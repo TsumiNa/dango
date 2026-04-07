@@ -1,0 +1,174 @@
+package orchestrator
+
+import (
+	"context"
+	"fmt"
+	"strings"
+
+	"github.com/tsumina/dango/internal/layout"
+	"github.com/tsumina/dango/internal/spec"
+	"github.com/tsumina/dango/internal/store/sqlite"
+)
+
+type DemoEngine struct {
+	layout    *layout.Layout
+	store     *sqlite.Store
+	tasks     *TaskService
+	planner   *Planner
+	scheduler *Scheduler
+}
+
+type DemoRunResult struct {
+	Task             sqlite.TaskRecord      `json:"task"`
+	Plan             spec.DAGPlan           `json:"plan"`
+	TerminalHandoffs []spec.HandoffMetadata `json:"terminal_handoffs"`
+	TaskDir          string                 `json:"task_dir"`
+	ResultPath       string                 `json:"result_path"`
+}
+
+func NewDemoEngine(layout *layout.Layout, store *sqlite.Store, tasks *TaskService, planner *Planner, scheduler *Scheduler) *DemoEngine {
+	return &DemoEngine{
+		layout:    layout,
+		store:     store,
+		tasks:     tasks,
+		planner:   planner,
+		scheduler: scheduler,
+	}
+}
+
+func (e *DemoEngine) Run(ctx context.Context, request string) (*DemoRunResult, error) {
+	task, err := e.tasks.Create(ctx, request)
+	if err != nil {
+		return nil, err
+	}
+
+	plan, err := e.planner.Plan(ctx, task.ID, request)
+	if err != nil {
+		_, _ = e.tasks.UpdateStatus(ctx, task.ID, spec.TaskStatusFailed)
+		_ = e.tasks.WriteResult(task.ID, buildFailureResult(task.ID, request, err))
+		return nil, err
+	}
+
+	task, err = e.tasks.ApplyPlan(ctx, task.ID, plan, spec.TaskStatusApproved)
+	if err != nil {
+		return nil, err
+	}
+
+	task, err = e.tasks.UpdateStatus(ctx, task.ID, spec.TaskStatusExecuting)
+	if err != nil {
+		return nil, err
+	}
+
+	handoffs := make([]spec.Handoff, 0, len(plan.Edges))
+	for _, edge := range plan.Edges {
+		handoff, edgeErr := e.scheduler.RunLocalEdge(ctx, EdgeExecutionRequest{
+			TaskID:         task.ID,
+			EdgeID:         edge.ID,
+			ToolName:       edge.ToolName,
+			UpstreamEdgeID: edge.Upstream,
+			SubTaskContent: edge.SubTask,
+		})
+		if edgeErr != nil {
+			_, _ = e.tasks.UpdateStatus(ctx, task.ID, spec.TaskStatusFailed)
+			_ = e.tasks.WriteResult(task.ID, buildExecutionFailureResult(task.ID, request, plan, handoffs, edgeErr))
+			return nil, edgeErr
+		}
+
+		handoffs = append(handoffs, handoff)
+	}
+
+	task, err = e.tasks.UpdateStatus(ctx, task.ID, spec.TaskStatusDone)
+	if err != nil {
+		return nil, err
+	}
+
+	terminalHandoffs := extractTerminalHandoffs(plan, handoffs)
+	if err := e.tasks.WriteResult(task.ID, buildSuccessResult(task.ID, request, plan, terminalHandoffs, e.layout)); err != nil {
+		return nil, err
+	}
+
+	return &DemoRunResult{
+		Task:             task,
+		Plan:             plan,
+		TerminalHandoffs: metadataOnly(terminalHandoffs),
+		TaskDir:          e.layout.TaskDir(task.ID),
+		ResultPath:       e.layout.TaskResultPath(task.ID),
+	}, nil
+}
+
+func extractTerminalHandoffs(plan spec.DAGPlan, handoffs []spec.Handoff) []spec.Handoff {
+	if len(plan.Edges) == 0 || len(handoffs) == 0 {
+		return nil
+	}
+
+	upstreamSet := map[string]bool{}
+	for _, edge := range plan.Edges {
+		if edge.Upstream != "" {
+			upstreamSet[edge.Upstream] = true
+		}
+	}
+
+	handoffByEdge := make(map[string]spec.Handoff, len(handoffs))
+	for index, handoff := range handoffs {
+		if index < len(plan.Edges) {
+			handoffByEdge[plan.Edges[index].ID] = handoff
+		}
+	}
+
+	var out []spec.Handoff
+	for _, edge := range plan.Edges {
+		if upstreamSet[edge.ID] {
+			continue
+		}
+		if handoff, ok := handoffByEdge[edge.ID]; ok {
+			out = append(out, handoff)
+		}
+	}
+
+	return out
+}
+
+func metadataOnly(handoffs []spec.Handoff) []spec.HandoffMetadata {
+	out := make([]spec.HandoffMetadata, 0, len(handoffs))
+	for _, handoff := range handoffs {
+		out = append(out, handoff.Metadata)
+	}
+	return out
+}
+
+func buildSuccessResult(taskID, request string, plan spec.DAGPlan, terminal []spec.Handoff, layout *layout.Layout) string {
+	var b strings.Builder
+	_, _ = fmt.Fprintf(&b, "# Demo Result\n\nTask ID: `%s`\n\n", taskID)
+	_, _ = fmt.Fprintf(&b, "Request:\n\n%s\n\n", strings.TrimSpace(request))
+	_, _ = fmt.Fprintf(&b, "Plan: `%d` stage(s)\n\n", len(plan.Edges))
+	_, _ = fmt.Fprintln(&b, "## Terminal Outputs")
+	for _, handoff := range terminal {
+		edgeID := findEdgeIDForTool(plan, handoff.Metadata.Tool)
+		_, _ = fmt.Fprintf(&b, "- Tool `%s` finished with status `%s`\n", handoff.Metadata.Tool, handoff.Metadata.Status)
+		_, _ = fmt.Fprintf(&b, "  Output dir: `%s`\n", layout.EdgeOutputDir(taskID, edgeID))
+		if len(handoff.Metadata.OutputFiles) == 0 {
+			_, _ = fmt.Fprintln(&b, "  Files: none declared")
+			continue
+		}
+		_, _ = fmt.Fprintf(&b, "  Files: %s\n", strings.Join(handoff.Metadata.OutputFiles, ", "))
+	}
+	_, _ = fmt.Fprintf(&b, "\nResult path: `%s`\n", layout.TaskResultPath(taskID))
+	return b.String()
+}
+
+func buildFailureResult(taskID, request string, err error) string {
+	return fmt.Sprintf("# Demo Result\n\nTask ID: `%s`\n\nRequest:\n\n%s\n\nStatus: failed during planning\n\nError: %s\n", taskID, strings.TrimSpace(request), err)
+}
+
+func buildExecutionFailureResult(taskID, request string, plan spec.DAGPlan, handoffs []spec.Handoff, err error) string {
+	return fmt.Sprintf("# Demo Result\n\nTask ID: `%s`\n\nRequest:\n\n%s\n\nPlanned stages: `%d`\nCompleted handoffs: `%d`\n\nStatus: failed during execution\n\nError: %s\n", taskID, strings.TrimSpace(request), len(plan.Edges), len(handoffs), err)
+}
+
+func findEdgeIDForTool(plan spec.DAGPlan, toolName string) string {
+	for _, edge := range plan.Edges {
+		if edge.ToolName == toolName {
+			return edge.ID
+		}
+	}
+	return ""
+}
