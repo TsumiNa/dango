@@ -11,13 +11,21 @@ import (
 	"strings"
 )
 
+// Config controls the shared slog logger setup for dango commands and
+// services.
 type Config struct {
-	Level     string
-	Format    string
-	File      string
+	// Level selects the minimum severity emitted by the logger.
+	Level string
+	// Format selects the output encoding. Supported values are text and json.
+	Format string
+	// File optionally appends logs to a file in addition to stderr.
+	File string
+	// AddSource enables source location reporting in slog handlers.
 	AddSource bool
 }
 
+// DefaultConfig returns the logging configuration derived from environment
+// variables and repository defaults.
 func DefaultConfig() Config {
 	return Config{
 		Level:     firstNonEmpty(os.Getenv("DANGO_LOG_LEVEL"), "info"),
@@ -27,6 +35,7 @@ func DefaultConfig() Config {
 	}
 }
 
+// BindFlags exposes Config fields on the provided flag set.
 func (c *Config) BindFlags(fs *flag.FlagSet) {
 	if c == nil || fs == nil {
 		return
@@ -38,6 +47,9 @@ func (c *Config) BindFlags(fs *flag.FlagSet) {
 	fs.BoolVar(&c.AddSource, "log-source", c.AddSource, "include source locations in logs")
 }
 
+// New constructs the shared slog logger used by the dango services.
+//
+// When cfg.File is set, New also returns a closer for the opened log file.
 func New(cfg Config, stderr io.Writer) (*slog.Logger, io.Closer, error) {
 	writer := io.Writer(stderr)
 	if writer == nil {
@@ -92,6 +104,7 @@ func New(cfg Config, stderr io.Writer) (*slog.Logger, io.Closer, error) {
 	return slog.New(handler).With("service", "dango"), closer, nil
 }
 
+// From returns logger when it is non-nil, or a discard logger otherwise.
 func From(logger *slog.Logger) *slog.Logger {
 	if logger != nil {
 		return logger
@@ -99,6 +112,7 @@ func From(logger *slog.Logger) *slog.Logger {
 	return slog.New(slog.NewTextHandler(io.Discard, &slog.HandlerOptions{}))
 }
 
+// Component annotates logger with the provided component name.
 func Component(logger *slog.Logger, component string) *slog.Logger {
 	return From(logger).With("component", component)
 }

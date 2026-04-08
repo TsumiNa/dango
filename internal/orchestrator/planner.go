@@ -13,6 +13,7 @@ import (
 	"github.com/tsumina/dango/internal/store/sqlite"
 )
 
+// Planner derives a demo execution plan from the registered tool catalog.
 type Planner struct {
 	store  *sqlite.Store
 	logger *slog.Logger
@@ -35,6 +36,8 @@ type plannerState struct {
 	Steps       []pathStep
 }
 
+// NewPlanner constructs the demo planner used to derive a linear tool path
+// from the registered tool catalog.
 func NewPlanner(store *sqlite.Store, logger *slog.Logger) *Planner {
 	return &Planner{
 		store:  store,
@@ -42,6 +45,8 @@ func NewPlanner(store *sqlite.Store, logger *slog.Logger) *Planner {
 	}
 }
 
+// Plan builds a demo DAG for request by finding a linear path from the
+// synthetic request input type to the synthetic final output type.
 func (p *Planner) Plan(ctx context.Context, taskID, request string) (spec.DAGPlan, error) {
 	p.logger.Info("planning task", "task_id", taskID)
 	tools, err := p.loadCatalog(ctx)

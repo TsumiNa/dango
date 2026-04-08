@@ -16,6 +16,7 @@ import (
 	"github.com/tsumina/dango/internal/store/sqlite"
 )
 
+// Scheduler executes planned edges and records their runtime state.
 type Scheduler struct {
 	layout  *layout.Layout
 	store   *sqlite.Store
@@ -23,14 +24,22 @@ type Scheduler struct {
 	logger  *slog.Logger
 }
 
+// EdgeExecutionRequest describes one edge execution request issued by the
+// orchestrator.
 type EdgeExecutionRequest struct {
-	TaskID         string
-	EdgeID         string
-	ToolName       string
+	// TaskID identifies the parent task.
+	TaskID string
+	// EdgeID identifies the edge being executed.
+	EdgeID string
+	// ToolName identifies the registered tool assigned to the edge.
+	ToolName string
+	// UpstreamEdgeID points to the producer edge whose output should be mounted.
 	UpstreamEdgeID string
+	// SubTaskContent is written to sub-task.md before execution when provided.
 	SubTaskContent string
 }
 
+// NewScheduler constructs the scheduler used to execute demo edges locally.
 func NewScheduler(layout *layout.Layout, store *sqlite.Store, rt runtime.ContainerRuntime, logger *slog.Logger) *Scheduler {
 	return &Scheduler{
 		layout:  layout,
@@ -40,6 +49,8 @@ func NewScheduler(layout *layout.Layout, store *sqlite.Store, rt runtime.Contain
 	}
 }
 
+// RunLocalEdge resolves tool config, prepares local paths, runs the tool, and
+// persists the resulting handoff metadata.
 func (s *Scheduler) RunLocalEdge(ctx context.Context, request EdgeExecutionRequest) (spec.Handoff, error) {
 	edgeLogger := s.logger.With("task_id", request.TaskID, "edge_id", request.EdgeID, "tool", request.ToolName)
 	edgeLogger.Info("starting edge execution")

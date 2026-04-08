@@ -19,6 +19,7 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
+// RegistryService manages tool registration and registry persistence.
 type RegistryService struct {
 	layout  *layout.Layout
 	store   *sqlite.Store
@@ -26,6 +27,8 @@ type RegistryService struct {
 	logger  *slog.Logger
 }
 
+// NewRegistryService constructs the tool registration service used by the
+// orchestrator.
 func NewRegistryService(layout *layout.Layout, store *sqlite.Store, rt runtime.ContainerRuntime, logger *slog.Logger) *RegistryService {
 	return &RegistryService{
 		layout:  layout,
@@ -35,19 +38,30 @@ func NewRegistryService(layout *layout.Layout, store *sqlite.Store, rt runtime.C
 	}
 }
 
+// RegisteredTool reports the persisted result of a registration operation.
 type RegisteredTool struct {
-	Tool  spec.ToolSpec       `json:"tool"`
-	Image string              `json:"image"`
-	Row   sqlite.ToolRecord   `json:"row"`
+	// Tool is the merged tool specification visible to the orchestrator.
+	Tool spec.ToolSpec `json:"tool"`
+	// Image is the runtime image or reference registered for the tool.
+	Image string `json:"image"`
+	// Row is the SQLite row persisted for the registration.
+	Row sqlite.ToolRecord `json:"row"`
+	// Files records the materialized config file locations on disk.
 	Files RegisteredToolFiles `json:"files"`
 }
 
+// RegisteredToolFiles points at the persisted registration files for a tool.
 type RegisteredToolFiles struct {
-	ToolPath     string `json:"tool_path"`
+	// ToolPath is the captured tool.yaml emitted by executor describe.
+	ToolPath string `json:"tool_path"`
+	// OverridePath is the copied override.yaml when an override was provided.
 	OverridePath string `json:"override_path,omitempty"`
-	MergedPath   string `json:"merged_path"`
+	// MergedPath is the merged.yaml path used at execution time.
+	MergedPath string `json:"merged_path"`
 }
 
+// Register pulls or resolves image, reads its tool description, merges any
+// override, and persists the registration.
 func (s *RegistryService) Register(ctx context.Context, image, overridePath string) (*RegisteredTool, error) {
 	if s.runtime == nil {
 		return nil, fmt.Errorf("container runtime is not configured")
@@ -156,6 +170,7 @@ func (s *RegistryService) Register(ctx context.Context, image, overridePath stri
 	}, nil
 }
 
+// Unregister removes a tool registration and its persisted config files.
 func (s *RegistryService) Unregister(ctx context.Context, name string) error {
 	s.logger.Info("unregistering tool", "tool", name)
 	if err := s.store.DeleteTool(ctx, name); err != nil && !s.store.IsNotFound(err) {
@@ -172,10 +187,12 @@ func (s *RegistryService) Unregister(ctx context.Context, name string) error {
 	return nil
 }
 
+// List returns the currently registered tools.
 func (s *RegistryService) List(ctx context.Context) ([]sqlite.ToolRecord, error) {
 	return s.store.ListTools(ctx)
 }
 
+// Load returns one registered tool row by name.
 func (s *RegistryService) Load(ctx context.Context, name string) (sqlite.ToolRecord, error) {
 	record, err := s.store.GetTool(ctx, name)
 	if err != nil {

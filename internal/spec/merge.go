@@ -2,14 +2,16 @@ package spec
 
 import "fmt"
 
+// MergeToolSpec overlays override values onto a base tool spec using recursive
+// map replacement semantics.
 func MergeToolSpec(base ToolSpec, override map[string]any) (ToolSpec, error) {
 	baseMap, err := base.ToMap()
 	if err != nil {
 		return ToolSpec{}, err
 	}
 
-	merged := MergeMaps(baseMap, override)
-	out, err := ToolSpecFromMap(merged)
+	merged := mergeMaps(baseMap, override)
+	out, err := toolSpecFromMap(merged)
 	if err != nil {
 		return ToolSpec{}, err
 	}
@@ -21,7 +23,7 @@ func MergeToolSpec(base ToolSpec, override map[string]any) (ToolSpec, error) {
 	return out, nil
 }
 
-func MergeMaps(base, override map[string]any) map[string]any {
+func mergeMaps(base, override map[string]any) map[string]any {
 	result := cloneMap(base)
 	for key, overrideValue := range override {
 		baseValue, exists := result[key]
@@ -29,7 +31,7 @@ func MergeMaps(base, override map[string]any) map[string]any {
 		overrideMap, overrideIsMap := asStringMap(overrideValue)
 
 		if exists && baseIsMap && overrideIsMap {
-			result[key] = MergeMaps(baseMap, overrideMap)
+			result[key] = mergeMaps(baseMap, overrideMap)
 			continue
 		}
 

@@ -14,12 +14,14 @@ import (
 	"github.com/tsumina/dango/internal/store/sqlite"
 )
 
+// TaskService manages task lifecycle persistence and task markdown artifacts.
 type TaskService struct {
 	layout *layout.Layout
 	store  *sqlite.Store
 	logger *slog.Logger
 }
 
+// NewTaskService constructs the task persistence service.
 func NewTaskService(layout *layout.Layout, store *sqlite.Store, logger *slog.Logger) *TaskService {
 	return &TaskService{
 		layout: layout,
@@ -28,6 +30,7 @@ func NewTaskService(layout *layout.Layout, store *sqlite.Store, logger *slog.Log
 	}
 }
 
+// Create allocates a task ID, persists the initial task row, and writes task.md.
 func (s *TaskService) Create(ctx context.Context, request string) (sqlite.TaskRecord, error) {
 	taskID, err := spec.NewUUID()
 	if err != nil {
@@ -59,10 +62,13 @@ func (s *TaskService) Create(ctx context.Context, request string) (sqlite.TaskRe
 	return s.store.GetTask(ctx, taskID)
 }
 
+// Get loads a task row by ID.
 func (s *TaskService) Get(ctx context.Context, taskID string) (sqlite.TaskRecord, error) {
 	return s.store.GetTask(ctx, taskID)
 }
 
+// ApplyPlan persists a plan, updates task status, and rewrites task.md to
+// include the current planning view.
 func (s *TaskService) ApplyPlan(ctx context.Context, taskID string, plan spec.DAGPlan, status spec.TaskStatus) (sqlite.TaskRecord, error) {
 	payload, err := json.MarshalIndent(plan, "", "  ")
 	if err != nil {
@@ -90,6 +96,7 @@ func (s *TaskService) ApplyPlan(ctx context.Context, taskID string, plan spec.DA
 	return s.store.GetTask(ctx, taskID)
 }
 
+// UpdateStatus persists a task status transition.
 func (s *TaskService) UpdateStatus(ctx context.Context, taskID string, status spec.TaskStatus) (sqlite.TaskRecord, error) {
 	s.logger.Info("updating task status", "task_id", taskID, "status", status)
 	if err := s.store.UpdateTaskStatus(ctx, taskID, string(status)); err != nil {
@@ -99,6 +106,7 @@ func (s *TaskService) UpdateStatus(ctx context.Context, taskID string, status sp
 	return s.store.GetTask(ctx, taskID)
 }
 
+// WriteResult writes the final result.md artifact for a task.
 func (s *TaskService) WriteResult(taskID string, result string) error {
 	if err := os.WriteFile(s.layout.TaskResultPath(taskID), []byte(result), 0o644); err != nil {
 		s.logger.Error("failed to write task result", "task_id", taskID, "error", err)

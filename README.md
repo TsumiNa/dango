@@ -35,6 +35,12 @@ internal/orchestrator/     registry, tasks, scheduler, HTTP server
 internal/executor/         executor describe/run logic
 ```
 
+Each package now keeps its primary exported type in the package-named file
+where practical, with helper logic moved into responsibility-focused companion
+files such as `runtime_context.go`, `tool_spec.go`, or `handoff.go`. Package
+overview docs live in `doc.go` so `go doc` and human review both start from the
+same entrypoint.
+
 ## Implemented commands
 
 ```text

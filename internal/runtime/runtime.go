@@ -1,54 +1,68 @@
 package runtime
 
 import (
-	"bytes"
 	"context"
 	"fmt"
 	"log/slog"
-	"os/exec"
 	"path"
 	"strings"
-
-	"github.com/tsumina/dango/internal/logging"
 )
 
+// ContainerRuntime describes the minimum runtime behavior needed by the
+// orchestrator to register and execute tools.
 type ContainerRuntime interface {
 	Pull(ctx context.Context, image string) error
 	DescribeTool(ctx context.Context, image string) ([]byte, error)
 	RunExecutor(ctx context.Context, request ExecutorRunRequest) error
 }
 
+// ExecutorRunRequest captures the host-side inputs needed to execute a tool.
 type ExecutorRunRequest struct {
-	Image          string
-	TaskID         string
-	SubTaskHost    string
+	// Image identifies the tool image or host tool reference to execute.
+	Image string
+	// TaskID scopes mounts and environment variables for a single task run.
+	TaskID string
+	// SubTaskHost points to the host sub-task markdown file.
+	SubTaskHost string
+	// ToolConfigHost points to the merged host tool configuration file.
 	ToolConfigHost string
-	InputHost      string
-	OutputHost     string
-	InputURL       string
-	OutputURL      string
+	// InputHost points to the host input directory when local storage is used.
+	InputHost string
+	// OutputHost points to the host output directory when local storage is used.
+	OutputHost string
+	// InputURL points to the remote input payload when URL-based storage is used.
+	InputURL string
+	// OutputURL points to the remote output destination when URL-based storage is used.
+	OutputURL string
 }
 
+// InputContainerPath returns the path exposed to a container for mounted input.
 func (r ExecutorRunRequest) InputContainerPath() string {
 	return path.Join("/mnt/shared", r.TaskID, "input")
 }
 
+// OutputContainerPath returns the path exposed to a container for mounted output.
 func (r ExecutorRunRequest) OutputContainerPath() string {
 	return path.Join("/mnt/shared", r.TaskID, "output")
 }
 
+// MultiRuntime dispatches tool actions to either the Docker runtime or the
+// host-local demo runtime based on the image reference scheme.
 type MultiRuntime struct {
 	docker ContainerRuntime
 	host   ContainerRuntime
 }
 
+// NewDefault constructs the default runtime multiplexer used by the
+// orchestrator.
 func NewDefault(dockerBinary string, logger *slog.Logger) *MultiRuntime {
 	return &MultiRuntime{
-		docker: NewDockerCLI(dockerBinary, logger),
-		host:   NewHostRuntime(logger),
+		docker: newDockerCLI(dockerBinary, logger),
+		host:   newHostRuntime(logger),
 	}
 }
 
+// Pull resolves the appropriate backend and ensures the tool image is available.
 func (m *MultiRuntime) Pull(ctx context.Context, image string) error {
 	rt, err := m.resolve(image)
 	if err != nil {
@@ -57,6 +71,7 @@ func (m *MultiRuntime) Pull(ctx context.Context, image string) error {
 	return rt.Pull(ctx, image)
 }
 
+// DescribeTool resolves the backend and returns the tool description payload.
 func (m *MultiRuntime) DescribeTool(ctx context.Context, image string) ([]byte, error) {
 	rt, err := m.resolve(image)
 	if err != nil {
@@ -65,6 +80,7 @@ func (m *MultiRuntime) DescribeTool(ctx context.Context, image string) ([]byte, 
 	return rt.DescribeTool(ctx, image)
 }
 
+// RunExecutor resolves the backend and runs the requested tool invocation.
 func (m *MultiRuntime) RunExecutor(ctx context.Context, request ExecutorRunRequest) error {
 	rt, err := m.resolve(request.Image)
 	if err != nil {
@@ -85,89 +101,4 @@ func (m *MultiRuntime) resolve(image string) (ContainerRuntime, error) {
 		return nil, fmt.Errorf("docker runtime is not configured")
 	}
 	return m.docker, nil
-}
-
-type DockerCLI struct {
-	Binary string
-	logger *slog.Logger
-}
-
-func NewDockerCLI(binary string, logger *slog.Logger) *DockerCLI {
-	if binary == "" {
-		binary = "docker"
-	}
-	return &DockerCLI{
-		Binary: binary,
-		logger: logging.Component(logger, "runtime.docker"),
-	}
-}
-
-func (d *DockerCLI) Pull(ctx context.Context, image string) error {
-	d.logger.Info("pulling tool image", "image", image)
-	cmd := exec.CommandContext(ctx, d.Binary, "pull", image)
-	output, err := cmd.CombinedOutput()
-	if err != nil {
-		d.logger.Error("docker pull failed", "image", image, "error", err, "output", string(bytes.TrimSpace(output)))
-		return fmt.Errorf("pull image %q: %w: %s", image, err, bytes.TrimSpace(output))
-	}
-	d.logger.Debug("docker pull completed", "image", image)
-	return nil
-}
-
-func (d *DockerCLI) DescribeTool(ctx context.Context, image string) ([]byte, error) {
-	d.logger.Info("describing tool image", "image", image)
-	cmd := exec.CommandContext(ctx, d.Binary, "run", "--rm", image, "dango", "executor", "describe", "--format", "yaml")
-	output, err := cmd.CombinedOutput()
-	if err != nil {
-		d.logger.Error("docker describe failed", "image", image, "error", err, "output", string(bytes.TrimSpace(output)))
-		return nil, fmt.Errorf("describe tool in image %q: %w: %s", image, err, bytes.TrimSpace(output))
-	}
-	d.logger.Debug("tool image described", "image", image, "bytes", len(output))
-	return output, nil
-}
-
-func (d *DockerCLI) RunExecutor(ctx context.Context, request ExecutorRunRequest) error {
-	d.logger.Info("running executor container", "image", request.Image, "task_id", request.TaskID)
-	args := []string{
-		"run", "--rm",
-		"-e", "TASK_ID=" + request.TaskID,
-		"-e", "SUB_TASK=/etc/dango/sub-task.md",
-		"-e", "TOOL_CONFIG=/etc/dango/tool-config.yaml",
-	}
-
-	if request.InputHost != "" {
-		args = append(args,
-			"-e", "INPUT_PATH="+request.InputContainerPath(),
-			"-v", request.InputHost+":"+request.InputContainerPath()+":ro",
-		)
-	}
-	if request.OutputHost != "" {
-		args = append(args,
-			"-e", "OUTPUT_PATH="+request.OutputContainerPath(),
-			"-v", request.OutputHost+":"+request.OutputContainerPath()+":rw",
-		)
-	}
-	if request.InputURL != "" {
-		args = append(args, "-e", "INPUT_URL="+request.InputURL)
-	}
-	if request.OutputURL != "" {
-		args = append(args, "-e", "OUTPUT_URL="+request.OutputURL)
-	}
-	if request.SubTaskHost != "" {
-		args = append(args, "-v", request.SubTaskHost+":/etc/dango/sub-task.md:ro")
-	}
-	if request.ToolConfigHost != "" {
-		args = append(args, "-v", request.ToolConfigHost+":/etc/dango/tool-config.yaml:ro")
-	}
-
-	args = append(args, request.Image, "dango", "executor", "run", "--task-id", request.TaskID, "--sub-task", "/etc/dango/sub-task.md")
-
-	cmd := exec.CommandContext(ctx, d.Binary, args...)
-	output, err := cmd.CombinedOutput()
-	if err != nil {
-		d.logger.Error("executor container failed", "image", request.Image, "task_id", request.TaskID, "error", err, "output", string(bytes.TrimSpace(output)))
-		return fmt.Errorf("run executor image %q: %w: %s", request.Image, err, bytes.TrimSpace(output))
-	}
-	d.logger.Info("executor container completed", "image", request.Image, "task_id", request.TaskID)
-	return nil
 }

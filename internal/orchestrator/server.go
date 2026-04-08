@@ -12,6 +12,7 @@ import (
 	"github.com/tsumina/dango/internal/logging"
 )
 
+// Server hosts the HTTP API for registry access and demo task execution.
 type Server struct {
 	addr        string
 	registry    *RegistryService
@@ -20,6 +21,7 @@ type Server struct {
 	logger      *slog.Logger
 }
 
+// NewServer constructs the HTTP server wrapper for the orchestrator services.
 func NewServer(addr string, registry *RegistryService, taskService *TaskService, engine *DemoEngine, logger *slog.Logger) *Server {
 	return &Server{
 		addr:        addr,
@@ -30,6 +32,8 @@ func NewServer(addr string, registry *RegistryService, taskService *TaskService,
 	}
 }
 
+// ListenAndServe starts the HTTP server and blocks until the context is
+// cancelled or the server exits.
 func (s *Server) ListenAndServe(ctx context.Context) error {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/healthz", s.handleHealth)

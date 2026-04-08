@@ -5,6 +5,7 @@ import (
 	"fmt"
 )
 
+// NewUUID returns a random RFC 4122 version 4 UUID string.
 func NewUUID() (string, error) {
 	var raw [16]byte
 	if _, err := rand.Read(raw[:]); err != nil {

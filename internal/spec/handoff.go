@@ -9,26 +9,42 @@ import (
 )
 
 const (
+	// HandoffStatusCompleted marks a fully successful tool handoff.
 	HandoffStatusCompleted = "completed"
-	HandoffStatusFailed    = "failed"
-	HandoffStatusPartial   = "partial"
+	// HandoffStatusFailed marks a handoff that ended in failure.
+	HandoffStatusFailed = "failed"
+	// HandoffStatusPartial marks a handoff that produced partial output.
+	HandoffStatusPartial = "partial"
 )
 
+// Handoff represents a tool output contract with machine-readable metadata and
+// human-readable body content.
 type Handoff struct {
 	Metadata HandoffMetadata
 	Body     string
 }
 
+// HandoffMetadata contains the frontmatter fields exchanged between tools and
+// the orchestrator.
 type HandoffMetadata struct {
-	TaskID      string    `json:"task_id" yaml:"task_id"`
-	Tool        string    `json:"tool" yaml:"tool"`
-	Status      string    `json:"status" yaml:"status"`
-	OutputFiles []string  `json:"output_files,omitempty" yaml:"output_files,omitempty"`
-	NextTool    *string   `json:"next_tool,omitempty" yaml:"next_tool,omitempty"`
-	Timestamp   time.Time `json:"timestamp" yaml:"timestamp"`
-	Error       string    `json:"error,omitempty" yaml:"error,omitempty"`
+	// TaskID identifies the task that produced this handoff.
+	TaskID string `json:"task_id" yaml:"task_id"`
+	// Tool identifies the tool that wrote the handoff.
+	Tool string `json:"tool" yaml:"tool"`
+	// Status reports whether execution completed, failed, or only partially succeeded.
+	Status string `json:"status" yaml:"status"`
+	// OutputFiles lists output artifacts relative to the tool output directory.
+	OutputFiles []string `json:"output_files,omitempty" yaml:"output_files,omitempty"`
+	// NextTool optionally hints at the next expected tool in a linear pipeline.
+	NextTool *string `json:"next_tool,omitempty" yaml:"next_tool,omitempty"`
+	// Timestamp records when the handoff was written.
+	Timestamp time.Time `json:"timestamp" yaml:"timestamp"`
+	// Error stores the failure message when Status is not completed.
+	Error string `json:"error,omitempty" yaml:"error,omitempty"`
 }
 
+// Validate verifies that the metadata can be consumed by the scheduler and
+// orchestration layer.
 func (m HandoffMetadata) Validate() error {
 	if strings.TrimSpace(m.TaskID) == "" {
 		return fmt.Errorf("task_id is required")
@@ -51,6 +67,7 @@ func (m HandoffMetadata) Validate() error {
 	return nil
 }
 
+// ParseHandoff decodes a markdown handoff document with YAML frontmatter.
 func ParseHandoff(data []byte) (Handoff, error) {
 	lines, end, err := splitFrontmatter(data)
 	if err != nil {
@@ -76,6 +93,8 @@ func ParseHandoff(data []byte) (Handoff, error) {
 	}, nil
 }
 
+// ExtractHandoffFrontmatter returns only the raw YAML frontmatter portion of a
+// handoff document.
 func ExtractHandoffFrontmatter(data []byte) ([]byte, error) {
 	lines, end, err := splitFrontmatter(data)
 	if err != nil {
@@ -85,6 +104,7 @@ func ExtractHandoffFrontmatter(data []byte) ([]byte, error) {
 	return []byte(strings.Join(lines[1:end], "\n")), nil
 }
 
+// RenderHandoff encodes a Handoff back into the markdown handoff file format.
 func RenderHandoff(h Handoff) ([]byte, error) {
 	if err := h.Metadata.Validate(); err != nil {
 		return nil, err

@@ -5,12 +5,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"io/fs"
 	"log/slog"
 	"os"
 	"os/exec"
 	"path/filepath"
-	"sort"
 	"strings"
 	"time"
 
@@ -19,27 +17,26 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
+// Executor serves the runtime entrypoints used inside tool containers.
+//
+// An Executor is safe to reuse across multiple describe and run calls as long
+// as its output writers remain valid for the lifetime of the calls.
 type Executor struct {
 	stdout io.Writer
 	stderr io.Writer
 	logger *slog.Logger
 }
 
+// RunOptions describes the CLI-provided inputs for executor runs.
 type RunOptions struct {
-	TaskID  string
+	// TaskID identifies the task being executed. If empty, TASK_ID is used.
+	TaskID string
+	// SubTask points to the sub-task markdown file. If empty, SUB_TASK is used.
 	SubTask string
 }
 
-type RuntimeContext struct {
-	TaskID         string
-	SubTaskPath    string
-	ToolConfigPath string
-	InputPath      string
-	OutputPath     string
-	InputURL       string
-	OutputURL      string
-}
-
+// New constructs an Executor that writes command results to stdout and
+// diagnostics to stderr.
 func New(stdout, stderr io.Writer, logger *slog.Logger) *Executor {
 	return &Executor{
 		stdout: stdout,
@@ -48,6 +45,7 @@ func New(stdout, stderr io.Writer, logger *slog.Logger) *Executor {
 	}
 }
 
+// Describe emits the local tool specification in the requested format.
 func (e *Executor) Describe(format string) error {
 	e.logger.Info("describe requested", "format", format)
 	toolSpec, err := loadToolSpec()
@@ -77,6 +75,7 @@ func (e *Executor) Describe(format string) error {
 	}
 }
 
+// Run executes a tool task using the current environment contract.
 func (e *Executor) Run(ctx context.Context, options RunOptions) error {
 	runtimeContext, err := loadRuntimeContext(options)
 	if err != nil {
@@ -137,7 +136,7 @@ func (e *Executor) runHook(ctx context.Context, hookPath string) error {
 	return nil
 }
 
-func (e *Executor) writeScaffoldArtifacts(runtimeContext RuntimeContext, toolSpec spec.ToolSpec) error {
+func (e *Executor) writeScaffoldArtifacts(runtimeContext runtimeContext, toolSpec spec.ToolSpec) error {
 	subTaskPayload, _ := os.ReadFile(runtimeContext.SubTaskPath)
 	configPayload, _ := os.ReadFile(runtimeContext.ToolConfigPath)
 
@@ -181,176 +180,4 @@ func (e *Executor) writeScaffoldArtifacts(runtimeContext RuntimeContext, toolSpe
 		},
 		Body: handoffBody,
 	})
-}
-
-func loadRuntimeContext(options RunOptions) (RuntimeContext, error) {
-	taskID := firstNonEmpty(options.TaskID, os.Getenv("TASK_ID"))
-	if strings.TrimSpace(taskID) == "" {
-		return RuntimeContext{}, fmt.Errorf("task id is required via --task-id or TASK_ID")
-	}
-
-	subTaskPath := firstNonEmpty(options.SubTask, os.Getenv("SUB_TASK"))
-	if strings.TrimSpace(subTaskPath) == "" {
-		return RuntimeContext{}, fmt.Errorf("sub-task path is required via --sub-task or SUB_TASK")
-	}
-
-	outputPath := strings.TrimSpace(os.Getenv("OUTPUT_PATH"))
-	if outputPath == "" {
-		return RuntimeContext{}, fmt.Errorf("OUTPUT_PATH is required")
-	}
-
-	return RuntimeContext{
-		TaskID:         taskID,
-		SubTaskPath:    subTaskPath,
-		ToolConfigPath: strings.TrimSpace(os.Getenv("TOOL_CONFIG")),
-		InputPath:      strings.TrimSpace(os.Getenv("INPUT_PATH")),
-		OutputPath:     outputPath,
-		InputURL:       strings.TrimSpace(os.Getenv("INPUT_URL")),
-		OutputURL:      strings.TrimSpace(os.Getenv("OUTPUT_URL")),
-	}, nil
-}
-
-func loadToolSpec() (spec.ToolSpec, error) {
-	for _, candidate := range []string{
-		strings.TrimSpace(os.Getenv("DANGO_TOOL_YAML")),
-		"/opt/tool/tool.yaml",
-		"tool.yaml",
-	} {
-		if candidate == "" {
-			continue
-		}
-		toolSpec, err := loadToolSpecFrom(candidate)
-		if err == nil {
-			return toolSpec, nil
-		}
-	}
-
-	return spec.ToolSpec{}, fmt.Errorf("tool.yaml was not found via DANGO_TOOL_YAML, /opt/tool/tool.yaml, or ./tool.yaml")
-}
-
-func loadToolSpecFrom(path string) (spec.ToolSpec, error) {
-	if strings.TrimSpace(path) == "" {
-		return spec.ToolSpec{}, fmt.Errorf("tool spec path is empty")
-	}
-
-	payload, err := os.ReadFile(filepath.Clean(path))
-	if err != nil {
-		return spec.ToolSpec{}, fmt.Errorf("read tool spec %q: %w", path, err)
-	}
-
-	var toolSpec spec.ToolSpec
-	if err := yaml.Unmarshal(payload, &toolSpec); err != nil {
-		return spec.ToolSpec{}, fmt.Errorf("parse tool spec %q: %w", path, err)
-	}
-
-	if err := toolSpec.Validate(); err != nil {
-		return spec.ToolSpec{}, err
-	}
-
-	return toolSpec, nil
-}
-
-func resolveRunHook() string {
-	for _, candidate := range []string{
-		strings.TrimSpace(os.Getenv("DANGO_TOOL_RUN")),
-		"/opt/tool/run",
-		"/opt/tool/bin/run",
-	} {
-		if candidate == "" {
-			continue
-		}
-
-		info, err := os.Stat(candidate)
-		if err != nil || info.IsDir() {
-			continue
-		}
-
-		if info.Mode()&0o111 != 0 {
-			return candidate
-		}
-	}
-
-	return ""
-}
-
-func writeAutoHandoff(outputPath, toolName, taskID, summary string) error {
-	files, err := collectOutputFiles(outputPath)
-	if err != nil {
-		return err
-	}
-
-	return writeHandoff(outputPath, spec.Handoff{
-		Metadata: spec.HandoffMetadata{
-			TaskID:      taskID,
-			Tool:        toolName,
-			Status:      spec.HandoffStatusCompleted,
-			OutputFiles: files,
-			Timestamp:   time.Now().UTC(),
-		},
-		Body: "## Description\n\n" + summary,
-	})
-}
-
-func writeFailureHandoff(outputPath, toolName, taskID string, executionErr error) error {
-	return writeHandoff(outputPath, spec.Handoff{
-		Metadata: spec.HandoffMetadata{
-			TaskID:    taskID,
-			Tool:      toolName,
-			Status:    spec.HandoffStatusFailed,
-			Timestamp: time.Now().UTC(),
-			Error:     executionErr.Error(),
-		},
-		Body: "## Description\n\nTool execution failed before producing a handoff.",
-	})
-}
-
-func writeHandoff(outputPath string, handoff spec.Handoff) error {
-	payload, err := spec.RenderHandoff(handoff)
-	if err != nil {
-		return err
-	}
-
-	path := filepath.Join(outputPath, "_handoff.md")
-	if err := os.WriteFile(path, payload, 0o644); err != nil {
-		return fmt.Errorf("write handoff %q: %w", path, err)
-	}
-	return nil
-}
-
-func collectOutputFiles(root string) ([]string, error) {
-	var out []string
-	err := filepath.WalkDir(root, func(path string, entry fs.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-		if entry.IsDir() {
-			return nil
-		}
-
-		relative, err := filepath.Rel(root, path)
-		if err != nil {
-			return err
-		}
-		if relative == "_handoff.md" {
-			return nil
-		}
-
-		out = append(out, filepath.ToSlash(relative))
-		return nil
-	})
-	if err != nil {
-		return nil, fmt.Errorf("walk output directory %q: %w", root, err)
-	}
-
-	sort.Strings(out)
-	return out, nil
-}
-
-func firstNonEmpty(values ...string) string {
-	for _, value := range values {
-		if strings.TrimSpace(value) != "" {
-			return value
-		}
-	}
-	return ""
 }

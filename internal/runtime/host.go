@@ -13,18 +13,22 @@ import (
 	"github.com/tsumina/dango/internal/logging"
 )
 
+// HostPrefix identifies tool references that should be resolved against the
+// host-local demo runtime instead of the container runtime.
 const HostPrefix = "host://"
 
-type HostRuntime struct {
+type hostRuntime struct {
 	logger *slog.Logger
 }
 
-func NewHostRuntime(logger *slog.Logger) *HostRuntime {
-	return &HostRuntime{
+func newHostRuntime(logger *slog.Logger) *hostRuntime {
+	return &hostRuntime{
 		logger: logging.Component(logger, "runtime.host"),
 	}
 }
 
+// NormalizeImageReference resolves host-based image references into absolute
+// host paths while leaving container image references unchanged.
 func NormalizeImageReference(image string) (string, error) {
 	if !strings.HasPrefix(image, HostPrefix) {
 		return strings.TrimSpace(image), nil
@@ -38,12 +42,12 @@ func NormalizeImageReference(image string) (string, error) {
 	return HostPrefix + dir, nil
 }
 
-func (h *HostRuntime) Pull(_ context.Context, image string) error {
+func (h *hostRuntime) Pull(_ context.Context, image string) error {
 	_, err := resolveHostToolDir(image)
 	return err
 }
 
-func (h *HostRuntime) DescribeTool(_ context.Context, image string) ([]byte, error) {
+func (h *hostRuntime) DescribeTool(_ context.Context, image string) ([]byte, error) {
 	dir, err := resolveHostToolDir(image)
 	if err != nil {
 		return nil, err
@@ -58,7 +62,7 @@ func (h *HostRuntime) DescribeTool(_ context.Context, image string) ([]byte, err
 	return payload, nil
 }
 
-func (h *HostRuntime) RunExecutor(ctx context.Context, request ExecutorRunRequest) error {
+func (h *hostRuntime) RunExecutor(ctx context.Context, request ExecutorRunRequest) error {
 	dir, err := resolveHostToolDir(request.Image)
 	if err != nil {
 		return err

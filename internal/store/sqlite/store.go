@@ -50,38 +50,65 @@ CREATE TABLE IF NOT EXISTS logs (
 );
 `
 
+// Store wraps the SQLite-backed persistence layer used by the orchestrator.
+//
+// Store values are safe to share across goroutines because the underlying
+// sql.DB manages concurrent access.
 type Store struct {
 	db *sql.DB
 }
 
+// ToolRecord mirrors one row in the tools table.
 type ToolRecord struct {
-	Name       string `json:"name"`
-	Image      string `json:"image"`
+	// Name is the unique tool name from the merged tool specification.
+	Name string `json:"name"`
+	// Image is the registered image or runtime reference used to invoke the tool.
+	Image string `json:"image"`
+	// ConfigJSON stores the merged tool configuration as JSON.
 	ConfigJSON string `json:"config_json"`
+	// Registered is the timestamp recorded by SQLite for the latest registration.
 	Registered string `json:"registered"`
 }
 
+// TaskRecord mirrors one row in the tasks table.
 type TaskRecord struct {
-	ID      string `json:"id"`
-	Status  string `json:"status"`
+	// ID is the task UUID.
+	ID string `json:"id"`
+	// Status is the persisted task lifecycle state.
+	Status string `json:"status"`
+	// Request is the original user request captured for the task.
 	Request string `json:"request"`
+	// DAGJSON stores the serialized plan when one has been applied.
 	DAGJSON string `json:"dag_json"`
+	// Created is the SQLite timestamp when the task row was inserted.
 	Created string `json:"created"`
+	// Updated is the SQLite timestamp for the last task mutation.
 	Updated string `json:"updated"`
 }
 
+// EdgeRecord mirrors one row in the edges table.
 type EdgeRecord struct {
-	ID          string `json:"id"`
-	TaskID      string `json:"task_id"`
-	ToolName    string `json:"tool_name"`
-	Upstream    string `json:"upstream"`
-	Status      string `json:"status"`
-	SharedDir   string `json:"shared_dir"`
+	// ID is the edge UUID.
+	ID string `json:"id"`
+	// TaskID identifies the parent task.
+	TaskID string `json:"task_id"`
+	// ToolName identifies the tool assigned to the edge.
+	ToolName string `json:"tool_name"`
+	// Upstream points at the producing edge when this edge consumes prior output.
+	Upstream string `json:"upstream"`
+	// Status is the persisted edge lifecycle state.
+	Status string `json:"status"`
+	// SharedDir stores the host path used for output handoff files.
+	SharedDir string `json:"shared_dir"`
+	// HandoffYAML stores the parsed _handoff.md frontmatter for machine use.
 	HandoffYAML string `json:"handoff_yaml"`
-	Started     string `json:"started"`
-	Finished    string `json:"finished"`
+	// Started records the execution start timestamp when known.
+	Started string `json:"started"`
+	// Finished records the execution finish timestamp when known.
+	Finished string `json:"finished"`
 }
 
+// Open opens or creates the SQLite database at path and applies migrations.
 func Open(path string) (*Store, error) {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return nil, fmt.Errorf("create db directory: %w", err)
@@ -101,6 +128,7 @@ func Open(path string) (*Store, error) {
 	return store, nil
 }
 
+// Close closes the underlying SQLite connection.
 func (s *Store) Close() error {
 	if s == nil || s.db == nil {
 		return nil
@@ -115,6 +143,7 @@ func (s *Store) migrate(ctx context.Context) error {
 	return nil
 }
 
+// UpsertTool inserts or replaces the stored metadata for one registered tool.
 func (s *Store) UpsertTool(ctx context.Context, record ToolRecord) error {
 	const query = `
 INSERT INTO tools (name, image, config_json)
@@ -132,6 +161,7 @@ ON CONFLICT(name) DO UPDATE SET
 	return nil
 }
 
+// DeleteTool removes the named tool row.
 func (s *Store) DeleteTool(ctx context.Context, name string) error {
 	result, err := s.db.ExecContext(ctx, `DELETE FROM tools WHERE name = ?`, name)
 	if err != nil {
@@ -145,6 +175,7 @@ func (s *Store) DeleteTool(ctx context.Context, name string) error {
 	return nil
 }
 
+// GetTool returns the stored row for one tool.
 func (s *Store) GetTool(ctx context.Context, name string) (ToolRecord, error) {
 	row := s.db.QueryRowContext(ctx, `SELECT name, image, config_json, registered FROM tools WHERE name = ?`, name)
 
@@ -156,6 +187,7 @@ func (s *Store) GetTool(ctx context.Context, name string) (ToolRecord, error) {
 	return record, nil
 }
 
+// ListTools returns all registered tools ordered by name.
 func (s *Store) ListTools(ctx context.Context) ([]ToolRecord, error) {
 	rows, err := s.db.QueryContext(ctx, `SELECT name, image, config_json, registered FROM tools ORDER BY name ASC`)
 	if err != nil {
@@ -179,6 +211,7 @@ func (s *Store) ListTools(ctx context.Context) ([]ToolRecord, error) {
 	return out, nil
 }
 
+// CreateTask inserts a new task row.
 func (s *Store) CreateTask(ctx context.Context, record TaskRecord) error {
 	const query = `
 INSERT INTO tasks (id, status, request, dag_json)
@@ -192,6 +225,7 @@ VALUES (?, ?, ?, ?)
 	return nil
 }
 
+// GetTask returns the stored row for one task.
 func (s *Store) GetTask(ctx context.Context, id string) (TaskRecord, error) {
 	row := s.db.QueryRowContext(ctx, `SELECT id, status, request, dag_json, created, updated FROM tasks WHERE id = ?`, id)
 
@@ -203,6 +237,7 @@ func (s *Store) GetTask(ctx context.Context, id string) (TaskRecord, error) {
 	return record, nil
 }
 
+// UpdateTaskStatus updates only the task lifecycle state.
 func (s *Store) UpdateTaskStatus(ctx context.Context, id string, status string) error {
 	result, err := s.db.ExecContext(ctx, `UPDATE tasks SET status = ?, updated = CURRENT_TIMESTAMP WHERE id = ?`, status, id)
 	if err != nil {
@@ -216,6 +251,7 @@ func (s *Store) UpdateTaskStatus(ctx context.Context, id string, status string) 
 	return nil
 }
 
+// UpdateTaskPlan persists both task status and serialized plan content.
 func (s *Store) UpdateTaskPlan(ctx context.Context, id, status, dagJSON string) error {
 	result, err := s.db.ExecContext(
 		ctx,
@@ -235,6 +271,7 @@ func (s *Store) UpdateTaskPlan(ctx context.Context, id, status, dagJSON string) 
 	return nil
 }
 
+// UpsertEdge inserts or replaces the stored state for one edge.
 func (s *Store) UpsertEdge(ctx context.Context, record EdgeRecord) error {
 	const query = `
 INSERT INTO edges (id, task_id, tool_name, upstream, status, shared_dir, handoff_yaml, started, finished)
@@ -269,6 +306,7 @@ ON CONFLICT(id) DO UPDATE SET
 	return nil
 }
 
+// UpdateEdgeResult updates the result metadata for one edge.
 func (s *Store) UpdateEdgeResult(ctx context.Context, edgeID, status, handoffYAML string, finished time.Time) error {
 	result, err := s.db.ExecContext(
 		ctx,
@@ -289,6 +327,7 @@ func (s *Store) UpdateEdgeResult(ctx context.Context, edgeID, status, handoffYAM
 	return nil
 }
 
+// InsertLog appends one log row for an edge execution.
 func (s *Store) InsertLog(ctx context.Context, edgeID, level, message string) error {
 	if _, err := s.db.ExecContext(ctx, `INSERT INTO logs (edge_id, level, message) VALUES (?, ?, ?)`, edgeID, level, message); err != nil {
 		return fmt.Errorf("insert log for edge %q: %w", edgeID, err)
@@ -296,6 +335,7 @@ func (s *Store) InsertLog(ctx context.Context, edgeID, level, message string) er
 	return nil
 }
 
+// IsNotFound reports whether err maps to sql.ErrNoRows.
 func (s *Store) IsNotFound(err error) bool {
 	return errors.Is(err, sql.ErrNoRows)
 }

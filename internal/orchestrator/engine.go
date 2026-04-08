@@ -12,6 +12,7 @@ import (
 	"github.com/tsumina/dango/internal/store/sqlite"
 )
 
+// DemoEngine runs the end-to-end local demo orchestration flow.
 type DemoEngine struct {
 	layout    *layout.Layout
 	store     *sqlite.Store
@@ -21,14 +22,22 @@ type DemoEngine struct {
 	logger    *slog.Logger
 }
 
+// DemoRunResult summarizes a completed demo execution.
 type DemoRunResult struct {
-	Task             sqlite.TaskRecord      `json:"task"`
-	Plan             spec.DAGPlan           `json:"plan"`
+	// Task is the final persisted task row.
+	Task sqlite.TaskRecord `json:"task"`
+	// Plan is the plan executed for the task.
+	Plan spec.DAGPlan `json:"plan"`
+	// TerminalHandoffs contains frontmatter summaries from terminal edges.
 	TerminalHandoffs []spec.HandoffMetadata `json:"terminal_handoffs"`
-	TaskDir          string                 `json:"task_dir"`
-	ResultPath       string                 `json:"result_path"`
+	// TaskDir is the task directory on disk.
+	TaskDir string `json:"task_dir"`
+	// ResultPath is the result.md path written by the engine.
+	ResultPath string `json:"result_path"`
 }
 
+// NewDemoEngine constructs the demo orchestration engine used by the local
+// runnable sample.
 func NewDemoEngine(layout *layout.Layout, store *sqlite.Store, tasks *TaskService, planner *Planner, scheduler *Scheduler, logger *slog.Logger) *DemoEngine {
 	return &DemoEngine{
 		layout:    layout,
@@ -40,6 +49,7 @@ func NewDemoEngine(layout *layout.Layout, store *sqlite.Store, tasks *TaskServic
 	}
 }
 
+// Run executes the end-to-end demo flow for one request.
 func (e *DemoEngine) Run(ctx context.Context, request string) (*DemoRunResult, error) {
 	e.logger.Info("demo run started")
 	task, err := e.tasks.Create(ctx, request)
