@@ -10,6 +10,7 @@ Write idiomatic Go documentation for `go doc`, `pkg.go.dev`, and local `pkgsite`
 - Document at the package level, not the file-module level.
 - Put package documentation in one `doc.go` file and start it with `Package <name> ...`.
 - Exported names should have doc comments unless there is a deliberate, local reason to omit one.
+- For exported functions and methods, comments may be more complete and should explain behavior, contract, and important usage expectations. For unexported functions and methods, keep comments concise, and omit comments for obvious private helpers whose purpose is already clear from the name and local context.
 - Start each type, func, method, const, or var comment with the declared name.
 - Use complete sentences. Explain behavior, semantics, invariants, lifecycle, concurrency guarantees, and zero-value usability when relevant rather than restating what is already obvious from the signature.
 - Field comments should explain exported fields when the meaning is not already obvious from the field name and type.
