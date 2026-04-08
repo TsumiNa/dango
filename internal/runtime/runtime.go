@@ -11,8 +11,11 @@ import (
 // ContainerRuntime describes the minimum runtime behavior needed by the
 // orchestrator to register and execute tools.
 type ContainerRuntime interface {
+	// Pull ensures the runtime can execute image.
 	Pull(ctx context.Context, image string) error
+	// DescribeTool returns the tool specification payload for image.
 	DescribeTool(ctx context.Context, image string) ([]byte, error)
+	// RunExecutor executes one tool invocation described by request.
 	RunExecutor(ctx context.Context, request ExecutorRunRequest) error
 }
 
@@ -55,6 +58,8 @@ type MultiRuntime struct {
 
 // NewDefault constructs the default runtime multiplexer used by the
 // orchestrator.
+//
+// dockerBinary defaults to "docker" when empty.
 func NewDefault(dockerBinary string, logger *slog.Logger) *MultiRuntime {
 	return &MultiRuntime{
 		docker: newDockerCLI(dockerBinary, logger),
@@ -62,7 +67,7 @@ func NewDefault(dockerBinary string, logger *slog.Logger) *MultiRuntime {
 	}
 }
 
-// Pull resolves the appropriate backend and ensures the tool image is available.
+// Pull resolves the appropriate backend and ensures image is available.
 func (m *MultiRuntime) Pull(ctx context.Context, image string) error {
 	rt, err := m.resolve(image)
 	if err != nil {

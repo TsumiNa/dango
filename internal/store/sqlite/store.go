@@ -108,7 +108,8 @@ type EdgeRecord struct {
 	Finished string `json:"finished"`
 }
 
-// Open opens or creates the SQLite database at path and applies migrations.
+// Open opens or creates the SQLite database at path and applies schema
+// migrations.
 func Open(path string) (*Store, error) {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return nil, fmt.Errorf("create db directory: %w", err)
@@ -162,6 +163,8 @@ ON CONFLICT(name) DO UPDATE SET
 }
 
 // DeleteTool removes the named tool row.
+//
+// DeleteTool returns sql.ErrNoRows when the tool does not exist.
 func (s *Store) DeleteTool(ctx context.Context, name string) error {
 	result, err := s.db.ExecContext(ctx, `DELETE FROM tools WHERE name = ?`, name)
 	if err != nil {
@@ -176,6 +179,8 @@ func (s *Store) DeleteTool(ctx context.Context, name string) error {
 }
 
 // GetTool returns the stored row for one tool.
+//
+// GetTool returns sql.ErrNoRows when no row matches name.
 func (s *Store) GetTool(ctx context.Context, name string) (ToolRecord, error) {
 	row := s.db.QueryRowContext(ctx, `SELECT name, image, config_json, registered FROM tools WHERE name = ?`, name)
 
@@ -226,6 +231,8 @@ VALUES (?, ?, ?, ?)
 }
 
 // GetTask returns the stored row for one task.
+//
+// GetTask returns sql.ErrNoRows when no row matches id.
 func (s *Store) GetTask(ctx context.Context, id string) (TaskRecord, error) {
 	row := s.db.QueryRowContext(ctx, `SELECT id, status, request, dag_json, created, updated FROM tasks WHERE id = ?`, id)
 
@@ -238,6 +245,8 @@ func (s *Store) GetTask(ctx context.Context, id string) (TaskRecord, error) {
 }
 
 // UpdateTaskStatus updates only the task lifecycle state.
+//
+// UpdateTaskStatus returns sql.ErrNoRows when no task matches id.
 func (s *Store) UpdateTaskStatus(ctx context.Context, id string, status string) error {
 	result, err := s.db.ExecContext(ctx, `UPDATE tasks SET status = ?, updated = CURRENT_TIMESTAMP WHERE id = ?`, status, id)
 	if err != nil {
@@ -252,6 +261,8 @@ func (s *Store) UpdateTaskStatus(ctx context.Context, id string, status string) 
 }
 
 // UpdateTaskPlan persists both task status and serialized plan content.
+//
+// UpdateTaskPlan returns sql.ErrNoRows when no task matches id.
 func (s *Store) UpdateTaskPlan(ctx context.Context, id, status, dagJSON string) error {
 	result, err := s.db.ExecContext(
 		ctx,
@@ -307,6 +318,8 @@ ON CONFLICT(id) DO UPDATE SET
 }
 
 // UpdateEdgeResult updates the result metadata for one edge.
+//
+// UpdateEdgeResult returns sql.ErrNoRows when no edge matches edgeID.
 func (s *Store) UpdateEdgeResult(ctx context.Context, edgeID, status, handoffYAML string, finished time.Time) error {
 	result, err := s.db.ExecContext(
 		ctx,

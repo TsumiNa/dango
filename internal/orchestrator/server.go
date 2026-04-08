@@ -34,6 +34,9 @@ func NewServer(addr string, registry *RegistryService, taskService *TaskService,
 
 // ListenAndServe starts the HTTP server and blocks until the context is
 // cancelled or the server exits.
+//
+// When ctx is cancelled, ListenAndServe requests graceful shutdown and returns
+// ctx.Err().
 func (s *Server) ListenAndServe(ctx context.Context) error {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/healthz", s.handleHealth)

@@ -6,6 +6,8 @@ import (
 )
 
 // NewUUID returns a random RFC 4122 version 4 UUID string.
+//
+// NewUUID uses crypto/rand as its entropy source.
 func NewUUID() (string, error) {
 	var raw [16]byte
 	if _, err := rand.Read(raw[:]); err != nil {

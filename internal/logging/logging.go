@@ -35,7 +35,9 @@ func DefaultConfig() Config {
 	}
 }
 
-// BindFlags exposes Config fields on the provided flag set.
+// BindFlags exposes Config fields on fs.
+//
+// BindFlags is a no-op when c or fs is nil.
 func (c *Config) BindFlags(fs *flag.FlagSet) {
 	if c == nil || fs == nil {
 		return
@@ -49,7 +51,8 @@ func (c *Config) BindFlags(fs *flag.FlagSet) {
 
 // New constructs the shared slog logger used by the dango services.
 //
-// When cfg.File is set, New also returns a closer for the opened log file.
+// When cfg.File is set, New also returns a closer for the opened log file. The
+// caller is responsible for closing it.
 func New(cfg Config, stderr io.Writer) (*slog.Logger, io.Closer, error) {
 	writer := io.Writer(stderr)
 	if writer == nil {
@@ -113,6 +116,8 @@ func From(logger *slog.Logger) *slog.Logger {
 }
 
 // Component annotates logger with the provided component name.
+//
+// Component never returns nil.
 func Component(logger *slog.Logger, component string) *slog.Logger {
 	return From(logger).With("component", component)
 }

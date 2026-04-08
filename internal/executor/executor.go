@@ -35,8 +35,10 @@ type RunOptions struct {
 	SubTask string
 }
 
-// New constructs an Executor that writes command results to stdout and
+// New constructs an [Executor] that writes command results to stdout and
 // diagnostics to stderr.
+//
+// When logger is nil, logging falls back to a discard logger.
 func New(stdout, stderr io.Writer, logger *slog.Logger) *Executor {
 	return &Executor{
 		stdout: stdout,
@@ -45,7 +47,9 @@ func New(stdout, stderr io.Writer, logger *slog.Logger) *Executor {
 	}
 }
 
-// Describe emits the local tool specification in the requested format.
+// Describe emits the local tool specification in format.
+//
+// Supported formats are "yaml" (default) and "json".
 func (e *Executor) Describe(format string) error {
 	e.logger.Info("describe requested", "format", format)
 	toolSpec, err := loadToolSpec()
@@ -75,7 +79,11 @@ func (e *Executor) Describe(format string) error {
 	}
 }
 
-// Run executes a tool task using the current environment contract.
+// Run executes a tool task using the scheduler environment contract.
+//
+// Run validates runtime inputs, ensures OUTPUT_PATH exists, executes a tool
+// hook when available, and guarantees that a _handoff.md is written even for
+// scaffold fallback behavior.
 func (e *Executor) Run(ctx context.Context, options RunOptions) error {
 	runtimeContext, err := loadRuntimeContext(options)
 	if err != nil {

@@ -20,8 +20,10 @@ type App struct {
 	stderr io.Writer
 }
 
-// New constructs an App that writes command output to stdout and diagnostics to
-// stderr.
+// New constructs an [App] that writes command output to stdout and diagnostics
+// to stderr.
+//
+// Callers should provide non-nil writers.
 func New(stdout, stderr io.Writer) *App {
 	return &App{
 		stdout: stdout,
@@ -29,7 +31,10 @@ func New(stdout, stderr io.Writer) *App {
 	}
 }
 
-// Run dispatches the provided CLI arguments to the requested dango mode.
+// Run dispatches args to the requested dango mode and subcommand.
+//
+// Run returns an error for unknown commands, argument parsing failures, and
+// command execution failures.
 func (a *App) Run(ctx context.Context, args []string) error {
 	if len(args) == 0 {
 		return a.usage()

@@ -62,6 +62,8 @@ type RegisteredToolFiles struct {
 
 // Register pulls or resolves image, reads its tool description, merges any
 // override, and persists the registration.
+//
+// Register updates existing rows when the tool name already exists.
 func (s *RegistryService) Register(ctx context.Context, image, overridePath string) (*RegisteredTool, error) {
 	if s.runtime == nil {
 		return nil, fmt.Errorf("container runtime is not configured")
@@ -171,6 +173,9 @@ func (s *RegistryService) Register(ctx context.Context, image, overridePath stri
 }
 
 // Unregister removes a tool registration and its persisted config files.
+//
+// Unregister is idempotent for missing database rows and still attempts to
+// remove the tool directory.
 func (s *RegistryService) Unregister(ctx context.Context, name string) error {
 	s.logger.Info("unregistering tool", "tool", name)
 	if err := s.store.DeleteTool(ctx, name); err != nil && !s.store.IsNotFound(err) {
@@ -193,6 +198,8 @@ func (s *RegistryService) List(ctx context.Context) ([]sqlite.ToolRecord, error)
 }
 
 // Load returns one registered tool row by name.
+//
+// Load returns sql.ErrNoRows when the tool is not registered.
 func (s *RegistryService) Load(ctx context.Context, name string) (sqlite.ToolRecord, error) {
 	record, err := s.store.GetTool(ctx, name)
 	if err != nil {

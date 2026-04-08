@@ -4,6 +4,8 @@ import "fmt"
 
 // MergeToolSpec overlays override values onto a base tool spec using recursive
 // map replacement semantics.
+//
+// MergeToolSpec does not mutate base.
 func MergeToolSpec(base ToolSpec, override map[string]any) (ToolSpec, error) {
 	baseMap, err := base.ToMap()
 	if err != nil {
