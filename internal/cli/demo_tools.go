@@ -2,8 +2,11 @@ package cli
 
 import (
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
+
+	"github.com/tsumina/dango/internal/logging"
 )
 
 type builtinDemoTool struct {
@@ -206,8 +209,10 @@ EOF
 	},
 }
 
-func materializeBuiltinDemoTools(dataDir string) (string, error) {
+func materializeBuiltinDemoTools(dataDir string, logger *slog.Logger) (string, error) {
 	root := filepath.Join(dataDir, "_builtin_demo_tools")
+	logger = logging.Component(logger, "cli.demo-tools")
+	logger.Info("materializing builtin demo tools", "root", root, "count", len(builtinDemoTools))
 	for _, tool := range builtinDemoTools {
 		toolDir := filepath.Join(root, tool.Name)
 		if err := os.MkdirAll(toolDir, 0o755); err != nil {
@@ -226,6 +231,7 @@ func materializeBuiltinDemoTools(dataDir string) (string, error) {
 		if err := os.Chmod(runPath, 0o755); err != nil {
 			return "", fmt.Errorf("chmod builtin demo tool run hook %q: %w", runPath, err)
 		}
+		logger.Debug("builtin demo tool materialized", "tool", tool.Name, "dir", toolDir)
 	}
 
 	return root, nil

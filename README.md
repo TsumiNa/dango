@@ -48,6 +48,28 @@ dango executor describe [--format yaml|json]
 dango executor run --task-id <uuid> [--sub-task path]
 ```
 
+## Logging
+
+All commands now support structured logging controls:
+
+```text
+--log-level   debug|info|warn|error
+--log-format  text|json
+--log-file    optional path for teeing logs to a file
+--log-source  include source locations
+```
+
+Environment fallbacks are also supported:
+
+```text
+DANGO_LOG_LEVEL
+DANGO_LOG_FORMAT
+DANGO_LOG_FILE
+DANGO_LOG_SOURCE
+```
+
+Logs are written to stderr by default so command JSON/YAML outputs on stdout remain script-friendly.
+
 ## Demo
 
 The local demo path uses built-in toy tools that are materialized under the chosen data directory at runtime. They are not intended to be source-controlled.
@@ -83,3 +105,4 @@ The terminal artifact is stored in the last edge output directory, and the synth
 If no hook exists, the executor writes a scaffold output and a valid `_handoff.md`, which keeps the orchestration pipeline testable before tool-specific logic is added.
 
 - `orchestrator register` also accepts `host://<tool-dir>` for local dev/demo tools. Those tool directories must contain `tool.yaml` and an executable `run` file.
+- `.env` and `.env.*` are ignored to reduce the risk of leaking local secrets such as OpenRouter API keys.

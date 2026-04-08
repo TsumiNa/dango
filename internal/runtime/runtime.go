@@ -4,9 +4,12 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"log/slog"
 	"os/exec"
 	"path"
 	"strings"
+
+	"github.com/tsumina/dango/internal/logging"
 )
 
 type ContainerRuntime interface {
@@ -39,10 +42,10 @@ type MultiRuntime struct {
 	host   ContainerRuntime
 }
 
-func NewDefault(dockerBinary string) *MultiRuntime {
+func NewDefault(dockerBinary string, logger *slog.Logger) *MultiRuntime {
 	return &MultiRuntime{
-		docker: NewDockerCLI(dockerBinary),
-		host:   NewHostRuntime(),
+		docker: NewDockerCLI(dockerBinary, logger),
+		host:   NewHostRuntime(logger),
 	}
 }
 
@@ -86,34 +89,45 @@ func (m *MultiRuntime) resolve(image string) (ContainerRuntime, error) {
 
 type DockerCLI struct {
 	Binary string
+	logger *slog.Logger
 }
 
-func NewDockerCLI(binary string) *DockerCLI {
+func NewDockerCLI(binary string, logger *slog.Logger) *DockerCLI {
 	if binary == "" {
 		binary = "docker"
 	}
-	return &DockerCLI{Binary: binary}
+	return &DockerCLI{
+		Binary: binary,
+		logger: logging.Component(logger, "runtime.docker"),
+	}
 }
 
 func (d *DockerCLI) Pull(ctx context.Context, image string) error {
+	d.logger.Info("pulling tool image", "image", image)
 	cmd := exec.CommandContext(ctx, d.Binary, "pull", image)
 	output, err := cmd.CombinedOutput()
 	if err != nil {
+		d.logger.Error("docker pull failed", "image", image, "error", err, "output", string(bytes.TrimSpace(output)))
 		return fmt.Errorf("pull image %q: %w: %s", image, err, bytes.TrimSpace(output))
 	}
+	d.logger.Debug("docker pull completed", "image", image)
 	return nil
 }
 
 func (d *DockerCLI) DescribeTool(ctx context.Context, image string) ([]byte, error) {
+	d.logger.Info("describing tool image", "image", image)
 	cmd := exec.CommandContext(ctx, d.Binary, "run", "--rm", image, "dango", "executor", "describe", "--format", "yaml")
 	output, err := cmd.CombinedOutput()
 	if err != nil {
+		d.logger.Error("docker describe failed", "image", image, "error", err, "output", string(bytes.TrimSpace(output)))
 		return nil, fmt.Errorf("describe tool in image %q: %w: %s", image, err, bytes.TrimSpace(output))
 	}
+	d.logger.Debug("tool image described", "image", image, "bytes", len(output))
 	return output, nil
 }
 
 func (d *DockerCLI) RunExecutor(ctx context.Context, request ExecutorRunRequest) error {
+	d.logger.Info("running executor container", "image", request.Image, "task_id", request.TaskID)
 	args := []string{
 		"run", "--rm",
 		"-e", "TASK_ID=" + request.TaskID,
@@ -151,7 +165,9 @@ func (d *DockerCLI) RunExecutor(ctx context.Context, request ExecutorRunRequest)
 	cmd := exec.CommandContext(ctx, d.Binary, args...)
 	output, err := cmd.CombinedOutput()
 	if err != nil {
+		d.logger.Error("executor container failed", "image", request.Image, "task_id", request.TaskID, "error", err, "output", string(bytes.TrimSpace(output)))
 		return fmt.Errorf("run executor image %q: %w: %s", request.Image, err, bytes.TrimSpace(output))
 	}
+	d.logger.Info("executor container completed", "image", request.Image, "task_id", request.TaskID)
 	return nil
 }

@@ -62,7 +62,7 @@ func TestRegistryRegister(t *testing.T) {
 			"defaults:\n" +
 			"  page_size: A4\n" +
 			"  language: ja\n"),
-	})
+	}, nil)
 
 	registered, err := service.Register(context.Background(), "example/pdf-tool:v1", overridePath)
 	if err != nil {

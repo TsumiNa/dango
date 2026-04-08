@@ -43,18 +43,18 @@ func TestDemoEngineRunEndToEndWithHostRuntime(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = store.Close() })
 
-	rt := runtime.NewDefault("")
-	registry := NewRegistryService(layout, store, rt)
+	rt := runtime.NewDefault("", nil)
+	registry := NewRegistryService(layout, store, rt, nil)
 	for _, name := range []string{"toy-brief", "toy-drafter", "toy-packager"} {
 		if _, err := registry.Register(context.Background(), runtime.HostPrefix+filepath.Join(toolsRoot, name), ""); err != nil {
 			t.Fatalf("Register(%s) error = %v", name, err)
 		}
 	}
 
-	taskService := NewTaskService(layout, store)
-	planner := NewPlanner(store)
-	scheduler := NewScheduler(layout, store, rt)
-	engine := NewDemoEngine(layout, store, taskService, planner, scheduler)
+	taskService := NewTaskService(layout, store, nil)
+	planner := NewPlanner(store, nil)
+	scheduler := NewScheduler(layout, store, rt, nil)
+	engine := NewDemoEngine(layout, store, taskService, planner, scheduler, nil)
 
 	result, err := engine.Run(context.Background(), "write a small demo artifact")
 	if err != nil {

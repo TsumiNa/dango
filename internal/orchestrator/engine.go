@@ -3,9 +3,11 @@ package orchestrator
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"strings"
 
 	"github.com/tsumina/dango/internal/layout"
+	"github.com/tsumina/dango/internal/logging"
 	"github.com/tsumina/dango/internal/spec"
 	"github.com/tsumina/dango/internal/store/sqlite"
 )
@@ -16,6 +18,7 @@ type DemoEngine struct {
 	tasks     *TaskService
 	planner   *Planner
 	scheduler *Scheduler
+	logger    *slog.Logger
 }
 
 type DemoRunResult struct {
@@ -26,24 +29,29 @@ type DemoRunResult struct {
 	ResultPath       string                 `json:"result_path"`
 }
 
-func NewDemoEngine(layout *layout.Layout, store *sqlite.Store, tasks *TaskService, planner *Planner, scheduler *Scheduler) *DemoEngine {
+func NewDemoEngine(layout *layout.Layout, store *sqlite.Store, tasks *TaskService, planner *Planner, scheduler *Scheduler, logger *slog.Logger) *DemoEngine {
 	return &DemoEngine{
 		layout:    layout,
 		store:     store,
 		tasks:     tasks,
 		planner:   planner,
 		scheduler: scheduler,
+		logger:    logging.Component(logger, "orchestrator.engine"),
 	}
 }
 
 func (e *DemoEngine) Run(ctx context.Context, request string) (*DemoRunResult, error) {
+	e.logger.Info("demo run started")
 	task, err := e.tasks.Create(ctx, request)
 	if err != nil {
+		e.logger.Error("failed to create task", "error", err)
 		return nil, err
 	}
+	taskLogger := e.logger.With("task_id", task.ID)
 
 	plan, err := e.planner.Plan(ctx, task.ID, request)
 	if err != nil {
+		taskLogger.Error("planning failed", "error", err)
 		_, _ = e.tasks.UpdateStatus(ctx, task.ID, spec.TaskStatusFailed)
 		_ = e.tasks.WriteResult(task.ID, buildFailureResult(task.ID, request, err))
 		return nil, err
@@ -51,16 +59,19 @@ func (e *DemoEngine) Run(ctx context.Context, request string) (*DemoRunResult, e
 
 	task, err = e.tasks.ApplyPlan(ctx, task.ID, plan, spec.TaskStatusApproved)
 	if err != nil {
+		taskLogger.Error("failed to persist approved plan", "error", err)
 		return nil, err
 	}
 
 	task, err = e.tasks.UpdateStatus(ctx, task.ID, spec.TaskStatusExecuting)
 	if err != nil {
+		taskLogger.Error("failed to transition task to executing", "error", err)
 		return nil, err
 	}
 
 	handoffs := make([]spec.Handoff, 0, len(plan.Edges))
 	for _, edge := range plan.Edges {
+		taskLogger.Info("dispatching edge", "edge_id", edge.ID, "tool", edge.ToolName, "upstream", edge.Upstream)
 		handoff, edgeErr := e.scheduler.RunLocalEdge(ctx, EdgeExecutionRequest{
 			TaskID:         task.ID,
 			EdgeID:         edge.ID,
@@ -69,23 +80,29 @@ func (e *DemoEngine) Run(ctx context.Context, request string) (*DemoRunResult, e
 			SubTaskContent: edge.SubTask,
 		})
 		if edgeErr != nil {
+			taskLogger.Error("edge execution failed", "edge_id", edge.ID, "tool", edge.ToolName, "error", edgeErr)
 			_, _ = e.tasks.UpdateStatus(ctx, task.ID, spec.TaskStatusFailed)
 			_ = e.tasks.WriteResult(task.ID, buildExecutionFailureResult(task.ID, request, plan, handoffs, edgeErr))
 			return nil, edgeErr
 		}
 
+		taskLogger.Info("edge completed", "edge_id", edge.ID, "tool", edge.ToolName, "status", handoff.Metadata.Status)
 		handoffs = append(handoffs, handoff)
 	}
 
 	task, err = e.tasks.UpdateStatus(ctx, task.ID, spec.TaskStatusDone)
 	if err != nil {
+		taskLogger.Error("failed to transition task to done", "error", err)
 		return nil, err
 	}
 
 	terminalHandoffs := extractTerminalHandoffs(plan, handoffs)
 	if err := e.tasks.WriteResult(task.ID, buildSuccessResult(task.ID, request, plan, terminalHandoffs, e.layout)); err != nil {
+		taskLogger.Error("failed to write final result", "error", err)
 		return nil, err
 	}
+
+	taskLogger.Info("demo run completed", "terminal_handoffs", len(terminalHandoffs), "result_path", e.layout.TaskResultPath(task.ID))
 
 	return &DemoRunResult{
 		Task:             task,

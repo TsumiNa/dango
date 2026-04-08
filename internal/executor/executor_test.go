@@ -35,7 +35,7 @@ func TestExecutorRunScaffold(t *testing.T) {
 	t.Setenv("TOOL_CONFIG", toolPath)
 	t.Setenv("OUTPUT_PATH", outputPath)
 
-	execMode := New(os.Stdout, os.Stderr)
+	execMode := New(os.Stdout, os.Stderr, nil)
 	if err := execMode.Run(context.Background(), RunOptions{}); err != nil {
 		t.Fatalf("Run() error = %v", err)
 	}

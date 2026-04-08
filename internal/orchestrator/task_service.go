@@ -4,10 +4,12 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"os"
 	"strings"
 
 	"github.com/tsumina/dango/internal/layout"
+	"github.com/tsumina/dango/internal/logging"
 	"github.com/tsumina/dango/internal/spec"
 	"github.com/tsumina/dango/internal/store/sqlite"
 )
@@ -15,12 +17,14 @@ import (
 type TaskService struct {
 	layout *layout.Layout
 	store  *sqlite.Store
+	logger *slog.Logger
 }
 
-func NewTaskService(layout *layout.Layout, store *sqlite.Store) *TaskService {
+func NewTaskService(layout *layout.Layout, store *sqlite.Store, logger *slog.Logger) *TaskService {
 	return &TaskService{
 		layout: layout,
 		store:  store,
+		logger: logging.Component(logger, "orchestrator.tasks"),
 	}
 }
 
@@ -39,15 +43,19 @@ func (s *TaskService) Create(ctx context.Context, request string) (sqlite.TaskRe
 		Status:  string(spec.TaskStatusPlanning),
 		Request: request,
 	}
+	s.logger.Info("creating task", "task_id", taskID, "status", record.Status)
 	if err := s.store.CreateTask(ctx, record); err != nil {
+		s.logger.Error("failed to create task record", "task_id", taskID, "error", err)
 		return sqlite.TaskRecord{}, err
 	}
 
 	taskMarkdown := buildTaskMarkdown(request, string(spec.TaskStatusPlanning), nil)
 	if err := os.WriteFile(s.layout.TaskRequestPath(taskID), []byte(taskMarkdown), 0o644); err != nil {
+		s.logger.Error("failed to write task markdown", "task_id", taskID, "error", err)
 		return sqlite.TaskRecord{}, fmt.Errorf("write task.md: %w", err)
 	}
 
+	s.logger.Debug("task created", "task_id", taskID, "task_path", s.layout.TaskRequestPath(taskID))
 	return s.store.GetTask(ctx, taskID)
 }
 
@@ -58,6 +66,7 @@ func (s *TaskService) Get(ctx context.Context, taskID string) (sqlite.TaskRecord
 func (s *TaskService) ApplyPlan(ctx context.Context, taskID string, plan spec.DAGPlan, status spec.TaskStatus) (sqlite.TaskRecord, error) {
 	payload, err := json.MarshalIndent(plan, "", "  ")
 	if err != nil {
+		s.logger.Error("failed to marshal task plan", "task_id", taskID, "error", err)
 		return sqlite.TaskRecord{}, fmt.Errorf("marshal dag plan: %w", err)
 	}
 
@@ -67,19 +76,24 @@ func (s *TaskService) ApplyPlan(ctx context.Context, taskID string, plan spec.DA
 	}
 
 	if err := s.store.UpdateTaskPlan(ctx, taskID, string(status), string(payload)); err != nil {
+		s.logger.Error("failed to persist task plan", "task_id", taskID, "status", status, "error", err)
 		return sqlite.TaskRecord{}, err
 	}
 
 	taskMarkdown := buildTaskMarkdown(task.Request, string(status), &plan)
 	if err := os.WriteFile(s.layout.TaskRequestPath(taskID), []byte(taskMarkdown), 0o644); err != nil {
+		s.logger.Error("failed to write planned task markdown", "task_id", taskID, "error", err)
 		return sqlite.TaskRecord{}, fmt.Errorf("write task.md: %w", err)
 	}
 
+	s.logger.Info("task plan applied", "task_id", taskID, "status", status, "edges", len(plan.Edges))
 	return s.store.GetTask(ctx, taskID)
 }
 
 func (s *TaskService) UpdateStatus(ctx context.Context, taskID string, status spec.TaskStatus) (sqlite.TaskRecord, error) {
+	s.logger.Info("updating task status", "task_id", taskID, "status", status)
 	if err := s.store.UpdateTaskStatus(ctx, taskID, string(status)); err != nil {
+		s.logger.Error("failed to update task status", "task_id", taskID, "status", status, "error", err)
 		return sqlite.TaskRecord{}, err
 	}
 	return s.store.GetTask(ctx, taskID)
@@ -87,8 +101,10 @@ func (s *TaskService) UpdateStatus(ctx context.Context, taskID string, status sp
 
 func (s *TaskService) WriteResult(taskID string, result string) error {
 	if err := os.WriteFile(s.layout.TaskResultPath(taskID), []byte(result), 0o644); err != nil {
+		s.logger.Error("failed to write task result", "task_id", taskID, "error", err)
 		return fmt.Errorf("write result.md: %w", err)
 	}
+	s.logger.Info("task result written", "task_id", taskID, "result_path", s.layout.TaskResultPath(taskID))
 	return nil
 }
 

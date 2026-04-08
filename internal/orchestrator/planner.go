@@ -4,15 +4,18 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"strings"
 	"time"
 
+	"github.com/tsumina/dango/internal/logging"
 	"github.com/tsumina/dango/internal/spec"
 	"github.com/tsumina/dango/internal/store/sqlite"
 )
 
 type Planner struct {
-	store *sqlite.Store
+	store  *sqlite.Store
+	logger *slog.Logger
 }
 
 type catalogTool struct {
@@ -32,21 +35,28 @@ type plannerState struct {
 	Steps       []pathStep
 }
 
-func NewPlanner(store *sqlite.Store) *Planner {
-	return &Planner{store: store}
+func NewPlanner(store *sqlite.Store, logger *slog.Logger) *Planner {
+	return &Planner{
+		store:  store,
+		logger: logging.Component(logger, "orchestrator.planner"),
+	}
 }
 
 func (p *Planner) Plan(ctx context.Context, taskID, request string) (spec.DAGPlan, error) {
+	p.logger.Info("planning task", "task_id", taskID)
 	tools, err := p.loadCatalog(ctx)
 	if err != nil {
+		p.logger.Error("failed to load tool catalog", "task_id", taskID, "error", err)
 		return spec.DAGPlan{}, err
 	}
 	if len(tools) == 0 {
+		p.logger.Warn("no tools registered for planning", "task_id", taskID)
 		return spec.DAGPlan{}, fmt.Errorf("no tools registered")
 	}
 
 	steps, err := findLinearPath(tools, "request", "final")
 	if err != nil {
+		p.logger.Error("planner failed to find path", "task_id", taskID, "error", err)
 		return spec.DAGPlan{}, err
 	}
 
@@ -69,6 +79,12 @@ func (p *Planner) Plan(ctx context.Context, taskID, request string) (spec.DAGPla
 		edges = append(edges, edge)
 		upstream = edgeID
 	}
+
+	selectedTools := make([]string, 0, len(edges))
+	for _, edge := range edges {
+		selectedTools = append(selectedTools, edge.ToolName)
+	}
+	p.logger.Info("planning completed", "task_id", taskID, "edges", len(edges), "tools", selectedTools)
 
 	return spec.DAGPlan{
 		Planner:   "demo-rule-planner",

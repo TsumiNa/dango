@@ -4,18 +4,25 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"log/slog"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
+
+	"github.com/tsumina/dango/internal/logging"
 )
 
 const HostPrefix = "host://"
 
-type HostRuntime struct{}
+type HostRuntime struct {
+	logger *slog.Logger
+}
 
-func NewHostRuntime() *HostRuntime {
-	return &HostRuntime{}
+func NewHostRuntime(logger *slog.Logger) *HostRuntime {
+	return &HostRuntime{
+		logger: logging.Component(logger, "runtime.host"),
+	}
 }
 
 func NormalizeImageReference(image string) (string, error) {
@@ -41,6 +48,7 @@ func (h *HostRuntime) DescribeTool(_ context.Context, image string) ([]byte, err
 	if err != nil {
 		return nil, err
 	}
+	h.logger.Debug("describing host tool", "image", image, "dir", dir)
 
 	toolPath := filepath.Join(dir, "tool.yaml")
 	payload, err := os.ReadFile(toolPath)
@@ -55,6 +63,7 @@ func (h *HostRuntime) RunExecutor(ctx context.Context, request ExecutorRunReques
 	if err != nil {
 		return err
 	}
+	h.logger.Info("running host tool", "image", request.Image, "dir", dir, "task_id", request.TaskID)
 
 	runPath := filepath.Join(dir, "run")
 	info, err := os.Stat(runPath)
@@ -92,9 +101,11 @@ func (h *HostRuntime) RunExecutor(ctx context.Context, request ExecutorRunReques
 	cmd.Env = env
 	output, err := cmd.CombinedOutput()
 	if err != nil {
+		h.logger.Error("host tool failed", "dir", dir, "task_id", request.TaskID, "error", err, "output", string(bytes.TrimSpace(output)))
 		return fmt.Errorf("run host tool %q: %w: %s", dir, err, bytes.TrimSpace(output))
 	}
 
+	h.logger.Info("host tool completed", "dir", dir, "task_id", request.TaskID)
 	return nil
 }
 

@@ -5,8 +5,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"strings"
+
+	"github.com/tsumina/dango/internal/logging"
 )
 
 type Server struct {
@@ -14,14 +17,16 @@ type Server struct {
 	registry    *RegistryService
 	taskService *TaskService
 	engine      *DemoEngine
+	logger      *slog.Logger
 }
 
-func NewServer(addr string, registry *RegistryService, taskService *TaskService, engine *DemoEngine) *Server {
+func NewServer(addr string, registry *RegistryService, taskService *TaskService, engine *DemoEngine, logger *slog.Logger) *Server {
 	return &Server{
 		addr:        addr,
 		registry:    registry,
 		taskService: taskService,
 		engine:      engine,
+		logger:      logging.Component(logger, "orchestrator.server"),
 	}
 }
 
@@ -42,9 +47,11 @@ func (s *Server) ListenAndServe(ctx context.Context) error {
 	go func() {
 		errCh <- server.ListenAndServe()
 	}()
+	s.logger.Info("server listening", "addr", s.addr)
 
 	select {
 	case <-ctx.Done():
+		s.logger.Info("server shutdown requested")
 		_ = server.Shutdown(context.Background())
 		return ctx.Err()
 	case err := <-errCh:
@@ -66,9 +73,11 @@ func (s *Server) handleTools(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
 		return
 	}
+	s.logger.Debug("listing tools", "method", r.Method, "path", r.URL.Path)
 
 	tools, err := s.registry.List(r.Context())
 	if err != nil {
+		s.logger.Error("list tools failed", "error", err)
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
@@ -81,12 +90,14 @@ func (s *Server) handleTasks(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
 		return
 	}
+	s.logger.Debug("create task requested", "method", r.Method, "path", r.URL.Path)
 
 	var payload struct {
 		Request string `json:"request"`
 		AutoRun bool   `json:"auto_run"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+		s.logger.Warn("failed to decode task payload", "error", err)
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": fmt.Sprintf("decode request body: %v", err)})
 		return
 	}
@@ -98,6 +109,7 @@ func (s *Server) handleTasks(w http.ResponseWriter, r *http.Request) {
 
 	task, err := s.taskService.Create(r.Context(), payload.Request)
 	if err != nil {
+		s.logger.Error("task creation failed", "error", err)
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
@@ -110,11 +122,13 @@ func (s *Server) handleTaskRuns(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
 		return
 	}
+	s.logger.Debug("task run requested", "method", r.Method, "path", r.URL.Path)
 
 	var payload struct {
 		Request string `json:"request"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+		s.logger.Warn("failed to decode task run payload", "error", err)
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": fmt.Sprintf("decode request body: %v", err)})
 		return
 	}
@@ -127,6 +141,7 @@ func (s *Server) handleTaskByID(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
 		return
 	}
+	s.logger.Debug("task lookup requested", "method", r.Method, "path", r.URL.Path)
 
 	taskID := strings.TrimPrefix(r.URL.Path, "/v1/tasks/")
 	if taskID == "" {
@@ -136,6 +151,7 @@ func (s *Server) handleTaskByID(w http.ResponseWriter, r *http.Request) {
 
 	task, err := s.taskService.Get(r.Context(), taskID)
 	if err != nil {
+		s.logger.Warn("task lookup failed", "task_id", taskID, "error", err)
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": err.Error()})
 		return
 	}
@@ -151,6 +167,7 @@ func (s *Server) runTaskNow(w http.ResponseWriter, r *http.Request, request stri
 
 	result, err := s.engine.Run(r.Context(), request)
 	if err != nil {
+		s.logger.Error("task run failed", "error", err)
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
