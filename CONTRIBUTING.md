@@ -12,6 +12,10 @@ This document is for contributors and maintainers. It covers architecture contex
 
 Current implementation includes a local runnable demo path and preserves extension points for production planners/models and remote storage backends.
 
+The diagram below gives contributors a high-level view of how the orchestrator, scheduler, executor, storage, and tool runtime pieces fit together.
+
+![dango architecture overview](dango_architecture.svg)
+
 ## Repository Structure
 
 ```text
