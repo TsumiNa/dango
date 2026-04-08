@@ -8,6 +8,7 @@ Current instruction files:
 
 - `.github/instructions/go-file-organization.instructions.md`
 - `.github/instructions/go-docs.instructions.md`
+- `.github/instructions/repository-doc-boundaries.instructions.md`
 
 Working rules:
 
