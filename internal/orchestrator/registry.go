@@ -11,7 +11,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/tsumina/dango/internal/layout"
+	"github.com/tsumina/dango/internal/datadir"
 	"github.com/tsumina/dango/internal/logging"
 	"github.com/tsumina/dango/internal/runtime"
 	"github.com/tsumina/dango/internal/spec"
@@ -21,7 +21,7 @@ import (
 
 // RegistryService manages tool registration and registry persistence.
 type RegistryService struct {
-	layout  *layout.Layout
+	locator *datadir.Locator
 	store   *sqlite.Store
 	runtime runtime.ContainerRuntime
 	logger  *slog.Logger
@@ -29,9 +29,9 @@ type RegistryService struct {
 
 // NewRegistryService constructs the tool registration service used by the
 // orchestrator.
-func NewRegistryService(layout *layout.Layout, store *sqlite.Store, rt runtime.ContainerRuntime, logger *slog.Logger) *RegistryService {
+func NewRegistryService(locator *datadir.Locator, store *sqlite.Store, rt runtime.ContainerRuntime, logger *slog.Logger) *RegistryService {
 	return &RegistryService{
-		layout:  layout,
+		locator: locator,
 		store:   store,
 		runtime: rt,
 		logger:  logging.Component(logger, "orchestrator.registry"),
@@ -69,8 +69,8 @@ func (s *RegistryService) Register(ctx context.Context, image, overridePath stri
 		return nil, fmt.Errorf("container runtime is not configured")
 	}
 	s.logger.Info("registering tool", "image", image, "override_path", overridePath)
-	if err := s.layout.Ensure(); err != nil {
-		s.logger.Error("failed to ensure layout", "image", image, "error", err)
+	if err := s.locator.Ensure(); err != nil {
+		s.logger.Error("failed to ensure data dir", "image", image, "error", err)
 		return nil, err
 	}
 
@@ -107,12 +107,12 @@ func (s *RegistryService) Register(ctx context.Context, image, overridePath stri
 		return nil, err
 	}
 
-	if err := s.layout.EnsureToolDir(merged.Name); err != nil {
+	if err := s.locator.EnsureToolDir(merged.Name); err != nil {
 		s.logger.Error("failed to ensure tool directory", "tool", merged.Name, "error", err)
 		return nil, err
 	}
 
-	toolPath := s.layout.ToolSpecPath(merged.Name)
+	toolPath := s.locator.ToolSpecPath(merged.Name)
 	if err := os.WriteFile(toolPath, toolYAML, 0o644); err != nil {
 		s.logger.Error("failed to write tool spec", "tool", merged.Name, "path", toolPath, "error", err)
 		return nil, fmt.Errorf("write tool.yaml: %w", err)
@@ -120,7 +120,7 @@ func (s *RegistryService) Register(ctx context.Context, image, overridePath stri
 
 	overrideFilePath := ""
 	if len(rawOverride) > 0 {
-		overrideFilePath = s.layout.ToolOverridePath(merged.Name)
+		overrideFilePath = s.locator.ToolOverridePath(merged.Name)
 		if err := os.WriteFile(overrideFilePath, rawOverride, 0o644); err != nil {
 			s.logger.Error("failed to write override file", "tool", merged.Name, "path", overrideFilePath, "error", err)
 			return nil, fmt.Errorf("write override.yaml: %w", err)
@@ -131,7 +131,7 @@ func (s *RegistryService) Register(ctx context.Context, image, overridePath stri
 	if err != nil {
 		return nil, fmt.Errorf("marshal merged.yaml: %w", err)
 	}
-	mergedPath := s.layout.ToolMergedPath(merged.Name)
+	mergedPath := s.locator.ToolMergedPath(merged.Name)
 	if err := os.WriteFile(mergedPath, mergedPayload, 0o644); err != nil {
 		s.logger.Error("failed to write merged config", "tool", merged.Name, "path", mergedPath, "error", err)
 		return nil, fmt.Errorf("write merged.yaml: %w", err)
@@ -183,7 +183,7 @@ func (s *RegistryService) Unregister(ctx context.Context, name string) error {
 		return err
 	}
 
-	toolDir := s.layout.ToolDir(name)
+	toolDir := s.locator.ToolDir(name)
 	if err := os.RemoveAll(toolDir); err != nil {
 		s.logger.Error("failed to remove tool directory", "tool", name, "path", toolDir, "error", err)
 		return fmt.Errorf("remove tool directory %q: %w", toolDir, err)

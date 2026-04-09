@@ -30,6 +30,8 @@ dango executor describe [--format yaml|json]
 dango executor run --task-id <uuid> [--sub-task path]
 ```
 
+Non-demo orchestrator commands default `--data-dir` to `~/.dango/data`.
+
 ## Logging
 
 All commands support:

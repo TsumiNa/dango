@@ -6,7 +6,7 @@ import (
 	"log/slog"
 
 	"github.com/spf13/cobra"
-	"github.com/tsumina/dango/internal/layout"
+	"github.com/tsumina/dango/internal/datadir"
 	"github.com/tsumina/dango/internal/logging"
 	"github.com/tsumina/dango/internal/store/sqlite"
 )
@@ -98,21 +98,21 @@ func (a *App) newExecutorCommand() *cobra.Command {
 	return cmd
 }
 
-func (a *App) bootstrapOrchestrator(dataDir string) (*layout.Layout, *sqlite.Store, error) {
-	layout, err := layout.New(dataDir)
+func (a *App) bootstrapOrchestrator(dataDir string) (*datadir.Locator, *sqlite.Store, error) {
+	locator, err := datadir.New(dataDir)
 	if err != nil {
 		return nil, nil, err
 	}
-	if err := layout.Ensure(); err != nil {
+	if err := locator.Ensure(); err != nil {
 		return nil, nil, err
 	}
 
-	store, err := sqlite.Open(layout.DBPath())
+	store, err := sqlite.Open(locator.DBPath())
 	if err != nil {
 		return nil, nil, err
 	}
 
-	return layout, store, nil
+	return locator, store, nil
 }
 
 func (a *App) newLogger(command string, cfg logging.Config) (*slog.Logger, func(), error) {

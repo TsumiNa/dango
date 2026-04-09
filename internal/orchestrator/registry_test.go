@@ -6,7 +6,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/tsumina/dango/internal/layout"
+	"github.com/tsumina/dango/internal/datadir"
 	"github.com/tsumina/dango/internal/runtime"
 	"github.com/tsumina/dango/internal/store/sqlite"
 )
@@ -31,15 +31,15 @@ func TestRegistryRegister(t *testing.T) {
 	t.Parallel()
 
 	root := t.TempDir()
-	layout, err := layout.New(root)
+	locator, err := datadir.New(root)
 	if err != nil {
-		t.Fatalf("layout.New() error = %v", err)
+		t.Fatalf("datadir.New() error = %v", err)
 	}
-	if err := layout.Ensure(); err != nil {
-		t.Fatalf("layout.Ensure() error = %v", err)
+	if err := locator.Ensure(); err != nil {
+		t.Fatalf("locator.Ensure() error = %v", err)
 	}
 
-	store, err := sqlite.Open(layout.DBPath())
+	store, err := sqlite.Open(locator.DBPath())
 	if err != nil {
 		t.Fatalf("sqlite.Open() error = %v", err)
 	}
@@ -51,7 +51,7 @@ func TestRegistryRegister(t *testing.T) {
 		t.Fatalf("write override: %v", err)
 	}
 
-	service := NewRegistryService(layout, store, fakeRuntime{
+	service := NewRegistryService(locator, store, fakeRuntime{
 		describeYAML: []byte("" +
 			"name: pdf-generator\n" +
 			"version: 1.0.0\n" +

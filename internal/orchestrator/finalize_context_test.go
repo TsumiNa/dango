@@ -8,7 +8,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/tsumina/dango/internal/layout"
+	"github.com/tsumina/dango/internal/datadir"
 	"github.com/tsumina/dango/internal/runtime"
 	"github.com/tsumina/dango/internal/store/sqlite"
 	_ "modernc.org/sqlite"
@@ -37,15 +37,15 @@ func (r *cancelingRuntime) RunExecutor(ctx context.Context, _ runtime.ExecutorRu
 
 func TestDemoEngineRunPersistsFailureAfterCancellation(t *testing.T) {
 	root := t.TempDir()
-	layout, err := layout.New(filepath.Join(root, "data"))
+	locator, err := datadir.New(filepath.Join(root, "data"))
 	if err != nil {
-		t.Fatalf("layout.New() error = %v", err)
+		t.Fatalf("datadir.New() error = %v", err)
 	}
-	if err := layout.Ensure(); err != nil {
-		t.Fatalf("layout.Ensure() error = %v", err)
+	if err := locator.Ensure(); err != nil {
+		t.Fatalf("locator.Ensure() error = %v", err)
 	}
 
-	store, err := sqlite.Open(layout.DBPath())
+	store, err := sqlite.Open(locator.DBPath())
 	if err != nil {
 		t.Fatalf("sqlite.Open() error = %v", err)
 	}
@@ -60,15 +60,15 @@ func TestDemoEngineRunPersistsFailureAfterCancellation(t *testing.T) {
 			"output_types: [final]\n" +
 			"model: demo/canceling-tool\n"),
 	}
-	registry := NewRegistryService(layout, store, rt, nil)
+	registry := NewRegistryService(locator, store, rt, nil)
 	if _, err := registry.Register(context.Background(), "example/canceling-tool:v1", ""); err != nil {
 		t.Fatalf("Register() error = %v", err)
 	}
 
-	taskService := NewTaskService(layout, store, nil)
+	taskService := NewTaskService(locator, store, nil)
 	planner := NewPlanner(store, nil)
-	scheduler := NewScheduler(layout, store, rt, nil)
-	engine := NewDemoEngine(layout, store, taskService, planner, scheduler, nil)
+	scheduler := NewScheduler(locator, store, rt, nil)
+	engine := NewDemoEngine(locator, store, taskService, planner, scheduler, nil)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	rt.cancel = cancel
@@ -84,7 +84,7 @@ func TestDemoEngineRunPersistsFailureAfterCancellation(t *testing.T) {
 		t.Fatalf("Run() result = %#v, want nil on failure", result)
 	}
 
-	db, err := sql.Open("sqlite", layout.DBPath())
+	db, err := sql.Open("sqlite", locator.DBPath())
 	if err != nil {
 		t.Fatalf("sql.Open() error = %v", err)
 	}
@@ -107,7 +107,7 @@ func TestDemoEngineRunPersistsFailureAfterCancellation(t *testing.T) {
 		t.Fatalf("edge status = %q, want %q", got, want)
 	}
 
-	if _, err := os.Stat(layout.TaskResultPath(taskID)); err != nil {
+	if _, err := os.Stat(locator.TaskResultPath(taskID)); err != nil {
 		t.Fatalf("task result stat error = %v", err)
 	}
 }

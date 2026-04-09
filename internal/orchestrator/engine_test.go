@@ -7,7 +7,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/tsumina/dango/internal/layout"
+	"github.com/tsumina/dango/internal/datadir"
 	"github.com/tsumina/dango/internal/runtime"
 	"github.com/tsumina/dango/internal/store/sqlite"
 )
@@ -29,32 +29,32 @@ func TestDemoEngineRunEndToEndWithHostRuntime(t *testing.T) {
 		createTempTool(t, toolsRoot, tool.Name, tool.InputType, tool.OutputType, tool.NextToolYML, tool.OutputFile)
 	}
 
-	layout, err := layout.New(filepath.Join(root, "data"))
+	locator, err := datadir.New(filepath.Join(root, "data"))
 	if err != nil {
-		t.Fatalf("layout.New() error = %v", err)
+		t.Fatalf("datadir.New() error = %v", err)
 	}
-	if err := layout.Ensure(); err != nil {
-		t.Fatalf("layout.Ensure() error = %v", err)
+	if err := locator.Ensure(); err != nil {
+		t.Fatalf("locator.Ensure() error = %v", err)
 	}
 
-	store, err := sqlite.Open(layout.DBPath())
+	store, err := sqlite.Open(locator.DBPath())
 	if err != nil {
 		t.Fatalf("sqlite.Open() error = %v", err)
 	}
 	t.Cleanup(func() { _ = store.Close() })
 
 	rt := runtime.NewDefault("", nil)
-	registry := NewRegistryService(layout, store, rt, nil)
+	registry := NewRegistryService(locator, store, rt, nil)
 	for _, name := range []string{"toy-brief", "toy-drafter", "toy-packager"} {
 		if _, err := registry.Register(context.Background(), runtime.HostPrefix+filepath.Join(toolsRoot, name), ""); err != nil {
 			t.Fatalf("Register(%s) error = %v", name, err)
 		}
 	}
 
-	taskService := NewTaskService(layout, store, nil)
+	taskService := NewTaskService(locator, store, nil)
 	planner := NewPlanner(store, nil)
-	scheduler := NewScheduler(layout, store, rt, nil)
-	engine := NewDemoEngine(layout, store, taskService, planner, scheduler, nil)
+	scheduler := NewScheduler(locator, store, rt, nil)
+	engine := NewDemoEngine(locator, store, taskService, planner, scheduler, nil)
 
 	result, err := engine.Run(context.Background(), "write a small demo artifact")
 	if err != nil {
@@ -76,7 +76,7 @@ func TestDemoEngineRunEndToEndWithHostRuntime(t *testing.T) {
 	}
 
 	finalEdgeID := result.Plan.Edges[len(result.Plan.Edges)-1].ID
-	finalArtifact := filepath.Join(layout.EdgeOutputDir(result.Task.ID, finalEdgeID), "final-report.md")
+	finalArtifact := filepath.Join(locator.EdgeOutputDir(result.Task.ID, finalEdgeID), "final-report.md")
 	if _, err := os.Stat(finalArtifact); err != nil {
 		t.Fatalf("final artifact stat error = %v", err)
 	}

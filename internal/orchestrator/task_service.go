@@ -8,7 +8,7 @@ import (
 	"os"
 	"strings"
 
-	"github.com/tsumina/dango/internal/layout"
+	"github.com/tsumina/dango/internal/datadir"
 	"github.com/tsumina/dango/internal/logging"
 	"github.com/tsumina/dango/internal/spec"
 	"github.com/tsumina/dango/internal/store/sqlite"
@@ -16,17 +16,17 @@ import (
 
 // TaskService manages task lifecycle persistence and task markdown artifacts.
 type TaskService struct {
-	layout *layout.Layout
-	store  *sqlite.Store
-	logger *slog.Logger
+	locator *datadir.Locator
+	store   *sqlite.Store
+	logger  *slog.Logger
 }
 
 // NewTaskService constructs the task persistence service.
-func NewTaskService(layout *layout.Layout, store *sqlite.Store, logger *slog.Logger) *TaskService {
+func NewTaskService(locator *datadir.Locator, store *sqlite.Store, logger *slog.Logger) *TaskService {
 	return &TaskService{
-		layout: layout,
-		store:  store,
-		logger: logging.Component(logger, "orchestrator.tasks"),
+		locator: locator,
+		store:   store,
+		logger:  logging.Component(logger, "orchestrator.tasks"),
 	}
 }
 
@@ -37,7 +37,7 @@ func (s *TaskService) Create(ctx context.Context, request string) (sqlite.TaskRe
 		return sqlite.TaskRecord{}, err
 	}
 
-	if err := s.layout.EnsureTaskDir(taskID); err != nil {
+	if err := s.locator.EnsureTaskDir(taskID); err != nil {
 		return sqlite.TaskRecord{}, err
 	}
 
@@ -53,12 +53,12 @@ func (s *TaskService) Create(ctx context.Context, request string) (sqlite.TaskRe
 	}
 
 	taskMarkdown := buildTaskMarkdown(request, string(spec.TaskStatusPlanning), nil)
-	if err := os.WriteFile(s.layout.TaskRequestPath(taskID), []byte(taskMarkdown), 0o644); err != nil {
+	if err := os.WriteFile(s.locator.TaskRequestPath(taskID), []byte(taskMarkdown), 0o644); err != nil {
 		s.logger.Error("failed to write task markdown", "task_id", taskID, "error", err)
 		return sqlite.TaskRecord{}, fmt.Errorf("write task.md: %w", err)
 	}
 
-	s.logger.Debug("task created", "task_id", taskID, "task_path", s.layout.TaskRequestPath(taskID))
+	s.logger.Debug("task created", "task_id", taskID, "task_path", s.locator.TaskRequestPath(taskID))
 	return s.store.GetTask(ctx, taskID)
 }
 
@@ -87,7 +87,7 @@ func (s *TaskService) ApplyPlan(ctx context.Context, taskID string, plan spec.DA
 	}
 
 	taskMarkdown := buildTaskMarkdown(task.Request, string(status), &plan)
-	if err := os.WriteFile(s.layout.TaskRequestPath(taskID), []byte(taskMarkdown), 0o644); err != nil {
+	if err := os.WriteFile(s.locator.TaskRequestPath(taskID), []byte(taskMarkdown), 0o644); err != nil {
 		s.logger.Error("failed to write planned task markdown", "task_id", taskID, "error", err)
 		return sqlite.TaskRecord{}, fmt.Errorf("write task.md: %w", err)
 	}
@@ -108,11 +108,11 @@ func (s *TaskService) UpdateStatus(ctx context.Context, taskID string, status sp
 
 // WriteResult writes the final result.md artifact for a task.
 func (s *TaskService) WriteResult(taskID string, result string) error {
-	if err := os.WriteFile(s.layout.TaskResultPath(taskID), []byte(result), 0o644); err != nil {
+	if err := os.WriteFile(s.locator.TaskResultPath(taskID), []byte(result), 0o644); err != nil {
 		s.logger.Error("failed to write task result", "task_id", taskID, "error", err)
 		return fmt.Errorf("write result.md: %w", err)
 	}
-	s.logger.Info("task result written", "task_id", taskID, "result_path", s.layout.TaskResultPath(taskID))
+	s.logger.Info("task result written", "task_id", taskID, "result_path", s.locator.TaskResultPath(taskID))
 	return nil
 }
 

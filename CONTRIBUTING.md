@@ -22,7 +22,7 @@ The diagram below gives contributors a high-level view of how the orchestrator, 
 cmd/dango/                 binary entrypoint
 internal/cli/              CLI parsing and top-level wiring
 internal/spec/             shared domain contracts and validation
-internal/layout/           data-dir path helpers
+internal/datadir/          data-dir path locators
 internal/store/sqlite/     SQLite migrations, sqlc query definitions, and persistence
 internal/runtime/          runtime abstraction (Docker + host demo)
 internal/orchestrator/     registry, planner, scheduler, engine, HTTP server
@@ -66,6 +66,10 @@ Run the HTTP server:
 ```bash
 go run ./cmd/dango orchestrator serve --data-dir /tmp/dango-data
 ```
+
+By default, orchestrator commands store runtime state under `~/.dango/data`.
+Reserve `~/.dango/` as the user-scoped home for future dango configuration
+files as well.
 
 ## Documentation Boundaries
 

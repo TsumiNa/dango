@@ -12,6 +12,7 @@ import (
 	"syscall"
 
 	"github.com/spf13/cobra"
+	"github.com/tsumina/dango/internal/datadir"
 	"github.com/tsumina/dango/internal/logging"
 	"github.com/tsumina/dango/internal/orchestrator"
 	"github.com/tsumina/dango/internal/runtime"
@@ -21,7 +22,7 @@ func (a *App) newOrchestratorServeCommand() *cobra.Command {
 	logCfg := logging.DefaultConfig()
 	model := "gemini-3.5-pro"
 	port := 8080
-	dataDir := "/data"
+	dataDir := defaultDataDir()
 
 	cmd := &cobra.Command{
 		Use:   "serve",
@@ -48,19 +49,19 @@ func (a *App) runOrchestratorServe(ctx context.Context, logCfg logging.Config, m
 	}
 	defer cleanup()
 
-	layout, store, err := a.bootstrapOrchestrator(dataDir)
+	locator, store, err := a.bootstrapOrchestrator(dataDir)
 	if err != nil {
 		return err
 	}
 	defer store.Close()
 
-	logger.Info("starting orchestrator server", "model", model, "port", port, "data_dir", layout.Root)
+	logger.Info("starting orchestrator server", "model", model, "port", port, "data_dir", locator.Root)
 	rt := runtime.NewDefault(os.Getenv("DANGO_DOCKER_BIN"), logger)
-	registry := orchestrator.NewRegistryService(layout, store, rt, logger)
-	taskService := orchestrator.NewTaskService(layout, store, logger)
+	registry := orchestrator.NewRegistryService(locator, store, rt, logger)
+	taskService := orchestrator.NewTaskService(locator, store, logger)
 	planner := orchestrator.NewPlanner(store, logger)
-	scheduler := orchestrator.NewScheduler(layout, store, rt, logger)
-	engine := orchestrator.NewDemoEngine(layout, store, taskService, planner, scheduler, logger)
+	scheduler := orchestrator.NewScheduler(locator, store, rt, logger)
+	engine := orchestrator.NewDemoEngine(locator, store, taskService, planner, scheduler, logger)
 	server := orchestrator.NewServer(":"+strconv.Itoa(port), registry, taskService, engine, logger)
 
 	serverCtx, cancel := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
@@ -72,7 +73,7 @@ func (a *App) runOrchestratorServe(ctx context.Context, logCfg logging.Config, m
 func (a *App) newOrchestratorRegisterCommand() *cobra.Command {
 	logCfg := logging.DefaultConfig()
 	var override string
-	dataDir := "/data"
+	dataDir := defaultDataDir()
 
 	cmd := &cobra.Command{
 		Use:   "register <image:tag>",
@@ -92,7 +93,7 @@ func (a *App) newOrchestratorRegisterCommand() *cobra.Command {
 }
 
 func (a *App) runOrchestratorRegister(ctx context.Context, logCfg logging.Config, imageArg string, override string, dataDir string) error {
-	layout, store, err := a.bootstrapOrchestrator(dataDir)
+	locator, store, err := a.bootstrapOrchestrator(dataDir)
 	if err != nil {
 		return err
 	}
@@ -109,8 +110,8 @@ func (a *App) runOrchestratorRegister(ctx context.Context, logCfg logging.Config
 		return err
 	}
 
-	logger.Info("register command started", "image", imageRef, "override_path", override, "data_dir", layout.Root)
-	service := orchestrator.NewRegistryService(layout, store, runtime.NewDefault(os.Getenv("DANGO_DOCKER_BIN"), logger), logger)
+	logger.Info("register command started", "image", imageRef, "override_path", override, "data_dir", locator.Root)
+	service := orchestrator.NewRegistryService(locator, store, runtime.NewDefault(os.Getenv("DANGO_DOCKER_BIN"), logger), logger)
 	tool, err := service.Register(ctx, imageRef, override)
 	if err != nil {
 		return err
@@ -121,7 +122,7 @@ func (a *App) runOrchestratorRegister(ctx context.Context, logCfg logging.Config
 
 func (a *App) newOrchestratorUnregisterCommand() *cobra.Command {
 	logCfg := logging.DefaultConfig()
-	dataDir := "/data"
+	dataDir := defaultDataDir()
 
 	cmd := &cobra.Command{
 		Use:   "unregister <tool-name>",
@@ -140,7 +141,7 @@ func (a *App) newOrchestratorUnregisterCommand() *cobra.Command {
 }
 
 func (a *App) runOrchestratorUnregister(ctx context.Context, logCfg logging.Config, toolName string, dataDir string) error {
-	layout, store, err := a.bootstrapOrchestrator(dataDir)
+	locator, store, err := a.bootstrapOrchestrator(dataDir)
 	if err != nil {
 		return err
 	}
@@ -152,7 +153,7 @@ func (a *App) runOrchestratorUnregister(ctx context.Context, logCfg logging.Conf
 	}
 	defer cleanup()
 
-	service := orchestrator.NewRegistryService(layout, store, runtime.NewDefault(os.Getenv("DANGO_DOCKER_BIN"), logger), logger)
+	service := orchestrator.NewRegistryService(locator, store, runtime.NewDefault(os.Getenv("DANGO_DOCKER_BIN"), logger), logger)
 	if err := service.Unregister(ctx, toolName); err != nil {
 		return err
 	}
@@ -163,7 +164,7 @@ func (a *App) runOrchestratorUnregister(ctx context.Context, logCfg logging.Conf
 
 func (a *App) newOrchestratorListToolsCommand() *cobra.Command {
 	logCfg := logging.DefaultConfig()
-	dataDir := "/data"
+	dataDir := defaultDataDir()
 
 	cmd := &cobra.Command{
 		Use:   "list-tools",
@@ -182,7 +183,7 @@ func (a *App) newOrchestratorListToolsCommand() *cobra.Command {
 }
 
 func (a *App) runOrchestratorListTools(ctx context.Context, logCfg logging.Config, dataDir string) error {
-	layout, store, err := a.bootstrapOrchestrator(dataDir)
+	locator, store, err := a.bootstrapOrchestrator(dataDir)
 	if err != nil {
 		return err
 	}
@@ -194,7 +195,7 @@ func (a *App) runOrchestratorListTools(ctx context.Context, logCfg logging.Confi
 	}
 	defer cleanup()
 
-	service := orchestrator.NewRegistryService(layout, store, runtime.NewDefault(os.Getenv("DANGO_DOCKER_BIN"), logger), logger)
+	service := orchestrator.NewRegistryService(locator, store, runtime.NewDefault(os.Getenv("DANGO_DOCKER_BIN"), logger), logger)
 	tools, err := service.List(ctx)
 	if err != nil {
 		return err
@@ -236,7 +237,7 @@ func (a *App) runOrchestratorDemoRun(ctx context.Context, logCfg logging.Config,
 		return fmt.Errorf("demo request is required via --request or positional args")
 	}
 
-	layout, store, err := a.bootstrapOrchestrator(dataDir)
+	locator, store, err := a.bootstrapOrchestrator(dataDir)
 	if err != nil {
 		return err
 	}
@@ -248,25 +249,25 @@ func (a *App) runOrchestratorDemoRun(ctx context.Context, logCfg logging.Config,
 	}
 	defer cleanup()
 
-	logger.Info("demo run command started", "data_dir", layout.Root)
+	logger.Info("demo run command started", "data_dir", locator.Root)
 	rt := runtime.NewDefault(os.Getenv("DANGO_DOCKER_BIN"), logger)
 	resolvedToolsDir := toolsDir
 	if strings.TrimSpace(resolvedToolsDir) == "" {
-		resolvedToolsDir, err = materializeBuiltinDemoTools(layout.Root, logger)
+		resolvedToolsDir, err = materializeBuiltinDemoTools(locator.Root, logger)
 		if err != nil {
 			return err
 		}
 	}
 
-	registry := orchestrator.NewRegistryService(layout, store, rt, logger)
+	registry := orchestrator.NewRegistryService(locator, store, rt, logger)
 	if err := ensureDemoToolsRegistered(ctx, registry, resolvedToolsDir, logger); err != nil {
 		return err
 	}
 
-	taskService := orchestrator.NewTaskService(layout, store, logger)
+	taskService := orchestrator.NewTaskService(locator, store, logger)
 	planner := orchestrator.NewPlanner(store, logger)
-	scheduler := orchestrator.NewScheduler(layout, store, rt, logger)
-	engine := orchestrator.NewDemoEngine(layout, store, taskService, planner, scheduler, logger)
+	scheduler := orchestrator.NewScheduler(locator, store, rt, logger)
+	engine := orchestrator.NewDemoEngine(locator, store, taskService, planner, scheduler, logger)
 
 	result, err := engine.Run(ctx, requestText)
 	if err != nil {
@@ -274,4 +275,15 @@ func (a *App) runOrchestratorDemoRun(ctx context.Context, logCfg logging.Config,
 	}
 
 	return json.NewEncoder(a.stdout).Encode(result)
+}
+
+func defaultDataDir() string {
+	root, err := datadir.DefaultRoot()
+	if err == nil {
+		return root
+	}
+
+	// Fall back to a relative path when the user home directory cannot be
+	// resolved during command construction.
+	return filepath.Join(".dango", "data")
 }

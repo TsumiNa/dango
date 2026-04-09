@@ -5,7 +5,7 @@ import (
 	"encoding/json"
 	"testing"
 
-	"github.com/tsumina/dango/internal/layout"
+	"github.com/tsumina/dango/internal/datadir"
 	"github.com/tsumina/dango/internal/spec"
 	"github.com/tsumina/dango/internal/store/sqlite"
 )
@@ -14,15 +14,15 @@ func TestPlannerPlanBuildsLinearDemoPath(t *testing.T) {
 	t.Parallel()
 
 	root := t.TempDir()
-	layout, err := layout.New(root)
+	locator, err := datadir.New(root)
 	if err != nil {
-		t.Fatalf("layout.New() error = %v", err)
+		t.Fatalf("datadir.New() error = %v", err)
 	}
-	if err := layout.Ensure(); err != nil {
-		t.Fatalf("layout.Ensure() error = %v", err)
+	if err := locator.Ensure(); err != nil {
+		t.Fatalf("locator.Ensure() error = %v", err)
 	}
 
-	store, err := sqlite.Open(layout.DBPath())
+	store, err := sqlite.Open(locator.DBPath())
 	if err != nil {
 		t.Fatalf("sqlite.Open() error = %v", err)
 	}

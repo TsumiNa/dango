@@ -9,7 +9,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/tsumina/dango/internal/layout"
+	"github.com/tsumina/dango/internal/datadir"
 	"github.com/tsumina/dango/internal/logging"
 	"github.com/tsumina/dango/internal/runtime"
 	"github.com/tsumina/dango/internal/spec"
@@ -18,7 +18,7 @@ import (
 
 // Scheduler executes planned edges and records their runtime state.
 type Scheduler struct {
-	layout  *layout.Layout
+	locator *datadir.Locator
 	store   *sqlite.Store
 	runtime runtime.ContainerRuntime
 	logger  *slog.Logger
@@ -46,9 +46,9 @@ type edgeExecutionPaths struct {
 }
 
 // NewScheduler constructs the scheduler used to execute demo edges locally.
-func NewScheduler(layout *layout.Layout, store *sqlite.Store, rt runtime.ContainerRuntime, logger *slog.Logger) *Scheduler {
+func NewScheduler(locator *datadir.Locator, store *sqlite.Store, rt runtime.ContainerRuntime, logger *slog.Logger) *Scheduler {
 	return &Scheduler{
-		layout:  layout,
+		locator: locator,
 		store:   store,
 		runtime: rt,
 		logger:  logging.Component(logger, "orchestrator.scheduler"),
@@ -104,14 +104,14 @@ func (s *Scheduler) loadTool(ctx context.Context, edgeLogger *slog.Logger, toolN
 }
 
 func (s *Scheduler) prepareEdgePaths(edgeLogger *slog.Logger, request EdgeExecutionRequest) (edgeExecutionPaths, error) {
-	if err := s.layout.EnsureEdgeDir(request.TaskID, request.EdgeID); err != nil {
+	if err := s.locator.EnsureEdgeDir(request.TaskID, request.EdgeID); err != nil {
 		edgeLogger.Error("failed to ensure edge directory", "error", err)
 		return edgeExecutionPaths{}, err
 	}
 
 	paths := edgeExecutionPaths{
-		subTaskPath: s.layout.EdgeSubTaskPath(request.TaskID, request.EdgeID),
-		outputHost:  s.layout.EdgeOutputDir(request.TaskID, request.EdgeID),
+		subTaskPath: s.locator.EdgeSubTaskPath(request.TaskID, request.EdgeID),
+		outputHost:  s.locator.EdgeOutputDir(request.TaskID, request.EdgeID),
 	}
 
 	if strings.TrimSpace(request.SubTaskContent) != "" {
@@ -125,11 +125,11 @@ func (s *Scheduler) prepareEdgePaths(edgeLogger *slog.Logger, request EdgeExecut
 	}
 
 	if request.UpstreamEdgeID != "" {
-		paths.inputHost = s.layout.EdgeOutputDir(request.TaskID, request.UpstreamEdgeID)
+		paths.inputHost = s.locator.EdgeOutputDir(request.TaskID, request.UpstreamEdgeID)
 		return paths, nil
 	}
 
-	paths.inputHost = s.layout.EdgeScratchInputDir(request.TaskID, request.EdgeID)
+	paths.inputHost = s.locator.EdgeScratchInputDir(request.TaskID, request.EdgeID)
 	if err := os.MkdirAll(paths.inputHost, 0o755); err != nil {
 		edgeLogger.Error("failed to create empty input directory", "path", paths.inputHost, "error", err)
 		return edgeExecutionPaths{}, fmt.Errorf("create empty input directory: %w", err)
@@ -159,7 +159,7 @@ func (s *Scheduler) runExecutor(ctx context.Context, edgeLogger *slog.Logger, re
 		Image:          tool.Image,
 		TaskID:         request.TaskID,
 		SubTaskHost:    paths.subTaskPath,
-		ToolConfigHost: s.layout.ToolMergedPath(request.ToolName),
+		ToolConfigHost: s.locator.ToolMergedPath(request.ToolName),
 		InputHost:      paths.inputHost,
 		OutputHost:     paths.outputHost,
 	}

@@ -6,7 +6,7 @@ import (
 	"log/slog"
 	"strings"
 
-	"github.com/tsumina/dango/internal/layout"
+	"github.com/tsumina/dango/internal/datadir"
 	"github.com/tsumina/dango/internal/logging"
 	"github.com/tsumina/dango/internal/spec"
 	"github.com/tsumina/dango/internal/store/sqlite"
@@ -14,7 +14,7 @@ import (
 
 // DemoEngine runs the end-to-end local demo orchestration flow.
 type DemoEngine struct {
-	layout    *layout.Layout
+	locator   *datadir.Locator
 	store     *sqlite.Store
 	tasks     *TaskService
 	planner   *Planner
@@ -38,9 +38,9 @@ type DemoRunResult struct {
 
 // NewDemoEngine constructs the demo orchestration engine used by the local
 // runnable sample.
-func NewDemoEngine(layout *layout.Layout, store *sqlite.Store, tasks *TaskService, planner *Planner, scheduler *Scheduler, logger *slog.Logger) *DemoEngine {
+func NewDemoEngine(locator *datadir.Locator, store *sqlite.Store, tasks *TaskService, planner *Planner, scheduler *Scheduler, logger *slog.Logger) *DemoEngine {
 	return &DemoEngine{
-		layout:    layout,
+		locator:   locator,
 		store:     store,
 		tasks:     tasks,
 		planner:   planner,
@@ -136,19 +136,19 @@ func (e *DemoEngine) completeTask(ctx context.Context, taskLogger *slog.Logger, 
 	}
 
 	terminalHandoffs := extractTerminalHandoffs(plan, handoffs)
-	if err := e.tasks.WriteResult(task.ID, buildSuccessResult(task.ID, request, plan, terminalHandoffs, e.layout)); err != nil {
+	if err := e.tasks.WriteResult(task.ID, buildSuccessResult(task.ID, request, plan, terminalHandoffs, e.locator)); err != nil {
 		taskLogger.Error("failed to write final result", "error", err)
 		return nil, err
 	}
 
-	taskLogger.Info("demo run completed", "terminal_handoffs", len(terminalHandoffs), "result_path", e.layout.TaskResultPath(task.ID))
+	taskLogger.Info("demo run completed", "terminal_handoffs", len(terminalHandoffs), "result_path", e.locator.TaskResultPath(task.ID))
 
 	return &DemoRunResult{
 		Task:             task,
 		Plan:             plan,
 		TerminalHandoffs: metadataOnly(terminalHandoffs),
-		TaskDir:          e.layout.TaskDir(task.ID),
-		ResultPath:       e.layout.TaskResultPath(task.ID),
+		TaskDir:          e.locator.TaskDir(task.ID),
+		ResultPath:       e.locator.TaskResultPath(task.ID),
 	}, nil
 }
 
@@ -207,7 +207,7 @@ func metadataOnly(handoffs []spec.Handoff) []spec.HandoffMetadata {
 	return out
 }
 
-func buildSuccessResult(taskID, request string, plan spec.DAGPlan, terminal []spec.Handoff, layout *layout.Layout) string {
+func buildSuccessResult(taskID, request string, plan spec.DAGPlan, terminal []spec.Handoff, locator *datadir.Locator) string {
 	var b strings.Builder
 	_, _ = fmt.Fprintf(&b, "# Demo Result\n\nTask ID: `%s`\n\n", taskID)
 	_, _ = fmt.Fprintf(&b, "Request:\n\n%s\n\n", strings.TrimSpace(request))
@@ -216,14 +216,14 @@ func buildSuccessResult(taskID, request string, plan spec.DAGPlan, terminal []sp
 	for _, handoff := range terminal {
 		edgeID := findEdgeIDForTool(plan, handoff.Metadata.Tool)
 		_, _ = fmt.Fprintf(&b, "- Tool `%s` finished with status `%s`\n", handoff.Metadata.Tool, handoff.Metadata.Status)
-		_, _ = fmt.Fprintf(&b, "  Output dir: `%s`\n", layout.EdgeOutputDir(taskID, edgeID))
+		_, _ = fmt.Fprintf(&b, "  Output dir: `%s`\n", locator.EdgeOutputDir(taskID, edgeID))
 		if len(handoff.Metadata.OutputFiles) == 0 {
 			_, _ = fmt.Fprintln(&b, "  Files: none declared")
 			continue
 		}
 		_, _ = fmt.Fprintf(&b, "  Files: %s\n", strings.Join(handoff.Metadata.OutputFiles, ", "))
 	}
-	_, _ = fmt.Fprintf(&b, "\nResult path: `%s`\n", layout.TaskResultPath(taskID))
+	_, _ = fmt.Fprintf(&b, "\nResult path: `%s`\n", locator.TaskResultPath(taskID))
 	return b.String()
 }
 
