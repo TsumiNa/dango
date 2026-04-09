@@ -1,0 +1,22 @@
+version: "2"
+sql:
+  - engine: "sqlite"
+    schema: "internal/store/sqlite/schema.sql"
+    queries: "internal/store/sqlite/queries.sql"
+    gen:
+      go:
+        package: "db"
+        out: "internal/store/sqlite/db"
+        sql_package: "database/sql"
+        emit_json_tags: true
+        overrides:
+          - column: "tools.registered"
+            go_type: "string"
+          - column: "tasks.created"
+            go_type: "string"
+          - column: "tasks.updated"
+            go_type: "string"
+          - column: "edges.started"
+            go_type: "database/sql.NullString"
+          - column: "edges.finished"
+            go_type: "database/sql.NullString"

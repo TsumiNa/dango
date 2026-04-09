@@ -39,6 +39,12 @@ type EdgeExecutionRequest struct {
 	SubTaskContent string
 }
 
+type edgeExecutionPaths struct {
+	subTaskPath string
+	inputHost   string
+	outputHost  string
+}
+
 // NewScheduler constructs the scheduler used to execute demo edges locally.
 func NewScheduler(layout *layout.Layout, store *sqlite.Store, rt runtime.ContainerRuntime, logger *slog.Logger) *Scheduler {
 	return &Scheduler{
@@ -54,43 +60,86 @@ func NewScheduler(layout *layout.Layout, store *sqlite.Store, rt runtime.Contain
 func (s *Scheduler) RunLocalEdge(ctx context.Context, request EdgeExecutionRequest) (spec.Handoff, error) {
 	edgeLogger := s.logger.With("task_id", request.TaskID, "edge_id", request.EdgeID, "tool", request.ToolName)
 	edgeLogger.Info("starting edge execution")
-	if err := s.layout.EnsureEdgeDir(request.TaskID, request.EdgeID); err != nil {
-		edgeLogger.Error("failed to ensure edge directory", "error", err)
+
+	tool, err := s.loadTool(ctx, edgeLogger, request.ToolName)
+	if err != nil {
 		return spec.Handoff{}, err
 	}
 
-	tool, err := s.store.GetTool(ctx, request.ToolName)
+	paths, err := s.prepareEdgePaths(edgeLogger, request)
+	if err != nil {
+		return spec.Handoff{}, err
+	}
+
+	started := time.Now().UTC()
+	if err := s.markEdgeRunning(ctx, request, paths.outputHost, started); err != nil {
+		edgeLogger.Error("failed to persist running edge state", "error", err)
+		return spec.Handoff{}, err
+	}
+
+	handoff, frontmatter, err := s.runExecutor(ctx, edgeLogger, request, tool, paths)
+	if err != nil {
+		s.markEdgeFailed(ctx, edgeLogger, request, paths.outputHost, started, err)
+		return spec.Handoff{}, err
+	}
+
+	if err := s.markEdgeCompleted(ctx, edgeLogger, request, paths.outputHost, started, handoff, frontmatter); err != nil {
+		edgeLogger.Error("failed to persist completed edge state", "error", err)
+		return spec.Handoff{}, err
+	}
+
+	edgeLogger.Info("edge execution completed", "status", handoff.Metadata.Status, "output_files", handoff.Metadata.OutputFiles)
+
+	return handoff, nil
+}
+
+func (s *Scheduler) loadTool(ctx context.Context, edgeLogger *slog.Logger, toolName string) (sqlite.ToolRecord, error) {
+	tool, err := s.store.GetTool(ctx, toolName)
 	if err != nil {
 		edgeLogger.Error("failed to load tool registration", "error", err)
-		return spec.Handoff{}, err
+		return sqlite.ToolRecord{}, err
 	}
 
-	subTaskPath := s.layout.EdgeSubTaskPath(request.TaskID, request.EdgeID)
+	return tool, nil
+}
+
+func (s *Scheduler) prepareEdgePaths(edgeLogger *slog.Logger, request EdgeExecutionRequest) (edgeExecutionPaths, error) {
+	if err := s.layout.EnsureEdgeDir(request.TaskID, request.EdgeID); err != nil {
+		edgeLogger.Error("failed to ensure edge directory", "error", err)
+		return edgeExecutionPaths{}, err
+	}
+
+	paths := edgeExecutionPaths{
+		subTaskPath: s.layout.EdgeSubTaskPath(request.TaskID, request.EdgeID),
+		outputHost:  s.layout.EdgeOutputDir(request.TaskID, request.EdgeID),
+	}
+
 	if strings.TrimSpace(request.SubTaskContent) != "" {
-		if err := os.WriteFile(subTaskPath, []byte(request.SubTaskContent), 0o644); err != nil {
-			edgeLogger.Error("failed to write sub-task", "path", subTaskPath, "error", err)
-			return spec.Handoff{}, fmt.Errorf("write sub-task.md: %w", err)
+		if err := os.WriteFile(paths.subTaskPath, []byte(request.SubTaskContent), 0o644); err != nil {
+			edgeLogger.Error("failed to write sub-task", "path", paths.subTaskPath, "error", err)
+			return edgeExecutionPaths{}, fmt.Errorf("write sub-task.md: %w", err)
 		}
-	} else if _, err := os.Stat(subTaskPath); err != nil {
-		edgeLogger.Error("missing sub-task for edge execution", "path", subTaskPath, "error", err)
-		return spec.Handoff{}, fmt.Errorf("sub-task.md is required before edge execution: %w", err)
+	} else if _, err := os.Stat(paths.subTaskPath); err != nil {
+		edgeLogger.Error("missing sub-task for edge execution", "path", paths.subTaskPath, "error", err)
+		return edgeExecutionPaths{}, fmt.Errorf("sub-task.md is required before edge execution: %w", err)
 	}
 
-	inputHost := ""
 	if request.UpstreamEdgeID != "" {
-		inputHost = s.layout.EdgeOutputDir(request.TaskID, request.UpstreamEdgeID)
-	} else {
-		inputHost = s.layout.EdgeScratchInputDir(request.TaskID, request.EdgeID)
-		if err := os.MkdirAll(inputHost, 0o755); err != nil {
-			edgeLogger.Error("failed to create empty input directory", "path", inputHost, "error", err)
-			return spec.Handoff{}, fmt.Errorf("create empty input directory: %w", err)
-		}
+		paths.inputHost = s.layout.EdgeOutputDir(request.TaskID, request.UpstreamEdgeID)
+		return paths, nil
 	}
 
-	outputHost := s.layout.EdgeOutputDir(request.TaskID, request.EdgeID)
-	started := time.Now().UTC()
+	paths.inputHost = s.layout.EdgeScratchInputDir(request.TaskID, request.EdgeID)
+	if err := os.MkdirAll(paths.inputHost, 0o755); err != nil {
+		edgeLogger.Error("failed to create empty input directory", "path", paths.inputHost, "error", err)
+		return edgeExecutionPaths{}, fmt.Errorf("create empty input directory: %w", err)
+	}
 
-	edgeRecord := sqlite.EdgeRecord{
+	return paths, nil
+}
+
+func (s *Scheduler) markEdgeRunning(ctx context.Context, request EdgeExecutionRequest, outputHost string, started time.Time) error {
+	if err := s.store.UpsertEdge(ctx, sqlite.EdgeRecord{
 		ID:        request.EdgeID,
 		TaskID:    request.TaskID,
 		ToolName:  request.ToolName,
@@ -98,63 +147,77 @@ func (s *Scheduler) RunLocalEdge(ctx context.Context, request EdgeExecutionReque
 		Status:    string(spec.EdgeStatusRunning),
 		SharedDir: outputHost,
 		Started:   started.Format(time.RFC3339),
-	}
-	if err := s.store.UpsertEdge(ctx, edgeRecord); err != nil {
-		edgeLogger.Error("failed to persist running edge state", "error", err)
-		return spec.Handoff{}, err
+	}); err != nil {
+		return err
 	}
 
-	if err := s.store.InsertLog(ctx, request.EdgeID, "info", "starting container execution"); err != nil {
-		edgeLogger.Error("failed to write edge start log", "error", err)
-		return spec.Handoff{}, err
-	}
+	return s.store.InsertLog(ctx, request.EdgeID, "info", "starting container execution")
+}
 
+func (s *Scheduler) runExecutor(ctx context.Context, edgeLogger *slog.Logger, request EdgeExecutionRequest, tool sqlite.ToolRecord, paths edgeExecutionPaths) (spec.Handoff, []byte, error) {
 	runRequest := runtime.ExecutorRunRequest{
 		Image:          tool.Image,
 		TaskID:         request.TaskID,
-		SubTaskHost:    subTaskPath,
+		SubTaskHost:    paths.subTaskPath,
 		ToolConfigHost: s.layout.ToolMergedPath(request.ToolName),
-		InputHost:      inputHost,
-		OutputHost:     outputHost,
+		InputHost:      paths.inputHost,
+		OutputHost:     paths.outputHost,
 	}
-	edgeLogger.Debug("prepared executor run request", "image", tool.Image, "input_host", inputHost, "output_host", outputHost, "sub_task_path", subTaskPath)
+	edgeLogger.Debug("prepared executor run request", "image", tool.Image, "input_host", paths.inputHost, "output_host", paths.outputHost, "sub_task_path", paths.subTaskPath)
 	if err := s.runtime.RunExecutor(ctx, runRequest); err != nil {
-		finished := time.Now().UTC()
 		edgeLogger.Error("executor runtime failed", "image", tool.Image, "error", err)
-		_ = s.store.UpsertEdge(ctx, sqlite.EdgeRecord{
-			ID:        request.EdgeID,
-			TaskID:    request.TaskID,
-			ToolName:  request.ToolName,
-			Upstream:  request.UpstreamEdgeID,
-			Status:    string(spec.EdgeStatusFailed),
-			SharedDir: outputHost,
-			Started:   started.Format(time.RFC3339),
-			Finished:  finished.Format(time.RFC3339),
-		})
-		_ = s.store.InsertLog(ctx, request.EdgeID, "error", err.Error())
-		return spec.Handoff{}, err
+		return spec.Handoff{}, nil, err
 	}
 
-	handoffPath := filepath.Join(outputHost, "_handoff.md")
+	handoffPath := filepath.Join(paths.outputHost, "_handoff.md")
 	rawHandoff, err := os.ReadFile(handoffPath)
 	if err != nil {
 		edgeLogger.Error("failed to read handoff", "path", handoffPath, "error", err)
-		return spec.Handoff{}, fmt.Errorf("read handoff file %q: %w", handoffPath, err)
+		return spec.Handoff{}, nil, fmt.Errorf("read handoff file %q: %w", handoffPath, err)
 	}
 
 	handoff, err := spec.ParseHandoff(rawHandoff)
 	if err != nil {
 		edgeLogger.Error("failed to parse handoff", "path", handoffPath, "error", err)
-		return spec.Handoff{}, err
+		return spec.Handoff{}, nil, err
 	}
 	frontmatter, err := spec.ExtractHandoffFrontmatter(rawHandoff)
 	if err != nil {
 		edgeLogger.Error("failed to extract handoff frontmatter", "path", handoffPath, "error", err)
-		return spec.Handoff{}, err
+		return spec.Handoff{}, nil, err
 	}
 
+	return handoff, frontmatter, nil
+}
+
+func (s *Scheduler) markEdgeFailed(ctx context.Context, edgeLogger *slog.Logger, request EdgeExecutionRequest, outputHost string, started time.Time, runErr error) {
+	finalizeCtx, cancel := finalizeContext(ctx)
+	defer cancel()
+
 	finished := time.Now().UTC()
-	if err := s.store.UpsertEdge(ctx, sqlite.EdgeRecord{
+	if err := s.store.UpsertEdge(finalizeCtx, sqlite.EdgeRecord{
+		ID:        request.EdgeID,
+		TaskID:    request.TaskID,
+		ToolName:  request.ToolName,
+		Upstream:  request.UpstreamEdgeID,
+		Status:    string(spec.EdgeStatusFailed),
+		SharedDir: outputHost,
+		Started:   started.Format(time.RFC3339),
+		Finished:  finished.Format(time.RFC3339),
+	}); err != nil {
+		edgeLogger.Error("failed to persist failed edge state", "error", err)
+	}
+	if err := s.store.InsertLog(finalizeCtx, request.EdgeID, "error", runErr.Error()); err != nil {
+		edgeLogger.Error("failed to write edge failure log", "error", err)
+	}
+}
+
+func (s *Scheduler) markEdgeCompleted(ctx context.Context, edgeLogger *slog.Logger, request EdgeExecutionRequest, outputHost string, started time.Time, handoff spec.Handoff, frontmatter []byte) error {
+	finalizeCtx, cancel := finalizeContext(ctx)
+	defer cancel()
+
+	finished := time.Now().UTC()
+	if err := s.store.UpsertEdge(finalizeCtx, sqlite.EdgeRecord{
 		ID:          request.EdgeID,
 		TaskID:      request.TaskID,
 		ToolName:    request.ToolName,
@@ -165,16 +228,13 @@ func (s *Scheduler) RunLocalEdge(ctx context.Context, request EdgeExecutionReque
 		Started:     started.Format(time.RFC3339),
 		Finished:    finished.Format(time.RFC3339),
 	}); err != nil {
-		edgeLogger.Error("failed to persist completed edge state", "error", err)
-		return spec.Handoff{}, err
+		return err
 	}
 
-	if err := s.store.InsertLog(ctx, request.EdgeID, "info", "container execution completed"); err != nil {
+	if err := s.store.InsertLog(finalizeCtx, request.EdgeID, "info", "container execution completed"); err != nil {
 		edgeLogger.Error("failed to write edge completion log", "error", err)
-		return spec.Handoff{}, err
+		return err
 	}
 
-	edgeLogger.Info("edge execution completed", "status", handoff.Metadata.Status, "output_files", handoff.Metadata.OutputFiles)
-
-	return handoff, nil
+	return nil
 }

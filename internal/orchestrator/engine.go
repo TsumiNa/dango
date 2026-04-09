@@ -51,34 +51,60 @@ func NewDemoEngine(layout *layout.Layout, store *sqlite.Store, tasks *TaskServic
 
 // Run executes the end-to-end demo flow for one request.
 func (e *DemoEngine) Run(ctx context.Context, request string) (*DemoRunResult, error) {
+	task, taskLogger, err := e.createTask(ctx, request)
+	if err != nil {
+		return nil, err
+	}
+
+	task, plan, err := e.planTask(ctx, taskLogger, task, request)
+	if err != nil {
+		return nil, err
+	}
+
+	handoffs, err := e.executePlan(ctx, taskLogger, task, request, plan)
+	if err != nil {
+		return nil, err
+	}
+
+	return e.completeTask(ctx, taskLogger, task, request, plan, handoffs)
+}
+
+func (e *DemoEngine) createTask(ctx context.Context, request string) (sqlite.TaskRecord, *slog.Logger, error) {
 	e.logger.Info("demo run started")
 	task, err := e.tasks.Create(ctx, request)
 	if err != nil {
 		e.logger.Error("failed to create task", "error", err)
-		return nil, err
+		return sqlite.TaskRecord{}, nil, err
 	}
-	taskLogger := e.logger.With("task_id", task.ID)
 
+	taskLogger := e.logger.With("task_id", task.ID)
+	return task, taskLogger, nil
+}
+
+func (e *DemoEngine) planTask(ctx context.Context, taskLogger *slog.Logger, task sqlite.TaskRecord, request string) (sqlite.TaskRecord, spec.DAGPlan, error) {
 	plan, err := e.planner.Plan(ctx, task.ID, request)
 	if err != nil {
 		taskLogger.Error("planning failed", "error", err)
-		_, _ = e.tasks.UpdateStatus(ctx, task.ID, spec.TaskStatusFailed)
-		_ = e.tasks.WriteResult(task.ID, buildFailureResult(task.ID, request, err))
-		return nil, err
+		e.markTaskFailed(ctx, task.ID, buildFailureResult(task.ID, request, err))
+		return sqlite.TaskRecord{}, spec.DAGPlan{}, err
 	}
 
 	task, err = e.tasks.ApplyPlan(ctx, task.ID, plan, spec.TaskStatusApproved)
 	if err != nil {
 		taskLogger.Error("failed to persist approved plan", "error", err)
-		return nil, err
+		return sqlite.TaskRecord{}, spec.DAGPlan{}, err
 	}
 
 	task, err = e.tasks.UpdateStatus(ctx, task.ID, spec.TaskStatusExecuting)
 	if err != nil {
 		taskLogger.Error("failed to transition task to executing", "error", err)
-		return nil, err
+		return sqlite.TaskRecord{}, spec.DAGPlan{}, err
 	}
 
+	return task, plan, nil
+}
+
+func (e *DemoEngine) executePlan(ctx context.Context, taskLogger *slog.Logger, task sqlite.TaskRecord, request string, plan spec.DAGPlan) ([]spec.Handoff, error) {
 	handoffs := make([]spec.Handoff, 0, len(plan.Edges))
 	for _, edge := range plan.Edges {
 		taskLogger.Info("dispatching edge", "edge_id", edge.ID, "tool", edge.ToolName, "upstream", edge.Upstream)
@@ -91,8 +117,7 @@ func (e *DemoEngine) Run(ctx context.Context, request string) (*DemoRunResult, e
 		})
 		if edgeErr != nil {
 			taskLogger.Error("edge execution failed", "edge_id", edge.ID, "tool", edge.ToolName, "error", edgeErr)
-			_, _ = e.tasks.UpdateStatus(ctx, task.ID, spec.TaskStatusFailed)
-			_ = e.tasks.WriteResult(task.ID, buildExecutionFailureResult(task.ID, request, plan, handoffs, edgeErr))
+			e.markTaskFailed(ctx, task.ID, buildExecutionFailureResult(task.ID, request, plan, handoffs, edgeErr))
 			return nil, edgeErr
 		}
 
@@ -100,7 +125,11 @@ func (e *DemoEngine) Run(ctx context.Context, request string) (*DemoRunResult, e
 		handoffs = append(handoffs, handoff)
 	}
 
-	task, err = e.tasks.UpdateStatus(ctx, task.ID, spec.TaskStatusDone)
+	return handoffs, nil
+}
+
+func (e *DemoEngine) completeTask(ctx context.Context, taskLogger *slog.Logger, task sqlite.TaskRecord, request string, plan spec.DAGPlan, handoffs []spec.Handoff) (*DemoRunResult, error) {
+	task, err := e.finalizeTaskStatus(ctx, task.ID, spec.TaskStatusDone)
 	if err != nil {
 		taskLogger.Error("failed to transition task to done", "error", err)
 		return nil, err
@@ -121,6 +150,21 @@ func (e *DemoEngine) Run(ctx context.Context, request string) (*DemoRunResult, e
 		TaskDir:          e.layout.TaskDir(task.ID),
 		ResultPath:       e.layout.TaskResultPath(task.ID),
 	}, nil
+}
+
+func (e *DemoEngine) finalizeTaskStatus(ctx context.Context, taskID string, status spec.TaskStatus) (sqlite.TaskRecord, error) {
+	finalizeCtx, cancel := finalizeContext(ctx)
+	defer cancel()
+
+	return e.tasks.UpdateStatus(finalizeCtx, taskID, status)
+}
+
+func (e *DemoEngine) markTaskFailed(ctx context.Context, taskID string, result string) {
+	finalizeCtx, cancel := finalizeContext(ctx)
+	defer cancel()
+
+	_, _ = e.tasks.UpdateStatus(finalizeCtx, taskID, spec.TaskStatusFailed)
+	_ = e.tasks.WriteResult(taskID, result)
 }
 
 func extractTerminalHandoffs(plan spec.DAGPlan, handoffs []spec.Handoff) []spec.Handoff {

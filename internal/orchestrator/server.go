@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/http"
 	"strings"
 
@@ -48,6 +49,9 @@ func (s *Server) ListenAndServe(ctx context.Context) error {
 	server := &http.Server{
 		Addr:    s.addr,
 		Handler: mux,
+		BaseContext: func(_ net.Listener) context.Context {
+			return ctx
+		},
 	}
 
 	errCh := make(chan error, 1)
@@ -59,7 +63,12 @@ func (s *Server) ListenAndServe(ctx context.Context) error {
 	select {
 	case <-ctx.Done():
 		s.logger.Info("server shutdown requested")
-		_ = server.Shutdown(context.Background())
+		shutdownCtx, cancel := finalizeContext(ctx)
+		defer cancel()
+		if err := server.Shutdown(shutdownCtx); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			s.logger.Error("server shutdown failed", "error", err)
+			return err
+		}
 		return ctx.Err()
 	case err := <-errCh:
 		if err == nil || errors.Is(err, http.ErrServerClosed) {

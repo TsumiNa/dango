@@ -6,6 +6,7 @@ Before planning, editing, refactoring, or reviewing code, read the instruction f
 
 Current instruction files:
 
+- `.github/instructions/database-workflow.instructions.md`
 - `.github/instructions/go-file-organization.instructions.md`
 - `.github/instructions/go-docs.instructions.md`
 - `.github/instructions/repository-doc-boundaries.instructions.md`

@@ -23,7 +23,7 @@ cmd/dango/                 binary entrypoint
 internal/cli/              CLI parsing and top-level wiring
 internal/spec/             shared domain contracts and validation
 internal/layout/           data-dir path helpers
-internal/store/sqlite/     SQLite schema and persistence
+internal/store/sqlite/     SQLite migrations, sqlc query definitions, and persistence
 internal/runtime/          runtime abstraction (Docker + host demo)
 internal/orchestrator/     registry, planner, scheduler, engine, HTTP server
 internal/executor/         executor describe/run implementation
@@ -42,6 +42,16 @@ Build and test:
 ```bash
 go test ./...
 ```
+
+Regenerate SQLite query wrappers after editing `internal/store/sqlite/queries.sql`
+or `internal/store/sqlite/schema.sql`:
+
+```bash
+go run github.com/sqlc-dev/sqlc/cmd/sqlc@latest generate
+```
+
+Add new SQLite schema changes as numbered migration pairs under
+`internal/store/sqlite/migrations/` using `.up.sql` and `.down.sql` files.
 
 Run the demo:
 
