@@ -1,7 +1,6 @@
 package logging
 
 import (
-	"flag"
 	"fmt"
 	"io"
 	"log/slog"
@@ -35,10 +34,15 @@ func DefaultConfig() Config {
 	}
 }
 
+type flagBinder interface {
+	StringVar(p *string, name string, value string, usage string)
+	BoolVar(p *bool, name string, value bool, usage string)
+}
+
 // BindFlags exposes Config fields on fs.
 //
 // BindFlags is a no-op when c or fs is nil.
-func (c *Config) BindFlags(fs *flag.FlagSet) {
+func (c *Config) BindFlags(fs flagBinder) {
 	if c == nil || fs == nil {
 		return
 	}

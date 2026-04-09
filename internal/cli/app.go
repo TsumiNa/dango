@@ -2,10 +2,10 @@ package cli
 
 import (
 	"context"
-	"fmt"
 	"io"
 	"log/slog"
 
+	"github.com/spf13/cobra"
 	"github.com/tsumina/dango/internal/layout"
 	"github.com/tsumina/dango/internal/logging"
 	"github.com/tsumina/dango/internal/store/sqlite"
@@ -36,39 +36,66 @@ func New(stdout, stderr io.Writer) *App {
 // Run returns an error for unknown commands, argument parsing failures, and
 // command execution failures.
 func (a *App) Run(ctx context.Context, args []string) error {
-	if len(args) == 0 {
-		return a.usage()
-	}
-
-	switch args[0] {
-	case "orchestrator":
-		return a.runOrchestrator(ctx, args[1:])
-	case "executor":
-		return a.runExecutor(ctx, args[1:])
-	default:
-		return fmt.Errorf("unknown mode %q", args[0])
-	}
+	root := a.newRootCommand()
+	root.SetArgs(args)
+	root.SetOut(a.stdout)
+	root.SetErr(a.stderr)
+	return root.ExecuteContext(ctx)
 }
 
-func (a *App) runOrchestrator(ctx context.Context, args []string) error {
-	if len(args) == 0 {
-		return fmt.Errorf("orchestrator subcommand is required")
+func (a *App) newRootCommand() *cobra.Command {
+	root := &cobra.Command{
+		Use:           "dango",
+		Short:         "Run dango orchestrator and executor commands",
+		SilenceErrors: true,
+		SilenceUsage:  true,
+		CompletionOptions: cobra.CompletionOptions{
+			DisableDefaultCmd: true,
+		},
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return cmd.Help()
+		},
 	}
 
-	switch args[0] {
-	case "serve":
-		return a.runOrchestratorServe(ctx, args[1:])
-	case "register":
-		return a.runOrchestratorRegister(ctx, args[1:])
-	case "unregister":
-		return a.runOrchestratorUnregister(ctx, args[1:])
-	case "list-tools":
-		return a.runOrchestratorListTools(ctx, args[1:])
-	case "demo-run":
-		return a.runOrchestratorDemoRun(ctx, args[1:])
-	default:
-		return fmt.Errorf("unknown orchestrator subcommand %q", args[0])
+	root.AddCommand(
+		a.newOrchestratorCommand(),
+		a.newExecutorCommand(),
+	)
+
+	return root
+}
+
+func (a *App) newOrchestratorCommand() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "orchestrator",
+		Short: "Run orchestrator services and administration commands",
+		Args:  cobra.NoArgs,
 	}
+
+	cmd.AddCommand(
+		a.newOrchestratorServeCommand(),
+		a.newOrchestratorRegisterCommand(),
+		a.newOrchestratorUnregisterCommand(),
+		a.newOrchestratorListToolsCommand(),
+		a.newOrchestratorDemoRunCommand(),
+	)
+
+	return cmd
+}
+
+func (a *App) newExecutorCommand() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "executor",
+		Short: "Run executor container entrypoints",
+		Args:  cobra.NoArgs,
+	}
+
+	cmd.AddCommand(
+		a.newExecutorDescribeCommand(),
+		a.newExecutorRunCommand(),
+	)
+
+	return cmd
 }
 
 func (a *App) bootstrapOrchestrator(dataDir string) (*layout.Layout, *sqlite.Store, error) {
@@ -86,19 +113,6 @@ func (a *App) bootstrapOrchestrator(dataDir string) (*layout.Layout, *sqlite.Sto
 	}
 
 	return layout, store, nil
-}
-
-func (a *App) usage() error {
-	_, _ = fmt.Fprintln(a.stderr, `usage:
-  dango orchestrator serve [--model gemini-2.5-pro] [--port 8080] [--data-dir /data] [--log-level info] [--log-format text]
-  dango orchestrator register <image:tag> [--override path] [--data-dir /data] [--log-level info]
-  dango orchestrator unregister <tool_name> [--data-dir /data] [--log-level info]
-  dango orchestrator list-tools [--data-dir /data] [--log-level info]
-  dango orchestrator demo-run --request "draft a demo report" [--data-dir ./.dango-demo] [--tools-dir /path/to/tools] [--log-level debug]
-
-  dango executor describe [--format yaml|json] [--log-level info]
-  dango executor run --task-id <uuid> [--sub-task path] [--log-level info]`)
-	return fmt.Errorf("missing command")
 }
 
 func (a *App) newLogger(command string, cfg logging.Config) (*slog.Logger, func(), error) {

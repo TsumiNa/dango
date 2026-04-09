@@ -22,7 +22,7 @@ func TestMergeToolSpec(t *testing.T) {
 	}
 
 	override := map[string]any{
-		"model": "openrouter/google/gemini-2.5-flash",
+		"model": "openrouter/google/gemini-3.5-flash",
 		"defaults": map[string]any{
 			"page_size": "letter",
 			"limits": map[string]any{
@@ -36,7 +36,7 @@ func TestMergeToolSpec(t *testing.T) {
 		t.Fatalf("MergeToolSpec() error = %v", err)
 	}
 
-	if got, want := merged.Model, "openrouter/google/gemini-2.5-flash"; got != want {
+	if got, want := merged.Model, "openrouter/google/gemini-3.5-flash"; got != want {
 		t.Fatalf("merged.Model = %q, want %q", got, want)
 	}
 	if got, want := merged.Defaults["page_size"], "letter"; got != want {

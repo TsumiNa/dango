@@ -46,7 +46,7 @@ func TestRegistryRegister(t *testing.T) {
 	t.Cleanup(func() { _ = store.Close() })
 
 	overridePath := filepath.Join(root, "override.yaml")
-	overrideYAML := []byte("model: openrouter/google/gemini-2.5-flash\ndefaults:\n  page_size: letter\n")
+	overrideYAML := []byte("model: openrouter/google/gemini-3.5-flash\ndefaults:\n  page_size: letter\n")
 	if err := os.WriteFile(overridePath, overrideYAML, 0o644); err != nil {
 		t.Fatalf("write override: %v", err)
 	}
@@ -72,7 +72,7 @@ func TestRegistryRegister(t *testing.T) {
 	if got, want := registered.Tool.Name, "pdf-generator"; got != want {
 		t.Fatalf("registered.Tool.Name = %q, want %q", got, want)
 	}
-	if got, want := registered.Tool.Model, "openrouter/google/gemini-2.5-flash"; got != want {
+	if got, want := registered.Tool.Model, "openrouter/google/gemini-3.5-flash"; got != want {
 		t.Fatalf("registered.Tool.Model = %q, want %q", got, want)
 	}
 	if got, want := registered.Tool.Defaults["page_size"], "letter"; got != want {
