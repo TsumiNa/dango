@@ -1,6 +1,7 @@
 package executor
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -33,6 +34,16 @@ type RunOptions struct {
 	TaskID string
 	// SubTask points to the sub-task markdown file. If empty, SUB_TASK is used.
 	SubTask string
+}
+
+// PlanOptions describes the CLI-provided inputs for executor planning.
+type PlanOptions struct {
+	// TaskID identifies the task being planned. If empty, TASK_ID is used.
+	TaskID string
+	// SubTask points to the draft sub-task markdown file. If empty, SUB_TASK is used.
+	SubTask string
+	// Format controls whether planning output is emitted as json or yaml.
+	Format string
 }
 
 // New constructs an [Executor] that writes command results to stdout and
@@ -79,23 +90,83 @@ func (e *Executor) Describe(format string) error {
 	}
 }
 
+// Plan refines one planned stage and emits a structured executor plan.
+func (e *Executor) Plan(ctx context.Context, options PlanOptions) error {
+	runtimeContext, err := loadPlanContext(options)
+	if err != nil {
+		e.logger.Error("executor planning context invalid", "error", err)
+		return err
+	}
+	planLogger := e.logger.With("task_id", runtimeContext.TaskID, "sub_task", runtimeContext.SubTaskPath)
+	planLogger.Info("executor planning started")
+
+	toolSpec, err := loadToolSpecFrom(runtimeContext.ToolConfigPath)
+	if err != nil {
+		planLogger.Debug("merged tool config unavailable during planning, falling back to local tool spec", "tool_config", runtimeContext.ToolConfigPath, "error", err)
+		toolSpec, err = loadToolSpec()
+		if err != nil {
+			return err
+		}
+	}
+
+	if hookPath := resolvePlanHook(); hookPath != "" {
+		payload, err := e.runHookOutput(ctx, hookPath)
+		if err != nil {
+			return err
+		}
+		if len(payload) > 0 {
+			_, err = e.stdout.Write(append(payload, '\n'))
+			return err
+		}
+	}
+
+	rawSubTask, err := os.ReadFile(runtimeContext.SubTaskPath)
+	if err != nil {
+		return fmt.Errorf("read planning sub-task: %w", err)
+	}
+
+	plan := spec.ExecutorPlan{
+		Summary:         fmt.Sprintf("Use %s to complete its assigned stage.", toolSpec.Name),
+		SubTask:         strings.TrimSpace(string(rawSubTask)),
+		ExpectedOutputs: defaultExpectedOutputs(toolSpec),
+	}
+
+	switch options.Format {
+	case "", "json":
+		return json.NewEncoder(e.stdout).Encode(plan)
+	case "yaml":
+		payload, err := yaml.Marshal(plan)
+		if err != nil {
+			return fmt.Errorf("marshal executor plan as yaml: %w", err)
+		}
+		_, err = e.stdout.Write(payload)
+		return err
+	default:
+		return fmt.Errorf("unsupported plan format %q", options.Format)
+	}
+}
+
 // Run executes a tool task using the scheduler environment contract.
 //
 // Run validates runtime inputs, ensures OUTPUT_PATH exists, executes a tool
 // hook when available, and guarantees that a _handoff.md is written even for
 // scaffold fallback behavior.
 func (e *Executor) Run(ctx context.Context, options RunOptions) error {
-	runtimeContext, err := loadRuntimeContext(options)
+	runtimeContext, err := loadRunContext(options)
 	if err != nil {
 		e.logger.Error("executor runtime context invalid", "error", err)
 		return err
 	}
-	runLogger := e.logger.With("task_id", runtimeContext.TaskID, "output_path", runtimeContext.OutputPath)
+	runLogger := e.logger.With("task_id", runtimeContext.TaskID, "output_path", runtimeContext.PublicOutputPath)
 	runLogger.Info("executor run started")
 
-	if err := os.MkdirAll(runtimeContext.OutputPath, 0o755); err != nil {
+	if err := os.MkdirAll(runtimeContext.PublicOutputPath, 0o755); err != nil {
 		runLogger.Error("failed to create output directory", "error", err)
 		return fmt.Errorf("create output directory: %w", err)
+	}
+	if err := os.MkdirAll(runtimeContext.PrivateOutputPath, 0o755); err != nil {
+		runLogger.Error("failed to create private output directory", "error", err)
+		return fmt.Errorf("create private output directory: %w", err)
 	}
 
 	toolSpec, err := loadToolSpecFrom(runtimeContext.ToolConfigPath)
@@ -114,18 +185,21 @@ func (e *Executor) Run(ctx context.Context, options RunOptions) error {
 		runLogger.Info("executing tool hook", "hook_path", hookPath)
 		if err := e.runHook(ctx, hookPath); err != nil {
 			runLogger.Error("tool hook failed", "hook_path", hookPath, "error", err)
-			_ = writeFailureHandoff(runtimeContext.OutputPath, toolSpec.Name, runtimeContext.TaskID, err)
+			_ = writeFailureHandoffs(runtimeContext.PublicOutputPath, runtimeContext.PrivateOutputPath, toolSpec.Name, runtimeContext.TaskID, err)
 			return err
 		}
 
-		handoffPath := filepath.Join(runtimeContext.OutputPath, "_handoff.md")
+		handoffPath := filepath.Join(runtimeContext.PrivateOutputPath, "_handoff.md")
 		if _, err := os.Stat(handoffPath); err == nil {
+			if err := ensurePublicHandoff(runtimeContext.PublicOutputPath, runtimeContext.PrivateOutputPath); err != nil {
+				return err
+			}
 			runLogger.Info("tool hook completed with explicit handoff", "hook_path", hookPath)
 			return nil
 		}
 
 		runLogger.Info("tool hook completed without handoff; generating fallback handoff", "hook_path", hookPath)
-		return writeAutoHandoff(runtimeContext.OutputPath, toolSpec.Name, runtimeContext.TaskID, "hook completed without explicit handoff")
+		return writeAutoHandoffs(runtimeContext.PublicOutputPath, runtimeContext.PrivateOutputPath, toolSpec.Name, runtimeContext.TaskID, "hook completed without explicit handoff")
 	}
 
 	runLogger.Info("no tool hook found; writing scaffold artifacts")
@@ -144,32 +218,48 @@ func (e *Executor) runHook(ctx context.Context, hookPath string) error {
 	return nil
 }
 
+func (e *Executor) runHookOutput(ctx context.Context, hookPath string) ([]byte, error) {
+	cmd := exec.CommandContext(ctx, hookPath)
+	cmd.Stderr = e.stderr
+	cmd.Env = os.Environ()
+	cmd.Dir = filepath.Dir(hookPath)
+	output, err := cmd.Output()
+	if err != nil {
+		return nil, fmt.Errorf("run tool hook %q: %w", hookPath, err)
+	}
+	return bytes.TrimSpace(output), nil
+}
+
 func (e *Executor) writeScaffoldArtifacts(runtimeContext runtimeContext, toolSpec spec.ToolSpec) error {
 	subTaskPayload, _ := os.ReadFile(runtimeContext.SubTaskPath)
 	configPayload, _ := os.ReadFile(runtimeContext.ToolConfigPath)
 
 	report := map[string]any{
-		"task_id":          runtimeContext.TaskID,
-		"tool":             toolSpec.Name,
-		"description":      toolSpec.Description,
-		"input_path":       runtimeContext.InputPath,
-		"output_path":      runtimeContext.OutputPath,
-		"sub_task_path":    runtimeContext.SubTaskPath,
-		"tool_config_path": runtimeContext.ToolConfigPath,
-		"input_url":        runtimeContext.InputURL,
-		"output_url":       runtimeContext.OutputURL,
-		"sub_task":         strings.TrimSpace(string(subTaskPayload)),
-		"tool_config":      strings.TrimSpace(string(configPayload)),
-		"generated_at":     time.Now().UTC().Format(time.RFC3339),
+		"task_id":             runtimeContext.TaskID,
+		"tool":                toolSpec.Name,
+		"description":         toolSpec.Description,
+		"input_path":          runtimeContext.InputPath,
+		"output_path":         runtimeContext.PublicOutputPath,
+		"private_output_path": runtimeContext.PrivateOutputPath,
+		"sub_task_path":       runtimeContext.SubTaskPath,
+		"tool_config_path":    runtimeContext.ToolConfigPath,
+		"input_url":           runtimeContext.InputURL,
+		"output_url":          runtimeContext.OutputURL,
+		"sub_task":            strings.TrimSpace(string(subTaskPayload)),
+		"tool_config":         strings.TrimSpace(string(configPayload)),
+		"generated_at":        time.Now().UTC().Format(time.RFC3339),
 	}
 
-	reportPath := filepath.Join(runtimeContext.OutputPath, "execution-report.json")
+	reportPath := filepath.Join(runtimeContext.PublicOutputPath, "execution-report.json")
 	reportPayload, err := json.MarshalIndent(report, "", "  ")
 	if err != nil {
 		return fmt.Errorf("marshal execution report: %w", err)
 	}
 	if err := os.WriteFile(reportPath, reportPayload, 0o644); err != nil {
 		return fmt.Errorf("write execution report: %w", err)
+	}
+	if err := os.WriteFile(filepath.Join(runtimeContext.PrivateOutputPath, "execution-context.json"), reportPayload, 0o644); err != nil {
+		return fmt.Errorf("write execution context: %w", err)
 	}
 
 	handoffBody := "## Description\n\n" +
@@ -178,14 +268,21 @@ func (e *Executor) writeScaffoldArtifacts(runtimeContext runtimeContext, toolSpe
 		"- The executor wrote `execution-report.json` as a placeholder artifact.\n" +
 		"- Replace it with `/opt/tool/run` or `DANGO_TOOL_RUN` to execute real tool logic.\n"
 
-	return writeHandoff(runtimeContext.OutputPath, spec.Handoff{
-		Metadata: spec.HandoffMetadata{
-			TaskID:      runtimeContext.TaskID,
-			Tool:        toolSpec.Name,
-			Status:      spec.HandoffStatusCompleted,
-			OutputFiles: []string{"execution-report.json"},
-			Timestamp:   time.Now().UTC(),
-		},
-		Body: handoffBody,
-	})
+	return writeAutoHandoffs(runtimeContext.PublicOutputPath, runtimeContext.PrivateOutputPath, toolSpec.Name, runtimeContext.TaskID, strings.TrimSpace(handoffBody))
+}
+
+func defaultExpectedOutputs(toolSpec spec.ToolSpec) []string {
+	if len(toolSpec.OutputTypes) == 0 {
+		return nil
+	}
+
+	outputs := make([]string, 0, len(toolSpec.OutputTypes))
+	for _, outputType := range toolSpec.OutputTypes {
+		outputType = strings.TrimSpace(outputType)
+		if outputType == "" {
+			continue
+		}
+		outputs = append(outputs, "result."+outputType)
+	}
+	return outputs
 }

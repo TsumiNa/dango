@@ -36,6 +36,11 @@ FROM tasks
 WHERE id = sqlc.arg(id)
 LIMIT 1;
 
+-- name: ListTasks :many
+SELECT id, status, request, dag_json, created, updated
+FROM tasks
+ORDER BY updated DESC, created DESC;
+
 -- name: UpdateTaskStatus :execrows
 UPDATE tasks
 SET status = sqlc.arg(status), updated = CURRENT_TIMESTAMP

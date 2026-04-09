@@ -92,6 +92,7 @@ func (a *App) newExecutorCommand() *cobra.Command {
 
 	cmd.AddCommand(
 		a.newExecutorDescribeCommand(),
+		a.newExecutorPlanCommand(),
 		a.newExecutorRunCommand(),
 	)
 

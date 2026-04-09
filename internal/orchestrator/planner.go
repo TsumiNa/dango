@@ -5,18 +5,24 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"os"
 	"strings"
 	"time"
 
+	"github.com/tsumina/dango/internal/datadir"
 	"github.com/tsumina/dango/internal/logging"
+	"github.com/tsumina/dango/internal/runtime"
 	"github.com/tsumina/dango/internal/spec"
 	"github.com/tsumina/dango/internal/store/sqlite"
 )
 
-// Planner derives a demo execution plan from the registered tool catalog.
+// Planner derives a task workflow from the registered tool catalog and asks
+// executors to refine their own assigned stages when possible.
 type Planner struct {
-	store  *sqlite.Store
-	logger *slog.Logger
+	locator *datadir.Locator
+	store   *sqlite.Store
+	runtime runtime.ContainerRuntime
+	logger  *slog.Logger
 }
 
 type catalogTool struct {
@@ -36,26 +42,44 @@ type plannerState struct {
 	Steps       []pathStep
 }
 
-// NewPlanner constructs the demo planner used to derive a linear tool path
-// from the registered tool catalog.
-func NewPlanner(store *sqlite.Store, logger *slog.Logger) *Planner {
+// NewPlanner constructs the planner used to derive and refine a task DAG.
+func NewPlanner(locator *datadir.Locator, store *sqlite.Store, rt runtime.ContainerRuntime, logger *slog.Logger) *Planner {
 	return &Planner{
-		store:  store,
-		logger: logging.Component(logger, "orchestrator.planner"),
+		locator: locator,
+		store:   store,
+		runtime: rt,
+		logger:  logging.Component(logger, "orchestrator.planner"),
 	}
 }
 
-// Plan builds a demo DAG for request by finding a linear path from the
-// synthetic request input type to the synthetic final output type.
+// Plan derives a draft workflow, asks executors to refine their stages, and
+// returns the runner-reviewed DAG.
 func (p *Planner) Plan(ctx context.Context, taskID, request string) (spec.DAGPlan, error) {
 	p.logger.Info("planning task", "task_id", taskID)
+
+	draft, err := p.Draft(ctx, taskID, request)
+	if err != nil {
+		return spec.DAGPlan{}, err
+	}
+
+	refined, err := p.Refine(ctx, taskID, draft)
+	if err != nil {
+		return spec.DAGPlan{}, err
+	}
+
+	plan := p.review(refined)
+	p.logger.Info("planning completed", "task_id", taskID, "edges", len(plan.Edges))
+	return plan, nil
+}
+
+// Draft creates the initial checklist-shaped workflow using the registered tool catalog.
+func (p *Planner) Draft(ctx context.Context, taskID, request string) (spec.DAGPlan, error) {
 	tools, err := p.loadCatalog(ctx)
 	if err != nil {
 		p.logger.Error("failed to load tool catalog", "task_id", taskID, "error", err)
 		return spec.DAGPlan{}, err
 	}
 	if len(tools) == 0 {
-		p.logger.Warn("no tools registered for planning", "task_id", taskID)
 		return spec.DAGPlan{}, fmt.Errorf("no tools registered")
 	}
 
@@ -66,37 +90,129 @@ func (p *Planner) Plan(ctx context.Context, taskID, request string) (spec.DAGPla
 	}
 
 	edges := make([]spec.PlannedEdge, 0, len(steps))
-	upstream := ""
+	var previousEdgeID string
 	for index, step := range steps {
 		edgeID, err := spec.NewUUID()
 		if err != nil {
 			return spec.DAGPlan{}, err
 		}
 
-		edge := spec.PlannedEdge{
-			ID:         edgeID,
-			ToolName:   step.Tool.Spec.Name,
-			Upstream:   upstream,
-			InputType:  step.InputType,
-			OutputType: step.OutputType,
-			SubTask:    buildSubTaskMarkdown(taskID, request, step.Tool.Spec, step.InputType, step.OutputType, index+1, len(steps)),
+		dependencies := []string{}
+		if previousEdgeID != "" {
+			dependencies = append(dependencies, previousEdgeID)
 		}
-		edges = append(edges, edge)
-		upstream = edgeID
-	}
 
-	selectedTools := make([]string, 0, len(edges))
-	for _, edge := range edges {
-		selectedTools = append(selectedTools, edge.ToolName)
+		edges = append(edges, spec.PlannedEdge{
+			ID:              edgeID,
+			ToolName:        step.Tool.Spec.Name,
+			Dependencies:    dependencies,
+			InputType:       step.InputType,
+			OutputType:      step.OutputType,
+			Title:           fmt.Sprintf("Stage %d", index+1),
+			Summary:         fmt.Sprintf("Use %s to transform %s into %s.", step.Tool.Spec.Name, step.InputType, step.OutputType),
+			ExpectedOutputs: defaultExpectedOutputs(step.Tool.Spec, step.OutputType),
+			SubTask:         buildDraftSubTaskMarkdown(taskID, request, step.Tool.Spec, step.InputType, step.OutputType, index+1, len(steps)),
+		})
+		previousEdgeID = edgeID
 	}
-	p.logger.Info("planning completed", "task_id", taskID, "edges", len(edges), "tools", selectedTools)
 
 	return spec.DAGPlan{
-		Planner:   "demo-rule-planner",
+		Planner:   "runner-draft-planner",
 		Mode:      "linear",
+		Revision:  1,
 		CreatedAt: time.Now().UTC(),
 		Edges:     edges,
 	}, nil
+}
+
+// Refine asks executors to refine their own planned stages and falls back to a
+// generic scaffold when no planner-specific hook is available.
+func (p *Planner) Refine(ctx context.Context, taskID string, draft spec.DAGPlan) (spec.DAGPlan, error) {
+	refined := draft
+	refined.Planner = "runner-refine-planner"
+	refined.Edges = append([]spec.PlannedEdge(nil), draft.Edges...)
+
+	for index, edge := range refined.Edges {
+		tool, err := p.store.GetTool(ctx, edge.ToolName)
+		if err != nil {
+			return spec.DAGPlan{}, err
+		}
+		if p.locator != nil {
+			if err := p.locator.EnsureEdgeDir(taskID, edge.ID); err != nil {
+				return spec.DAGPlan{}, err
+			}
+			if err := os.WriteFile(p.locator.EdgeSubTaskPath(taskID, edge.ID), []byte(edge.SubTask), 0o644); err != nil {
+				return spec.DAGPlan{}, fmt.Errorf("write planning sub-task: %w", err)
+			}
+		}
+
+		updatedEdge, err := p.refineEdge(ctx, taskID, edge, tool)
+		if err != nil {
+			return spec.DAGPlan{}, err
+		}
+		if updatedEdge.Title == "" {
+			updatedEdge.Title = fmt.Sprintf("Stage %d", index+1)
+		}
+		refined.Edges[index] = updatedEdge
+	}
+
+	return refined, nil
+}
+
+func (p *Planner) refineEdge(ctx context.Context, taskID string, edge spec.PlannedEdge, tool sqlite.ToolRecord) (spec.PlannedEdge, error) {
+	if p.runtime == nil || p.locator == nil {
+		return p.fallbackEdgePlan(edge), nil
+	}
+
+	payload, err := p.runtime.PlanExecutor(ctx, runtime.ExecutorPlanRequest{
+		Image:          tool.Image,
+		TaskID:         taskID,
+		SubTaskHost:    p.locator.EdgeSubTaskPath(taskID, edge.ID),
+		ToolConfigHost: p.locator.ToolMergedPath(edge.ToolName),
+	})
+	if err != nil {
+		p.logger.Warn("executor planning hook unavailable; using fallback refinement", "task_id", taskID, "edge_id", edge.ID, "tool", edge.ToolName, "error", err)
+		return p.fallbackEdgePlan(edge), nil
+	}
+
+	var plan spec.ExecutorPlan
+	if err := json.Unmarshal(payload, &plan); err != nil {
+		p.logger.Warn("executor planning output was invalid; using fallback refinement", "task_id", taskID, "edge_id", edge.ID, "tool", edge.ToolName, "error", err)
+		return p.fallbackEdgePlan(edge), nil
+	}
+
+	if strings.TrimSpace(plan.Summary) != "" {
+		edge.Summary = strings.TrimSpace(plan.Summary)
+	}
+	if strings.TrimSpace(plan.SubTask) != "" {
+		edge.SubTask = strings.TrimSpace(plan.SubTask)
+	}
+	if len(plan.ExpectedOutputs) > 0 {
+		edge.ExpectedOutputs = append([]string(nil), plan.ExpectedOutputs...)
+	}
+
+	return p.fallbackEdgePlan(edge), nil
+}
+
+func (p *Planner) fallbackEdgePlan(edge spec.PlannedEdge) spec.PlannedEdge {
+	if strings.TrimSpace(edge.Summary) == "" {
+		edge.Summary = fmt.Sprintf("Use %s to transform %s into %s.", edge.ToolName, edge.InputType, edge.OutputType)
+	}
+	if len(edge.ExpectedOutputs) == 0 {
+		edge.ExpectedOutputs = []string{"result." + strings.TrimSpace(edge.OutputType)}
+	}
+	if strings.TrimSpace(edge.SubTask) == "" {
+		edge.SubTask = fmt.Sprintf("Complete the stage assigned to %s.", edge.ToolName)
+	}
+	return edge
+}
+
+func (p *Planner) review(plan spec.DAGPlan) spec.DAGPlan {
+	plan.ReviewedAt = time.Now().UTC()
+	if plan.Mode == "" {
+		plan.Mode = "linear"
+	}
+	return plan
 }
 
 func (p *Planner) loadCatalog(ctx context.Context) ([]catalogTool, error) {
@@ -114,10 +230,7 @@ func (p *Planner) loadCatalog(ctx context.Context) ([]catalogTool, error) {
 		if err := toolSpec.Validate(); err != nil {
 			return nil, fmt.Errorf("validate config for tool %q: %w", row.Name, err)
 		}
-		out = append(out, catalogTool{
-			Row:  row,
-			Spec: toolSpec,
-		})
+		out = append(out, catalogTool{Row: row, Spec: toolSpec})
 	}
 
 	return out, nil
@@ -166,27 +279,27 @@ func findLinearPath(tools []catalogTool, startType, goalType string) ([]pathStep
 	return nil, fmt.Errorf("no tool path found from %q to %q", startType, goalType)
 }
 
-func buildSubTaskMarkdown(taskID, request string, tool spec.ToolSpec, inputType, outputType string, index, total int) string {
+func buildDraftSubTaskMarkdown(taskID, request string, tool spec.ToolSpec, inputType, outputType string, index, total int) string {
 	request = strings.TrimSpace(request)
 	if request == "" {
 		request = "(empty request)"
 	}
 
-	return fmt.Sprintf("# Sub-task\n\n"+
+	return fmt.Sprintf("# Planner Draft\n\n"+
 		"Task ID: %s\n"+
 		"Stage: %d/%d\n"+
 		"Assigned tool: %s\n\n"+
-		"## Objective\n\n"+
-		"Use this tool to transform `%s` into `%s`.\n\n"+
+		"## Workflow Checklist Item\n\n"+
+		"Transform `%s` into `%s`. Refine this checklist item into an executable sub-task for the executor.\n\n"+
 		"## Tool Context\n\n"+
 		"- Name: %s\n"+
 		"- Description: %s\n"+
 		"- Model: %s\n\n"+
-		"## Execution Notes\n\n"+
-		"- If this is the first stage, rely on the original request below and the local config.\n"+
-		"- If this is not the first stage, read from INPUT_PATH and produce output files in OUTPUT_PATH.\n"+
-		"- Always write a valid _handoff.md at the root of OUTPUT_PATH.\n"+
-		"- Keep artifacts small and review-friendly for the demo.\n\n"+
+		"## Planning Requirements\n\n"+
+		"- Update the summary so the runner can review the stage intent quickly.\n"+
+		"- Keep the sub-task concise and execution-oriented.\n"+
+		"- List the expected output artifacts for this stage.\n"+
+		"- Preserve the append-only task history by describing changes rather than deleting prior context.\n\n"+
 		"## Original Request\n\n"+
 		"%s\n",
 		taskID, index, total, tool.Name, inputType, outputType, tool.Name, tool.Description, tool.Model, request)
@@ -214,4 +327,14 @@ func appendPathStep(base []pathStep, step pathStep) []pathStep {
 	out = append(out, base...)
 	out = append(out, step)
 	return out
+}
+
+func defaultExpectedOutputs(tool spec.ToolSpec, outputType string) []string {
+	if strings.TrimSpace(outputType) != "" {
+		return []string{"result." + strings.TrimSpace(outputType)}
+	}
+	if len(tool.OutputTypes) == 0 {
+		return nil
+	}
+	return []string{"result." + strings.TrimSpace(tool.OutputTypes[0])}
 }

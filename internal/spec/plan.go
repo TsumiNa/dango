@@ -8,8 +8,12 @@ type DAGPlan struct {
 	Planner string `json:"planner,omitempty" yaml:"planner,omitempty"`
 	// Mode describes the overall plan topology, such as linear or fan-out.
 	Mode string `json:"mode,omitempty" yaml:"mode,omitempty"`
+	// Revision tracks monotonic runner edits to the DAG within one task lineage.
+	Revision int `json:"revision,omitempty" yaml:"revision,omitempty"`
 	// CreatedAt records when the plan was generated.
 	CreatedAt time.Time `json:"created_at" yaml:"created_at"`
+	// ReviewedAt records when the runner finished its last plan review pass.
+	ReviewedAt time.Time `json:"reviewed_at,omitempty" yaml:"reviewed_at,omitempty"`
 	// Edges lists the planned execution edges in planner-defined order.
 	Edges []PlannedEdge `json:"edges" yaml:"edges"`
 }
@@ -20,12 +24,18 @@ type PlannedEdge struct {
 	ID string `json:"id" yaml:"id"`
 	// ToolName identifies the tool to invoke for this edge.
 	ToolName string `json:"tool_name" yaml:"tool_name"`
-	// Upstream identifies the upstream edge whose output becomes this edge's input.
-	Upstream string `json:"upstream,omitempty" yaml:"upstream,omitempty"`
+	// Dependencies identifies the upstream edges whose outputs become this edge's inputs.
+	Dependencies []string `json:"dependencies,omitempty" yaml:"dependencies,omitempty"`
 	// InputType captures the logical input type expected by the tool.
 	InputType string `json:"input_type" yaml:"input_type"`
 	// OutputType captures the logical output type produced by the tool.
 	OutputType string `json:"output_type" yaml:"output_type"`
+	// Title is the concise runner-visible name for the edge.
+	Title string `json:"title,omitempty" yaml:"title,omitempty"`
+	// Summary is the executor-refined description of the edge's intent.
+	Summary string `json:"summary,omitempty" yaml:"summary,omitempty"`
+	// ExpectedOutputs lists the artifacts the executor expects to materialize.
+	ExpectedOutputs []string `json:"expected_outputs,omitempty" yaml:"expected_outputs,omitempty"`
 	// SubTask contains the sub-task markdown given to the tool.
 	SubTask string `json:"sub_task" yaml:"sub_task"`
 }

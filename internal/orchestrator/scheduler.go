@@ -33,19 +33,20 @@ type EdgeExecutionRequest struct {
 	EdgeID string
 	// ToolName identifies the registered tool assigned to the edge.
 	ToolName string
-	// UpstreamEdgeID points to the producer edge whose output should be mounted.
-	UpstreamEdgeID string
+	// DependencyEdgeIDs points at upstream edges whose private outputs should be mounted.
+	DependencyEdgeIDs []string
 	// SubTaskContent is written to sub-task.md before execution when provided.
 	SubTaskContent string
 }
 
 type edgeExecutionPaths struct {
-	subTaskPath string
-	inputHost   string
-	outputHost  string
+	subTaskPath        string
+	inputHost          string
+	publicOutputHost   string
+	privateOutputHost  string
 }
 
-// NewScheduler constructs the scheduler used to execute demo edges locally.
+// NewScheduler constructs the scheduler used to execute task edges locally.
 func NewScheduler(locator *datadir.Locator, store *sqlite.Store, rt runtime.ContainerRuntime, logger *slog.Logger) *Scheduler {
 	return &Scheduler{
 		locator: locator,
@@ -72,24 +73,23 @@ func (s *Scheduler) RunLocalEdge(ctx context.Context, request EdgeExecutionReque
 	}
 
 	started := time.Now().UTC()
-	if err := s.markEdgeRunning(ctx, request, paths.outputHost, started); err != nil {
+	if err := s.markEdgeRunning(ctx, request, paths.publicOutputHost, started); err != nil {
 		edgeLogger.Error("failed to persist running edge state", "error", err)
 		return spec.Handoff{}, err
 	}
 
 	handoff, frontmatter, err := s.runExecutor(ctx, edgeLogger, request, tool, paths)
 	if err != nil {
-		s.markEdgeFailed(ctx, edgeLogger, request, paths.outputHost, started, err)
+		s.markEdgeFailed(ctx, edgeLogger, request, paths.publicOutputHost, started, err)
 		return spec.Handoff{}, err
 	}
 
-	if err := s.markEdgeCompleted(ctx, edgeLogger, request, paths.outputHost, started, handoff, frontmatter); err != nil {
+	if err := s.markEdgeCompleted(ctx, edgeLogger, request, paths.publicOutputHost, started, handoff, frontmatter); err != nil {
 		edgeLogger.Error("failed to persist completed edge state", "error", err)
 		return spec.Handoff{}, err
 	}
 
 	edgeLogger.Info("edge execution completed", "status", handoff.Metadata.Status, "output_files", handoff.Metadata.OutputFiles)
-
 	return handoff, nil
 }
 
@@ -99,7 +99,6 @@ func (s *Scheduler) loadTool(ctx context.Context, edgeLogger *slog.Logger, toolN
 		edgeLogger.Error("failed to load tool registration", "error", err)
 		return sqlite.ToolRecord{}, err
 	}
-
 	return tool, nil
 }
 
@@ -110,8 +109,9 @@ func (s *Scheduler) prepareEdgePaths(edgeLogger *slog.Logger, request EdgeExecut
 	}
 
 	paths := edgeExecutionPaths{
-		subTaskPath: s.locator.EdgeSubTaskPath(request.TaskID, request.EdgeID),
-		outputHost:  s.locator.EdgeOutputDir(request.TaskID, request.EdgeID),
+		subTaskPath:       s.locator.EdgeSubTaskPath(request.TaskID, request.EdgeID),
+		publicOutputHost:  s.locator.EdgeOutputDir(request.TaskID, request.EdgeID),
+		privateOutputHost: s.locator.EdgePrivateOutputDir(request.TaskID, request.EdgeID),
 	}
 
 	if strings.TrimSpace(request.SubTaskContent) != "" {
@@ -124,18 +124,45 @@ func (s *Scheduler) prepareEdgePaths(edgeLogger *slog.Logger, request EdgeExecut
 		return edgeExecutionPaths{}, fmt.Errorf("sub-task.md is required before edge execution: %w", err)
 	}
 
-	if request.UpstreamEdgeID != "" {
-		paths.inputHost = s.locator.EdgeOutputDir(request.TaskID, request.UpstreamEdgeID)
-		return paths, nil
+	inputHost, err := s.resolveInputHost(edgeLogger, request)
+	if err != nil {
+		return edgeExecutionPaths{}, err
 	}
-
-	paths.inputHost = s.locator.EdgeScratchInputDir(request.TaskID, request.EdgeID)
-	if err := os.MkdirAll(paths.inputHost, 0o755); err != nil {
-		edgeLogger.Error("failed to create empty input directory", "path", paths.inputHost, "error", err)
-		return edgeExecutionPaths{}, fmt.Errorf("create empty input directory: %w", err)
-	}
-
+	paths.inputHost = inputHost
 	return paths, nil
+}
+
+func (s *Scheduler) resolveInputHost(edgeLogger *slog.Logger, request EdgeExecutionRequest) (string, error) {
+	if len(request.DependencyEdgeIDs) == 0 {
+		inputHost := s.locator.EdgeScratchInputDir(request.TaskID, request.EdgeID)
+		if err := os.MkdirAll(inputHost, 0o755); err != nil {
+			edgeLogger.Error("failed to create empty input directory", "path", inputHost, "error", err)
+			return "", fmt.Errorf("create empty input directory: %w", err)
+		}
+		return inputHost, nil
+	}
+
+	if len(request.DependencyEdgeIDs) == 1 {
+		return s.locator.EdgePrivateOutputDir(request.TaskID, request.DependencyEdgeIDs[0]), nil
+	}
+
+	mergedInput := s.locator.EdgeMergedInputDir(request.TaskID, request.EdgeID)
+	if err := os.RemoveAll(mergedInput); err != nil {
+		return "", fmt.Errorf("reset merged input directory: %w", err)
+	}
+	if err := os.MkdirAll(mergedInput, 0o755); err != nil {
+		return "", fmt.Errorf("create merged input directory: %w", err)
+	}
+
+	for _, dependencyEdgeID := range request.DependencyEdgeIDs {
+		target := s.locator.EdgePrivateOutputDir(request.TaskID, dependencyEdgeID)
+		linkPath := filepath.Join(mergedInput, dependencyEdgeID)
+		if err := os.Symlink(target, linkPath); err != nil {
+			return "", fmt.Errorf("link dependency output %q into %q: %w", target, mergedInput, err)
+		}
+	}
+
+	return mergedInput, nil
 }
 
 func (s *Scheduler) markEdgeRunning(ctx context.Context, request EdgeExecutionRequest, outputHost string, started time.Time) error {
@@ -143,7 +170,7 @@ func (s *Scheduler) markEdgeRunning(ctx context.Context, request EdgeExecutionRe
 		ID:        request.EdgeID,
 		TaskID:    request.TaskID,
 		ToolName:  request.ToolName,
-		Upstream:  request.UpstreamEdgeID,
+		Upstream:  strings.Join(request.DependencyEdgeIDs, ","),
 		Status:    string(spec.EdgeStatusRunning),
 		SharedDir: outputHost,
 		Started:   started.Format(time.RFC3339),
@@ -156,20 +183,21 @@ func (s *Scheduler) markEdgeRunning(ctx context.Context, request EdgeExecutionRe
 
 func (s *Scheduler) runExecutor(ctx context.Context, edgeLogger *slog.Logger, request EdgeExecutionRequest, tool sqlite.ToolRecord, paths edgeExecutionPaths) (spec.Handoff, []byte, error) {
 	runRequest := runtime.ExecutorRunRequest{
-		Image:          tool.Image,
-		TaskID:         request.TaskID,
-		SubTaskHost:    paths.subTaskPath,
-		ToolConfigHost: s.locator.ToolMergedPath(request.ToolName),
-		InputHost:      paths.inputHost,
-		OutputHost:     paths.outputHost,
+		Image:             tool.Image,
+		TaskID:            request.TaskID,
+		SubTaskHost:       paths.subTaskPath,
+		ToolConfigHost:    s.locator.ToolMergedPath(request.ToolName),
+		InputHost:         paths.inputHost,
+		PublicOutputHost:  paths.publicOutputHost,
+		PrivateOutputHost: paths.privateOutputHost,
 	}
-	edgeLogger.Debug("prepared executor run request", "image", tool.Image, "input_host", paths.inputHost, "output_host", paths.outputHost, "sub_task_path", paths.subTaskPath)
+	edgeLogger.Debug("prepared executor run request", "image", tool.Image, "input_host", paths.inputHost, "output_host", paths.publicOutputHost, "private_output_host", paths.privateOutputHost, "sub_task_path", paths.subTaskPath)
 	if err := s.runtime.RunExecutor(ctx, runRequest); err != nil {
 		edgeLogger.Error("executor runtime failed", "image", tool.Image, "error", err)
 		return spec.Handoff{}, nil, err
 	}
 
-	handoffPath := filepath.Join(paths.outputHost, "_handoff.md")
+	handoffPath := s.locator.EdgePrivateHandoffPath(request.TaskID, request.EdgeID)
 	rawHandoff, err := os.ReadFile(handoffPath)
 	if err != nil {
 		edgeLogger.Error("failed to read handoff", "path", handoffPath, "error", err)
@@ -199,7 +227,7 @@ func (s *Scheduler) markEdgeFailed(ctx context.Context, edgeLogger *slog.Logger,
 		ID:        request.EdgeID,
 		TaskID:    request.TaskID,
 		ToolName:  request.ToolName,
-		Upstream:  request.UpstreamEdgeID,
+		Upstream:  strings.Join(request.DependencyEdgeIDs, ","),
 		Status:    string(spec.EdgeStatusFailed),
 		SharedDir: outputHost,
 		Started:   started.Format(time.RFC3339),
@@ -221,7 +249,7 @@ func (s *Scheduler) markEdgeCompleted(ctx context.Context, edgeLogger *slog.Logg
 		ID:          request.EdgeID,
 		TaskID:      request.TaskID,
 		ToolName:    request.ToolName,
-		Upstream:    request.UpstreamEdgeID,
+		Upstream:    strings.Join(request.DependencyEdgeIDs, ","),
 		Status:      string(spec.EdgeStatusCompleted),
 		SharedDir:   outputHost,
 		HandoffYAML: string(frontmatter),

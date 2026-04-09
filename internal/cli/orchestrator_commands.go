@@ -23,13 +23,14 @@ func (a *App) newOrchestratorServeCommand() *cobra.Command {
 	model := "gemini-3.5-pro"
 	port := 8080
 	dataDir := defaultDataDir()
+	unixSocket := filepath.Join(dataDir, "orchestrator.sock")
 
 	cmd := &cobra.Command{
 		Use:   "serve",
 		Short: "Run the orchestrator API server",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return a.runOrchestratorServe(cmd.Context(), logCfg, model, port, dataDir)
+			return a.runOrchestratorServe(cmd.Context(), logCfg, model, port, dataDir, unixSocket)
 		},
 	}
 
@@ -37,12 +38,13 @@ func (a *App) newOrchestratorServeCommand() *cobra.Command {
 	logCfg.BindFlags(flags)
 	flags.StringVar(&model, "model", model, "AI model for orchestration")
 	flags.IntVar(&port, "port", port, "listen port")
+	flags.StringVar(&unixSocket, "unix-socket", unixSocket, "path to the Unix domain socket listener")
 	flags.StringVar(&dataDir, "data-dir", dataDir, "root data directory")
 
 	return cmd
 }
 
-func (a *App) runOrchestratorServe(ctx context.Context, logCfg logging.Config, model string, port int, dataDir string) error {
+func (a *App) runOrchestratorServe(ctx context.Context, logCfg logging.Config, model string, port int, dataDir string, unixSocket string) error {
 	logger, cleanup, err := a.newLogger("orchestrator.serve", logCfg)
 	if err != nil {
 		return err
@@ -59,10 +61,13 @@ func (a *App) runOrchestratorServe(ctx context.Context, logCfg logging.Config, m
 	rt := runtime.NewDefault(os.Getenv("DANGO_DOCKER_BIN"), logger)
 	registry := orchestrator.NewRegistryService(locator, store, rt, logger)
 	taskService := orchestrator.NewTaskService(locator, store, logger)
-	planner := orchestrator.NewPlanner(store, logger)
+	planner := orchestrator.NewPlanner(locator, store, rt, logger)
 	scheduler := orchestrator.NewScheduler(locator, store, rt, logger)
-	engine := orchestrator.NewDemoEngine(locator, store, taskService, planner, scheduler, logger)
-	server := orchestrator.NewServer(":"+strconv.Itoa(port), registry, taskService, engine, logger)
+	runners := orchestrator.NewTaskRunnerService(locator, taskService, planner, scheduler, logger)
+	server := orchestrator.NewServer(orchestrator.ServerConfig{
+		TCPAddress:     ":" + strconv.Itoa(port),
+		UnixSocketPath: unixSocket,
+	}, registry, taskService, runners, logger)
 
 	serverCtx, cancel := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
 	defer cancel()
@@ -265,11 +270,11 @@ func (a *App) runOrchestratorDemoRun(ctx context.Context, logCfg logging.Config,
 	}
 
 	taskService := orchestrator.NewTaskService(locator, store, logger)
-	planner := orchestrator.NewPlanner(store, logger)
+	planner := orchestrator.NewPlanner(locator, store, rt, logger)
 	scheduler := orchestrator.NewScheduler(locator, store, rt, logger)
-	engine := orchestrator.NewDemoEngine(locator, store, taskService, planner, scheduler, logger)
+	runners := orchestrator.NewTaskRunnerService(locator, taskService, planner, scheduler, logger)
 
-	result, err := engine.Run(ctx, requestText)
+	result, err := runners.RunNow(ctx, orchestrator.RequestEnvelope{Text: requestText})
 	if err != nil {
 		return err
 	}

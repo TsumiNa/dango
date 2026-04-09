@@ -186,6 +186,21 @@ func (s *Store) GetTask(ctx context.Context, id string) (TaskRecord, error) {
 	return taskRecordFromRow(row), nil
 }
 
+// ListTasks returns all task rows ordered by most recent update.
+func (s *Store) ListTasks(ctx context.Context) ([]TaskRecord, error) {
+	rows, err := s.queries.ListTasks(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("list tasks: %w", err)
+	}
+
+	out := make([]TaskRecord, 0, len(rows))
+	for _, row := range rows {
+		out = append(out, taskRecordFromRow(row))
+	}
+
+	return out, nil
+}
+
 // UpdateTaskStatus updates only the task lifecycle state.
 //
 // UpdateTaskStatus returns sql.ErrNoRows when no task matches id.

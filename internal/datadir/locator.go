@@ -8,10 +8,11 @@ import (
 )
 
 const (
-	registryDirName = "registry"
-	tasksDirName    = "tasks"
-	dbFileName      = "dango.db"
-	handoffFileName = "_handoff.md"
+	registryDirName        = "registry"
+	tasksDirName           = "tasks"
+	dbFileName             = "dango.db"
+	publicHandoffFileName  = "handoff.md"
+	privateHandoffFileName = "_handoff.md"
 )
 
 // Locator resolves the canonical on-disk paths used by an orchestrator data
@@ -95,6 +96,16 @@ func (l *Locator) TaskRequestPath(taskID string) string {
 	return filepath.Join(l.TaskDir(taskID), "task.md")
 }
 
+// TaskMetadataPath returns the task metadata path for a task.
+func (l *Locator) TaskMetadataPath(taskID string) string {
+	return filepath.Join(l.TaskDir(taskID), "meta.json")
+}
+
+// TaskEventsPath returns the append-only event log path for a task.
+func (l *Locator) TaskEventsPath(taskID string) string {
+	return filepath.Join(l.TaskDir(taskID), "events.jsonl")
+}
+
 // TaskResultPath returns the result.md path for a task.
 func (l *Locator) TaskResultPath(taskID string) string {
 	return filepath.Join(l.TaskDir(taskID), "result.md")
@@ -115,14 +126,29 @@ func (l *Locator) EdgeOutputDir(taskID, edgeID string) string {
 	return filepath.Join(l.EdgeDir(taskID, edgeID), "output")
 }
 
+// EdgePrivateOutputDir returns the private downstream-only output directory for an edge.
+func (l *Locator) EdgePrivateOutputDir(taskID, edgeID string) string {
+	return filepath.Join(l.EdgeDir(taskID, edgeID), "_output")
+}
+
 // EdgeScratchInputDir returns the empty scratch input directory for root edges.
 func (l *Locator) EdgeScratchInputDir(taskID, edgeID string) string {
 	return filepath.Join(l.EdgeDir(taskID, edgeID), ".input-empty")
 }
 
-// EdgeHandoffPath returns the required _handoff.md path for an edge output.
-func (l *Locator) EdgeHandoffPath(taskID, edgeID string) string {
-	return filepath.Join(l.EdgeOutputDir(taskID, edgeID), handoffFileName)
+// EdgeMergedInputDir returns the directory used to merge multiple dependency inputs.
+func (l *Locator) EdgeMergedInputDir(taskID, edgeID string) string {
+	return filepath.Join(l.EdgeDir(taskID, edgeID), ".input-merged")
+}
+
+// EdgePublicHandoffPath returns the public handoff.md path for an edge.
+func (l *Locator) EdgePublicHandoffPath(taskID, edgeID string) string {
+	return filepath.Join(l.EdgeOutputDir(taskID, edgeID), publicHandoffFileName)
+}
+
+// EdgePrivateHandoffPath returns the private _handoff.md path for an edge.
+func (l *Locator) EdgePrivateHandoffPath(taskID, edgeID string) string {
+	return filepath.Join(l.EdgePrivateOutputDir(taskID, edgeID), privateHandoffFileName)
 }
 
 // EnsureToolDir creates the directory used to persist one registered tool.
@@ -140,6 +166,7 @@ func (l *Locator) EnsureEdgeDir(taskID, edgeID string) error {
 	paths := []string{
 		l.EdgeDir(taskID, edgeID),
 		l.EdgeOutputDir(taskID, edgeID),
+		l.EdgePrivateOutputDir(taskID, edgeID),
 	}
 
 	for _, p := range paths {

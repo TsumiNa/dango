@@ -49,6 +49,31 @@ func (d *dockerCLI) DescribeTool(ctx context.Context, image string) ([]byte, err
 	return output, nil
 }
 
+func (d *dockerCLI) PlanExecutor(ctx context.Context, request ExecutorPlanRequest) ([]byte, error) {
+	d.logger.Info("planning executor container", "image", request.Image, "task_id", request.TaskID)
+	args := []string{
+		"run", "--rm",
+		"-e", "TASK_ID=" + request.TaskID,
+		"-e", "SUB_TASK=/etc/dango/sub-task.md",
+		"-e", "TOOL_CONFIG=/etc/dango/tool-config.yaml",
+	}
+	if request.SubTaskHost != "" {
+		args = append(args, "-v", request.SubTaskHost+":/etc/dango/sub-task.md:ro")
+	}
+	if request.ToolConfigHost != "" {
+		args = append(args, "-v", request.ToolConfigHost+":/etc/dango/tool-config.yaml:ro")
+	}
+	args = append(args, request.Image, "dango", "executor", "plan", "--task-id", request.TaskID, "--sub-task", "/etc/dango/sub-task.md", "--format", "json")
+
+	cmd := exec.CommandContext(ctx, d.binary, args...)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		d.logger.Error("executor planning container failed", "image", request.Image, "task_id", request.TaskID, "error", err, "output", string(bytes.TrimSpace(output)))
+		return nil, fmt.Errorf("plan executor image %q: %w: %s", request.Image, err, bytes.TrimSpace(output))
+	}
+	return bytes.TrimSpace(output), nil
+}
+
 func (d *dockerCLI) RunExecutor(ctx context.Context, request ExecutorRunRequest) error {
 	d.logger.Info("running executor container", "image", request.Image, "task_id", request.TaskID)
 	args := []string{
@@ -64,10 +89,17 @@ func (d *dockerCLI) RunExecutor(ctx context.Context, request ExecutorRunRequest)
 			"-v", request.InputHost+":"+request.InputContainerPath()+":ro",
 		)
 	}
-	if request.OutputHost != "" {
+	if request.PublicOutputHost != "" {
 		args = append(args,
 			"-e", "OUTPUT_PATH="+request.OutputContainerPath(),
-			"-v", request.OutputHost+":"+request.OutputContainerPath()+":rw",
+			"-e", "PUBLIC_OUTPUT_PATH="+request.OutputContainerPath(),
+			"-v", request.PublicOutputHost+":"+request.OutputContainerPath()+":rw",
+		)
+	}
+	if request.PrivateOutputHost != "" {
+		args = append(args,
+			"-e", "PRIVATE_OUTPUT_PATH="+request.PrivateOutputContainerPath(),
+			"-v", request.PrivateOutputHost+":"+request.PrivateOutputContainerPath()+":rw",
 		)
 	}
 	if request.InputURL != "" {

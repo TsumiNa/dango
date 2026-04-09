@@ -106,6 +106,42 @@ func (q *Queries) InsertLog(ctx context.Context, arg InsertLogParams) error {
 	return err
 }
 
+const listTasks = `-- name: ListTasks :many
+SELECT id, status, request, dag_json, created, updated
+FROM tasks
+ORDER BY updated DESC, created DESC
+`
+
+func (q *Queries) ListTasks(ctx context.Context) ([]Task, error) {
+	rows, err := q.db.QueryContext(ctx, listTasks)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []Task
+	for rows.Next() {
+		var i Task
+		if err := rows.Scan(
+			&i.ID,
+			&i.Status,
+			&i.Request,
+			&i.DagJson,
+			&i.Created,
+			&i.Updated,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listTools = `-- name: ListTools :many
 SELECT name, image, config_json, registered
 FROM tools

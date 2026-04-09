@@ -11,13 +11,13 @@ import (
 	"github.com/tsumina/dango/internal/spec"
 )
 
-func writeAutoHandoff(outputPath, toolName, taskID, summary string) error {
-	files, err := collectOutputFiles(outputPath)
+func writeAutoHandoffs(publicOutputPath, privateOutputPath, toolName, taskID, summary string) error {
+	files, err := collectOutputFiles(publicOutputPath)
 	if err != nil {
 		return err
 	}
 
-	return writeHandoff(outputPath, spec.Handoff{
+	handoff := spec.Handoff{
 		Metadata: spec.HandoffMetadata{
 			TaskID:      taskID,
 			Tool:        toolName,
@@ -26,11 +26,15 @@ func writeAutoHandoff(outputPath, toolName, taskID, summary string) error {
 			Timestamp:   time.Now().UTC(),
 		},
 		Body: "## Description\n\n" + summary,
-	})
+	}
+	if err := writePublicHandoff(publicOutputPath, handoff); err != nil {
+		return err
+	}
+	return writePrivateHandoff(privateOutputPath, handoff)
 }
 
-func writeFailureHandoff(outputPath, toolName, taskID string, executionErr error) error {
-	return writeHandoff(outputPath, spec.Handoff{
+func writeFailureHandoffs(publicOutputPath, privateOutputPath, toolName, taskID string, executionErr error) error {
+	handoff := spec.Handoff{
 		Metadata: spec.HandoffMetadata{
 			TaskID:    taskID,
 			Tool:      toolName,
@@ -39,16 +43,43 @@ func writeFailureHandoff(outputPath, toolName, taskID string, executionErr error
 			Error:     executionErr.Error(),
 		},
 		Body: "## Description\n\nTool execution failed before producing a handoff.",
-	})
+	}
+	if err := writePublicHandoff(publicOutputPath, handoff); err != nil {
+		return err
+	}
+	return writePrivateHandoff(privateOutputPath, handoff)
 }
 
-func writeHandoff(outputPath string, handoff spec.Handoff) error {
+func writePublicHandoff(outputPath string, handoff spec.Handoff) error {
+	return writeHandoffFile(filepath.Join(outputPath, "handoff.md"), handoff)
+}
+
+func writePrivateHandoff(outputPath string, handoff spec.Handoff) error {
+	return writeHandoffFile(filepath.Join(outputPath, "_handoff.md"), handoff)
+}
+
+func ensurePublicHandoff(publicOutputPath, privateOutputPath string) error {
+	publicPath := filepath.Join(publicOutputPath, "handoff.md")
+	if _, err := os.Stat(publicPath); err == nil {
+		return nil
+	}
+
+	privatePayload, err := os.ReadFile(filepath.Join(privateOutputPath, "_handoff.md"))
+	if err != nil {
+		return fmt.Errorf("read private handoff %q: %w", filepath.Join(privateOutputPath, "_handoff.md"), err)
+	}
+	if err := os.WriteFile(publicPath, privatePayload, 0o644); err != nil {
+		return fmt.Errorf("write public handoff %q: %w", publicPath, err)
+	}
+	return nil
+}
+
+func writeHandoffFile(path string, handoff spec.Handoff) error {
 	payload, err := spec.RenderHandoff(handoff)
 	if err != nil {
 		return err
 	}
 
-	path := filepath.Join(outputPath, "_handoff.md")
 	if err := os.WriteFile(path, payload, 0o644); err != nil {
 		return fmt.Errorf("write handoff %q: %w", path, err)
 	}
@@ -69,7 +100,7 @@ func collectOutputFiles(root string) ([]string, error) {
 		if err != nil {
 			return err
 		}
-		if relative == "_handoff.md" {
+		if relative == "_handoff.md" || relative == "handoff.md" {
 			return nil
 		}
 

@@ -72,3 +72,26 @@ func resolveRunHook() string {
 
 	return ""
 }
+
+func resolvePlanHook() string {
+	for _, candidate := range []string{
+		strings.TrimSpace(os.Getenv("DANGO_TOOL_PLAN")),
+		"/opt/tool/plan",
+		"/opt/tool/bin/plan",
+	} {
+		if candidate == "" {
+			continue
+		}
+
+		info, err := os.Stat(candidate)
+		if err != nil || info.IsDir() {
+			continue
+		}
+
+		if info.Mode()&0o111 != 0 {
+			return candidate
+		}
+	}
+
+	return ""
+}

@@ -14,6 +14,7 @@ func TestExecutorRunScaffold(t *testing.T) {
 	toolPath := filepath.Join(root, "tool.yaml")
 	subTaskPath := filepath.Join(root, "sub-task.md")
 	outputPath := filepath.Join(root, "output")
+	privateOutputPath := filepath.Join(root, "_output")
 
 	toolYAML := []byte("" +
 		"name: pdf-generator\n" +
@@ -34,6 +35,7 @@ func TestExecutorRunScaffold(t *testing.T) {
 	t.Setenv("SUB_TASK", subTaskPath)
 	t.Setenv("TOOL_CONFIG", toolPath)
 	t.Setenv("OUTPUT_PATH", outputPath)
+	t.Setenv("PRIVATE_OUTPUT_PATH", privateOutputPath)
 
 	execMode := New(os.Stdout, os.Stderr, nil)
 	if err := execMode.Run(context.Background(), RunOptions{}); err != nil {
@@ -44,7 +46,7 @@ func TestExecutorRunScaffold(t *testing.T) {
 		t.Fatalf("execution-report.json missing: %v", err)
 	}
 
-	handoffPayload, err := os.ReadFile(filepath.Join(outputPath, "_handoff.md"))
+	handoffPayload, err := os.ReadFile(filepath.Join(privateOutputPath, "_handoff.md"))
 	if err != nil {
 		t.Fatalf("read _handoff.md: %v", err)
 	}
@@ -59,5 +61,8 @@ func TestExecutorRunScaffold(t *testing.T) {
 	}
 	if got, want := handoff.Metadata.Status, spec.HandoffStatusCompleted; got != want {
 		t.Fatalf("handoff.Metadata.Status = %q, want %q", got, want)
+	}
+	if _, err := os.Stat(filepath.Join(outputPath, "handoff.md")); err != nil {
+		t.Fatalf("handoff.md missing: %v", err)
 	}
 }

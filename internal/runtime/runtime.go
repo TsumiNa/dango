@@ -15,8 +15,22 @@ type ContainerRuntime interface {
 	Pull(ctx context.Context, image string) error
 	// DescribeTool returns the tool specification payload for image.
 	DescribeTool(ctx context.Context, image string) ([]byte, error)
+	// PlanExecutor refines one task edge during the planning phase.
+	PlanExecutor(ctx context.Context, request ExecutorPlanRequest) ([]byte, error)
 	// RunExecutor executes one tool invocation described by request.
 	RunExecutor(ctx context.Context, request ExecutorRunRequest) error
+}
+
+// ExecutorPlanRequest captures the host-side inputs needed to refine one edge.
+type ExecutorPlanRequest struct {
+	// Image identifies the tool image or host tool reference to execute.
+	Image string
+	// TaskID scopes the planning request to a single task lineage.
+	TaskID string
+	// SubTaskHost points to the host planning markdown file.
+	SubTaskHost string
+	// ToolConfigHost points to the merged host tool configuration file.
+	ToolConfigHost string
 }
 
 // ExecutorRunRequest captures the host-side inputs needed to execute a tool.
@@ -31,8 +45,10 @@ type ExecutorRunRequest struct {
 	ToolConfigHost string
 	// InputHost points to the host input directory when local storage is used.
 	InputHost string
-	// OutputHost points to the host output directory when local storage is used.
-	OutputHost string
+	// PublicOutputHost points to the host directory for orchestrator-visible artifacts.
+	PublicOutputHost string
+	// PrivateOutputHost points to the host directory for downstream-only artifacts.
+	PrivateOutputHost string
 	// InputURL points to the remote input payload when URL-based storage is used.
 	InputURL string
 	// OutputURL points to the remote output destination when URL-based storage is used.
@@ -47,6 +63,11 @@ func (r ExecutorRunRequest) InputContainerPath() string {
 // OutputContainerPath returns the path exposed to a container for mounted output.
 func (r ExecutorRunRequest) OutputContainerPath() string {
 	return path.Join("/mnt/shared", r.TaskID, "output")
+}
+
+// PrivateOutputContainerPath returns the private path exposed to a container for mounted output.
+func (r ExecutorRunRequest) PrivateOutputContainerPath() string {
+	return path.Join("/mnt/shared", r.TaskID, "_output")
 }
 
 // MultiRuntime dispatches tool actions to either the Docker runtime or the
@@ -83,6 +104,15 @@ func (m *MultiRuntime) DescribeTool(ctx context.Context, image string) ([]byte, 
 		return nil, err
 	}
 	return rt.DescribeTool(ctx, image)
+}
+
+// PlanExecutor resolves the backend and refines the requested tool edge.
+func (m *MultiRuntime) PlanExecutor(ctx context.Context, request ExecutorPlanRequest) ([]byte, error) {
+	rt, err := m.resolve(request.Image)
+	if err != nil {
+		return nil, err
+	}
+	return rt.PlanExecutor(ctx, request)
 }
 
 // RunExecutor resolves the backend and runs the requested tool invocation.

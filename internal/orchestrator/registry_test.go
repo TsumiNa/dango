@@ -23,6 +23,10 @@ func (f fakeRuntime) DescribeTool(_ context.Context, _ string) ([]byte, error) {
 	return f.describeYAML, nil
 }
 
+func (f fakeRuntime) PlanExecutor(_ context.Context, _ runtime.ExecutorPlanRequest) ([]byte, error) {
+	return []byte(`{}`), nil
+}
+
 func (f fakeRuntime) RunExecutor(_ context.Context, _ runtime.ExecutorRunRequest) error {
 	return nil
 }

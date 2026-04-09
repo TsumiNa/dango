@@ -67,7 +67,7 @@ func TestPlannerPlanBuildsLinearDemoPath(t *testing.T) {
 		Model:       "demo/toy-packager",
 	})
 
-	planner := NewPlanner(store, nil)
+	planner := NewPlanner(locator, store, nil, nil)
 	plan, err := planner.Plan(context.Background(), "task-123", "write a small demo")
 	if err != nil {
 		t.Fatalf("Plan() error = %v", err)
