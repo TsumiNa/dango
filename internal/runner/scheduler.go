@@ -16,7 +16,14 @@ import (
 	"github.com/tsumina/dango/internal/store/sqlite"
 )
 
-// Scheduler executes planned edges and records their runtime state.
+// Scheduler executes one planned edge at a time and persists its edge state.
+//
+// Scheduler is the bridge between the runner's DAG-level orchestration and the
+// runtime package's executor invocation API. It resolves tool registration,
+// prepares the edge working directories, chooses the correct upstream input
+// directory, invokes the executor through the runtime abstraction, and records
+// the resulting edge status and handoff metadata in SQLite. The zero value is
+// not usable; callers construct it with [NewScheduler].
 type Scheduler struct {
 	locator *datadir.Locator
 	store   *sqlite.Store
@@ -24,8 +31,12 @@ type Scheduler struct {
 	logger  *slog.Logger
 }
 
-// EdgeExecutionRequest describes one edge execution request issued by the
-// runner.
+// EdgeExecutionRequest describes the runner-owned inputs for one edge
+// execution.
+//
+// The state machine emits this request shape after dependency resolution. The
+// scheduler then turns it into runtime paths, edge row mutations, and a single
+// executor invocation.
 type EdgeExecutionRequest struct {
 	// TaskID identifies the parent task.
 	TaskID string
@@ -46,7 +57,10 @@ type edgeExecutionPaths struct {
 	privateOutputHost string
 }
 
-// NewScheduler constructs the scheduler used to execute task edges locally.
+// NewScheduler constructs the scheduler used by the runner execution plane.
+//
+// locator provides task and edge paths, store provides persisted edge and tool
+// rows, and rt provides the backend used to invoke executors.
 func NewScheduler(locator *datadir.Locator, store *sqlite.Store, rt runtime.ContainerRuntime, logger *slog.Logger) *Scheduler {
 	return &Scheduler{
 		locator: locator,
@@ -56,8 +70,14 @@ func NewScheduler(locator *datadir.Locator, store *sqlite.Store, rt runtime.Cont
 	}
 }
 
-// RunLocalEdge resolves tool config, prepares local paths, runs the tool, and
-// persists the resulting handoff metadata.
+// RunLocalEdge executes one planned edge and returns its parsed handoff.
+//
+// The workflow is: load the registered tool, materialize the edge paths,
+// choose or synthesize the correct upstream input directory, persist the
+// running state, invoke the executor through the runtime package, and then
+// persist either the failed edge state or the completed handoff metadata.
+// RunLocalEdge is intentionally edge-scoped; DAG ordering and concurrency are
+// owned by [StateMachine].
 func (s *Scheduler) RunLocalEdge(ctx context.Context, request EdgeExecutionRequest) (spec.Handoff, error) {
 	edgeLogger := s.logger.With("task_id", request.TaskID, "edge_id", request.EdgeID, "tool", request.ToolName)
 	edgeLogger.Info("starting edge execution")

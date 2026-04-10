@@ -10,8 +10,14 @@ import (
 	"strings"
 )
 
-// Config controls the shared slog logger setup for dango commands and
-// services.
+// Config controls the process-wide slog logger setup shared by dango commands
+// and services.
+//
+// CLI code typically starts from [DefaultConfig], optionally exposes these
+// fields through [Config.BindFlags], and then passes the resolved value to
+// [New]. The same Config is intended to drive both control-plane and
+// executor-side logging so all components share one service-level logging
+// policy.
 type Config struct {
 	// Level selects the minimum severity emitted by the logger.
 	Level string
@@ -25,6 +31,9 @@ type Config struct {
 
 // DefaultConfig returns the logging configuration derived from environment
 // variables and repository defaults.
+//
+// The returned value is suitable for further mutation through CLI flags before
+// it is passed to [New].
 func DefaultConfig() Config {
 	return Config{
 		Level:     firstNonEmpty(os.Getenv("DANGO_LOG_LEVEL"), "info"),
@@ -41,7 +50,9 @@ type flagBinder interface {
 
 // BindFlags exposes Config fields on fs.
 //
-// BindFlags is a no-op when c or fs is nil.
+// BindFlags is a no-op when c or fs is nil. The flags mutate the receiver in
+// place so later calls to [New] see the final resolved configuration after the
+// usual environment-defaults-then-flags layering used by dango commands.
 func (c *Config) BindFlags(fs flagBinder) {
 	if c == nil || fs == nil {
 		return
@@ -53,10 +64,13 @@ func (c *Config) BindFlags(fs flagBinder) {
 	fs.BoolVar(&c.AddSource, "log-source", c.AddSource, "include source locations in logs")
 }
 
-// New constructs the shared slog logger used by the dango services.
+// New constructs the shared slog logger used by dango services.
 //
-// When cfg.File is set, New also returns a closer for the opened log file. The
-// caller is responsible for closing it.
+// New normalizes the requested level and format, optionally tees output to a
+// log file, auto-enables source locations for debug-level logging, and always
+// annotates the returned logger with the service=dango field. When cfg.File is
+// set, New also returns a closer for the opened log file, and the caller is
+// responsible for closing it.
 func New(cfg Config, stderr io.Writer) (*slog.Logger, io.Closer, error) {
 	writer := io.Writer(stderr)
 	if writer == nil {
@@ -112,6 +126,9 @@ func New(cfg Config, stderr io.Writer) (*slog.Logger, io.Closer, error) {
 }
 
 // From returns logger when it is non-nil, or a discard logger otherwise.
+//
+// It is the safe entrypoint used by helper functions such as [Component] when
+// callers may not have provided a logger yet.
 func From(logger *slog.Logger) *slog.Logger {
 	if logger != nil {
 		return logger
@@ -121,7 +138,8 @@ func From(logger *slog.Logger) *slog.Logger {
 
 // Component annotates logger with the provided component name.
 //
-// Component never returns nil.
+// Component never returns nil and is the standard way for packages to derive a
+// subsystem-specific logger from the process-wide base logger.
 func Component(logger *slog.Logger, component string) *slog.Logger {
 	return From(logger).With("component", component)
 }

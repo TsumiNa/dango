@@ -23,7 +23,14 @@ type catalogTool struct {
 	Spec spec.ToolSpec
 }
 
-// Planner coordinates runner-owned draft, detail-refinement, and review planning.
+// Planner coordinates the runner-owned planning pipeline for one task.
+//
+// Planner turns a normalized request plus the current tool catalog into a
+// reviewed executable DAG. It owns four planning stages: loading the catalog,
+// creating the initial draft, refining each edge through executor-side detail
+// planning, and reviewing or repairing the resulting DAG before execution. The
+// zero value is not usable; callers construct it with one of the NewPlanner
+// constructors.
 type Planner struct {
 	locator    *datadir.Locator
 	store      *sqlite.Store
@@ -34,17 +41,30 @@ type Planner struct {
 	logger     *slog.Logger
 }
 
-// NewPlanner constructs the runner-owned planner with the built-in draft hook.
+// NewPlanner constructs a [Planner] backed by the repository's default LLM
+// client configuration.
+//
+// It is the standard constructor used by production wiring. The built-in draft,
+// review, and repair hooks are created from the configured model.
 func NewPlanner(locator *datadir.Locator, store *sqlite.Store, rt runtime.ContainerRuntime, model string, logger *slog.Logger) *Planner {
 	return NewPlannerWithClient(locator, store, rt, llm.NewOpenAICompatibleFromEnv(model, logger), logger)
 }
 
-// NewPlannerWithClient constructs the runner-owned planner with an explicit LLM client.
+// NewPlannerWithClient constructs a [Planner] with an explicit shared LLM
+// client.
+//
+// This constructor is useful for tests or callers that want to control model
+// transport without replacing the built-in hook implementations.
 func NewPlannerWithClient(locator *datadir.Locator, store *sqlite.Store, rt runtime.ContainerRuntime, client llm.Client, logger *slog.Logger) *Planner {
 	return NewPlannerWithHooks(locator, store, rt, newBuiltInDraftPlanningHook(client, logger), newBuiltInReviewPlanningHook(client, logger), newBuiltInRepairPlanningHook(client, logger), logger)
 }
 
-// NewPlannerWithHooks constructs the runner-owned planner with explicit hook implementations.
+// NewPlannerWithHooks constructs a [Planner] with explicit hook
+// implementations.
+//
+// It is the lowest-level constructor and lets callers replace any stage of the
+// planning pipeline while keeping the same catalog loading and executor
+// refinement behavior.
 func NewPlannerWithHooks(locator *datadir.Locator, store *sqlite.Store, rt runtime.ContainerRuntime, draftHook llm.DraftPlanningHook, reviewHook llm.ReviewPlanningHook, repairHook llm.RepairPlanningHook, logger *slog.Logger) *Planner {
 	return &Planner{
 		locator:    locator,
@@ -57,7 +77,13 @@ func NewPlannerWithHooks(locator *datadir.Locator, store *sqlite.Store, rt runti
 	}
 }
 
-// Plan derives a draft workflow, asks executors to refine their stages, and returns the reviewed DAG.
+// Plan runs the full planning pipeline and returns the reviewed executable DAG.
+//
+// The workflow is: load the registered tool catalog, create the initial draft,
+// refine each edge through executor planning, and then review or repair the
+// resulting DAG. Plan does not persist the DAG itself; the caller is expected
+// to store the returned plan before execution so later describe, resume, and
+// result-assembly paths observe the same reviewed graph.
 func (p *Planner) Plan(ctx context.Context, taskID string, request taskflow.RequestEnvelope) (spec.DAGPlan, error) {
 	p.logger.Info("planning task", "task_id", taskID)
 
@@ -89,7 +115,11 @@ func (p *Planner) Plan(ctx context.Context, taskID string, request taskflow.Requ
 	return plan, nil
 }
 
-// Draft creates the initial workflow using the registered tool catalog.
+// Draft creates the initial workflow from the normalized request and tool
+// catalog.
+//
+// Draft is the first dynamic planning stage. It delegates to the configured
+// draft hook and returns a syntactic DAG before executor-side detail refinement.
 func (p *Planner) Draft(ctx context.Context, taskID string, request taskflow.RequestEnvelope, tools []catalogTool) (spec.DAGPlan, error) {
 	if p.draftHook == nil {
 		return spec.DAGPlan{}, llm.NewCannotProceedError(
@@ -111,7 +141,11 @@ func (p *Planner) Draft(ctx context.Context, taskID string, request taskflow.Req
 	return plan, nil
 }
 
-// Refine asks executors to refine their own planned stages.
+// Refine asks each executor to refine its own planned stage.
+//
+// Refine writes the current edge sub-task markdown into the task directory,
+// calls executor detail planning through the runtime abstraction, and merges
+// the returned summary, sub-task text, and expected outputs back into the DAG.
 func (p *Planner) Refine(ctx context.Context, taskID string, draft spec.DAGPlan) (spec.DAGPlan, error) {
 	refined := draft
 	refined.Planner = "runner-refine-planner"
@@ -144,7 +178,11 @@ func (p *Planner) Refine(ctx context.Context, taskID string, draft spec.DAGPlan)
 	return refined, nil
 }
 
-// Review validates or adjusts the plan after refinement.
+// Review validates or adjusts the refined plan before execution.
+//
+// When a review hook is configured, Review asks it to approve or correct the
+// plan and optionally falls back to the repair hook when review fails. When no
+// review hook is present, Review stamps the plan as reviewed and returns it.
 func (p *Planner) Review(ctx context.Context, taskID string, request taskflow.RequestEnvelope, tools []catalogTool, plan spec.DAGPlan) (spec.DAGPlan, error) {
 	if p.reviewHook == nil {
 		plan.ReviewedAt = time.Now().UTC()

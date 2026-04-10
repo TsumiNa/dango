@@ -13,12 +13,20 @@ import (
 	"github.com/tsumina/dango/internal/taskflow"
 )
 
-// PlanBuilder derives executable DAG plans for persisted tasks.
+// PlanBuilder derives the reviewed executable DAG plan for one persisted task.
+//
+// TaskRunnerService and TaskRunner depend on this interface so they can drive
+// planning without depending on a concrete planner implementation.
 type PlanBuilder interface {
 	Plan(ctx context.Context, taskID string, request taskflow.RequestEnvelope) (spec.DAGPlan, error)
 }
 
-// TaskStore persists runner-owned task lifecycle state and artifacts.
+// TaskStore persists the task state and artifacts that the runner mutates while
+// executing a task.
+//
+// The orchestrator's TaskService is the primary implementation. The interface
+// is intentionally narrow so the runner depends only on the persistence
+// operations it actually needs.
 type TaskStore interface {
 	CreateRequest(ctx context.Context, request taskflow.RequestEnvelope, metadata taskflow.TaskMetadata) (sqlite.TaskRecord, error)
 	List(ctx context.Context) ([]taskflow.TaskSummary, error)
@@ -33,7 +41,14 @@ type runnerHandle struct {
 	cancel context.CancelFunc
 }
 
-// TaskRunnerService manages task runner creation, lookup, and control operations.
+// TaskRunnerService is the orchestrator-facing facade for runner control.
+//
+// It creates pending tasks, starts or resumes background execution, runs tasks
+// synchronously when requested, exposes persisted descriptions, tracks active
+// in-memory cancellations, and handles clone or cancel operations. The service
+// depends on TaskStore for persistence, PlanBuilder for planning, and Scheduler
+// for edge execution. The zero value is not usable; callers construct it with
+// [NewTaskRunnerService].
 type TaskRunnerService struct {
 	locator   *datadir.Locator
 	tasks     TaskStore
@@ -45,7 +60,12 @@ type TaskRunnerService struct {
 	runners map[string]runnerHandle
 }
 
-// NewTaskRunnerService constructs the runner-facing task control service.
+// NewTaskRunnerService constructs the runner control service used by the
+// orchestrator.
+//
+// The returned service is safe to call concurrently. It does not begin any
+// execution until [TaskRunnerService.Start], [TaskRunnerService.Resume], or
+// [TaskRunnerService.RunNow] is called.
 func NewTaskRunnerService(locator *datadir.Locator, tasks TaskStore, planner PlanBuilder, scheduler *Scheduler, logger *slog.Logger) *TaskRunnerService {
 	return &TaskRunnerService{
 		locator:   locator,
@@ -57,7 +77,11 @@ func NewTaskRunnerService(locator *datadir.Locator, tasks TaskStore, planner Pla
 	}
 }
 
-// Start creates a task runner and starts it in the background.
+// Start creates a pending task and starts its runner in the background.
+//
+// Start returns once the task has been persisted and the background goroutine
+// has been scheduled. The returned description reflects durable state, not task
+// completion.
 func (s *TaskRunnerService) Start(ctx context.Context, request taskflow.RequestEnvelope) (*taskflow.TaskDescription, error) {
 	description, err := s.Create(ctx, request)
 	if err != nil {
@@ -66,7 +90,9 @@ func (s *TaskRunnerService) Start(ctx context.Context, request taskflow.RequestE
 	return s.startWithDescription(ctx, description, "task.run.started", "task runner started in background")
 }
 
-// Create persists a pending task runner without starting execution.
+// Create persists a pending task without starting execution.
+//
+// Create is the shared first step for both Start and RunNow.
 func (s *TaskRunnerService) Create(ctx context.Context, request taskflow.RequestEnvelope) (*taskflow.TaskDescription, error) {
 	task, err := s.tasks.CreateRequest(ctx, request, taskflow.TaskMetadata{Entry: taskflow.RequestMetadataFromContext(ctx)})
 	if err != nil {
@@ -75,7 +101,11 @@ func (s *TaskRunnerService) Create(ctx context.Context, request taskflow.Request
 	return s.tasks.Describe(ctx, task.ID)
 }
 
-// RunNow creates a task runner and executes it synchronously in the caller context.
+// RunNow creates a task and executes its runner synchronously in the caller's
+// context.
+//
+// RunNow is primarily used by tests and CLI flows that need the terminal result
+// before returning.
 func (s *TaskRunnerService) RunNow(ctx context.Context, request taskflow.RequestEnvelope) (*taskflow.TaskRunResult, error) {
 	description, err := s.Create(ctx, request)
 	if err != nil {
@@ -84,17 +114,20 @@ func (s *TaskRunnerService) RunNow(ctx context.Context, request taskflow.Request
 	return s.runWithDescription(ctx, description)
 }
 
-// List returns persisted task summaries.
+// List returns the persisted task summaries exposed by the backing TaskStore.
 func (s *TaskRunnerService) List(ctx context.Context) ([]taskflow.TaskSummary, error) {
 	return s.tasks.List(ctx)
 }
 
-// Describe returns the persisted description for one task runner.
+// Describe returns the current persisted description for one task.
 func (s *TaskRunnerService) Describe(ctx context.Context, taskID string) (*taskflow.TaskDescription, error) {
 	return s.tasks.Describe(ctx, taskID)
 }
 
-// Resume starts a pending or paused runner in the background.
+// Resume starts a resumable task in the background when its status allows it.
+//
+// If the task is already in a non-resumable state, Resume returns the current
+// description without mutating execution state.
 func (s *TaskRunnerService) Resume(ctx context.Context, taskID string) (*taskflow.TaskDescription, error) {
 	description, err := s.tasks.Describe(ctx, taskID)
 	if err != nil {
@@ -125,7 +158,11 @@ func (s *TaskRunnerService) startWithDescription(ctx context.Context, descriptio
 	return s.tasks.Describe(ctx, taskID)
 }
 
-// Cancel marks a runner as canceled and stops any active in-memory execution.
+// Cancel stops any active in-memory execution and persists the canceled state.
+//
+// Cancel is best-effort with respect to live goroutines: it cancels the active
+// context when present, then records the durable canceled status regardless of
+// whether a runner handle existed.
 func (s *TaskRunnerService) Cancel(ctx context.Context, taskID string) (*taskflow.TaskDescription, error) {
 	s.mu.Lock()
 	handle, ok := s.runners[taskID]
@@ -140,7 +177,12 @@ func (s *TaskRunnerService) Cancel(ctx context.Context, taskID string) (*taskflo
 	return s.tasks.Describe(ctx, taskID)
 }
 
-// Clone creates a new pending runner that preserves the request and plan lineage.
+// Clone creates a new pending task that preserves the source request and
+// lineage.
+//
+// When the source task already has a plan, Clone copies that plan onto the new
+// task with an incremented revision so the new lineage can be reviewed, edited,
+// or resumed independently.
 func (s *TaskRunnerService) Clone(ctx context.Context, taskID string, reason string) (*taskflow.TaskDescription, error) {
 	source, err := s.tasks.Describe(ctx, taskID)
 	if err != nil {

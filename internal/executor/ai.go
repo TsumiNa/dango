@@ -23,6 +23,11 @@ func defaultLLMClientFactory(model string, logger *slog.Logger) llm.Client {
 	return llm.NewOpenAICompatibleFromEnv(model, logger)
 }
 
+// planWithBuiltInAI executes the built-in executor detail-planning path.
+//
+// It renders the detail-planning prompt, requests structured JSON from the
+// configured model, and validates that the returned executor plan includes the
+// minimum information required for downstream execution.
 func (e *Executor) planWithBuiltInAI(ctx context.Context, runtimeContext runtimeContext, toolSpec spec.ToolSpec) (spec.ExecutorPlan, error) {
 	prompt, err := e.renderDetailPlanPrompt(runtimeContext, toolSpec)
 	if err != nil {
@@ -69,6 +74,11 @@ func (e *Executor) planWithBuiltInAI(ctx context.Context, runtimeContext runtime
 	return plan, nil
 }
 
+// runWithBuiltInAI executes the built-in executor execute-generation path.
+//
+// It renders the execute-time prompt, validates the generated artifacts, writes
+// those artifacts into the public and private output trees, and emits matching
+// handoff files for the runner.
 func (e *Executor) runWithBuiltInAI(ctx context.Context, runtimeContext runtimeContext, toolSpec spec.ToolSpec) error {
 	prompt, err := e.renderExecutePrompt(runtimeContext, toolSpec)
 	if err != nil {
@@ -133,6 +143,8 @@ func (e *Executor) runWithBuiltInAI(ctx context.Context, runtimeContext runtimeC
 	return nil
 }
 
+// renderDetailPlanPrompt builds the detail-planning prompt from the current
+// executor runtime context.
 func (e *Executor) renderDetailPlanPrompt(runtimeContext runtimeContext, toolSpec spec.ToolSpec) (string, error) {
 	toolJSON, toolConfigYAML, inputContextJSON, err := e.promptContext(runtimeContext, toolSpec)
 	if err != nil {
@@ -147,6 +159,8 @@ func (e *Executor) renderDetailPlanPrompt(runtimeContext runtimeContext, toolSpe
 	})
 }
 
+// renderExecutePrompt builds the execute-generation prompt from the current
+// executor runtime context and default output hints.
 func (e *Executor) renderExecutePrompt(runtimeContext runtimeContext, toolSpec spec.ToolSpec) (string, error) {
 	toolJSON, toolConfigYAML, inputContextJSON, err := e.promptContext(runtimeContext, toolSpec)
 	if err != nil {
@@ -166,6 +180,8 @@ func (e *Executor) renderExecutePrompt(runtimeContext runtimeContext, toolSpec s
 	})
 }
 
+// promptContext collects the serialized tool, config, and input context shared
+// by the built-in detail-planning and execute-generation prompts.
 func (e *Executor) promptContext(runtimeContext runtimeContext, toolSpec spec.ToolSpec) (string, string, string, error) {
 	toolPayload, err := json.MarshalIndent(toolSpec, "", "  ")
 	if err != nil {
@@ -182,6 +198,8 @@ func (e *Executor) promptContext(runtimeContext runtimeContext, toolSpec spec.To
 	return string(toolPayload), toolConfigYAML, inputContextJSON, nil
 }
 
+// completeJSON resolves a model-scoped LLM client and requests structured JSON
+// for the provided prompts.
 func (e *Executor) completeJSON(ctx context.Context, model string, systemPrompt string, userPrompt string) ([]byte, error) {
 	if e.llmFactory == nil {
 		return nil, fmt.Errorf("built-in executor AI client factory is not configured")
@@ -197,6 +215,9 @@ func (e *Executor) completeJSON(ctx context.Context, model string, systemPrompt 
 	})
 }
 
+// loadToolConfigPromptYAML returns the merged tool config payload used in
+// executor prompts, falling back to the local tool spec when the merged config
+// file is unavailable.
 func loadToolConfigPromptYAML(path string, toolSpec spec.ToolSpec) (string, error) {
 	if strings.TrimSpace(path) != "" {
 		payload, err := os.ReadFile(path)
@@ -211,6 +232,8 @@ func loadToolConfigPromptYAML(path string, toolSpec spec.ToolSpec) (string, erro
 	return strings.TrimSpace(string(payload)), nil
 }
 
+// mustReadTrimmed reads a small text artifact for prompt rendering and returns
+// an empty string when the file is unavailable.
 func mustReadTrimmed(path string) string {
 	payload, err := os.ReadFile(path)
 	if err != nil {
@@ -219,6 +242,8 @@ func mustReadTrimmed(path string) string {
 	return strings.TrimSpace(string(payload))
 }
 
+// defaultOutputHints derives the fallback public artifact names suggested to
+// the built-in execute-generation prompt from the tool's declared output types.
 func defaultOutputHints(toolSpec spec.ToolSpec) []string {
 	out := make([]string, 0, len(toolSpec.OutputTypes))
 	for _, outputType := range toolSpec.OutputTypes {
@@ -231,6 +256,12 @@ func defaultOutputHints(toolSpec spec.ToolSpec) []string {
 	return out
 }
 
+// normalizeExecuteGenerationResult validates and normalizes the model-produced
+// execute-generation result before any files are written.
+//
+// The function ensures a handoff body exists, all generated artifact paths are
+// safe and non-empty, at least one public artifact is present, and the declared
+// expected outputs line up with the generated public artifacts.
 func normalizeExecuteGenerationResult(result llm.ExecuteGenerationResult) (llm.ExecuteGenerationResult, []string, error) {
 	result.Summary = strings.TrimSpace(result.Summary)
 	result.HandoffBody = strings.TrimSpace(result.HandoffBody)
@@ -282,6 +313,8 @@ func normalizeExecuteGenerationResult(result llm.ExecuteGenerationResult) (llm.E
 	return result, publicFiles, nil
 }
 
+// cleanOutputPaths normalizes a set of relative output paths and drops invalid
+// or duplicate entries.
 func cleanOutputPaths(values []string) []string {
 	out := make([]string, 0, len(values))
 	seen := map[string]bool{}
@@ -296,6 +329,8 @@ func cleanOutputPaths(values []string) []string {
 	return out
 }
 
+// normalizeGeneratedPath validates that a generated artifact path stays within
+// the output root and does not collide with reserved handoff filenames.
 func normalizeGeneratedPath(value string) (string, error) {
 	value = filepath.ToSlash(filepath.Clean(strings.TrimSpace(value)))
 	if value == "" || value == "." {
@@ -310,6 +345,8 @@ func normalizeGeneratedPath(value string) (string, error) {
 	return value, nil
 }
 
+// writeGeneratedArtifacts materializes generated artifacts into the private
+// output tree and mirrors public artifacts into the public output tree.
 func writeGeneratedArtifacts(publicOutputPath string, privateOutputPath string, artifacts []llm.GeneratedArtifact) error {
 	for _, artifact := range artifacts {
 		privatePath := filepath.Join(privateOutputPath, filepath.FromSlash(artifact.Path))

@@ -16,8 +16,11 @@ import (
 
 // Store wraps the SQLite-backed persistence layer used by the orchestrator.
 //
-// Store values are safe to share across goroutines because the underlying
-// sql.DB manages concurrent access.
+// Store is the narrow persistence adapter shared by registry management, task
+// lifecycle services, and runner execution code. Most methods map directly onto
+// generated sqlc queries so higher-level packages can keep workflow logic in
+// Go while relying on SQLite for durable state. Store values are safe to share
+// across goroutines because the underlying sql.DB manages concurrent access.
 type Store struct {
 	db      *sql.DB
 	queries *sqldb.Queries
@@ -75,6 +78,10 @@ type EdgeRecord struct {
 
 // Open opens or creates the SQLite database at path and applies schema
 // migrations.
+//
+// Open ensures the parent directory exists, initializes the sql.DB handle,
+// applies the hand-written migration set used by sqlc-generated queries, and
+// returns a Store ready for registry, task, edge, and log operations.
 func Open(path string) (*Store, error) {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return nil, fmt.Errorf("create db directory: %w", err)
@@ -97,6 +104,8 @@ func Open(path string) (*Store, error) {
 }
 
 // Close closes the underlying SQLite connection.
+//
+// Close is safe to call on a nil Store or after partial initialization.
 func (s *Store) Close() error {
 	if s == nil || s.db == nil {
 		return nil
@@ -105,6 +114,9 @@ func (s *Store) Close() error {
 }
 
 // UpsertTool inserts or replaces the stored metadata for one registered tool.
+//
+// RegistryService uses this when loading or updating tool registrations so the
+// durable catalog stays aligned with the merged on-disk tool configuration.
 func (s *Store) UpsertTool(ctx context.Context, record ToolRecord) error {
 	if err := s.queries.UpsertTool(ctx, sqldb.UpsertToolParams{
 		Name:       record.Name,
@@ -161,6 +173,10 @@ func (s *Store) ListTools(ctx context.Context) ([]ToolRecord, error) {
 }
 
 // CreateTask inserts a new task row.
+//
+// Task rows are created before planning or execution side effects are written
+// so later workflow stages can safely attach plan content, events, and result
+// artifacts to an already durable task identity.
 func (s *Store) CreateTask(ctx context.Context, record TaskRecord) error {
 	if err := s.queries.CreateTask(ctx, sqldb.CreateTaskParams{
 		ID:      record.ID,
@@ -222,7 +238,10 @@ func (s *Store) UpdateTaskStatus(ctx context.Context, id string, status string) 
 
 // UpdateTaskPlan persists both task status and serialized plan content.
 //
-// UpdateTaskPlan returns sql.ErrNoRows when no task matches id.
+// Runner services call this after planning succeeds so task listings and
+// describe views can reconstruct the latest executable DAG without reading the
+// task directory first. UpdateTaskPlan returns sql.ErrNoRows when no task
+// matches id.
 func (s *Store) UpdateTaskPlan(ctx context.Context, id, status, dagJSON string) error {
 	rows, err := s.queries.UpdateTaskPlan(ctx, sqldb.UpdateTaskPlanParams{
 		Status:  status,
@@ -241,6 +260,10 @@ func (s *Store) UpdateTaskPlan(ctx context.Context, id, status, dagJSON string) 
 }
 
 // UpsertEdge inserts or replaces the stored state for one edge.
+//
+// The scheduler uses this both when an edge starts running and when final edge
+// metadata is materialized so resume, inspection, and terminal result assembly
+// can read a single durable edge view from SQLite.
 func (s *Store) UpsertEdge(ctx context.Context, record EdgeRecord) error {
 	if err := s.queries.UpsertEdge(ctx, sqldb.UpsertEdgeParams{
 		ID:          record.ID,
@@ -261,7 +284,9 @@ func (s *Store) UpsertEdge(ctx context.Context, record EdgeRecord) error {
 
 // UpdateEdgeResult updates the result metadata for one edge.
 //
-// UpdateEdgeResult returns sql.ErrNoRows when no edge matches edgeID.
+// This helper is used when callers already know the edge row exists and only
+// need to stamp the final status, extracted handoff frontmatter, and finish
+// time. UpdateEdgeResult returns sql.ErrNoRows when no edge matches edgeID.
 func (s *Store) UpdateEdgeResult(ctx context.Context, edgeID, status, handoffYAML string, finished time.Time) error {
 	rows, err := s.queries.UpdateEdgeResult(ctx, sqldb.UpdateEdgeResultParams{
 		Status:      status,
@@ -281,6 +306,9 @@ func (s *Store) UpdateEdgeResult(ctx context.Context, edgeID, status, handoffYAM
 }
 
 // InsertLog appends one log row for an edge execution.
+//
+// Edge logs provide an append-only execution trace that complements the task
+// event stream with edge-scoped operational details.
 func (s *Store) InsertLog(ctx context.Context, edgeID, level, message string) error {
 	if err := s.queries.InsertLog(ctx, sqldb.InsertLogParams{
 		EdgeID:  edgeID,
@@ -293,6 +321,9 @@ func (s *Store) InsertLog(ctx context.Context, edgeID, level, message string) er
 }
 
 // IsNotFound reports whether err maps to sql.ErrNoRows.
+//
+// Higher-level services use this helper to collapse store-specific query errors
+// into task- or registry-level not-found handling.
 func (s *Store) IsNotFound(err error) bool {
 	return errors.Is(err, sql.ErrNoRows)
 }

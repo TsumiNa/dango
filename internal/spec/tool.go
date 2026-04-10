@@ -8,6 +8,11 @@ import (
 )
 
 // ToolSpec describes a registered execution tool and its default behavior.
+//
+// ToolSpec is the canonical contract shared across registration, planning, and
+// executor invocation. The orchestrator persists it after registration, the
+// runner exposes its fields to planning hooks, and executors use the merged
+// configuration view as the basis for planning and execution.
 type ToolSpec struct {
 	// Name uniquely identifies the tool in the registry and DAG plans.
 	Name string `json:"name" yaml:"name"`
@@ -25,7 +30,12 @@ type ToolSpec struct {
 	Defaults map[string]any `json:"defaults,omitempty" yaml:"defaults,omitempty"`
 }
 
-// Validate checks whether the tool spec contains the minimum required fields.
+// Validate checks whether the tool spec contains the minimum required fields
+// needed for registration and planning.
+//
+// Validate intentionally enforces only the shared structural requirements of a
+// tool contract. Higher-level semantic checks, such as whether a planner chose
+// a compatible input or output type for a specific edge, happen in the runner.
 func (s ToolSpec) Validate() error {
 	if strings.TrimSpace(s.Name) == "" {
 		return fmt.Errorf("tool name is required")
@@ -45,6 +55,10 @@ func (s ToolSpec) Validate() error {
 
 // ToMap converts the tool spec to a generic map representation suitable for
 // layered merges.
+//
+// MergeToolSpec uses this representation so user- or repo-provided overrides
+// can be applied without maintaining a second hand-written merge path for every
+// ToolSpec field.
 func (s ToolSpec) ToMap() (map[string]any, error) {
 	payload, err := yaml.Marshal(s)
 	if err != nil {

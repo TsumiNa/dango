@@ -29,6 +29,10 @@ type plannerReviewInput struct {
 }
 
 // RenderPlannerReview renders the built-in runner plan review prompt.
+//
+// It packages the normalized request, a stably ordered tool catalog, and the
+// current DAG so the review stage can approve, reshape, or reject the refined
+// plan using the same system prompt every time.
 func RenderPlannerReview(taskID string, request taskflow.RequestEnvelope, tools []llm.ToolCatalogEntry, plan spec.DAGPlan) (string, error) {
 	return renderPlannerReviewPrompt("planner_review", plannerReviewPrompt, plannerReviewInput{
 		TaskID:      taskID,
@@ -39,6 +43,10 @@ func RenderPlannerReview(taskID string, request taskflow.RequestEnvelope, tools 
 }
 
 // RenderPlannerRepair renders the built-in runner plan repair prompt.
+//
+// Repair uses the same request, tool, and DAG context as review, but also
+// injects the failure reason from the prior review pass so the model can emit a
+// corrected executable plan instead of starting over from scratch.
 func RenderPlannerRepair(taskID string, request taskflow.RequestEnvelope, tools []llm.ToolCatalogEntry, plan spec.DAGPlan, reason string) (string, error) {
 	return renderPlannerReviewPrompt("planner_repair", plannerRepairPrompt, plannerReviewInput{
 		TaskID:      taskID,

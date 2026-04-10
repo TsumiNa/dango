@@ -19,13 +19,27 @@ import (
 	"github.com/tsumina/dango/internal/taskflow"
 )
 
-// ServerConfig controls which listeners are exposed by the orchestrator API server.
+// ServerConfig controls which listeners the orchestrator API exposes.
+//
+// Empty addresses disable the corresponding listener. The same [Server]
+// instance may serve both a TCP listener and a Unix domain socket listener at
+// the same time so local automation and remote clients can share one control
+// plane process.
 type ServerConfig struct {
-	TCPAddress     string
+	// TCPAddress is the TCP listen address for the public HTTP API.
+	TCPAddress string
+	// UnixSocketPath is the filesystem path for the Unix domain socket listener.
 	UnixSocketPath string
 }
 
-// Server hosts the HTTP API for registry access and task runner control.
+// Server hosts the orchestrator HTTP API for registry access and task control.
+//
+// A Server is the control-plane entrypoint that translates HTTP requests into
+// registry mutations, task persistence operations, request normalization, and
+// runner control calls. It depends on RegistryService for tool administration,
+// TaskService for durable task state, TaskRunnerService for execution control,
+// and an optional intent-understanding hook for request normalization. The zero
+// value is not usable; callers construct it with [NewServer].
 type Server struct {
 	config   ServerConfig
 	registry *RegistryService
@@ -100,7 +114,13 @@ var normalizedIntents = map[string]string{
 	"task/[id]/clone":    "task/clone",
 }
 
-// NewServer constructs the HTTP server wrapper for the orchestrator services.
+// NewServer constructs the HTTP entrypoint for the orchestrator services.
+//
+// The returned server is a thin coordinator: it validates and routes HTTP
+// input, enriches requests with request metadata, and delegates domain work to
+// the supplied services instead of owning planning or execution logic itself.
+// Callers are responsible for providing already wired registry, task, runner,
+// and optional intent-understanding dependencies.
 func NewServer(config ServerConfig, registry *RegistryService, taskService *TaskService, runners *runner.TaskRunnerService, intentHook llm.IntentUnderstandingHook, logger *slog.Logger) *Server {
 	return &Server{
 		config:   config,
@@ -112,8 +132,15 @@ func NewServer(config ServerConfig, registry *RegistryService, taskService *Task
 	}
 }
 
-// ListenAndServe starts the configured TCP and Unix socket listeners and blocks
-// until the context is canceled or any listener exits unexpectedly.
+// ListenAndServe opens the configured listeners and serves the orchestrator API
+// until shutdown.
+//
+// The serving workflow is: build the route mux, open the enabled TCP and Unix
+// socket listeners, wrap requests with entrypoint metadata, serve each listener
+// concurrently, and then block until the parent context is canceled or one of
+// the listeners exits unexpectedly. On shutdown, ListenAndServe gives each
+// listener a bounded finalize context so in-flight requests can stop cleanly
+// while preserving the request metadata needed by downstream task creation.
 func (s *Server) ListenAndServe(ctx context.Context) error {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/healthz", s.handleHealth)

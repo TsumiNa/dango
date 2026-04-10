@@ -18,12 +18,21 @@ type builtInIntentUnderstandingHook struct {
 	logger *slog.Logger
 }
 
-// NewIntentUnderstandingHook constructs the built-in orchestrator intent-understanding hook.
+// NewIntentUnderstandingHook constructs the built-in orchestrator
+// intent-understanding hook using the default environment-backed LLM client.
+//
+// This is the production entrypoint used by CLI and server wiring when request
+// normalization should be handled by the repository's built-in AI path.
 func NewIntentUnderstandingHook(model string, logger *slog.Logger) llm.IntentUnderstandingHook {
 	return NewIntentUnderstandingHookWithClient(llm.NewOpenAICompatibleFromEnv(model, logger), logger)
 }
 
-// NewIntentUnderstandingHookWithClient constructs the built-in intent hook with an explicit LLM client.
+// NewIntentUnderstandingHookWithClient constructs the built-in
+// intent-understanding hook with an explicit LLM client.
+//
+// This constructor is useful for tests and alternative transport wiring where
+// the hook behavior should remain the same but the model client should be
+// supplied explicitly.
 func NewIntentUnderstandingHookWithClient(client llm.Client, logger *slog.Logger) llm.IntentUnderstandingHook {
 	return &builtInIntentUnderstandingHook{
 		llm:    client,
@@ -31,6 +40,13 @@ func NewIntentUnderstandingHookWithClient(client llm.Client, logger *slog.Logger
 	}
 }
 
+// Understand implements llm.IntentUnderstandingHook using the repository's
+// built-in prompt assets and JSON completion path.
+//
+// The method renders the intent-understanding prompt, asks the LLM for a
+// normalized request envelope plus structured metadata, trims the returned
+// summary fields, and validates that the result can still drive the downstream
+// task workflow without losing ingress context.
 func (h *builtInIntentUnderstandingHook) Understand(ctx context.Context, request llm.IntentRequest) (llm.IntentResult, error) {
 	if h.llm == nil {
 		return llm.IntentResult{}, llm.NewCannotProceedError(
@@ -92,6 +108,12 @@ func (h *builtInIntentUnderstandingHook) Understand(ctx context.Context, request
 	return result, nil
 }
 
+// applyIntentResult merges the intent-understanding result back onto the
+// original request envelope.
+//
+// Original metadata is preserved unless the hook explicitly overwrites a key,
+// and any hook-provided summary is stored under the intent_summary metadata
+// field for later inspection.
 func applyIntentResult(original taskflow.RequestEnvelope, result llm.IntentResult) taskflow.RequestEnvelope {
 	merged := taskflow.NormalizeRequestEnvelope(result.Request)
 	if merged.Meta == nil {
@@ -111,6 +133,11 @@ func applyIntentResult(original taskflow.RequestEnvelope, result llm.IntentResul
 	return merged
 }
 
+// understandRequest runs the configured intent-understanding hook and returns a
+// normalized request envelope suitable for task creation.
+//
+// The helper injects request-entry metadata from context, enforces that a hook
+// is present, and rejects hook results that collapse into an empty request.
 func understandRequest(ctx context.Context, hook llm.IntentUnderstandingHook, request taskflow.RequestEnvelope) (taskflow.RequestEnvelope, error) {
 	if hook == nil {
 		return taskflow.RequestEnvelope{}, llm.NewCannotProceedError(

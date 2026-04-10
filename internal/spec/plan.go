@@ -3,6 +3,11 @@ package spec
 import "time"
 
 // DAGPlan is the orchestrator's persisted execution plan for a task.
+//
+// It is the shared contract produced by the runner planning pipeline, stored by
+// task services, and later consumed by the scheduler and state machine. The
+// plan captures both workflow-level metadata and the ordered edge definitions
+// needed to reconstruct execution.
 type DAGPlan struct {
 	// Planner identifies the planner implementation that produced the plan.
 	Planner string `json:"planner,omitempty" yaml:"planner,omitempty"`
@@ -19,6 +24,10 @@ type DAGPlan struct {
 }
 
 // PlannedEdge describes one tool invocation within a DAG plan.
+//
+// Each edge starts as a draft planner selection and is then enriched by
+// executor-side detail planning with stage-local sub-task text, expected
+// outputs, and user-facing summaries before the runner executes it.
 type PlannedEdge struct {
 	// ID uniquely identifies the edge within the task.
 	ID string `json:"id" yaml:"id"`

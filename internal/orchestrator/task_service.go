@@ -17,14 +17,25 @@ import (
 	"github.com/tsumina/dango/internal/taskflow"
 )
 
-// TaskService manages task lifecycle persistence and task markdown artifacts.
+// TaskService manages durable task state for the control plane.
+//
+// A TaskService persists the normalized request, the SQLite task row, the task
+// metadata sidecar, append-only lifecycle events, the plan snapshot rendered
+// into task.md, and the final result artifact. The runner depends on this
+// behavior through the runner.TaskStore interface, while the orchestrator uses
+// it directly for create, list, and describe flows. The zero value is not
+// usable; callers construct it with [NewTaskService].
 type TaskService struct {
 	locator *datadir.Locator
 	store   *sqlite.Store
 	logger  *slog.Logger
 }
 
-// NewTaskService constructs the task persistence service.
+// NewTaskService constructs the task persistence service shared by the
+// orchestrator and runner.
+//
+// locator defines where task artifacts are written, store defines the SQLite
+// task rows, and logger is wrapped with the orchestrator.tasks component name.
 func NewTaskService(locator *datadir.Locator, store *sqlite.Store, logger *slog.Logger) *TaskService {
 	return &TaskService{
 		locator: locator,
@@ -33,7 +44,14 @@ func NewTaskService(locator *datadir.Locator, store *sqlite.Store, logger *slog.
 	}
 }
 
-// CreateRequest persists a structured request together with task metadata.
+// CreateRequest persists a new pending task together with its structured
+// request metadata and initial task artifacts.
+//
+// CreateRequest allocates a new task ID, normalizes the request envelope,
+// fills missing request-entry and lineage fields, writes the SQLite task row,
+// stores meta.json, appends the initial event, renders task.md, and then
+// reloads the task row to return the persisted state. It creates state only;
+// it does not start execution.
 func (s *TaskService) CreateRequest(ctx context.Context, request taskflow.RequestEnvelope, metadata taskflow.TaskMetadata) (sqlite.TaskRecord, error) {
 	taskID, err := spec.NewUUID()
 	if err != nil {
@@ -89,12 +107,18 @@ func (s *TaskService) CreateRequest(ctx context.Context, request taskflow.Reques
 	return s.store.GetTask(ctx, taskID)
 }
 
-// Get loads a task row by ID.
+// Get loads the persisted SQLite task row by ID.
+//
+// Get does not read metadata, plan snapshots, or events.
 func (s *TaskService) Get(ctx context.Context, taskID string) (sqlite.TaskRecord, error) {
 	return s.store.GetTask(ctx, taskID)
 }
 
-// List loads task summaries ordered by most recent update.
+// List loads persisted task summaries together with their metadata and result
+// paths.
+//
+// List combines the row view from SQLite with the sidecar metadata file and
+// the stable filesystem locations used for task inspection.
 func (s *TaskService) List(ctx context.Context) ([]taskflow.TaskSummary, error) {
 	tasks, err := s.store.ListTasks(ctx)
 	if err != nil {
@@ -118,7 +142,11 @@ func (s *TaskService) List(ctx context.Context) ([]taskflow.TaskSummary, error) 
 	return out, nil
 }
 
-// Describe returns the full persisted description for one task runner.
+// Describe returns the fully materialized persisted view for one task.
+//
+// Describe combines the SQLite task row with the metadata sidecar, decoded
+// event log, and any serialized DAG plan so callers can inspect the current
+// control-plane state without reconstructing it themselves.
 func (s *TaskService) Describe(ctx context.Context, taskID string) (*taskflow.TaskDescription, error) {
 	task, err := s.store.GetTask(ctx, taskID)
 	if err != nil {
@@ -155,6 +183,10 @@ func (s *TaskService) Describe(ctx context.Context, taskID string) (*taskflow.Ta
 
 // ApplyPlan persists a plan, updates task status, and rewrites task.md to
 // include the current planning view.
+//
+// Runner code calls ApplyPlan after planning or replanning so the database row,
+// task.md artifact, and append-only event log all reflect the same DAG
+// revision.
 func (s *TaskService) ApplyPlan(ctx context.Context, taskID string, plan spec.DAGPlan, status spec.TaskStatus) (sqlite.TaskRecord, error) {
 	payload, err := json.MarshalIndent(plan, "", "  ")
 	if err != nil {
@@ -188,7 +220,10 @@ func (s *TaskService) ApplyPlan(ctx context.Context, taskID string, plan spec.DA
 	return s.store.GetTask(ctx, taskID)
 }
 
-// UpdateStatus persists a task status transition.
+// UpdateStatus persists a task status transition and appends a matching event.
+//
+// It returns the reloaded task row so callers can continue the workflow with
+// the latest persisted timestamps and state.
 func (s *TaskService) UpdateStatus(ctx context.Context, taskID string, status spec.TaskStatus) (sqlite.TaskRecord, error) {
 	if err := s.store.UpdateTaskStatus(ctx, taskID, string(status)); err != nil {
 		return sqlite.TaskRecord{}, err
@@ -204,7 +239,11 @@ func (s *TaskService) UpdateStatus(ctx context.Context, taskID string, status sp
 	return s.store.GetTask(ctx, taskID)
 }
 
-// WriteResult writes the final result.md artifact for a task.
+// WriteResult writes the task result artifact and records that write in the
+// event log.
+//
+// The runner calls WriteResult for both successful and explanatory failure
+// completions after status transitions have been persisted.
 func (s *TaskService) WriteResult(taskID string, result string) error {
 	if err := os.WriteFile(s.locator.TaskResultPath(taskID), []byte(result), 0o644); err != nil {
 		return fmt.Errorf("write result.md: %w", err)
@@ -219,7 +258,10 @@ func (s *TaskService) WriteResult(taskID string, result string) error {
 	})
 }
 
-// AppendEvent appends one lifecycle event to the task event log.
+// AppendEvent appends one lifecycle event to the task's JSONL event log.
+//
+// Events are append-only and are used to reconstruct the visible task history
+// in [TaskService.Describe].
 func (s *TaskService) AppendEvent(taskID string, event taskflow.TaskEvent) error {
 	if event.Timestamp.IsZero() {
 		event.Timestamp = time.Now().UTC()
@@ -239,7 +281,10 @@ func (s *TaskService) AppendEvent(taskID string, event taskflow.TaskEvent) error
 	return nil
 }
 
-// UpdateMetadata rewrites the structured metadata persisted for a task.
+// UpdateMetadata rewrites the structured metadata sidecar for a task.
+//
+// UpdateMetadata normalizes the request envelope and fills missing lineage or
+// timestamp fields before replacing meta.json.
 func (s *TaskService) UpdateMetadata(taskID string, metadata taskflow.TaskMetadata) error {
 	metadata.Request = taskflow.NormalizeRequestEnvelope(metadata.Request)
 	if metadata.Entry.ReceivedAt.IsZero() {

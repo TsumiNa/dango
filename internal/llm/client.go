@@ -15,23 +15,43 @@ import (
 	"github.com/tsumina/dango/internal/logging"
 )
 
-// Request describes one LLM completion request.
+// Request describes one structured completion request sent through a
+// repository-owned LLM client.
+//
+// Callers typically build Request after rendering a system prompt from package
+// prompts and deciding on a short user instruction that asks for JSON output.
 type Request struct {
+	// SystemPrompt contains the main instruction set and structured context.
 	SystemPrompt string
-	UserPrompt   string
-	Temperature  float64
+	// UserPrompt contains the final imperative user message sent after the system prompt.
+	UserPrompt string
+	// Temperature requests the sampling temperature for the completion.
+	Temperature float64
 }
 
 // Client generates structured responses from an LLM provider.
+//
+// Implementations are expected to be safe for reuse across concurrent planning
+// and execution flows.
 type Client interface {
+	// CompleteJSON submits request and returns the raw JSON payload selected by
+	// the model.
 	CompleteJSON(ctx context.Context, request Request) ([]byte, error)
 }
 
-// Config configures the OpenAI-compatible chat client.
+// Config configures the OpenAI-compatible chat client used by the built-in AI
+// paths.
+//
+// The same structure is used for orchestrator intent understanding, runner
+// planning and review, and executor-side built-in AI generation.
 type Config struct {
-	BaseURL     string
-	APIKey      string
-	Model       string
+	// BaseURL is the OpenAI-compatible API root without a trailing slash.
+	BaseURL string
+	// APIKey is the bearer token sent to the upstream provider.
+	APIKey string
+	// Model is the model identifier sent in the chat completion request.
+	Model string
+	// Temperature is the default sampling temperature used for each request.
 	Temperature float64
 }
 
@@ -71,8 +91,14 @@ type openAIChatResponse struct {
 	} `json:"error,omitempty"`
 }
 
-// NewOpenAICompatibleFromEnv constructs an OpenAI-compatible client using env
-// fallbacks for base URL and API key.
+// NewOpenAICompatibleFromEnv constructs an OpenAI-compatible client from the
+// repository's environment-variable conventions.
+//
+// The lookup order is DANGO-prefixed variables first, then OPENAI-prefixed
+// variables, and finally hard-coded defaults for the base URL. When model or
+// API key configuration is missing, the returned Client is a disabled client
+// that fails calls with an explanatory error so higher-level planning and
+// orchestration code can keep a uniform dependency shape without nil checks.
 func NewOpenAICompatibleFromEnv(model string, logger *slog.Logger) Client {
 	baseURL := firstNonEmpty(
 		strings.TrimSpace(os.Getenv("DANGO_LLM_BASE_URL")),
@@ -105,6 +131,11 @@ func NewOpenAICompatibleFromEnv(model string, logger *slog.Logger) Client {
 }
 
 // NewOpenAICompatible constructs an OpenAI-compatible JSON completion client.
+//
+// The client always asks the upstream provider for JSON object output and is
+// the main transport used by the built-in intent, planning, review, repair,
+// and executor generation paths. It also normalizes base URL and temperature
+// defaults so callers can pass partial configuration.
 func NewOpenAICompatible(config Config, logger *slog.Logger) Client {
 	if strings.TrimSpace(config.Model) == "" {
 		return disabledClient{reason: "planner LLM model is not configured"}
@@ -136,6 +167,10 @@ func (c disabledClient) CompleteJSON(context.Context, Request) ([]byte, error) {
 }
 
 // CompleteJSON requests a JSON object from an OpenAI-compatible chat endpoint.
+//
+// The method converts Request into a two-message chat completion call, strips
+// any surrounding Markdown code fence from the chosen answer, and validates
+// that the resulting payload is well-formed JSON before returning it.
 func (c *openAICompatibleClient) CompleteJSON(ctx context.Context, request Request) ([]byte, error) {
 	payload, err := json.Marshal(openAIChatRequest{
 		Model: c.model,

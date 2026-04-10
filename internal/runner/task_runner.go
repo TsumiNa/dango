@@ -20,7 +20,13 @@ type terminalEdgeResult struct {
 	Handoff spec.Handoff
 }
 
-// TaskRunner manages the full lifecycle of one task execution.
+// TaskRunner executes the full lifecycle of one persisted task.
+//
+// A TaskRunner turns a pending task row plus its metadata into a terminal
+// result by coordinating planning, durable status transitions, edge execution,
+// and finalization. It depends on TaskStore for persistence, PlanBuilder for
+// DAG construction, and Scheduler for per-edge execution. The zero value is not
+// usable; callers construct it with [NewTaskRunner].
 type TaskRunner struct {
 	locator   *datadir.Locator
 	tasks     TaskStore
@@ -31,7 +37,10 @@ type TaskRunner struct {
 	metadata  taskflow.TaskMetadata
 }
 
-// NewTaskRunner constructs a runner for one persisted task.
+// NewTaskRunner constructs a runner for one already-persisted task.
+//
+// Callers are expected to pass the task row and metadata returned by the
+// control-plane persistence layer rather than constructing those values by hand.
 func NewTaskRunner(locator *datadir.Locator, tasks TaskStore, planner PlanBuilder, scheduler *Scheduler, task sqlite.TaskRecord, metadata taskflow.TaskMetadata, logger *slog.Logger) *TaskRunner {
 	return &TaskRunner{
 		locator:   locator,
@@ -44,7 +53,12 @@ func NewTaskRunner(locator *datadir.Locator, tasks TaskStore, planner PlanBuilde
 	}
 }
 
-// Run executes planning, review, dispatch, execution, and finalization for one task.
+// Run executes the task's end-to-end lifecycle and returns the terminal result.
+//
+// The workflow is: derive the request text, append the start event, plan the
+// task, persist and execute the reviewed DAG, finalize the terminal status, and
+// write the final result artifact. Planning or execution failures are converted
+// into persisted failure or canceled state before the error is returned.
 func (r *TaskRunner) Run(ctx context.Context) (*taskflow.TaskRunResult, error) {
 	if r.planner == nil {
 		return nil, fmt.Errorf("runner planner is required")

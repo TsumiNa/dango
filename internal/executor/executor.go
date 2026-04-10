@@ -48,7 +48,10 @@ type PlanOptions struct {
 // New constructs an [Executor] that writes command results to stdout and
 // diagnostics to stderr.
 //
-// When logger is nil, logging falls back to a discard logger.
+// The returned executor wires the shared executor logger component and the
+// default LLM client factory used by the built-in detail-planning and
+// execute-generation fallbacks. When logger is nil, logging falls back to a
+// discard logger.
 func New(stdout, stderr io.Writer, logger *slog.Logger) *Executor {
 	return newWithLLMFactory(stdout, stderr, logger, defaultLLMClientFactory)
 }
@@ -67,7 +70,9 @@ func newWithLLMFactory(stdout, stderr io.Writer, logger *slog.Logger, llmFactory
 
 // Describe emits the local tool specification in format.
 //
-// Supported formats are "yaml" (default) and "json".
+// Registry registration and runtime describe flows call this entrypoint to
+// capture the canonical tool contract exposed by the current tool image or
+// host executor. Supported formats are "yaml" (default) and "json".
 func (e *Executor) Describe(format string) error {
 	e.logger.Info("describe requested", "format", format)
 	toolSpec, err := loadToolSpec()
@@ -98,6 +103,12 @@ func (e *Executor) Describe(format string) error {
 }
 
 // Plan refines one planned stage and emits a structured executor plan.
+//
+// The planning workflow loads scheduler-provided runtime context, resolves the
+// merged tool configuration, prefers an explicit plan hook when available, and
+// otherwise falls back to the built-in AI detail planner. The result is emitted
+// in the requested structured format so the runner can merge it back into the
+// task DAG.
 func (e *Executor) Plan(ctx context.Context, options PlanOptions) error {
 	runtimeContext, err := loadPlanContext(options)
 	if err != nil {

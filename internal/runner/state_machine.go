@@ -10,11 +10,17 @@ import (
 	"github.com/tsumina/dango/internal/spec"
 )
 
-// EdgeResult reports the result of one completed edge execution.
+// EdgeResult reports the terminal result of one completed edge execution.
+//
+// The state machine returns these values in completion order so TaskRunner can
+// derive terminal handoffs and build the final task result.
 type EdgeResult struct {
-	EdgeID   string
+	// EdgeID identifies the completed edge.
+	EdgeID string
+	// ToolName identifies the tool assigned to the edge.
 	ToolName string
-	Handoff  spec.Handoff
+	// Handoff is the parsed completion handoff emitted by the executor.
+	Handoff spec.Handoff
 }
 
 type edgeExecutionOutcome struct {
@@ -22,13 +28,20 @@ type edgeExecutionOutcome struct {
 	err    error
 }
 
-// StateMachine supervises edge execution using a channel-driven DAG loop.
+// StateMachine supervises concurrent DAG execution for one planned task.
+//
+// StateMachine is responsible for dependency tracking and launch ordering, not
+// for the actual executor invocation. It depends on [Scheduler] to run one edge
+// at a time and then uses a channel-driven loop to launch newly ready edges as
+// upstream work completes.
 type StateMachine struct {
 	scheduler *Scheduler
 	logger    *slog.Logger
 }
 
-// NewStateMachine constructs a runner execution state machine.
+// NewStateMachine constructs the DAG execution supervisor used by TaskRunner.
+//
+// The returned state machine is intended for one task run at a time.
 func NewStateMachine(scheduler *Scheduler, logger *slog.Logger) *StateMachine {
 	return &StateMachine{
 		scheduler: scheduler,
@@ -36,8 +49,14 @@ func NewStateMachine(scheduler *Scheduler, logger *slog.Logger) *StateMachine {
 	}
 }
 
-// Run executes all ready edges as their dependencies become satisfied and
-// returns one result per completed edge.
+// Run executes the DAG until all edges complete or any edge fails.
+//
+// Run keeps three pieces of state: pending edges that have not launched,
+// running edges currently owned by the scheduler, and completed edges whose
+// handoffs may unblock downstream work. As soon as a dependency set becomes
+// satisfied, Run launches the edge in a goroutine. The method returns the edge
+// results in completion order, cancels remaining work on the first failure, and
+// reports a deadlock when no runnable edges remain before the DAG is complete.
 func (m *StateMachine) Run(ctx context.Context, taskID string, plan spec.DAGPlan) ([]EdgeResult, error) {
 	if len(plan.Edges) == 0 {
 		return nil, nil

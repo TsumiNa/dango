@@ -19,6 +19,11 @@ const (
 
 // Handoff represents a tool output contract with machine-readable metadata and
 // human-readable body content.
+//
+// Executors write handoffs as Markdown files with YAML frontmatter. The runner
+// and scheduler parse the same structure to decide whether an edge completed,
+// failed, or produced partial output and which artifacts should flow to
+// downstream stages.
 type Handoff struct {
 	Metadata HandoffMetadata
 	Body     string
@@ -26,6 +31,9 @@ type Handoff struct {
 
 // HandoffMetadata contains the frontmatter fields exchanged between tools and
 // the orchestrator.
+//
+// This metadata is the machine-readable contract used by edge persistence,
+// terminal result assembly, and downstream tool chaining.
 type HandoffMetadata struct {
 	// TaskID identifies the task that produced this handoff.
 	TaskID string `json:"task_id" yaml:"task_id"`
@@ -45,6 +53,9 @@ type HandoffMetadata struct {
 
 // Validate verifies that the metadata can be consumed by the scheduler and
 // orchestration layer.
+//
+// The checks intentionally enforce only the cross-tool contract shared by all
+// handoffs so both host and container executors can emit the same file format.
 func (m HandoffMetadata) Validate() error {
 	if strings.TrimSpace(m.TaskID) == "" {
 		return fmt.Errorf("task_id is required")
@@ -68,6 +79,9 @@ func (m HandoffMetadata) Validate() error {
 }
 
 // ParseHandoff decodes a markdown handoff document with YAML frontmatter.
+//
+// ParseHandoff validates the frontmatter contract before returning the body so
+// callers never observe a structurally invalid handoff as a successful parse.
 func ParseHandoff(data []byte) (Handoff, error) {
 	lines, end, err := splitFrontmatter(data)
 	if err != nil {
@@ -95,6 +109,9 @@ func ParseHandoff(data []byte) (Handoff, error) {
 
 // ExtractHandoffFrontmatter returns only the raw YAML frontmatter portion of a
 // handoff document.
+//
+// Task and edge persistence use this helper when they want to store the
+// machine-readable contract separately from the human-readable handoff body.
 func ExtractHandoffFrontmatter(data []byte) ([]byte, error) {
 	lines, end, err := splitFrontmatter(data)
 	if err != nil {
@@ -105,6 +122,9 @@ func ExtractHandoffFrontmatter(data []byte) ([]byte, error) {
 }
 
 // RenderHandoff encodes a Handoff back into the markdown handoff file format.
+//
+// The renderer preserves the canonical frontmatter-plus-body layout expected by
+// ParseHandoff and by downstream tooling that inspects handoff files directly.
 func RenderHandoff(h Handoff) ([]byte, error) {
 	if err := h.Metadata.Validate(); err != nil {
 		return nil, err

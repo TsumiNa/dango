@@ -19,7 +19,13 @@ type intentPromptInput struct {
 	EntryJSON   string
 }
 
-// RenderIntentUnderstand renders the built-in orchestrator intent-understanding prompt.
+// RenderIntentUnderstand renders the built-in orchestrator
+// intent-understanding prompt.
+//
+// The prompt contains both the normalized request payload and the captured
+// request-entry metadata so the model can rewrite the request while preserving
+// control-plane context such as ingress surface, listener metadata, and the
+// original multimodal request structure.
 func RenderIntentUnderstand(request taskflow.RequestEnvelope, entry taskflow.RequestMetadata) (string, error) {
 	requestPayload, err := json.MarshalIndent(request, "", "  ")
 	if err != nil {
