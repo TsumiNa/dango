@@ -1,9 +1,30 @@
-// Package executor implements the in-tool runtime entrypoints.
+// Package executor implements the in-tool runtime entrypoints used by
+// registered tools.
 //
-// [Executor.Describe] emits tool metadata for registration, and [Executor.Run]
-// executes one assigned sub-task using the scheduler-provided environment
-// contract. Tools may provide their own plan and run hooks; when the required
-// hook is absent, the executor falls back to repository-owned built-in AI
-// detail-planning or execute-generation. When neither hooks nor built-in AI
-// can produce a valid result, execution fails with an explanatory handoff.
+// This package is the worker-side half of dango's execution model. The runner
+// invokes tools through two phases: planning and execution. [Executor.Describe]
+// emits the local tool specification used during registration,
+// [Executor.Plan] refines one planned stage into an executable
+// spec.ExecutorPlan, and [Executor.Run] carries out the assigned sub-task and
+// writes the resulting artifacts and handoff files. The package therefore sits
+// at the boundary where a tool's local implementation meets the runner's
+// scheduling contract.
+//
+// The normal workflow begins with [New], which constructs an [Executor] around
+// output writers, a logger, and the built-in AI client factory. Describe loads
+// the local tool spec and serializes it for the registry. Plan loads the
+// scheduler-provided runtime context, prefers a tool-provided planning hook
+// when one exists, and otherwise falls back to repository-owned built-in AI via
+// the llm and prompts packages. Run follows the same shape for execution: it
+// validates the runtime contract, prepares output directories, prefers an
+// explicit run hook, and otherwise performs execute-time generation with the
+// built-in AI path.
+//
+// The key dependency relationship is that the runner owns task lifecycle and
+// dispatch, while this package owns only tool-local behavior. It consumes
+// spec.ToolSpec, spec.ExecutorPlan, and spec.Handoff as machine
+// contracts, uses the llm package to represent hook failures and LLM requests,
+// and renders prompts through package prompts. A successful run must materialize
+// the public handoff, the private handoff, and any declared output files so the
+// runner can persist edge state and feed downstream stages.
 package executor
