@@ -112,7 +112,7 @@ func TestHandleRequestTaskListIntentReturnsTasks(t *testing.T) {
 		}
 	}
 
-	req := httptest.NewRequest(http.MethodPost, "/v1/request", strings.NewReader(`{"intent":"task/list"}`))
+	req := httptest.NewRequest(http.MethodPost, "/v0/request", strings.NewReader(`{"intent":"task/list"}`))
 	recorder := httptest.NewRecorder()
 
 	server.handleRequest(recorder, req)
@@ -145,7 +145,7 @@ func TestHandleTasksPostCreatesTask(t *testing.T) {
 	t.Parallel()
 
 	server, _ := newServerTestFixture(t)
-	req := httptest.NewRequest(http.MethodPost, "/v1/tasks", strings.NewReader(`{"text":"task from collection endpoint"}`))
+	req := httptest.NewRequest(http.MethodPost, "/v0/tasks", strings.NewReader(`{"text":"task from collection endpoint"}`))
 	recorder := httptest.NewRecorder()
 
 	server.handleTasks(recorder, req)
@@ -172,7 +172,7 @@ func TestHandleTaskRunsPostNormalizesRequestWithIntentHook(t *testing.T) {
 		Summary: "normalized by test",
 	}}
 
-	req := httptest.NewRequest(http.MethodPost, "/v1/task-runs", strings.NewReader(`{"text":"raw request","meta":{"source":"http"}}`))
+	req := httptest.NewRequest(http.MethodPost, "/v0/task-runs", strings.NewReader(`{"text":"raw request","meta":{"source":"http"}}`))
 	recorder := httptest.NewRecorder()
 
 	server.handleTaskRuns(recorder, req)
@@ -220,7 +220,7 @@ func TestHandleTaskByIDDescribeActionReturnsTask(t *testing.T) {
 		t.Fatalf("Create() error = %v", err)
 	}
 
-	path := fmt.Sprintf("/v1/tasks/%s/describe", created.Task.ID)
+	path := fmt.Sprintf("/v0/tasks/%s/describe", created.Task.ID)
 	req := httptest.NewRequest(http.MethodGet, path, nil)
 	recorder := httptest.NewRecorder()
 

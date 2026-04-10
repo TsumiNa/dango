@@ -144,12 +144,12 @@ func NewServer(config ServerConfig, registry *RegistryService, taskService *Task
 func (s *Server) ListenAndServe(ctx context.Context) error {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/healthz", s.handleHealth)
-	mux.HandleFunc("/v1/tools", s.handleTools)
-	mux.HandleFunc("/v1/request", s.handleRequest)
-	mux.HandleFunc("/v1/task/list", s.handleTaskList)
-	mux.HandleFunc("/v1/tasks/run", s.handleTaskRuns)
-	mux.HandleFunc("/v1/tasks", s.handleTasks)
-	mux.HandleFunc("/v1/tasks/", s.handleTaskByID)
+	mux.HandleFunc("/v0/tools", s.handleTools)
+	mux.HandleFunc("/v0/request", s.handleRequest)
+	mux.HandleFunc("/v0/task/list", s.handleTaskList)
+	mux.HandleFunc("/v0/tasks/run", s.handleTaskRuns)
+	mux.HandleFunc("/v0/tasks", s.handleTasks)
+	mux.HandleFunc("/v0/tasks/", s.handleTaskByID)
 
 	listeners, err := s.openListeners(ctx, mux)
 	if err != nil {
@@ -533,7 +533,7 @@ func requestEnvelopeFromPayload(payload requestPayload) taskflow.RequestEnvelope
 }
 
 func parseTaskRoute(path string) (taskID string, action string, ok bool) {
-	trimmed := strings.TrimPrefix(path, "/v1/tasks/")
+	trimmed := strings.TrimPrefix(path, "/v0/tasks/")
 	parts := strings.Split(strings.Trim(trimmed, "/"), "/")
 	if len(parts) == 0 || strings.TrimSpace(parts[0]) == "" {
 		return "", "", false

@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -64,10 +63,6 @@ type openAICompatibleClient struct {
 	logger      *slog.Logger
 }
 
-type disabledClient struct {
-	reason string
-}
-
 type openAIChatRequest struct {
 	Model          string              `json:"model"`
 	Messages       []openAIChatMessage `json:"messages"`
@@ -96,9 +91,9 @@ type openAIChatResponse struct {
 //
 // The lookup order is DANGO-prefixed variables first, then OPENAI-prefixed
 // variables, and finally hard-coded defaults for the base URL. When model or
-// API key configuration is missing, the returned Client is a disabled client
-// that fails calls with an explanatory error so higher-level planning and
-// orchestration code can keep a uniform dependency shape without nil checks.
+// API key configuration is missing, the function returns nil and leaves it to
+// higher-level planning or orchestration code to report that built-in AI is not
+// configured.
 func NewOpenAICompatibleFromEnv(model string, logger *slog.Logger) Client {
 	baseURL := firstNonEmpty(
 		strings.TrimSpace(os.Getenv("DANGO_LLM_BASE_URL")),
@@ -116,10 +111,10 @@ func NewOpenAICompatibleFromEnv(model string, logger *slog.Logger) Client {
 	)
 
 	if model == "" {
-		return disabledClient{reason: "planner LLM model is not configured"}
+		return nil
 	}
 	if apiKey == "" {
-		return disabledClient{reason: "planner LLM API key is not configured"}
+		return nil
 	}
 
 	return NewOpenAICompatible(Config{
@@ -135,13 +130,14 @@ func NewOpenAICompatibleFromEnv(model string, logger *slog.Logger) Client {
 // The client always asks the upstream provider for JSON object output and is
 // the main transport used by the built-in intent, planning, review, repair,
 // and executor generation paths. It also normalizes base URL and temperature
-// defaults so callers can pass partial configuration.
+// defaults so callers can pass partial configuration. When required config is
+// missing, NewOpenAICompatible returns nil.
 func NewOpenAICompatible(config Config, logger *slog.Logger) Client {
 	if strings.TrimSpace(config.Model) == "" {
-		return disabledClient{reason: "planner LLM model is not configured"}
+		return nil
 	}
 	if strings.TrimSpace(config.APIKey) == "" {
-		return disabledClient{reason: "planner LLM API key is not configured"}
+		return nil
 	}
 	baseURL := strings.TrimRight(strings.TrimSpace(config.BaseURL), "/")
 	if baseURL == "" {
@@ -160,10 +156,6 @@ func NewOpenAICompatible(config Config, logger *slog.Logger) Client {
 		temperature: temperature,
 		logger:      logging.Component(logger, "llm.openai_compatible"),
 	}
-}
-
-func (c disabledClient) CompleteJSON(context.Context, Request) ([]byte, error) {
-	return nil, errors.New(c.reason)
 }
 
 // CompleteJSON requests a JSON object from an OpenAI-compatible chat endpoint.

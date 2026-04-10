@@ -12,6 +12,7 @@ import (
 
 	"github.com/spf13/cobra"
 	"github.com/tsumina/dango/internal/datadir"
+	"github.com/tsumina/dango/internal/llm"
 	"github.com/tsumina/dango/internal/logging"
 	"github.com/tsumina/dango/internal/orchestrator"
 	"github.com/tsumina/dango/internal/runner"
@@ -62,7 +63,7 @@ func (a *App) runOrchestratorServe(ctx context.Context, logCfg logging.Config, m
 	registry := orchestrator.NewRegistryService(locator, store, rt, logger)
 	taskService := orchestrator.NewTaskService(locator, store, logger)
 	planner := runner.NewPlanner(locator, store, rt, model, logger)
-	intentHook := orchestrator.NewIntentUnderstandingHook(model, logger)
+	intentHook := orchestrator.NewIntentUnderstandingHook(llm.NewOpenAICompatibleFromEnv(model, logger), logger)
 	scheduler := runner.NewScheduler(locator, store, rt, logger)
 	runners := runner.NewTaskRunnerService(locator, taskService, planner, scheduler, logger)
 	server := orchestrator.NewServer(orchestrator.ServerConfig{

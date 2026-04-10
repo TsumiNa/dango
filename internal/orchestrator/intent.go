@@ -19,21 +19,12 @@ type builtInIntentUnderstandingHook struct {
 }
 
 // NewIntentUnderstandingHook constructs the built-in orchestrator
-// intent-understanding hook using the default environment-backed LLM client.
-//
-// This is the production entrypoint used by CLI and server wiring when request
-// normalization should be handled by the repository's built-in AI path.
-func NewIntentUnderstandingHook(model string, logger *slog.Logger) llm.IntentUnderstandingHook {
-	return NewIntentUnderstandingHookWithClient(llm.NewOpenAICompatibleFromEnv(model, logger), logger)
-}
-
-// NewIntentUnderstandingHookWithClient constructs the built-in
 // intent-understanding hook with an explicit LLM client.
 //
-// This constructor is useful for tests and alternative transport wiring where
-// the hook behavior should remain the same but the model client should be
-// supplied explicitly.
-func NewIntentUnderstandingHookWithClient(client llm.Client, logger *slog.Logger) llm.IntentUnderstandingHook {
+// Callers are responsible for choosing how that client is configured. Production
+// wiring typically passes [llm.NewOpenAICompatibleFromEnv], while tests and
+// alternate transport wiring can inject a stub or custom client directly.
+func NewIntentUnderstandingHook(client llm.Client, logger *slog.Logger) llm.IntentUnderstandingHook {
 	return &builtInIntentUnderstandingHook{
 		llm:    client,
 		logger: logging.Component(logger, "orchestrator.intent_hook"),
