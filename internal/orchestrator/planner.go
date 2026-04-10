@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/tsumina/dango/internal/datadir"
+	"github.com/tsumina/dango/internal/llm"
 	"github.com/tsumina/dango/internal/logging"
 	"github.com/tsumina/dango/internal/runtime"
 	"github.com/tsumina/dango/internal/spec"
@@ -22,6 +23,7 @@ type Planner struct {
 	locator *datadir.Locator
 	store   *sqlite.Store
 	runtime runtime.ContainerRuntime
+	llm     llm.Client
 	logger  *slog.Logger
 }
 
@@ -30,24 +32,18 @@ type catalogTool struct {
 	Spec spec.ToolSpec
 }
 
-type pathStep struct {
-	Tool       catalogTool
-	InputType  string
-	OutputType string
-}
-
-type plannerState struct {
-	CurrentType string
-	UsedTools   map[string]bool
-	Steps       []pathStep
-}
-
 // NewPlanner constructs the planner used to derive and refine a task DAG.
-func NewPlanner(locator *datadir.Locator, store *sqlite.Store, rt runtime.ContainerRuntime, logger *slog.Logger) *Planner {
+func NewPlanner(locator *datadir.Locator, store *sqlite.Store, rt runtime.ContainerRuntime, model string, logger *slog.Logger) *Planner {
+	return NewPlannerWithClient(locator, store, rt, llm.NewOpenAICompatibleFromEnv(model, logger), logger)
+}
+
+// NewPlannerWithClient constructs the planner with an explicit LLM client.
+func NewPlannerWithClient(locator *datadir.Locator, store *sqlite.Store, rt runtime.ContainerRuntime, client llm.Client, logger *slog.Logger) *Planner {
 	return &Planner{
 		locator: locator,
 		store:   store,
 		runtime: rt,
+		llm:     client,
 		logger:  logging.Component(logger, "orchestrator.planner"),
 	}
 }
@@ -83,46 +79,12 @@ func (p *Planner) Draft(ctx context.Context, taskID, request string) (spec.DAGPl
 		return spec.DAGPlan{}, fmt.Errorf("no tools registered")
 	}
 
-	steps, err := findLinearPath(tools, "request", "final")
+	plan, err := p.buildDraftWithLLM(ctx, taskID, request, tools)
 	if err != nil {
-		p.logger.Error("planner failed to find path", "task_id", taskID, "error", err)
+		p.logger.Error("planner LLM draft failed", "task_id", taskID, "error", err)
 		return spec.DAGPlan{}, err
 	}
-
-	edges := make([]spec.PlannedEdge, 0, len(steps))
-	var previousEdgeID string
-	for index, step := range steps {
-		edgeID, err := spec.NewUUID()
-		if err != nil {
-			return spec.DAGPlan{}, err
-		}
-
-		dependencies := []string{}
-		if previousEdgeID != "" {
-			dependencies = append(dependencies, previousEdgeID)
-		}
-
-		edges = append(edges, spec.PlannedEdge{
-			ID:              edgeID,
-			ToolName:        step.Tool.Spec.Name,
-			Dependencies:    dependencies,
-			InputType:       step.InputType,
-			OutputType:      step.OutputType,
-			Title:           fmt.Sprintf("Stage %d", index+1),
-			Summary:         fmt.Sprintf("Use %s to transform %s into %s.", step.Tool.Spec.Name, step.InputType, step.OutputType),
-			ExpectedOutputs: defaultExpectedOutputs(step.Tool.Spec, step.OutputType),
-			SubTask:         buildDraftSubTaskMarkdown(taskID, request, step.Tool.Spec, step.InputType, step.OutputType, index+1, len(steps)),
-		})
-		previousEdgeID = edgeID
-	}
-
-	return spec.DAGPlan{
-		Planner:   "runner-draft-planner",
-		Mode:      "linear",
-		Revision:  1,
-		CreatedAt: time.Now().UTC(),
-		Edges:     edges,
-	}, nil
+	return plan, nil
 }
 
 // Refine asks executors to refine their own planned stages and falls back to a
@@ -236,75 +198,6 @@ func (p *Planner) loadCatalog(ctx context.Context) ([]catalogTool, error) {
 	return out, nil
 }
 
-func findLinearPath(tools []catalogTool, startType, goalType string) ([]pathStep, error) {
-	queue := []plannerState{{
-		CurrentType: startType,
-		UsedTools:   map[string]bool{},
-	}}
-
-	for len(queue) > 0 {
-		state := queue[0]
-		queue = queue[1:]
-
-		for _, tool := range tools {
-			if state.UsedTools[tool.Spec.Name] {
-				continue
-			}
-			if !containsType(tool.Spec.InputTypes, state.CurrentType) {
-				continue
-			}
-
-			for _, outputType := range tool.Spec.OutputTypes {
-				nextSteps := appendPathStep(state.Steps, pathStep{
-					Tool:       tool,
-					InputType:  state.CurrentType,
-					OutputType: outputType,
-				})
-
-				if outputType == goalType {
-					return nextSteps, nil
-				}
-
-				nextUsed := cloneToolSet(state.UsedTools)
-				nextUsed[tool.Spec.Name] = true
-				queue = append(queue, plannerState{
-					CurrentType: outputType,
-					UsedTools:   nextUsed,
-					Steps:       nextSteps,
-				})
-			}
-		}
-	}
-
-	return nil, fmt.Errorf("no tool path found from %q to %q", startType, goalType)
-}
-
-func buildDraftSubTaskMarkdown(taskID, request string, tool spec.ToolSpec, inputType, outputType string, index, total int) string {
-	request = strings.TrimSpace(request)
-	if request == "" {
-		request = "(empty request)"
-	}
-
-	return fmt.Sprintf("# Planner Draft\n\n"+
-		"Task ID: %s\n"+
-		"Stage: %d/%d\n"+
-		"Assigned tool: %s\n\n"+
-		"## Workflow Checklist Item\n\n"+
-		"Transform `%s` into `%s`. Refine this checklist item into an executable sub-task for the executor.\n\n"+
-		"## Tool Context\n\n"+
-		"- Name: %s\n"+
-		"- Description: %s\n"+
-		"- Model: %s\n\n"+
-		"## Planning Requirements\n\n"+
-		"- Update the summary so the runner can review the stage intent quickly.\n"+
-		"- Keep the sub-task concise and execution-oriented.\n"+
-		"- List the expected output artifacts for this stage.\n"+
-		"- Preserve the append-only task history by describing changes rather than deleting prior context.\n\n"+
-		"## Original Request\n\n"+
-		"%s\n",
-		taskID, index, total, tool.Name, inputType, outputType, tool.Name, tool.Description, tool.Model, request)
-}
-
 func containsType(values []string, target string) bool {
 	for _, value := range values {
 		if strings.EqualFold(strings.TrimSpace(value), strings.TrimSpace(target)) {
@@ -312,21 +205,6 @@ func containsType(values []string, target string) bool {
 		}
 	}
 	return false
-}
-
-func cloneToolSet(value map[string]bool) map[string]bool {
-	out := make(map[string]bool, len(value))
-	for key, item := range value {
-		out[key] = item
-	}
-	return out
-}
-
-func appendPathStep(base []pathStep, step pathStep) []pathStep {
-	out := make([]pathStep, 0, len(base)+1)
-	out = append(out, base...)
-	out = append(out, step)
-	return out
 }
 
 func defaultExpectedOutputs(tool spec.ToolSpec, outputType string) []string {

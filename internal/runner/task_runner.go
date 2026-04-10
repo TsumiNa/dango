@@ -1,4 +1,4 @@
-package orchestrator
+package runner
 
 import (
 	"context"
@@ -10,24 +10,9 @@ import (
 
 	"github.com/tsumina/dango/internal/datadir"
 	"github.com/tsumina/dango/internal/logging"
-	"github.com/tsumina/dango/internal/runner"
 	"github.com/tsumina/dango/internal/spec"
 	"github.com/tsumina/dango/internal/store/sqlite"
 )
-
-// TaskRunResult summarizes a completed task runner execution.
-type TaskRunResult struct {
-	// Task is the final persisted task row.
-	Task sqlite.TaskRecord `json:"task"`
-	// Plan is the plan executed for the task.
-	Plan spec.DAGPlan `json:"plan"`
-	// TerminalHandoffs contains frontmatter summaries from terminal edges.
-	TerminalHandoffs []spec.HandoffMetadata `json:"terminal_handoffs"`
-	// TaskDir is the task directory on disk.
-	TaskDir string `json:"task_dir"`
-	// ResultPath is the result.md path written by the runner.
-	ResultPath string `json:"result_path"`
-}
 
 type terminalEdgeResult struct {
 	Edge    spec.PlannedEdge
@@ -37,22 +22,22 @@ type terminalEdgeResult struct {
 // TaskRunner manages the full lifecycle of one task execution.
 type TaskRunner struct {
 	locator   *datadir.Locator
-	tasks     *TaskService
-	planner   *Planner
-	scheduler *runner.Scheduler
+	tasks     TaskStore
+	planner   Planner
+	scheduler *Scheduler
 	logger    *slog.Logger
 	task      sqlite.TaskRecord
 	metadata  TaskMetadata
 }
 
 // NewTaskRunner constructs a runner for one persisted task.
-func NewTaskRunner(locator *datadir.Locator, tasks *TaskService, planner *Planner, scheduler *runner.Scheduler, task sqlite.TaskRecord, metadata TaskMetadata, logger *slog.Logger) *TaskRunner {
+func NewTaskRunner(locator *datadir.Locator, tasks TaskStore, planner Planner, scheduler *Scheduler, task sqlite.TaskRecord, metadata TaskMetadata, logger *slog.Logger) *TaskRunner {
 	return &TaskRunner{
 		locator:   locator,
 		tasks:     tasks,
 		planner:   planner,
 		scheduler: scheduler,
-		logger:    logging.Component(logger, "orchestrator.task_runner"),
+		logger:    logging.Component(logger, "runner.task_runner"),
 		task:      task,
 		metadata:  metadata,
 	}
@@ -60,6 +45,10 @@ func NewTaskRunner(locator *datadir.Locator, tasks *TaskService, planner *Planne
 
 // Run executes planning, review, dispatch, execution, and finalization for one task.
 func (r *TaskRunner) Run(ctx context.Context) (*TaskRunResult, error) {
+	if r.planner == nil {
+		return nil, fmt.Errorf("runner planner is required")
+	}
+
 	request := primaryRequestText(r.metadata.Request)
 	if strings.TrimSpace(request) == "" {
 		request = r.task.Request
@@ -106,8 +95,8 @@ func (r *TaskRunner) planTask(ctx context.Context, taskLogger *slog.Logger, requ
 	return task, plan, nil
 }
 
-func (r *TaskRunner) executePlan(ctx context.Context, taskLogger *slog.Logger, task sqlite.TaskRecord, request string, plan spec.DAGPlan) ([]runner.EdgeResult, error) {
-	stateMachine := runner.NewStateMachine(r.scheduler, taskLogger)
+func (r *TaskRunner) executePlan(ctx context.Context, taskLogger *slog.Logger, task sqlite.TaskRecord, request string, plan spec.DAGPlan) ([]EdgeResult, error) {
+	stateMachine := NewStateMachine(r.scheduler, taskLogger)
 	results, err := stateMachine.Run(ctx, task.ID, plan)
 	if err != nil {
 		status := spec.TaskStatusFailed
@@ -120,7 +109,7 @@ func (r *TaskRunner) executePlan(ctx context.Context, taskLogger *slog.Logger, t
 	return results, nil
 }
 
-func (r *TaskRunner) completeTask(ctx context.Context, taskLogger *slog.Logger, task sqlite.TaskRecord, request string, plan spec.DAGPlan, results []runner.EdgeResult) (*TaskRunResult, error) {
+func (r *TaskRunner) completeTask(ctx context.Context, taskLogger *slog.Logger, task sqlite.TaskRecord, request string, plan spec.DAGPlan, results []EdgeResult) (*TaskRunResult, error) {
 	task, err := r.finalizeTaskStatus(ctx, task.ID, spec.TaskStatusDone)
 	if err != nil {
 		return nil, err
@@ -156,7 +145,7 @@ func (r *TaskRunner) markTaskStopped(ctx context.Context, taskID, request string
 	_ = r.tasks.WriteResult(taskID, result)
 }
 
-func extractTerminalEdgeResults(plan spec.DAGPlan, results []runner.EdgeResult) []terminalEdgeResult {
+func extractTerminalEdgeResults(plan spec.DAGPlan, results []EdgeResult) []terminalEdgeResult {
 	if len(plan.Edges) == 0 || len(results) == 0 {
 		return nil
 	}
@@ -216,7 +205,7 @@ func buildFailureResult(taskID, request string, err error) string {
 	return fmt.Sprintf("# Task Result\n\nTask ID: `%s`\n\nRequest:\n\n%s\n\nStatus: failed during planning\n\nError: %s\n", taskID, strings.TrimSpace(request), err)
 }
 
-func buildExecutionFailureResult(taskID, request string, plan spec.DAGPlan, results []runner.EdgeResult, err error) string {
+func buildExecutionFailureResult(taskID, request string, plan spec.DAGPlan, results []EdgeResult, err error) string {
 	return fmt.Sprintf("# Task Result\n\nTask ID: `%s`\n\nRequest:\n\n%s\n\nPlanned stages: `%d`\nCompleted handoffs: `%d`\n\nStatus: failed during execution\n\nError: %s\n", taskID, strings.TrimSpace(request), len(plan.Edges), len(results), err)
 }
 

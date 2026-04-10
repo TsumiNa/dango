@@ -322,7 +322,7 @@ func (s *Server) handleRequestTaskCloneIntent(w http.ResponseWriter, r *http.Req
 func (s *Server) createOrRunTaskFromPayload(w http.ResponseWriter, ctx context.Context, payload requestPayload) {
 	request := requestEnvelopeFromPayload(payload)
 	if payload.AutoRun {
-		s.runTaskRequest(w, ctx, request)
+		s.startTaskRequest(w, ctx, request)
 		return
 	}
 	s.createTaskRequest(w, ctx, request)
@@ -337,13 +337,13 @@ func (s *Server) createTaskRequest(w http.ResponseWriter, ctx context.Context, r
 	writeJSON(w, http.StatusCreated, description)
 }
 
-func (s *Server) runTaskRequest(w http.ResponseWriter, ctx context.Context, request RequestEnvelope) {
-	result, err := s.runners.RunNow(ctx, request)
+func (s *Server) startTaskRequest(w http.ResponseWriter, ctx context.Context, request RequestEnvelope) {
+	description, err := s.runners.Start(ctx, request)
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
-	writeJSON(w, http.StatusCreated, result)
+	writeJSON(w, http.StatusAccepted, description)
 }
 
 func (s *Server) writeTaskList(w http.ResponseWriter, ctx context.Context) {
@@ -401,7 +401,7 @@ func (s *Server) handleTaskRuns(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
 	}
-	s.runTaskRequest(w, r.Context(), requestEnvelopeFromPayload(payload))
+	s.startTaskRequest(w, r.Context(), requestEnvelopeFromPayload(payload))
 }
 
 func (s *Server) handleTaskByID(w http.ResponseWriter, r *http.Request) {

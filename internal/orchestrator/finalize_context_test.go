@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/tsumina/dango/internal/datadir"
+	"github.com/tsumina/dango/internal/runner"
 	"github.com/tsumina/dango/internal/runtime"
 	"github.com/tsumina/dango/internal/store/sqlite"
 	_ "modernc.org/sqlite"
@@ -70,8 +71,12 @@ func TestTaskRunnerRunPersistsCancellationAfterCancellation(t *testing.T) {
 	}
 
 	taskService := NewTaskService(locator, store, nil)
-	planner := NewPlanner(locator, store, rt, nil)
-	scheduler := NewScheduler(locator, store, rt, nil)
+	planner := NewPlannerWithClient(locator, store, rt, staticPlannerClient(t, staticPlannerDraftJSON(
+		[]plannerDraftResponseEdge{
+			{Ref: "cancel", ToolName: "canceling-tool", Dependencies: nil, InputType: "request", OutputType: "final", Title: "Cancel run", Summary: "Invoke the canceling tool once.", ExpectedOutputs: []string{"result.final"}, SubTask: "Run the canceling tool for this request."},
+		},
+	)), nil)
+	scheduler := runner.NewScheduler(locator, store, rt, nil)
 	runners := NewTaskRunnerService(locator, taskService, planner, scheduler, nil)
 
 	ctx, cancel := context.WithCancel(context.Background())

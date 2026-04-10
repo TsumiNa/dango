@@ -1,4 +1,4 @@
-package orchestrator
+package runner
 
 import (
 	"context"
@@ -8,34 +8,50 @@ import (
 
 	"github.com/tsumina/dango/internal/datadir"
 	"github.com/tsumina/dango/internal/logging"
-	"github.com/tsumina/dango/internal/runner"
 	"github.com/tsumina/dango/internal/spec"
+	"github.com/tsumina/dango/internal/store/sqlite"
 )
+
+// Planner derives executable DAG plans for persisted tasks.
+type Planner interface {
+	Plan(ctx context.Context, taskID, request string) (spec.DAGPlan, error)
+}
+
+// TaskStore persists runner-owned task lifecycle state and artifacts.
+type TaskStore interface {
+	CreateRequest(ctx context.Context, request RequestEnvelope, metadata TaskMetadata) (sqlite.TaskRecord, error)
+	List(ctx context.Context) ([]TaskSummary, error)
+	Describe(ctx context.Context, taskID string) (*TaskDescription, error)
+	UpdateStatus(ctx context.Context, taskID string, status spec.TaskStatus) (sqlite.TaskRecord, error)
+	ApplyPlan(ctx context.Context, taskID string, plan spec.DAGPlan, status spec.TaskStatus) (sqlite.TaskRecord, error)
+	AppendEvent(taskID string, event TaskEvent) error
+	WriteResult(taskID string, result string) error
+}
 
 type runnerHandle struct {
 	cancel context.CancelFunc
 }
 
-// TaskRunnerService manages runner creation, lookup, and control operations.
+// TaskRunnerService manages task runner creation, lookup, and control operations.
 type TaskRunnerService struct {
 	locator   *datadir.Locator
-	tasks     *TaskService
-	planner   *Planner
-	scheduler *runner.Scheduler
+	tasks     TaskStore
+	planner   Planner
+	scheduler *Scheduler
 	logger    *slog.Logger
 
 	mu      sync.Mutex
 	runners map[string]runnerHandle
 }
 
-// NewTaskRunnerService constructs the orchestrator-facing runner control plane.
-func NewTaskRunnerService(locator *datadir.Locator, tasks *TaskService, planner *Planner, scheduler *runner.Scheduler, logger *slog.Logger) *TaskRunnerService {
+// NewTaskRunnerService constructs the runner-facing task control service.
+func NewTaskRunnerService(locator *datadir.Locator, tasks TaskStore, planner Planner, scheduler *Scheduler, logger *slog.Logger) *TaskRunnerService {
 	return &TaskRunnerService{
 		locator:   locator,
 		tasks:     tasks,
 		planner:   planner,
 		scheduler: scheduler,
-		logger:    logging.Component(logger, "orchestrator.task_runner_service"),
+		logger:    logging.Component(logger, "runner.service"),
 		runners:   map[string]runnerHandle{},
 	}
 }

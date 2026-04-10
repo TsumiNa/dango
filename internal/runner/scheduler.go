@@ -1,4 +1,4 @@
-package orchestrator
+package runner
 
 import (
 	"context"
@@ -25,7 +25,7 @@ type Scheduler struct {
 }
 
 // EdgeExecutionRequest describes one edge execution request issued by the
-// orchestrator.
+// runner.
 type EdgeExecutionRequest struct {
 	// TaskID identifies the parent task.
 	TaskID string
@@ -40,10 +40,10 @@ type EdgeExecutionRequest struct {
 }
 
 type edgeExecutionPaths struct {
-	subTaskPath        string
-	inputHost          string
-	publicOutputHost   string
-	privateOutputHost  string
+	subTaskPath       string
+	inputHost         string
+	publicOutputHost  string
+	privateOutputHost string
 }
 
 // NewScheduler constructs the scheduler used to execute task edges locally.
@@ -52,7 +52,7 @@ func NewScheduler(locator *datadir.Locator, store *sqlite.Store, rt runtime.Cont
 		locator: locator,
 		store:   store,
 		runtime: rt,
-		logger:  logging.Component(logger, "orchestrator.scheduler"),
+		logger:  logging.Component(logger, "runner.scheduler"),
 	}
 }
 

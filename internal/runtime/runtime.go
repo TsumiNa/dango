@@ -71,7 +71,7 @@ func (r ExecutorRunRequest) PrivateOutputContainerPath() string {
 }
 
 // MultiRuntime dispatches tool actions to either the Docker runtime or the
-// host-local demo runtime based on the image reference scheme.
+// host-local runtime based on the image reference scheme.
 type MultiRuntime struct {
 	docker ContainerRuntime
 	host   ContainerRuntime

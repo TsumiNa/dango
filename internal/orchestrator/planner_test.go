@@ -6,11 +6,12 @@ import (
 	"testing"
 
 	"github.com/tsumina/dango/internal/datadir"
+	"github.com/tsumina/dango/internal/llm"
 	"github.com/tsumina/dango/internal/spec"
 	"github.com/tsumina/dango/internal/store/sqlite"
 )
 
-func TestPlannerPlanBuildsLinearDemoPath(t *testing.T) {
+func TestPlannerPlanUsesLLMOutput(t *testing.T) {
 	t.Parallel()
 
 	root := t.TempDir()
@@ -67,8 +68,14 @@ func TestPlannerPlanBuildsLinearDemoPath(t *testing.T) {
 		Model:       "demo/toy-packager",
 	})
 
-	planner := NewPlanner(locator, store, nil, nil)
-	plan, err := planner.Plan(context.Background(), "task-123", "write a small demo")
+	planner := NewPlannerWithClient(locator, store, nil, staticPlannerClient(t, staticPlannerDraftJSON(
+		[]plannerDraftResponseEdge{
+			{Ref: "brief", ToolName: "toy-brief", Dependencies: nil, InputType: "request", OutputType: "brief", Title: "Create brief", Summary: "Produce a brief from the request.", ExpectedOutputs: []string{"brief.md"}, SubTask: "Read the request and produce a short brief artifact."},
+			{Ref: "draft", ToolName: "toy-drafter", Dependencies: []string{"brief"}, InputType: "brief", OutputType: "draft", Title: "Draft content", Summary: "Expand the brief into a draft.", ExpectedOutputs: []string{"draft.md"}, SubTask: "Use the brief input and produce a draft output."},
+			{Ref: "final", ToolName: "toy-packager", Dependencies: []string{"draft"}, InputType: "draft", OutputType: "final", Title: "Package result", Summary: "Turn the draft into the final artifact.", ExpectedOutputs: []string{"final-report.md"}, SubTask: "Package the draft into final deliverables."},
+		},
+	)), nil)
+	plan, err := planner.Plan(context.Background(), "task-123", "write a small project status update")
 	if err != nil {
 		t.Fatalf("Plan() error = %v", err)
 	}
@@ -85,4 +92,26 @@ func TestPlannerPlanBuildsLinearDemoPath(t *testing.T) {
 	if got, want := plan.Edges[2].OutputType, "final"; got != want {
 		t.Fatalf("plan.Edges[2].OutputType = %q, want %q", got, want)
 	}
+}
+
+type staticPlannerLLMClient struct {
+	testing *testing.T
+	payload []byte
+}
+
+func staticPlannerClient(t *testing.T, payload []byte) staticPlannerLLMClient {
+	t.Helper()
+	return staticPlannerLLMClient{testing: t, payload: payload}
+}
+
+func (c staticPlannerLLMClient) CompleteJSON(context.Context, llm.Request) ([]byte, error) {
+	return append([]byte(nil), c.payload...), nil
+}
+
+func staticPlannerDraftJSON(edges []plannerDraftResponseEdge) []byte {
+	payload, err := json.Marshal(plannerDraftResponse{Mode: "linear", Edges: edges})
+	if err != nil {
+		panic(err)
+	}
+	return payload
 }

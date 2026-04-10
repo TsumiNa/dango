@@ -17,7 +17,7 @@ import (
 )
 
 // HostPrefix identifies tool references that should be resolved against the
-// host-local demo runtime instead of the container runtime.
+// host-local runtime instead of the container runtime.
 const HostPrefix = "host://"
 
 type hostRuntime struct {

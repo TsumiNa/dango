@@ -8,13 +8,13 @@ import (
 	"os/signal"
 	"path/filepath"
 	"strconv"
-	"strings"
 	"syscall"
 
 	"github.com/spf13/cobra"
 	"github.com/tsumina/dango/internal/datadir"
 	"github.com/tsumina/dango/internal/logging"
 	"github.com/tsumina/dango/internal/orchestrator"
+	"github.com/tsumina/dango/internal/runner"
 	"github.com/tsumina/dango/internal/runtime"
 )
 
@@ -61,8 +61,8 @@ func (a *App) runOrchestratorServe(ctx context.Context, logCfg logging.Config, m
 	rt := runtime.NewDefault(os.Getenv("DANGO_DOCKER_BIN"), logger)
 	registry := orchestrator.NewRegistryService(locator, store, rt, logger)
 	taskService := orchestrator.NewTaskService(locator, store, logger)
-	planner := orchestrator.NewPlanner(locator, store, rt, logger)
-	scheduler := orchestrator.NewScheduler(locator, store, rt, logger)
+	planner := orchestrator.NewPlanner(locator, store, rt, os.Getenv("DANGO_LLM_MODEL"), logger)
+	scheduler := runner.NewScheduler(locator, store, rt, logger)
 	runners := orchestrator.NewTaskRunnerService(locator, taskService, planner, scheduler, logger)
 	server := orchestrator.NewServer(orchestrator.ServerConfig{
 		TCPAddress:     ":" + strconv.Itoa(port),
@@ -207,79 +207,6 @@ func (a *App) runOrchestratorListTools(ctx context.Context, logCfg logging.Confi
 	}
 
 	return json.NewEncoder(a.stdout).Encode(map[string]any{"tools": tools})
-}
-
-func (a *App) newOrchestratorDemoRunCommand() *cobra.Command {
-	logCfg := logging.DefaultConfig()
-	var request string
-	dataDir := filepath.Join(".", ".dango-demo")
-	var toolsDir string
-
-	cmd := &cobra.Command{
-		Use:   "demo-run [request...]",
-		Short: "Run the local demo orchestration flow",
-		Args:  cobra.ArbitraryArgs,
-		RunE: func(cmd *cobra.Command, args []string) error {
-			return a.runOrchestratorDemoRun(cmd.Context(), logCfg, request, dataDir, toolsDir, args)
-		},
-	}
-
-	flags := cmd.Flags()
-	logCfg.BindFlags(flags)
-	flags.StringVar(&request, "request", "", "user request for the demo flow")
-	flags.StringVar(&dataDir, "data-dir", dataDir, "root data directory")
-	flags.StringVar(&toolsDir, "tools-dir", "", "directory containing external demo tools; if empty, built-in toy tools are materialized under data-dir")
-
-	return cmd
-}
-
-func (a *App) runOrchestratorDemoRun(ctx context.Context, logCfg logging.Config, request string, dataDir string, toolsDir string, args []string) error {
-	requestText := strings.TrimSpace(request)
-	if requestText == "" && len(args) > 0 {
-		requestText = strings.TrimSpace(strings.Join(args, " "))
-	}
-	if requestText == "" {
-		return fmt.Errorf("demo request is required via --request or positional args")
-	}
-
-	locator, store, err := a.bootstrapOrchestrator(dataDir)
-	if err != nil {
-		return err
-	}
-	defer store.Close()
-
-	logger, cleanup, err := a.newLogger("orchestrator.demo-run", logCfg)
-	if err != nil {
-		return err
-	}
-	defer cleanup()
-
-	logger.Info("demo run command started", "data_dir", locator.Root)
-	rt := runtime.NewDefault(os.Getenv("DANGO_DOCKER_BIN"), logger)
-	resolvedToolsDir := toolsDir
-	if strings.TrimSpace(resolvedToolsDir) == "" {
-		resolvedToolsDir, err = materializeBuiltinDemoTools(locator.Root, logger)
-		if err != nil {
-			return err
-		}
-	}
-
-	registry := orchestrator.NewRegistryService(locator, store, rt, logger)
-	if err := ensureDemoToolsRegistered(ctx, registry, resolvedToolsDir, logger); err != nil {
-		return err
-	}
-
-	taskService := orchestrator.NewTaskService(locator, store, logger)
-	planner := orchestrator.NewPlanner(locator, store, rt, logger)
-	scheduler := orchestrator.NewScheduler(locator, store, rt, logger)
-	runners := orchestrator.NewTaskRunnerService(locator, taskService, planner, scheduler, logger)
-
-	result, err := runners.RunNow(ctx, orchestrator.RequestEnvelope{Text: requestText})
-	if err != nil {
-		return err
-	}
-
-	return json.NewEncoder(a.stdout).Encode(result)
 }
 
 func defaultDataDir() string {

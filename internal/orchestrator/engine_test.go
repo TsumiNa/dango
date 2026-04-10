@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/tsumina/dango/internal/datadir"
+	"github.com/tsumina/dango/internal/runner"
 	"github.com/tsumina/dango/internal/runtime"
 	"github.com/tsumina/dango/internal/store/sqlite"
 )
@@ -52,8 +53,14 @@ func TestTaskRunnerRunEndToEndWithHostRuntime(t *testing.T) {
 	}
 
 	taskService := NewTaskService(locator, store, nil)
-	planner := NewPlanner(locator, store, rt, nil)
-	scheduler := NewScheduler(locator, store, rt, nil)
+	planner := NewPlannerWithClient(locator, store, rt, staticPlannerClient(t, staticPlannerDraftJSON(
+		[]plannerDraftResponseEdge{
+			{Ref: "brief", ToolName: "toy-brief", Dependencies: nil, InputType: "request", OutputType: "brief", Title: "Create brief", Summary: "Produce a brief from the request.", ExpectedOutputs: []string{"brief.md"}, SubTask: "Read the request and produce a short brief artifact."},
+			{Ref: "draft", ToolName: "toy-drafter", Dependencies: []string{"brief"}, InputType: "brief", OutputType: "draft", Title: "Draft content", Summary: "Expand the brief into a draft.", ExpectedOutputs: []string{"draft.md"}, SubTask: "Use the brief input and produce a draft output."},
+			{Ref: "final", ToolName: "toy-packager", Dependencies: []string{"draft"}, InputType: "draft", OutputType: "final", Title: "Package result", Summary: "Turn the draft into the final artifact.", ExpectedOutputs: []string{"final-report.md"}, SubTask: "Package the draft into final deliverables."},
+		},
+	)), nil)
+	scheduler := runner.NewScheduler(locator, store, rt, nil)
 	runners := NewTaskRunnerService(locator, taskService, planner, scheduler, nil)
 
 	result, err := runners.RunNow(context.Background(), RequestEnvelope{Text: "write a small demo artifact"})
