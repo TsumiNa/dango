@@ -16,7 +16,7 @@ export DANGO_LLM_API_KEY="..."
 go run ./cmd/dango orchestrator serve --data-dir /tmp/dango-data
 ```
 
-Register tools before submitting tasks. Task requests are planned by the orchestrator LLM and then started asynchronously by the runner.
+Register tools before submitting tasks. Task requests are accepted by the orchestrator control plane and then planned and executed asynchronously by the runner.
 
 ## CLI Usage
 
@@ -57,7 +57,8 @@ DANGO_LOG_SOURCE
 - `orchestrator register` accepts container images and `host://<tool-dir>` for host-local tools.
 - `executor describe` searches `tool.yaml` in `DANGO_TOOL_YAML`, `/opt/tool/tool.yaml`, then `./tool.yaml`.
 - `executor run` uses `DANGO_TOOL_RUN`, `/opt/tool/run`, or `/opt/tool/bin/run` when present.
-- If no run hook exists, executor writes scaffold artifacts and a valid `_handoff.md`.
+- When `plan` or `run` hooks are absent, dango can fall back to repository-owned built-in AI executor planning and execute-generation if LLM configuration is available to the executor runtime.
+- When neither hooks nor built-in AI can produce a valid result, dango fails the task and writes explanatory handoff artifacts.
 
 ## For Contributors
 

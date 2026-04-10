@@ -10,11 +10,9 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"strings"
-	"time"
 
+	"github.com/tsumina/dango/internal/aihook"
 	"github.com/tsumina/dango/internal/logging"
-	"github.com/tsumina/dango/internal/spec"
 	"gopkg.in/yaml.v3"
 )
 
@@ -23,9 +21,10 @@ import (
 // An Executor is safe to reuse across multiple describe and run calls as long
 // as its output writers remain valid for the lifetime of the calls.
 type Executor struct {
-	stdout io.Writer
-	stderr io.Writer
-	logger *slog.Logger
+	stdout     io.Writer
+	stderr     io.Writer
+	logger     *slog.Logger
+	llmFactory llmClientFactory
 }
 
 // RunOptions describes the CLI-provided inputs for executor runs.
@@ -51,10 +50,18 @@ type PlanOptions struct {
 //
 // When logger is nil, logging falls back to a discard logger.
 func New(stdout, stderr io.Writer, logger *slog.Logger) *Executor {
+	return newWithLLMFactory(stdout, stderr, logger, defaultLLMClientFactory)
+}
+
+func newWithLLMFactory(stdout, stderr io.Writer, logger *slog.Logger, llmFactory llmClientFactory) *Executor {
+	if llmFactory == nil {
+		llmFactory = defaultLLMClientFactory
+	}
 	return &Executor{
-		stdout: stdout,
-		stderr: stderr,
-		logger: logging.Component(logger, "executor"),
+		stdout:     stdout,
+		stderr:     stderr,
+		logger:     logging.Component(logger, "executor"),
+		llmFactory: llmFactory,
 	}
 }
 
@@ -118,17 +125,18 @@ func (e *Executor) Plan(ctx context.Context, options PlanOptions) error {
 			_, err = e.stdout.Write(append(payload, '\n'))
 			return err
 		}
+		return aihook.NewCannotProceedError(
+			aihook.ModuleExecutor,
+			aihook.KindDetailPlanning,
+			fmt.Sprintf("plan hook %q returned no executor plan output for tool %q", hookPath, toolSpec.Name),
+			nil,
+		)
 	}
 
-	rawSubTask, err := os.ReadFile(runtimeContext.SubTaskPath)
+	planLogger.Info("using built-in AI detail planning", "tool", toolSpec.Name)
+	plan, err := e.planWithBuiltInAI(ctx, runtimeContext, toolSpec)
 	if err != nil {
-		return fmt.Errorf("read planning sub-task: %w", err)
-	}
-
-	plan := spec.ExecutorPlan{
-		Summary:         fmt.Sprintf("Use %s to complete its assigned stage.", toolSpec.Name),
-		SubTask:         strings.TrimSpace(string(rawSubTask)),
-		ExpectedOutputs: defaultExpectedOutputs(toolSpec),
+		return err
 	}
 
 	switch options.Format {
@@ -149,8 +157,8 @@ func (e *Executor) Plan(ctx context.Context, options PlanOptions) error {
 // Run executes a tool task using the scheduler environment contract.
 //
 // Run validates runtime inputs, ensures OUTPUT_PATH exists, executes a tool
-// hook when available, and guarantees that a _handoff.md is written even for
-// scaffold fallback behavior.
+// hook when available, and writes explanatory failure handoffs when dynamic
+// execution cannot proceed.
 func (e *Executor) Run(ctx context.Context, options RunOptions) error {
 	runtimeContext, err := loadRunContext(options)
 	if err != nil {
@@ -198,12 +206,38 @@ func (e *Executor) Run(ctx context.Context, options RunOptions) error {
 			return nil
 		}
 
-		runLogger.Info("tool hook completed without handoff; generating fallback handoff", "hook_path", hookPath)
-		return writeAutoHandoffs(runtimeContext.PublicOutputPath, runtimeContext.PrivateOutputPath, toolSpec.Name, runtimeContext.TaskID, "hook completed without explicit handoff")
+		err := aihook.NewCannotProceedError(
+			aihook.ModuleExecutor,
+			aihook.KindExecuteGeneration,
+			fmt.Sprintf("run hook %q completed without writing _handoff.md for tool %q", hookPath, toolSpec.Name),
+			nil,
+		)
+		runLogger.Error("tool hook completed without required handoff", "hook_path", hookPath, "error", err)
+		_ = writeFailureHandoffsWithSummary(
+			runtimeContext.PublicOutputPath,
+			runtimeContext.PrivateOutputPath,
+			toolSpec.Name,
+			runtimeContext.TaskID,
+			"Tool execution could not proceed because the run hook finished without producing the required _handoff.md contract artifact.",
+			err,
+		)
+		return err
 	}
 
-	runLogger.Info("no tool hook found; writing scaffold artifacts")
-	return e.writeScaffoldArtifacts(runtimeContext, toolSpec)
+	runLogger.Info("using built-in AI execute generation", "tool", toolSpec.Name)
+	if err := e.runWithBuiltInAI(ctx, runtimeContext, toolSpec); err != nil {
+		runLogger.Error("built-in AI execute generation failed", "error", err)
+		_ = writeFailureHandoffsWithSummary(
+			runtimeContext.PublicOutputPath,
+			runtimeContext.PrivateOutputPath,
+			toolSpec.Name,
+			runtimeContext.TaskID,
+			"Tool execution could not proceed because built-in AI execute-time generation did not produce a valid result.",
+			err,
+		)
+		return err
+	}
+	return nil
 }
 
 func (e *Executor) runHook(ctx context.Context, hookPath string) error {
@@ -228,61 +262,4 @@ func (e *Executor) runHookOutput(ctx context.Context, hookPath string) ([]byte, 
 		return nil, fmt.Errorf("run tool hook %q: %w", hookPath, err)
 	}
 	return bytes.TrimSpace(output), nil
-}
-
-func (e *Executor) writeScaffoldArtifacts(runtimeContext runtimeContext, toolSpec spec.ToolSpec) error {
-	subTaskPayload, _ := os.ReadFile(runtimeContext.SubTaskPath)
-	configPayload, _ := os.ReadFile(runtimeContext.ToolConfigPath)
-
-	report := map[string]any{
-		"task_id":             runtimeContext.TaskID,
-		"tool":                toolSpec.Name,
-		"description":         toolSpec.Description,
-		"input_path":          runtimeContext.InputPath,
-		"output_path":         runtimeContext.PublicOutputPath,
-		"private_output_path": runtimeContext.PrivateOutputPath,
-		"sub_task_path":       runtimeContext.SubTaskPath,
-		"tool_config_path":    runtimeContext.ToolConfigPath,
-		"input_url":           runtimeContext.InputURL,
-		"output_url":          runtimeContext.OutputURL,
-		"sub_task":            strings.TrimSpace(string(subTaskPayload)),
-		"tool_config":         strings.TrimSpace(string(configPayload)),
-		"generated_at":        time.Now().UTC().Format(time.RFC3339),
-	}
-
-	reportPath := filepath.Join(runtimeContext.PublicOutputPath, "execution-report.json")
-	reportPayload, err := json.MarshalIndent(report, "", "  ")
-	if err != nil {
-		return fmt.Errorf("marshal execution report: %w", err)
-	}
-	if err := os.WriteFile(reportPath, reportPayload, 0o644); err != nil {
-		return fmt.Errorf("write execution report: %w", err)
-	}
-	if err := os.WriteFile(filepath.Join(runtimeContext.PrivateOutputPath, "execution-context.json"), reportPayload, 0o644); err != nil {
-		return fmt.Errorf("write execution context: %w", err)
-	}
-
-	handoffBody := "## Description\n\n" +
-		"This output was produced by the built-in scaffold executor.\n\n" +
-		"- A tool-specific run hook was not found.\n" +
-		"- The executor wrote `execution-report.json` as a placeholder artifact.\n" +
-		"- Replace it with `/opt/tool/run` or `DANGO_TOOL_RUN` to execute real tool logic.\n"
-
-	return writeAutoHandoffs(runtimeContext.PublicOutputPath, runtimeContext.PrivateOutputPath, toolSpec.Name, runtimeContext.TaskID, strings.TrimSpace(handoffBody))
-}
-
-func defaultExpectedOutputs(toolSpec spec.ToolSpec) []string {
-	if len(toolSpec.OutputTypes) == 0 {
-		return nil
-	}
-
-	outputs := make([]string, 0, len(toolSpec.OutputTypes))
-	for _, outputType := range toolSpec.OutputTypes {
-		outputType = strings.TrimSpace(outputType)
-		if outputType == "" {
-			continue
-		}
-		outputs = append(outputs, "result."+outputType)
-	}
-	return outputs
 }

@@ -15,7 +15,7 @@ import (
 	"github.com/tsumina/dango/internal/logging"
 	"github.com/tsumina/dango/internal/orchestrator"
 	"github.com/tsumina/dango/internal/runner"
-	"github.com/tsumina/dango/internal/runtime"
+	"github.com/tsumina/dango/internal/runner/runtime"
 )
 
 func (a *App) newOrchestratorServeCommand() *cobra.Command {
@@ -61,13 +61,14 @@ func (a *App) runOrchestratorServe(ctx context.Context, logCfg logging.Config, m
 	rt := runtime.NewDefault(os.Getenv("DANGO_DOCKER_BIN"), logger)
 	registry := orchestrator.NewRegistryService(locator, store, rt, logger)
 	taskService := orchestrator.NewTaskService(locator, store, logger)
-	planner := orchestrator.NewPlanner(locator, store, rt, os.Getenv("DANGO_LLM_MODEL"), logger)
+	planner := runner.NewPlanner(locator, store, rt, model, logger)
+	intentHook := orchestrator.NewIntentUnderstandingHook(model, logger)
 	scheduler := runner.NewScheduler(locator, store, rt, logger)
-	runners := orchestrator.NewTaskRunnerService(locator, taskService, planner, scheduler, logger)
+	runners := runner.NewTaskRunnerService(locator, taskService, planner, scheduler, logger)
 	server := orchestrator.NewServer(orchestrator.ServerConfig{
 		TCPAddress:     ":" + strconv.Itoa(port),
 		UnixSocketPath: unixSocket,
-	}, registry, taskService, runners, logger)
+	}, registry, taskService, runners, intentHook, logger)
 
 	serverCtx, cancel := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
 	defer cancel()

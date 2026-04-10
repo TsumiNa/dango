@@ -6,11 +6,11 @@ This document is for contributors and maintainers. It covers architecture contex
 
 `dango` is a three-tier orchestration design:
 
-- Tier 1 (`orchestrator`): request intake, registry, task APIs, LLM planner integration, and persisted control state
-- Tier 2 (`runner`): background execution, state transitions, edge dispatch, and executor supervision
+- Tier 1 (`orchestrator`): request intake, registry, task APIs, and persisted control state
+- Tier 2 (`runner`): background execution, runner-owned draft/refine/review planning, state transitions, edge dispatch, and executor supervision
 - Tier 3 (`executor`): tool-facing `describe` and `run` contract
 
-The planner prompt lives in `internal/orchestrator/prompts/` and is intended to be edited directly during planner iteration.
+Built-in prompt assets for orchestrator intent understanding, runner planning, and executor AI live in `internal/prompts/` and are intended to be edited directly during iteration.
 
 The diagram below gives contributors a high-level view of how the orchestrator, scheduler, executor, storage, and tool runtime pieces fit together.
 
@@ -22,13 +22,14 @@ The diagram below gives contributors a high-level view of how the orchestrator, 
 cmd/dango/                 binary entrypoint
 internal/cli/              CLI parsing and top-level wiring
 internal/llm/              LLM provider clients used by planning flows
+internal/prompts/          repository-owned prompt assets for built-in AI hooks
 internal/spec/             shared domain contracts and validation
 internal/datadir/          data-dir path locators
 internal/store/sqlite/     SQLite migrations, sqlc query definitions, and persistence
-internal/runtime/          runtime abstraction (Docker + host-local execution)
-internal/orchestrator/     registry, task persistence, planner, HTTP server
-internal/runner/           runner state machine and execution scheduling
-internal/executor/         executor describe/run implementation
+internal/orchestrator/     registry, task persistence, prompt assets, HTTP server
+internal/runner/           runner planning, state machine, and execution scheduling
+internal/runner/runtime/   runtime abstraction (Docker + host-local execution)
+internal/executor/         executor describe/run implementation and built-in AI fallback
 ```
 
 Go source is organized for reviewer navigation:

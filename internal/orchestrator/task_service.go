@@ -14,69 +14,8 @@ import (
 	"github.com/tsumina/dango/internal/logging"
 	"github.com/tsumina/dango/internal/spec"
 	"github.com/tsumina/dango/internal/store/sqlite"
+	"github.com/tsumina/dango/internal/taskflow"
 )
-
-// RequestPart captures one multimodal part of an orchestrator request.
-type RequestPart struct {
-	Kind      string `json:"kind,omitempty"`
-	Name      string `json:"name,omitempty"`
-	MediaType string `json:"media_type,omitempty"`
-	Text      string `json:"text,omitempty"`
-	URI       string `json:"uri,omitempty"`
-}
-
-// RequestEnvelope stores the normalized orchestrator request payload.
-type RequestEnvelope struct {
-	Text  string            `json:"text,omitempty"`
-	Parts []RequestPart     `json:"parts,omitempty"`
-	Meta  map[string]string `json:"meta,omitempty"`
-}
-
-// RequestMetadata records how a request entered the orchestrator.
-type RequestMetadata struct {
-	Entrypoint string    `json:"entrypoint,omitempty"`
-	RemoteAddr string    `json:"remote_addr,omitempty"`
-	LocalAddr  string    `json:"local_addr,omitempty"`
-	ReceivedAt time.Time `json:"received_at,omitempty"`
-}
-
-// TaskLineage records append-only task ancestry and revision state.
-type TaskLineage struct {
-	RootTaskID    string `json:"root_task_id,omitempty"`
-	ParentTaskID  string `json:"parent_task_id,omitempty"`
-	CloneOfTaskID string `json:"clone_of_task_id,omitempty"`
-	Revision      int    `json:"revision,omitempty"`
-}
-
-// TaskMetadata stores the structured metadata that is not part of the SQLite task row.
-type TaskMetadata struct {
-	Request RequestEnvelope `json:"request"`
-	Entry   RequestMetadata `json:"entry"`
-	Lineage TaskLineage     `json:"lineage"`
-}
-
-// TaskEvent is an append-only task lifecycle event.
-type TaskEvent struct {
-	Timestamp time.Time      `json:"timestamp"`
-	Type      string         `json:"type"`
-	Message   string         `json:"message,omitempty"`
-	Data      map[string]any `json:"data,omitempty"`
-}
-
-// TaskSummary is the list-oriented view of a persisted task.
-type TaskSummary struct {
-	Task       sqlite.TaskRecord `json:"task"`
-	Metadata   TaskMetadata      `json:"metadata"`
-	TaskDir    string            `json:"task_dir"`
-	ResultPath string            `json:"result_path"`
-}
-
-// TaskDescription is the detailed view of a persisted task runner.
-type TaskDescription struct {
-	TaskSummary
-	Plan   spec.DAGPlan `json:"plan"`
-	Events []TaskEvent  `json:"events"`
-}
 
 // TaskService manages task lifecycle persistence and task markdown artifacts.
 type TaskService struct {
@@ -94,13 +33,8 @@ func NewTaskService(locator *datadir.Locator, store *sqlite.Store, logger *slog.
 	}
 }
 
-// Create allocates a task ID, persists the initial task row, and writes task.md.
-func (s *TaskService) Create(ctx context.Context, request string) (sqlite.TaskRecord, error) {
-	return s.CreateRequest(ctx, RequestEnvelope{Text: request}, TaskMetadata{})
-}
-
 // CreateRequest persists a structured request together with task metadata.
-func (s *TaskService) CreateRequest(ctx context.Context, request RequestEnvelope, metadata TaskMetadata) (sqlite.TaskRecord, error) {
+func (s *TaskService) CreateRequest(ctx context.Context, request taskflow.RequestEnvelope, metadata taskflow.TaskMetadata) (sqlite.TaskRecord, error) {
 	taskID, err := spec.NewUUID()
 	if err != nil {
 		return sqlite.TaskRecord{}, err
@@ -110,9 +44,9 @@ func (s *TaskService) CreateRequest(ctx context.Context, request RequestEnvelope
 		return sqlite.TaskRecord{}, err
 	}
 
-	metadata.Request = normalizeRequestEnvelope(request)
+	metadata.Request = taskflow.NormalizeRequestEnvelope(request)
 	if metadata.Entry.ReceivedAt.IsZero() {
-		metadata.Entry = mergeRequestMetadata(metadata.Entry, RequestMetadataFromContext(ctx))
+		metadata.Entry = taskflow.MergeRequestMetadata(metadata.Entry, taskflow.RequestMetadataFromContext(ctx))
 	}
 	if metadata.Entry.ReceivedAt.IsZero() {
 		metadata.Entry.ReceivedAt = time.Now().UTC()
@@ -127,7 +61,7 @@ func (s *TaskService) CreateRequest(ctx context.Context, request RequestEnvelope
 	record := sqlite.TaskRecord{
 		ID:      taskID,
 		Status:  string(spec.TaskStatusPending),
-		Request: primaryRequestText(metadata.Request),
+		Request: taskflow.PrimaryRequestText(metadata.Request),
 	}
 	if err := s.store.CreateTask(ctx, record); err != nil {
 		return sqlite.TaskRecord{}, err
@@ -135,7 +69,7 @@ func (s *TaskService) CreateRequest(ctx context.Context, request RequestEnvelope
 	if err := s.writeMetadata(taskID, metadata); err != nil {
 		return sqlite.TaskRecord{}, err
 	}
-	if err := s.AppendEvent(taskID, TaskEvent{
+	if err := s.AppendEvent(taskID, taskflow.TaskEvent{
 		Timestamp: time.Now().UTC(),
 		Type:      "task.created",
 		Message:   "task runner created",
@@ -161,19 +95,19 @@ func (s *TaskService) Get(ctx context.Context, taskID string) (sqlite.TaskRecord
 }
 
 // List loads task summaries ordered by most recent update.
-func (s *TaskService) List(ctx context.Context) ([]TaskSummary, error) {
+func (s *TaskService) List(ctx context.Context) ([]taskflow.TaskSummary, error) {
 	tasks, err := s.store.ListTasks(ctx)
 	if err != nil {
 		return nil, err
 	}
 
-	out := make([]TaskSummary, 0, len(tasks))
+	out := make([]taskflow.TaskSummary, 0, len(tasks))
 	for _, task := range tasks {
 		metadata, err := s.loadMetadata(task.ID)
 		if err != nil {
 			return nil, err
 		}
-		out = append(out, TaskSummary{
+		out = append(out, taskflow.TaskSummary{
 			Task:       task,
 			Metadata:   metadata,
 			TaskDir:    s.locator.TaskDir(task.ID),
@@ -185,7 +119,7 @@ func (s *TaskService) List(ctx context.Context) ([]TaskSummary, error) {
 }
 
 // Describe returns the full persisted description for one task runner.
-func (s *TaskService) Describe(ctx context.Context, taskID string) (*TaskDescription, error) {
+func (s *TaskService) Describe(ctx context.Context, taskID string) (*taskflow.TaskDescription, error) {
 	task, err := s.store.GetTask(ctx, taskID)
 	if err != nil {
 		return nil, err
@@ -207,8 +141,8 @@ func (s *TaskService) Describe(ctx context.Context, taskID string) (*TaskDescrip
 		}
 	}
 
-	return &TaskDescription{
-		TaskSummary: TaskSummary{
+	return &taskflow.TaskDescription{
+		TaskSummary: taskflow.TaskSummary{
 			Task:       task,
 			Metadata:   metadata,
 			TaskDir:    s.locator.TaskDir(task.ID),
@@ -240,7 +174,7 @@ func (s *TaskService) ApplyPlan(ctx context.Context, taskID string, plan spec.DA
 		return sqlite.TaskRecord{}, fmt.Errorf("write task.md: %w", err)
 	}
 
-	_ = s.AppendEvent(taskID, TaskEvent{
+	_ = s.AppendEvent(taskID, taskflow.TaskEvent{
 		Timestamp: time.Now().UTC(),
 		Type:      "task.plan.applied",
 		Message:   "runner persisted a new DAG revision",
@@ -259,7 +193,7 @@ func (s *TaskService) UpdateStatus(ctx context.Context, taskID string, status sp
 	if err := s.store.UpdateTaskStatus(ctx, taskID, string(status)); err != nil {
 		return sqlite.TaskRecord{}, err
 	}
-	_ = s.AppendEvent(taskID, TaskEvent{
+	_ = s.AppendEvent(taskID, taskflow.TaskEvent{
 		Timestamp: time.Now().UTC(),
 		Type:      "task.status.updated",
 		Message:   "runner status changed",
@@ -275,7 +209,7 @@ func (s *TaskService) WriteResult(taskID string, result string) error {
 	if err := os.WriteFile(s.locator.TaskResultPath(taskID), []byte(result), 0o644); err != nil {
 		return fmt.Errorf("write result.md: %w", err)
 	}
-	return s.AppendEvent(taskID, TaskEvent{
+	return s.AppendEvent(taskID, taskflow.TaskEvent{
 		Timestamp: time.Now().UTC(),
 		Type:      "task.result.written",
 		Message:   "result artifact updated",
@@ -286,7 +220,7 @@ func (s *TaskService) WriteResult(taskID string, result string) error {
 }
 
 // AppendEvent appends one lifecycle event to the task event log.
-func (s *TaskService) AppendEvent(taskID string, event TaskEvent) error {
+func (s *TaskService) AppendEvent(taskID string, event taskflow.TaskEvent) error {
 	if event.Timestamp.IsZero() {
 		event.Timestamp = time.Now().UTC()
 	}
@@ -306,8 +240,8 @@ func (s *TaskService) AppendEvent(taskID string, event TaskEvent) error {
 }
 
 // UpdateMetadata rewrites the structured metadata persisted for a task.
-func (s *TaskService) UpdateMetadata(taskID string, metadata TaskMetadata) error {
-	metadata.Request = normalizeRequestEnvelope(metadata.Request)
+func (s *TaskService) UpdateMetadata(taskID string, metadata taskflow.TaskMetadata) error {
+	metadata.Request = taskflow.NormalizeRequestEnvelope(metadata.Request)
 	if metadata.Entry.ReceivedAt.IsZero() {
 		metadata.Entry.ReceivedAt = time.Now().UTC()
 	}
@@ -317,7 +251,7 @@ func (s *TaskService) UpdateMetadata(taskID string, metadata TaskMetadata) error
 	return s.writeMetadata(taskID, metadata)
 }
 
-func (s *TaskService) writeMetadata(taskID string, metadata TaskMetadata) error {
+func (s *TaskService) writeMetadata(taskID string, metadata taskflow.TaskMetadata) error {
 	payload, err := json.MarshalIndent(metadata, "", "  ")
 	if err != nil {
 		return fmt.Errorf("marshal task metadata: %w", err)
@@ -328,22 +262,22 @@ func (s *TaskService) writeMetadata(taskID string, metadata TaskMetadata) error 
 	return nil
 }
 
-func (s *TaskService) loadMetadata(taskID string) (TaskMetadata, error) {
+func (s *TaskService) loadMetadata(taskID string) (taskflow.TaskMetadata, error) {
 	payload, err := os.ReadFile(s.locator.TaskMetadataPath(taskID))
 	if err != nil {
 		if os.IsNotExist(err) {
-			return TaskMetadata{}, nil
+			return taskflow.TaskMetadata{}, nil
 		}
-		return TaskMetadata{}, fmt.Errorf("read task metadata: %w", err)
+		return taskflow.TaskMetadata{}, fmt.Errorf("read task metadata: %w", err)
 	}
-	var metadata TaskMetadata
+	var metadata taskflow.TaskMetadata
 	if err := json.Unmarshal(payload, &metadata); err != nil {
-		return TaskMetadata{}, fmt.Errorf("decode task metadata: %w", err)
+		return taskflow.TaskMetadata{}, fmt.Errorf("decode task metadata: %w", err)
 	}
 	return metadata, nil
 }
 
-func (s *TaskService) loadEvents(taskID string) ([]TaskEvent, error) {
+func (s *TaskService) loadEvents(taskID string) ([]taskflow.TaskEvent, error) {
 	file, err := os.Open(s.locator.TaskEventsPath(taskID))
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -353,14 +287,14 @@ func (s *TaskService) loadEvents(taskID string) ([]TaskEvent, error) {
 	}
 	defer file.Close()
 
-	var events []TaskEvent
+	var events []taskflow.TaskEvent
 	scanner := bufio.NewScanner(file)
 	for scanner.Scan() {
 		line := strings.TrimSpace(scanner.Text())
 		if line == "" {
 			continue
 		}
-		var event TaskEvent
+		var event taskflow.TaskEvent
 		if err := json.Unmarshal([]byte(line), &event); err != nil {
 			return nil, fmt.Errorf("decode task event: %w", err)
 		}
@@ -372,57 +306,8 @@ func (s *TaskService) loadEvents(taskID string) ([]TaskEvent, error) {
 	return events, nil
 }
 
-func normalizeRequestEnvelope(request RequestEnvelope) RequestEnvelope {
-	request.Text = strings.TrimSpace(request.Text)
-	if request.Meta == nil {
-		request.Meta = map[string]string{}
-	}
-	parts := make([]RequestPart, 0, len(request.Parts))
-	for _, part := range request.Parts {
-		if strings.TrimSpace(part.Text) == "" && strings.TrimSpace(part.URI) == "" {
-			continue
-		}
-		part.Kind = strings.TrimSpace(part.Kind)
-		part.Name = strings.TrimSpace(part.Name)
-		part.MediaType = strings.TrimSpace(part.MediaType)
-		part.Text = strings.TrimSpace(part.Text)
-		part.URI = strings.TrimSpace(part.URI)
-		parts = append(parts, part)
-	}
-	request.Parts = parts
-	return request
-}
-
-func primaryRequestText(request RequestEnvelope) string {
-	if strings.TrimSpace(request.Text) != "" {
-		return strings.TrimSpace(request.Text)
-	}
-	for _, part := range request.Parts {
-		if strings.TrimSpace(part.Text) != "" {
-			return strings.TrimSpace(part.Text)
-		}
-	}
-	return ""
-}
-
-func mergeRequestMetadata(base, overlay RequestMetadata) RequestMetadata {
-	if strings.TrimSpace(base.Entrypoint) == "" {
-		base.Entrypoint = overlay.Entrypoint
-	}
-	if strings.TrimSpace(base.RemoteAddr) == "" {
-		base.RemoteAddr = overlay.RemoteAddr
-	}
-	if strings.TrimSpace(base.LocalAddr) == "" {
-		base.LocalAddr = overlay.LocalAddr
-	}
-	if base.ReceivedAt.IsZero() {
-		base.ReceivedAt = overlay.ReceivedAt
-	}
-	return base
-}
-
-func buildTaskMarkdown(request RequestEnvelope, status string, plan *spec.DAGPlan) string {
-	requestText := primaryRequestText(request)
+func buildTaskMarkdown(request taskflow.RequestEnvelope, status string, plan *spec.DAGPlan) string {
+	requestText := taskflow.PrimaryRequestText(request)
 	if requestText == "" {
 		requestText = "(empty request)"
 	}

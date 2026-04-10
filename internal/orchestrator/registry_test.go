@@ -7,7 +7,7 @@ import (
 	"testing"
 
 	"github.com/tsumina/dango/internal/datadir"
-	"github.com/tsumina/dango/internal/runtime"
+	"github.com/tsumina/dango/internal/runner/runtime"
 	"github.com/tsumina/dango/internal/store/sqlite"
 )
 

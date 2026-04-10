@@ -12,6 +12,7 @@ import (
 	"github.com/tsumina/dango/internal/logging"
 	"github.com/tsumina/dango/internal/spec"
 	"github.com/tsumina/dango/internal/store/sqlite"
+	"github.com/tsumina/dango/internal/taskflow"
 )
 
 type terminalEdgeResult struct {
@@ -23,15 +24,15 @@ type terminalEdgeResult struct {
 type TaskRunner struct {
 	locator   *datadir.Locator
 	tasks     TaskStore
-	planner   Planner
+	planner   PlanBuilder
 	scheduler *Scheduler
 	logger    *slog.Logger
 	task      sqlite.TaskRecord
-	metadata  TaskMetadata
+	metadata  taskflow.TaskMetadata
 }
 
 // NewTaskRunner constructs a runner for one persisted task.
-func NewTaskRunner(locator *datadir.Locator, tasks TaskStore, planner Planner, scheduler *Scheduler, task sqlite.TaskRecord, metadata TaskMetadata, logger *slog.Logger) *TaskRunner {
+func NewTaskRunner(locator *datadir.Locator, tasks TaskStore, planner PlanBuilder, scheduler *Scheduler, task sqlite.TaskRecord, metadata taskflow.TaskMetadata, logger *slog.Logger) *TaskRunner {
 	return &TaskRunner{
 		locator:   locator,
 		tasks:     tasks,
@@ -44,19 +45,23 @@ func NewTaskRunner(locator *datadir.Locator, tasks TaskStore, planner Planner, s
 }
 
 // Run executes planning, review, dispatch, execution, and finalization for one task.
-func (r *TaskRunner) Run(ctx context.Context) (*TaskRunResult, error) {
+func (r *TaskRunner) Run(ctx context.Context) (*taskflow.TaskRunResult, error) {
 	if r.planner == nil {
 		return nil, fmt.Errorf("runner planner is required")
 	}
 
-	request := primaryRequestText(r.metadata.Request)
+	requestEnvelope := r.metadata.Request
+	request := taskflow.PrimaryRequestText(requestEnvelope)
 	if strings.TrimSpace(request) == "" {
 		request = r.task.Request
+		if strings.TrimSpace(requestEnvelope.Text) == "" {
+			requestEnvelope.Text = request
+		}
 	}
 	taskLogger := r.logger.With("task_id", r.task.ID)
-	_ = r.tasks.AppendEvent(r.task.ID, TaskEvent{Timestamp: nowUTC(), Type: "task.run.started", Message: "task runner execution started"})
+	_ = r.tasks.AppendEvent(r.task.ID, taskflow.TaskEvent{Timestamp: nowUTC(), Type: "task.run.started", Message: "task runner execution started"})
 
-	task, plan, err := r.planTask(ctx, taskLogger, request)
+	task, plan, err := r.planTask(ctx, taskLogger, requestEnvelope, request)
 	if err != nil {
 		return nil, err
 	}
@@ -69,13 +74,13 @@ func (r *TaskRunner) Run(ctx context.Context) (*TaskRunResult, error) {
 	return r.completeTask(ctx, taskLogger, task, request, plan, results)
 }
 
-func (r *TaskRunner) planTask(ctx context.Context, taskLogger *slog.Logger, request string) (sqlite.TaskRecord, spec.DAGPlan, error) {
+func (r *TaskRunner) planTask(ctx context.Context, taskLogger *slog.Logger, requestEnvelope taskflow.RequestEnvelope, request string) (sqlite.TaskRecord, spec.DAGPlan, error) {
 	task, err := r.tasks.UpdateStatus(ctx, r.task.ID, spec.TaskStatusPlanning)
 	if err != nil {
 		return sqlite.TaskRecord{}, spec.DAGPlan{}, err
 	}
 
-	plan, err := r.planner.Plan(ctx, task.ID, request)
+	plan, err := r.planner.Plan(ctx, task.ID, requestEnvelope)
 	if err != nil {
 		taskLogger.Error("planning failed", "error", err)
 		r.markTaskStopped(ctx, task.ID, request, spec.TaskStatusFailed, buildFailureResult(task.ID, request, err))
@@ -109,7 +114,7 @@ func (r *TaskRunner) executePlan(ctx context.Context, taskLogger *slog.Logger, t
 	return results, nil
 }
 
-func (r *TaskRunner) completeTask(ctx context.Context, taskLogger *slog.Logger, task sqlite.TaskRecord, request string, plan spec.DAGPlan, results []EdgeResult) (*TaskRunResult, error) {
+func (r *TaskRunner) completeTask(ctx context.Context, taskLogger *slog.Logger, task sqlite.TaskRecord, request string, plan spec.DAGPlan, results []EdgeResult) (*taskflow.TaskRunResult, error) {
 	task, err := r.finalizeTaskStatus(ctx, task.ID, spec.TaskStatusDone)
 	if err != nil {
 		return nil, err
@@ -119,11 +124,11 @@ func (r *TaskRunner) completeTask(ctx context.Context, taskLogger *slog.Logger, 
 	if err := r.tasks.WriteResult(task.ID, buildSuccessResult(task.ID, request, terminal, r.locator)); err != nil {
 		return nil, err
 	}
-	_ = r.tasks.AppendEvent(task.ID, TaskEvent{Timestamp: nowUTC(), Type: "task.run.completed", Message: "task runner finished successfully"})
+	_ = r.tasks.AppendEvent(task.ID, taskflow.TaskEvent{Timestamp: nowUTC(), Type: "task.run.completed", Message: "task runner finished successfully"})
 
 	taskLogger.Info("task runner completed", "terminal_handoffs", len(terminal), "result_path", r.locator.TaskResultPath(task.ID))
 
-	return &TaskRunResult{
+	return &taskflow.TaskRunResult{
 		Task:             task,
 		Plan:             plan,
 		TerminalHandoffs: metadataOnly(terminal),

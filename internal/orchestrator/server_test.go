@@ -13,11 +13,20 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/tsumina/dango/internal/aihook"
 	"github.com/tsumina/dango/internal/datadir"
+	"github.com/tsumina/dango/internal/runner"
 	"github.com/tsumina/dango/internal/store/sqlite"
+	"github.com/tsumina/dango/internal/taskflow"
 )
 
-func newServerTestFixture(t *testing.T) (*Server, *TaskRunnerService) {
+type passthroughIntentHook struct{}
+
+func (passthroughIntentHook) Understand(_ context.Context, request aihook.IntentRequest) (aihook.IntentResult, error) {
+	return aihook.IntentResult{Request: request.Request}, nil
+}
+
+func newServerTestFixture(t *testing.T) (*Server, *runner.TaskRunnerService) {
 	t.Helper()
 
 	root := t.TempDir()
@@ -36,8 +45,8 @@ func newServerTestFixture(t *testing.T) (*Server, *TaskRunnerService) {
 	t.Cleanup(func() { _ = store.Close() })
 
 	taskService := NewTaskService(locator, store, nil)
-	runners := NewTaskRunnerService(locator, taskService, nil, nil, nil)
-	return NewServer(ServerConfig{}, nil, taskService, runners, nil), runners
+	runners := runner.NewTaskRunnerService(locator, taskService, nil, nil, nil)
+	return NewServer(ServerConfig{}, nil, taskService, runners, passthroughIntentHook{}, nil), runners
 }
 
 func TestRemoveUnixSocketRemovesStaleSocket(t *testing.T) {
@@ -98,7 +107,7 @@ func TestHandleRequestTaskListIntentReturnsTasks(t *testing.T) {
 	server, runners := newServerTestFixture(t)
 
 	for _, prompt := range []string{"first task", "second task"} {
-		if _, err := runners.Create(context.Background(), RequestEnvelope{Text: prompt}); err != nil {
+		if _, err := runners.Create(context.Background(), taskflow.RequestEnvelope{Text: prompt}); err != nil {
 			t.Fatalf("Create(%q) error = %v", prompt, err)
 		}
 	}
@@ -113,7 +122,7 @@ func TestHandleRequestTaskListIntentReturnsTasks(t *testing.T) {
 	}
 
 	var response struct {
-		Tasks []TaskSummary `json:"tasks"`
+		Tasks []taskflow.TaskSummary `json:"tasks"`
 	}
 	if err := json.NewDecoder(recorder.Body).Decode(&response); err != nil {
 		t.Fatalf("decode response error = %v", err)
@@ -145,7 +154,7 @@ func TestHandleTasksPostCreatesTask(t *testing.T) {
 		t.Fatalf("status code = %d, want %d; body = %s", got, want, recorder.Body.String())
 	}
 
-	var response TaskDescription
+	var response taskflow.TaskDescription
 	if err := json.NewDecoder(recorder.Body).Decode(&response); err != nil {
 		t.Fatalf("decode response error = %v", err)
 	}
@@ -154,11 +163,59 @@ func TestHandleTasksPostCreatesTask(t *testing.T) {
 	}
 }
 
+func TestHandleTaskRunsPostNormalizesRequestWithIntentHook(t *testing.T) {
+	t.Parallel()
+
+	server, _ := newServerTestFixture(t)
+	server.intent = intentTestHook{result: aihook.IntentResult{
+		Request: taskflow.RequestEnvelope{Text: "normalized request", Meta: map[string]string{"intent": "write"}},
+		Summary: "normalized by test",
+	}}
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/task-runs", strings.NewReader(`{"text":"raw request","meta":{"source":"http"}}`))
+	recorder := httptest.NewRecorder()
+
+	server.handleTaskRuns(recorder, req)
+
+	if got, want := recorder.Code, http.StatusAccepted; got != want {
+		t.Fatalf("status code = %d, want %d; body = %s", got, want, recorder.Body.String())
+	}
+
+	var response taskflow.TaskDescription
+	if err := json.NewDecoder(recorder.Body).Decode(&response); err != nil {
+		t.Fatalf("decode response error = %v", err)
+	}
+	if got, want := response.Task.Request, "normalized request"; got != want {
+		t.Fatalf("response.Task.Request = %q, want %q", got, want)
+	}
+	if got, want := response.Metadata.Request.Meta["source"], "http"; got != want {
+		t.Fatalf("response.Metadata.Request.Meta[source] = %q, want %q", got, want)
+	}
+	if got, want := response.Metadata.Request.Meta["intent"], "write"; got != want {
+		t.Fatalf("response.Metadata.Request.Meta[intent] = %q, want %q", got, want)
+	}
+	if got, want := response.Metadata.Request.Meta["intent_summary"], "normalized by test"; got != want {
+		t.Fatalf("response.Metadata.Request.Meta[intent_summary] = %q, want %q", got, want)
+	}
+}
+
+type intentTestHook struct {
+	result aihook.IntentResult
+	err    error
+}
+
+func (h intentTestHook) Understand(context.Context, aihook.IntentRequest) (aihook.IntentResult, error) {
+	if h.err != nil {
+		return aihook.IntentResult{}, h.err
+	}
+	return h.result, nil
+}
+
 func TestHandleTaskByIDDescribeActionReturnsTask(t *testing.T) {
 	t.Parallel()
 
 	server, runners := newServerTestFixture(t)
-	created, err := runners.Create(context.Background(), RequestEnvelope{Text: "task for describe action"})
+	created, err := runners.Create(context.Background(), taskflow.RequestEnvelope{Text: "task for describe action"})
 	if err != nil {
 		t.Fatalf("Create() error = %v", err)
 	}
@@ -173,7 +230,7 @@ func TestHandleTaskByIDDescribeActionReturnsTask(t *testing.T) {
 		t.Fatalf("status code = %d, want %d; body = %s", got, want, recorder.Body.String())
 	}
 
-	var response TaskDescription
+	var response taskflow.TaskDescription
 	if err := json.NewDecoder(recorder.Body).Decode(&response); err != nil {
 		t.Fatalf("decode response error = %v", err)
 	}

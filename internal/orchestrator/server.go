@@ -13,7 +13,10 @@ import (
 	"strings"
 	"time"
 
+	"github.com/tsumina/dango/internal/aihook"
 	"github.com/tsumina/dango/internal/logging"
+	"github.com/tsumina/dango/internal/runner"
+	"github.com/tsumina/dango/internal/taskflow"
 )
 
 // ServerConfig controls which listeners are exposed by the orchestrator API server.
@@ -27,7 +30,8 @@ type Server struct {
 	config   ServerConfig
 	registry *RegistryService
 	tasks    *TaskService
-	runners  *TaskRunnerService
+	runners  *runner.TaskRunnerService
+	intent   aihook.IntentUnderstandingHook
 	logger   *slog.Logger
 }
 
@@ -38,13 +42,13 @@ type serverListener struct {
 }
 
 type requestPayload struct {
-	Intent      string            `json:"intent,omitempty"`
-	TaskID      string            `json:"task_id,omitempty"`
-	Text        string            `json:"text,omitempty"`
-	Parts       []RequestPart     `json:"parts,omitempty"`
-	Meta        map[string]string `json:"meta,omitempty"`
-	AutoRun     bool              `json:"auto_run,omitempty"`
-	CloneReason string            `json:"clone_reason,omitempty"`
+	Intent      string                 `json:"intent,omitempty"`
+	TaskID      string                 `json:"task_id,omitempty"`
+	Text        string                 `json:"text,omitempty"`
+	Parts       []taskflow.RequestPart `json:"parts,omitempty"`
+	Meta        map[string]string      `json:"meta,omitempty"`
+	AutoRun     bool                   `json:"auto_run,omitempty"`
+	CloneReason string                 `json:"clone_reason,omitempty"`
 }
 
 type requestIntentHandler func(*Server, http.ResponseWriter, *http.Request, requestPayload)
@@ -97,12 +101,13 @@ var normalizedIntents = map[string]string{
 }
 
 // NewServer constructs the HTTP server wrapper for the orchestrator services.
-func NewServer(config ServerConfig, registry *RegistryService, taskService *TaskService, runners *TaskRunnerService, logger *slog.Logger) *Server {
+func NewServer(config ServerConfig, registry *RegistryService, taskService *TaskService, runners *runner.TaskRunnerService, intentHook aihook.IntentUnderstandingHook, logger *slog.Logger) *Server {
 	return &Server{
 		config:   config,
 		registry: registry,
 		tasks:    taskService,
 		runners:  runners,
+		intent:   intentHook,
 		logger:   logging.Component(logger, "orchestrator.server"),
 	}
 }
@@ -242,7 +247,7 @@ func removeUnixSocket(path string) error {
 
 func (s *Server) withRequestMetadata(next http.Handler, entrypoint string) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		metadata := RequestMetadata{
+		metadata := taskflow.RequestMetadata{
 			Entrypoint: entrypoint,
 			RemoteAddr: r.RemoteAddr,
 			ReceivedAt: time.Now().UTC(),
@@ -250,7 +255,7 @@ func (s *Server) withRequestMetadata(next http.Handler, entrypoint string) http.
 		if localAddr, ok := r.Context().Value(http.LocalAddrContextKey).(net.Addr); ok && localAddr != nil {
 			metadata.LocalAddr = localAddr.String()
 		}
-		next.ServeHTTP(w, r.WithContext(WithRequestMetadata(r.Context(), metadata)))
+		next.ServeHTTP(w, r.WithContext(taskflow.WithRequestMetadata(r.Context(), metadata)))
 	})
 }
 
@@ -320,7 +325,11 @@ func (s *Server) handleRequestTaskCloneIntent(w http.ResponseWriter, r *http.Req
 }
 
 func (s *Server) createOrRunTaskFromPayload(w http.ResponseWriter, ctx context.Context, payload requestPayload) {
-	request := requestEnvelopeFromPayload(payload)
+	request, err := understandRequest(ctx, s.intent, requestEnvelopeFromPayload(payload))
+	if err != nil {
+		writeJSON(w, http.StatusBadGateway, map[string]string{"error": err.Error()})
+		return
+	}
 	if payload.AutoRun {
 		s.startTaskRequest(w, ctx, request)
 		return
@@ -328,7 +337,7 @@ func (s *Server) createOrRunTaskFromPayload(w http.ResponseWriter, ctx context.C
 	s.createTaskRequest(w, ctx, request)
 }
 
-func (s *Server) createTaskRequest(w http.ResponseWriter, ctx context.Context, request RequestEnvelope) {
+func (s *Server) createTaskRequest(w http.ResponseWriter, ctx context.Context, request taskflow.RequestEnvelope) {
 	description, err := s.runners.Create(ctx, request)
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
@@ -337,7 +346,7 @@ func (s *Server) createTaskRequest(w http.ResponseWriter, ctx context.Context, r
 	writeJSON(w, http.StatusCreated, description)
 }
 
-func (s *Server) startTaskRequest(w http.ResponseWriter, ctx context.Context, request RequestEnvelope) {
+func (s *Server) startTaskRequest(w http.ResponseWriter, ctx context.Context, request taskflow.RequestEnvelope) {
 	description, err := s.runners.Start(ctx, request)
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
@@ -401,7 +410,12 @@ func (s *Server) handleTaskRuns(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
 	}
-	s.startTaskRequest(w, r.Context(), requestEnvelopeFromPayload(payload))
+	request, err := understandRequest(r.Context(), s.intent, requestEnvelopeFromPayload(payload))
+	if err != nil {
+		writeJSON(w, http.StatusBadGateway, map[string]string{"error": err.Error()})
+		return
+	}
+	s.startTaskRequest(w, r.Context(), request)
 }
 
 func (s *Server) handleTaskByID(w http.ResponseWriter, r *http.Request) {
@@ -487,8 +501,8 @@ func (s *Server) cloneTaskByID(w http.ResponseWriter, r *http.Request, taskID st
 
 var errEmptyBody = errors.New("empty request body")
 
-func requestEnvelopeFromPayload(payload requestPayload) RequestEnvelope {
-	return RequestEnvelope{Text: payload.Text, Parts: payload.Parts, Meta: payload.Meta}
+func requestEnvelopeFromPayload(payload requestPayload) taskflow.RequestEnvelope {
+	return taskflow.RequestEnvelope{Text: payload.Text, Parts: payload.Parts, Meta: payload.Meta}
 }
 
 func parseTaskRoute(path string) (taskID string, action string, ok bool) {

@@ -1,4 +1,4 @@
-package runner
+package taskflow
 
 import (
 	"strings"
@@ -84,7 +84,30 @@ type TaskRunResult struct {
 	ResultPath string `json:"result_path"`
 }
 
-func primaryRequestText(request RequestEnvelope) string {
+// NormalizeRequestEnvelope trims and normalizes a request envelope.
+func NormalizeRequestEnvelope(request RequestEnvelope) RequestEnvelope {
+	request.Text = strings.TrimSpace(request.Text)
+	if request.Meta == nil {
+		request.Meta = map[string]string{}
+	}
+	parts := make([]RequestPart, 0, len(request.Parts))
+	for _, part := range request.Parts {
+		if strings.TrimSpace(part.Text) == "" && strings.TrimSpace(part.URI) == "" {
+			continue
+		}
+		part.Kind = strings.TrimSpace(part.Kind)
+		part.Name = strings.TrimSpace(part.Name)
+		part.MediaType = strings.TrimSpace(part.MediaType)
+		part.Text = strings.TrimSpace(part.Text)
+		part.URI = strings.TrimSpace(part.URI)
+		parts = append(parts, part)
+	}
+	request.Parts = parts
+	return request
+}
+
+// PrimaryRequestText extracts the primary free-form text from a request.
+func PrimaryRequestText(request RequestEnvelope) string {
 	if strings.TrimSpace(request.Text) != "" {
 		return strings.TrimSpace(request.Text)
 	}
@@ -96,7 +119,8 @@ func primaryRequestText(request RequestEnvelope) string {
 	return ""
 }
 
-func mergeRequestMetadata(base, overlay RequestMetadata) RequestMetadata {
+// MergeRequestMetadata merges missing fields from overlay into base.
+func MergeRequestMetadata(base, overlay RequestMetadata) RequestMetadata {
 	if strings.TrimSpace(base.Entrypoint) == "" {
 		base.Entrypoint = overlay.Entrypoint
 	}

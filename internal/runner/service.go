@@ -10,21 +10,22 @@ import (
 	"github.com/tsumina/dango/internal/logging"
 	"github.com/tsumina/dango/internal/spec"
 	"github.com/tsumina/dango/internal/store/sqlite"
+	"github.com/tsumina/dango/internal/taskflow"
 )
 
-// Planner derives executable DAG plans for persisted tasks.
-type Planner interface {
-	Plan(ctx context.Context, taskID, request string) (spec.DAGPlan, error)
+// PlanBuilder derives executable DAG plans for persisted tasks.
+type PlanBuilder interface {
+	Plan(ctx context.Context, taskID string, request taskflow.RequestEnvelope) (spec.DAGPlan, error)
 }
 
 // TaskStore persists runner-owned task lifecycle state and artifacts.
 type TaskStore interface {
-	CreateRequest(ctx context.Context, request RequestEnvelope, metadata TaskMetadata) (sqlite.TaskRecord, error)
-	List(ctx context.Context) ([]TaskSummary, error)
-	Describe(ctx context.Context, taskID string) (*TaskDescription, error)
+	CreateRequest(ctx context.Context, request taskflow.RequestEnvelope, metadata taskflow.TaskMetadata) (sqlite.TaskRecord, error)
+	List(ctx context.Context) ([]taskflow.TaskSummary, error)
+	Describe(ctx context.Context, taskID string) (*taskflow.TaskDescription, error)
 	UpdateStatus(ctx context.Context, taskID string, status spec.TaskStatus) (sqlite.TaskRecord, error)
 	ApplyPlan(ctx context.Context, taskID string, plan spec.DAGPlan, status spec.TaskStatus) (sqlite.TaskRecord, error)
-	AppendEvent(taskID string, event TaskEvent) error
+	AppendEvent(taskID string, event taskflow.TaskEvent) error
 	WriteResult(taskID string, result string) error
 }
 
@@ -36,7 +37,7 @@ type runnerHandle struct {
 type TaskRunnerService struct {
 	locator   *datadir.Locator
 	tasks     TaskStore
-	planner   Planner
+	planner   PlanBuilder
 	scheduler *Scheduler
 	logger    *slog.Logger
 
@@ -45,7 +46,7 @@ type TaskRunnerService struct {
 }
 
 // NewTaskRunnerService constructs the runner-facing task control service.
-func NewTaskRunnerService(locator *datadir.Locator, tasks TaskStore, planner Planner, scheduler *Scheduler, logger *slog.Logger) *TaskRunnerService {
+func NewTaskRunnerService(locator *datadir.Locator, tasks TaskStore, planner PlanBuilder, scheduler *Scheduler, logger *slog.Logger) *TaskRunnerService {
 	return &TaskRunnerService{
 		locator:   locator,
 		tasks:     tasks,
@@ -57,7 +58,7 @@ func NewTaskRunnerService(locator *datadir.Locator, tasks TaskStore, planner Pla
 }
 
 // Start creates a task runner and starts it in the background.
-func (s *TaskRunnerService) Start(ctx context.Context, request RequestEnvelope) (*TaskDescription, error) {
+func (s *TaskRunnerService) Start(ctx context.Context, request taskflow.RequestEnvelope) (*taskflow.TaskDescription, error) {
 	description, err := s.Create(ctx, request)
 	if err != nil {
 		return nil, err
@@ -66,8 +67,8 @@ func (s *TaskRunnerService) Start(ctx context.Context, request RequestEnvelope) 
 }
 
 // Create persists a pending task runner without starting execution.
-func (s *TaskRunnerService) Create(ctx context.Context, request RequestEnvelope) (*TaskDescription, error) {
-	task, err := s.tasks.CreateRequest(ctx, request, TaskMetadata{Entry: RequestMetadataFromContext(ctx)})
+func (s *TaskRunnerService) Create(ctx context.Context, request taskflow.RequestEnvelope) (*taskflow.TaskDescription, error) {
+	task, err := s.tasks.CreateRequest(ctx, request, taskflow.TaskMetadata{Entry: taskflow.RequestMetadataFromContext(ctx)})
 	if err != nil {
 		return nil, err
 	}
@@ -75,7 +76,7 @@ func (s *TaskRunnerService) Create(ctx context.Context, request RequestEnvelope)
 }
 
 // RunNow creates a task runner and executes it synchronously in the caller context.
-func (s *TaskRunnerService) RunNow(ctx context.Context, request RequestEnvelope) (*TaskRunResult, error) {
+func (s *TaskRunnerService) RunNow(ctx context.Context, request taskflow.RequestEnvelope) (*taskflow.TaskRunResult, error) {
 	description, err := s.Create(ctx, request)
 	if err != nil {
 		return nil, err
@@ -84,17 +85,17 @@ func (s *TaskRunnerService) RunNow(ctx context.Context, request RequestEnvelope)
 }
 
 // List returns persisted task summaries.
-func (s *TaskRunnerService) List(ctx context.Context) ([]TaskSummary, error) {
+func (s *TaskRunnerService) List(ctx context.Context) ([]taskflow.TaskSummary, error) {
 	return s.tasks.List(ctx)
 }
 
 // Describe returns the persisted description for one task runner.
-func (s *TaskRunnerService) Describe(ctx context.Context, taskID string) (*TaskDescription, error) {
+func (s *TaskRunnerService) Describe(ctx context.Context, taskID string) (*taskflow.TaskDescription, error) {
 	return s.tasks.Describe(ctx, taskID)
 }
 
 // Resume starts a pending or paused runner in the background.
-func (s *TaskRunnerService) Resume(ctx context.Context, taskID string) (*TaskDescription, error) {
+func (s *TaskRunnerService) Resume(ctx context.Context, taskID string) (*taskflow.TaskDescription, error) {
 	description, err := s.tasks.Describe(ctx, taskID)
 	if err != nil {
 		return nil, err
@@ -105,7 +106,7 @@ func (s *TaskRunnerService) Resume(ctx context.Context, taskID string) (*TaskDes
 	return s.startWithDescription(ctx, description, "task.run.resumed", "task runner resumed in background")
 }
 
-func (s *TaskRunnerService) startWithDescription(ctx context.Context, description *TaskDescription, eventType string, message string) (*TaskDescription, error) {
+func (s *TaskRunnerService) startWithDescription(ctx context.Context, description *taskflow.TaskDescription, eventType string, message string) (*taskflow.TaskDescription, error) {
 	taskID := description.Task.ID
 	if s.isRunning(taskID) {
 		return description, nil
@@ -120,12 +121,12 @@ func (s *TaskRunnerService) startWithDescription(ctx context.Context, descriptio
 		}
 	}()
 
-	_ = s.tasks.AppendEvent(taskID, TaskEvent{Timestamp: nowUTC(), Type: eventType, Message: message})
+	_ = s.tasks.AppendEvent(taskID, taskflow.TaskEvent{Timestamp: nowUTC(), Type: eventType, Message: message})
 	return s.tasks.Describe(ctx, taskID)
 }
 
 // Cancel marks a runner as canceled and stops any active in-memory execution.
-func (s *TaskRunnerService) Cancel(ctx context.Context, taskID string) (*TaskDescription, error) {
+func (s *TaskRunnerService) Cancel(ctx context.Context, taskID string) (*taskflow.TaskDescription, error) {
 	s.mu.Lock()
 	handle, ok := s.runners[taskID]
 	s.mu.Unlock()
@@ -135,22 +136,22 @@ func (s *TaskRunnerService) Cancel(ctx context.Context, taskID string) (*TaskDes
 	if _, err := s.tasks.UpdateStatus(ctx, taskID, spec.TaskStatusCanceled); err != nil {
 		return nil, err
 	}
-	_ = s.tasks.AppendEvent(taskID, TaskEvent{Timestamp: nowUTC(), Type: "task.run.canceled", Message: "task runner canceled by orchestrator"})
+	_ = s.tasks.AppendEvent(taskID, taskflow.TaskEvent{Timestamp: nowUTC(), Type: "task.run.canceled", Message: "task runner canceled by orchestrator"})
 	return s.tasks.Describe(ctx, taskID)
 }
 
 // Clone creates a new pending runner that preserves the request and plan lineage.
-func (s *TaskRunnerService) Clone(ctx context.Context, taskID string, reason string) (*TaskDescription, error) {
+func (s *TaskRunnerService) Clone(ctx context.Context, taskID string, reason string) (*taskflow.TaskDescription, error) {
 	source, err := s.tasks.Describe(ctx, taskID)
 	if err != nil {
 		return nil, err
 	}
 
 	revision := source.Metadata.Lineage.Revision + 1
-	metadata := TaskMetadata{
+	metadata := taskflow.TaskMetadata{
 		Request: source.Metadata.Request,
-		Entry:   mergeRequestMetadata(RequestMetadataFromContext(ctx), source.Metadata.Entry),
-		Lineage: TaskLineage{
+		Entry:   taskflow.MergeRequestMetadata(taskflow.RequestMetadataFromContext(ctx), source.Metadata.Entry),
+		Lineage: taskflow.TaskLineage{
 			RootTaskID:    source.Metadata.Lineage.RootTaskID,
 			ParentTaskID:  source.Task.ID,
 			CloneOfTaskID: source.Task.ID,
@@ -172,19 +173,19 @@ func (s *TaskRunnerService) Clone(ctx context.Context, taskID string, reason str
 			return nil, err
 		}
 	}
-	_ = s.tasks.AppendEvent(task.ID, TaskEvent{Timestamp: nowUTC(), Type: "task.cloned", Message: "task runner cloned from prior lineage", Data: map[string]any{"source_task_id": source.Task.ID, "reason": reason}})
-	_ = s.tasks.AppendEvent(source.Task.ID, TaskEvent{Timestamp: nowUTC(), Type: "task.clone.created", Message: "task runner was cloned", Data: map[string]any{"cloned_task_id": task.ID, "reason": reason}})
+	_ = s.tasks.AppendEvent(task.ID, taskflow.TaskEvent{Timestamp: nowUTC(), Type: "task.cloned", Message: "task runner cloned from prior lineage", Data: map[string]any{"source_task_id": source.Task.ID, "reason": reason}})
+	_ = s.tasks.AppendEvent(source.Task.ID, taskflow.TaskEvent{Timestamp: nowUTC(), Type: "task.clone.created", Message: "task runner was cloned", Data: map[string]any{"cloned_task_id": task.ID, "reason": reason}})
 	return s.tasks.Describe(ctx, task.ID)
 }
 
-func (s *TaskRunnerService) runWithDescription(ctx context.Context, description *TaskDescription) (*TaskRunResult, error) {
+func (s *TaskRunnerService) runWithDescription(ctx context.Context, description *taskflow.TaskDescription) (*taskflow.TaskRunResult, error) {
 	runCtx, cancel := context.WithCancel(ctx)
 	s.register(description.Task.ID, cancel)
 	defer s.unregister(description.Task.ID)
 	return s.runTask(runCtx, description)
 }
 
-func (s *TaskRunnerService) runTask(ctx context.Context, description *TaskDescription) (*TaskRunResult, error) {
+func (s *TaskRunnerService) runTask(ctx context.Context, description *taskflow.TaskDescription) (*taskflow.TaskRunResult, error) {
 	metadata := description.Metadata
 	if strings.TrimSpace(metadata.Lineage.RootTaskID) == "" {
 		metadata.Lineage.RootTaskID = description.Task.ID

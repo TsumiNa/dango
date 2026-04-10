@@ -1,15 +1,25 @@
-package orchestrator
+package runner
 
 import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"strings"
 	"time"
 
+	"github.com/tsumina/dango/internal/aihook"
 	"github.com/tsumina/dango/internal/llm"
+	"github.com/tsumina/dango/internal/logging"
+	promptassets "github.com/tsumina/dango/internal/prompts"
 	"github.com/tsumina/dango/internal/spec"
+	"github.com/tsumina/dango/internal/taskflow"
 )
+
+type builtInDraftPlanningHook struct {
+	llm    llm.Client
+	logger *slog.Logger
+}
 
 type plannerDraftResponse struct {
 	Mode  string                     `json:"mode"`
@@ -28,33 +38,65 @@ type plannerDraftResponseEdge struct {
 	SubTask         string   `json:"sub_task"`
 }
 
-func (p *Planner) buildDraftWithLLM(ctx context.Context, taskID string, request string, tools []catalogTool) (spec.DAGPlan, error) {
-	if p.llm == nil {
-		return spec.DAGPlan{}, fmt.Errorf("planner LLM is not configured")
+func newBuiltInDraftPlanningHook(client llm.Client, logger *slog.Logger) aihook.DraftPlanningHook {
+	return &builtInDraftPlanningHook{
+		llm:    client,
+		logger: logging.Component(logger, "runner.planner.draft_hook"),
+	}
+}
+
+func (h *builtInDraftPlanningHook) Draft(ctx context.Context, request aihook.DraftPlanRequest) (spec.DAGPlan, error) {
+	if h.llm == nil {
+		return spec.DAGPlan{}, aihook.NewCannotProceedError(
+			aihook.ModuleRunner,
+			aihook.KindDraftPlanning,
+			"built-in draft planning LLM is not configured",
+			nil,
+		)
 	}
 
-	prompt, err := renderPlannerDraftPrompt(taskID, request, tools)
+	prompt, err := promptassets.RenderPlannerDraft(request.TaskID, taskflow.PrimaryRequestText(request.Request), request.Tools)
 	if err != nil {
-		return spec.DAGPlan{}, err
+		return spec.DAGPlan{}, aihook.NewCannotProceedError(
+			aihook.ModuleRunner,
+			aihook.KindDraftPlanning,
+			"failed to render draft planning prompt",
+			err,
+		)
 	}
 
-	payload, err := p.llm.CompleteJSON(ctx, llm.Request{
+	payload, err := h.llm.CompleteJSON(ctx, llm.Request{
 		SystemPrompt: prompt,
 		UserPrompt:   "Generate the task DAG now and return JSON only.",
 		Temperature:  0.1,
 	})
 	if err != nil {
-		return spec.DAGPlan{}, err
+		return spec.DAGPlan{}, aihook.NewCannotProceedError(
+			aihook.ModuleRunner,
+			aihook.KindDraftPlanning,
+			"built-in draft planning LLM failed",
+			err,
+		)
 	}
 
 	var draft plannerDraftResponse
 	if err := json.Unmarshal(payload, &draft); err != nil {
-		return spec.DAGPlan{}, fmt.Errorf("decode planner LLM draft: %w", err)
+		return spec.DAGPlan{}, aihook.NewCannotProceedError(
+			aihook.ModuleRunner,
+			aihook.KindDraftPlanning,
+			"built-in draft planning LLM returned invalid JSON",
+			err,
+		)
 	}
 
-	edges, mode, err := normalizePlannerDraft(draft, tools)
+	edges, mode, err := normalizePlannerDraft(draft, request.Tools)
 	if err != nil {
-		return spec.DAGPlan{}, err
+		return spec.DAGPlan{}, aihook.NewCannotProceedError(
+			aihook.ModuleRunner,
+			aihook.KindDraftPlanning,
+			"built-in draft planning LLM returned an invalid plan",
+			err,
+		)
 	}
 
 	return spec.DAGPlan{
@@ -66,14 +108,14 @@ func (p *Planner) buildDraftWithLLM(ctx context.Context, taskID string, request 
 	}, nil
 }
 
-func normalizePlannerDraft(draft plannerDraftResponse, tools []catalogTool) ([]spec.PlannedEdge, string, error) {
+func normalizePlannerDraft(draft plannerDraftResponse, tools []aihook.ToolCatalogEntry) ([]spec.PlannedEdge, string, error) {
 	if len(draft.Edges) == 0 {
 		return nil, "", fmt.Errorf("planner LLM returned an empty DAG")
 	}
 
-	catalog := make(map[string]spec.ToolSpec, len(tools))
+	catalog := make(map[string]aihook.ToolCatalogEntry, len(tools))
 	for _, tool := range tools {
-		catalog[tool.Spec.Name] = tool.Spec
+		catalog[tool.Name] = tool
 	}
 
 	refToID := map[string]string{}
@@ -132,7 +174,7 @@ func normalizePlannerDraft(draft plannerDraftResponse, tools []catalogTool) ([]s
 
 		expectedOutputs := cleanExpectedOutputs(edge.ExpectedOutputs)
 		if len(expectedOutputs) == 0 {
-			expectedOutputs = defaultExpectedOutputs(toolSpec, outputType)
+			return nil, "", fmt.Errorf("planner edge %q must declare expected_outputs", ref)
 		}
 
 		edgeID, err := spec.NewUUID()

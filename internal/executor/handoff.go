@@ -2,38 +2,19 @@ package executor
 
 import (
 	"fmt"
-	"io/fs"
 	"os"
 	"path/filepath"
-	"sort"
+	"strings"
 	"time"
 
 	"github.com/tsumina/dango/internal/spec"
 )
 
-func writeAutoHandoffs(publicOutputPath, privateOutputPath, toolName, taskID, summary string) error {
-	files, err := collectOutputFiles(publicOutputPath)
-	if err != nil {
-		return err
-	}
-
-	handoff := spec.Handoff{
-		Metadata: spec.HandoffMetadata{
-			TaskID:      taskID,
-			Tool:        toolName,
-			Status:      spec.HandoffStatusCompleted,
-			OutputFiles: files,
-			Timestamp:   time.Now().UTC(),
-		},
-		Body: "## Description\n\n" + summary,
-	}
-	if err := writePublicHandoff(publicOutputPath, handoff); err != nil {
-		return err
-	}
-	return writePrivateHandoff(privateOutputPath, handoff)
+func writeFailureHandoffs(publicOutputPath, privateOutputPath, toolName, taskID string, executionErr error) error {
+	return writeFailureHandoffsWithSummary(publicOutputPath, privateOutputPath, toolName, taskID, "Tool execution failed before producing a valid handoff.", executionErr)
 }
 
-func writeFailureHandoffs(publicOutputPath, privateOutputPath, toolName, taskID string, executionErr error) error {
+func writeFailureHandoffsWithSummary(publicOutputPath, privateOutputPath, toolName, taskID string, summary string, executionErr error) error {
 	handoff := spec.Handoff{
 		Metadata: spec.HandoffMetadata{
 			TaskID:    taskID,
@@ -42,7 +23,7 @@ func writeFailureHandoffs(publicOutputPath, privateOutputPath, toolName, taskID 
 			Timestamp: time.Now().UTC(),
 			Error:     executionErr.Error(),
 		},
-		Body: "## Description\n\nTool execution failed before producing a handoff.",
+		Body: "## Description\n\n" + strings.TrimSpace(summary),
 	}
 	if err := writePublicHandoff(publicOutputPath, handoff); err != nil {
 		return err
@@ -84,33 +65,4 @@ func writeHandoffFile(path string, handoff spec.Handoff) error {
 		return fmt.Errorf("write handoff %q: %w", path, err)
 	}
 	return nil
-}
-
-func collectOutputFiles(root string) ([]string, error) {
-	var out []string
-	err := filepath.WalkDir(root, func(path string, entry fs.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-		if entry.IsDir() {
-			return nil
-		}
-
-		relative, err := filepath.Rel(root, path)
-		if err != nil {
-			return err
-		}
-		if relative == "_handoff.md" || relative == "handoff.md" {
-			return nil
-		}
-
-		out = append(out, filepath.ToSlash(relative))
-		return nil
-	})
-	if err != nil {
-		return nil, fmt.Errorf("walk output directory %q: %w", root, err)
-	}
-
-	sort.Strings(out)
-	return out, nil
 }

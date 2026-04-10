@@ -11,7 +11,7 @@ import (
 
 	"github.com/tsumina/dango/internal/datadir"
 	"github.com/tsumina/dango/internal/logging"
-	"github.com/tsumina/dango/internal/runtime"
+	"github.com/tsumina/dango/internal/runner/runtime"
 	"github.com/tsumina/dango/internal/spec"
 	"github.com/tsumina/dango/internal/store/sqlite"
 )

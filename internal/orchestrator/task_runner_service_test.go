@@ -10,9 +10,10 @@ import (
 
 	"github.com/tsumina/dango/internal/datadir"
 	"github.com/tsumina/dango/internal/runner"
-	"github.com/tsumina/dango/internal/runtime"
+	"github.com/tsumina/dango/internal/runner/runtime"
 	"github.com/tsumina/dango/internal/spec"
 	"github.com/tsumina/dango/internal/store/sqlite"
+	"github.com/tsumina/dango/internal/taskflow"
 )
 
 type blockingRuntime struct {
@@ -30,7 +31,7 @@ func (r *blockingRuntime) DescribeTool(context.Context, string) ([]byte, error) 
 }
 
 func (r *blockingRuntime) PlanExecutor(context.Context, runtime.ExecutorPlanRequest) ([]byte, error) {
-	return []byte(`{}`), nil
+	return staticExecutorPlanJSON("Background finalization", "Run the blocking tool and wait for completion.", []string{"result.final"}), nil
 }
 
 func (r *blockingRuntime) RunExecutor(ctx context.Context, request runtime.ExecutorRunRequest) error {
@@ -112,27 +113,30 @@ func TestTaskRunnerServiceStartRunsInBackground(t *testing.T) {
 	}
 
 	taskService := NewTaskService(locator, store, nil)
-	planner := NewPlannerWithClient(locator, store, rt, staticPlannerClient(t, staticPlannerDraftJSON(
-		[]plannerDraftResponseEdge{{
-			Ref:             "final",
-			ToolName:        "blocking-tool",
-			Dependencies:    nil,
-			InputType:       "request",
-			OutputType:      "final",
-			Title:           "Background finalization",
-			Summary:         "Run the blocking tool in the background.",
-			ExpectedOutputs: []string{"result.final"},
-			SubTask:         "Run the blocking tool and wait for completion.",
-		}},
-	)), nil)
+	planner := runner.NewPlannerWithClient(locator, store, rt, staticPlannerClient(t,
+		staticPlannerDraftJSON(
+			[]plannerDraftResponseEdge{{
+				Ref:             "final",
+				ToolName:        "blocking-tool",
+				Dependencies:    nil,
+				InputType:       "request",
+				OutputType:      "final",
+				Title:           "Background finalization",
+				Summary:         "Run the blocking tool in the background.",
+				ExpectedOutputs: []string{"result.final"},
+				SubTask:         "Run the blocking tool and wait for completion.",
+			}},
+		),
+		plannerApprovedJSON(),
+	), nil)
 	scheduler := runner.NewScheduler(locator, store, rt, nil)
-	runners := NewTaskRunnerService(locator, taskService, planner, scheduler, nil)
+	runners := runner.NewTaskRunnerService(locator, taskService, planner, scheduler, nil)
 
 	returned := make(chan struct{})
-	var description *TaskDescription
+	var description *taskflow.TaskDescription
 	var startErr error
 	go func() {
-		description, startErr = runners.Start(context.Background(), RequestEnvelope{Text: "run in background"})
+		description, startErr = runners.Start(context.Background(), taskflow.RequestEnvelope{Text: "run in background"})
 		close(returned)
 	}()
 

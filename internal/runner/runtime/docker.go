@@ -5,10 +5,20 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"os"
 	"os/exec"
 
 	"github.com/tsumina/dango/internal/logging"
 )
+
+var forwardedLLMEnvironmentKeys = []string{
+	"DANGO_LLM_BASE_URL",
+	"OPENAI_BASE_URL",
+	"DANGO_LLM_API_KEY",
+	"OPENAI_API_KEY",
+	"DANGO_LLM_MODEL",
+	"OPENAI_MODEL",
+}
 
 type dockerCLI struct {
 	binary string
@@ -57,6 +67,7 @@ func (d *dockerCLI) PlanExecutor(ctx context.Context, request ExecutorPlanReques
 		"-e", "SUB_TASK=/etc/dango/sub-task.md",
 		"-e", "TOOL_CONFIG=/etc/dango/tool-config.yaml",
 	}
+	args = appendForwardedLLMEnvironment(args)
 	if request.SubTaskHost != "" {
 		args = append(args, "-v", request.SubTaskHost+":/etc/dango/sub-task.md:ro")
 	}
@@ -82,6 +93,7 @@ func (d *dockerCLI) RunExecutor(ctx context.Context, request ExecutorRunRequest)
 		"-e", "SUB_TASK=/etc/dango/sub-task.md",
 		"-e", "TOOL_CONFIG=/etc/dango/tool-config.yaml",
 	}
+	args = appendForwardedLLMEnvironment(args)
 
 	if request.InputHost != "" {
 		args = append(args,
@@ -125,4 +137,13 @@ func (d *dockerCLI) RunExecutor(ctx context.Context, request ExecutorRunRequest)
 	}
 	d.logger.Info("executor container completed", "image", request.Image, "task_id", request.TaskID)
 	return nil
+}
+
+func appendForwardedLLMEnvironment(args []string) []string {
+	for _, key := range forwardedLLMEnvironmentKeys {
+		if value, ok := os.LookupEnv(key); ok && value != "" {
+			args = append(args, "-e", key+"="+value)
+		}
+	}
+	return args
 }

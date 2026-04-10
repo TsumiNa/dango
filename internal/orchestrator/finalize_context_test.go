@@ -10,8 +10,9 @@ import (
 
 	"github.com/tsumina/dango/internal/datadir"
 	"github.com/tsumina/dango/internal/runner"
-	"github.com/tsumina/dango/internal/runtime"
+	"github.com/tsumina/dango/internal/runner/runtime"
 	"github.com/tsumina/dango/internal/store/sqlite"
+	"github.com/tsumina/dango/internal/taskflow"
 	_ "modernc.org/sqlite"
 )
 
@@ -29,7 +30,7 @@ func (r *cancelingRuntime) DescribeTool(_ context.Context, _ string) ([]byte, er
 }
 
 func (r *cancelingRuntime) PlanExecutor(_ context.Context, _ runtime.ExecutorPlanRequest) ([]byte, error) {
-	return []byte(`{}`), nil
+	return staticExecutorPlanJSON("Cancel run", "Run the canceling tool for this request.", []string{"result.final"}), nil
 }
 
 func (r *cancelingRuntime) RunExecutor(ctx context.Context, _ runtime.ExecutorRunRequest) error {
@@ -71,18 +72,21 @@ func TestTaskRunnerRunPersistsCancellationAfterCancellation(t *testing.T) {
 	}
 
 	taskService := NewTaskService(locator, store, nil)
-	planner := NewPlannerWithClient(locator, store, rt, staticPlannerClient(t, staticPlannerDraftJSON(
-		[]plannerDraftResponseEdge{
-			{Ref: "cancel", ToolName: "canceling-tool", Dependencies: nil, InputType: "request", OutputType: "final", Title: "Cancel run", Summary: "Invoke the canceling tool once.", ExpectedOutputs: []string{"result.final"}, SubTask: "Run the canceling tool for this request."},
-		},
-	)), nil)
+	planner := runner.NewPlannerWithClient(locator, store, rt, staticPlannerClient(t,
+		staticPlannerDraftJSON(
+			[]plannerDraftResponseEdge{
+				{Ref: "cancel", ToolName: "canceling-tool", Dependencies: nil, InputType: "request", OutputType: "final", Title: "Cancel run", Summary: "Invoke the canceling tool once.", ExpectedOutputs: []string{"result.final"}, SubTask: "Run the canceling tool for this request."},
+			},
+		),
+		plannerApprovedJSON(),
+	), nil)
 	scheduler := runner.NewScheduler(locator, store, rt, nil)
-	runners := NewTaskRunnerService(locator, taskService, planner, scheduler, nil)
+	runners := runner.NewTaskRunnerService(locator, taskService, planner, scheduler, nil)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	rt.cancel = cancel
 
-	result, err := runners.RunNow(ctx, RequestEnvelope{Text: "trigger cancellation handling"})
+	result, err := runners.RunNow(ctx, taskflow.RequestEnvelope{Text: "trigger cancellation handling"})
 	if err == nil {
 		t.Fatal("Run() error = nil, want cancellation error")
 	}
