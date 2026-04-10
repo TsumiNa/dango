@@ -9,8 +9,10 @@ import (
 	"testing"
 
 	"github.com/tsumina/dango/internal/datadir"
-	"github.com/tsumina/dango/internal/runtime"
+	"github.com/tsumina/dango/internal/runner"
+	"github.com/tsumina/dango/internal/runner/runtime"
 	"github.com/tsumina/dango/internal/store/sqlite"
+	"github.com/tsumina/dango/internal/taskflow"
 	_ "modernc.org/sqlite"
 )
 
@@ -27,6 +29,10 @@ func (r *cancelingRuntime) DescribeTool(_ context.Context, _ string) ([]byte, er
 	return r.describeYAML, nil
 }
 
+func (r *cancelingRuntime) PlanExecutor(_ context.Context, _ runtime.ExecutorPlanRequest) ([]byte, error) {
+	return staticExecutorPlanJSON("Cancel run", "Run the canceling tool for this request.", []string{"result.final"}), nil
+}
+
 func (r *cancelingRuntime) RunExecutor(ctx context.Context, _ runtime.ExecutorRunRequest) error {
 	if r.cancel != nil {
 		r.cancel()
@@ -35,7 +41,7 @@ func (r *cancelingRuntime) RunExecutor(ctx context.Context, _ runtime.ExecutorRu
 	return ctx.Err()
 }
 
-func TestDemoEngineRunPersistsFailureAfterCancellation(t *testing.T) {
+func TestTaskRunnerRunPersistsCancellationAfterCancellation(t *testing.T) {
 	root := t.TempDir()
 	locator, err := datadir.New(filepath.Join(root, "data"))
 	if err != nil {
@@ -66,14 +72,21 @@ func TestDemoEngineRunPersistsFailureAfterCancellation(t *testing.T) {
 	}
 
 	taskService := NewTaskService(locator, store, nil)
-	planner := NewPlanner(store, nil)
-	scheduler := NewScheduler(locator, store, rt, nil)
-	engine := NewDemoEngine(locator, store, taskService, planner, scheduler, nil)
+	planner := runner.NewPlannerWithClient(locator, store, rt, staticPlannerClient(t,
+		staticPlannerDraftJSON(
+			[]plannerDraftResponseEdge{
+				{Ref: "cancel", ToolName: "canceling-tool", Dependencies: nil, InputType: "request", OutputType: "final", Title: "Cancel run", Summary: "Invoke the canceling tool once.", ExpectedOutputs: []string{"result.final"}, SubTask: "Run the canceling tool for this request."},
+			},
+		),
+		plannerApprovedJSON(),
+	), nil)
+	scheduler := runner.NewScheduler(locator, store, rt, nil)
+	runners := runner.NewTaskRunnerService(locator, taskService, planner, scheduler, nil)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	rt.cancel = cancel
 
-	result, err := engine.Run(ctx, "trigger cancellation handling")
+	result, err := runners.RunNow(ctx, taskflow.RequestEnvelope{Text: "trigger cancellation handling"})
 	if err == nil {
 		t.Fatal("Run() error = nil, want cancellation error")
 	}
@@ -95,7 +108,7 @@ func TestDemoEngineRunPersistsFailureAfterCancellation(t *testing.T) {
 	if err := db.QueryRow(`SELECT id, status FROM tasks LIMIT 1`).Scan(&taskID, &taskStatus); err != nil {
 		t.Fatalf("query task status error = %v", err)
 	}
-	if got, want := taskStatus, "failed"; got != want {
+	if got, want := taskStatus, "canceled"; got != want {
 		t.Fatalf("task status = %q, want %q", got, want)
 	}
 

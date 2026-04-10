@@ -7,7 +7,7 @@ import (
 	"testing"
 
 	"github.com/tsumina/dango/internal/datadir"
-	"github.com/tsumina/dango/internal/runtime"
+	"github.com/tsumina/dango/internal/runner/runtime"
 	"github.com/tsumina/dango/internal/store/sqlite"
 )
 
@@ -21,6 +21,10 @@ func (f fakeRuntime) Pull(_ context.Context, _ string) error {
 
 func (f fakeRuntime) DescribeTool(_ context.Context, _ string) ([]byte, error) {
 	return f.describeYAML, nil
+}
+
+func (f fakeRuntime) PlanExecutor(_ context.Context, _ runtime.ExecutorPlanRequest) ([]byte, error) {
+	return []byte(`{}`), nil
 }
 
 func (f fakeRuntime) RunExecutor(_ context.Context, _ runtime.ExecutorRunRequest) error {

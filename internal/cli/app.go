@@ -77,7 +77,6 @@ func (a *App) newOrchestratorCommand() *cobra.Command {
 		a.newOrchestratorRegisterCommand(),
 		a.newOrchestratorUnregisterCommand(),
 		a.newOrchestratorListToolsCommand(),
-		a.newOrchestratorDemoRunCommand(),
 	)
 
 	return cmd
@@ -92,6 +91,7 @@ func (a *App) newExecutorCommand() *cobra.Command {
 
 	cmd.AddCommand(
 		a.newExecutorDescribeCommand(),
+		a.newExecutorPlanCommand(),
 		a.newExecutorRunCommand(),
 	)
 

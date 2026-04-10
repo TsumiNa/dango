@@ -13,13 +13,20 @@ import (
 
 	"github.com/tsumina/dango/internal/datadir"
 	"github.com/tsumina/dango/internal/logging"
-	"github.com/tsumina/dango/internal/runtime"
+	"github.com/tsumina/dango/internal/runner/runtime"
 	"github.com/tsumina/dango/internal/spec"
 	"github.com/tsumina/dango/internal/store/sqlite"
 	"gopkg.in/yaml.v3"
 )
 
-// RegistryService manages tool registration and registry persistence.
+// RegistryService manages the control-plane path from a tool reference to a
+// persisted registry entry.
+//
+// A RegistryService coordinates the runtime, filesystem layout, and SQLite
+// store needed to register or remove tools. The zero value is not usable;
+// callers construct the service with [NewRegistryService] and then invoke
+// [RegistryService.Register], [RegistryService.Unregister], [RegistryService.List],
+// or [RegistryService.Load] from CLI or HTTP handlers.
 type RegistryService struct {
 	locator *datadir.Locator
 	store   *sqlite.Store
@@ -27,8 +34,12 @@ type RegistryService struct {
 	logger  *slog.Logger
 }
 
-// NewRegistryService constructs the tool registration service used by the
-// orchestrator.
+// NewRegistryService constructs the registry service used by the orchestrator
+// control plane.
+//
+// The returned service expects locator and store to point at the same data
+// root. rt is used to pull and describe tools during registration, while logger
+// is wrapped with the orchestrator.registry component name.
 func NewRegistryService(locator *datadir.Locator, store *sqlite.Store, rt runtime.ContainerRuntime, logger *slog.Logger) *RegistryService {
 	return &RegistryService{
 		locator: locator,
@@ -38,7 +49,12 @@ func NewRegistryService(locator *datadir.Locator, store *sqlite.Store, rt runtim
 	}
 }
 
-// RegisteredTool reports the persisted result of a registration operation.
+// RegisteredTool reports the full persisted result of one registration
+// operation.
+//
+// It combines the merged tool spec that planners should see, the SQLite row
+// that was stored, and the materialized file paths written under the registry
+// directory.
 type RegisteredTool struct {
 	// Tool is the merged tool specification visible to the orchestrator.
 	Tool spec.ToolSpec `json:"tool"`
@@ -50,7 +66,12 @@ type RegisteredTool struct {
 	Files RegisteredToolFiles `json:"files"`
 }
 
-// RegisteredToolFiles points at the persisted registration files for a tool.
+// RegisteredToolFiles points at the registry files written for a tool during
+// registration.
+//
+// These paths let callers inspect the raw described tool spec, the optional
+// override payload, and the final merged configuration that the runner passes
+// into executor planning and execution.
 type RegisteredToolFiles struct {
 	// ToolPath is the captured tool.yaml emitted by executor describe.
 	ToolPath string `json:"tool_path"`
@@ -60,10 +81,15 @@ type RegisteredToolFiles struct {
 	MergedPath string `json:"merged_path"`
 }
 
-// Register pulls or resolves image, reads its tool description, merges any
-// override, and persists the registration.
+// Register resolves image, reads its described tool spec, merges any override,
+// writes the registry files, and persists the final tool row.
 //
-// Register updates existing rows when the tool name already exists.
+// The registration workflow is: ensure the data root exists, ask the runtime
+// to make the tool available, read tool.yaml through the runtime, validate the
+// described [spec.ToolSpec], merge any override.yaml content, write tool.yaml,
+// override.yaml, and merged.yaml under the registry directory, and finally
+// upsert the SQLite row. Register updates existing rows and files when the tool
+// name already exists.
 func (s *RegistryService) Register(ctx context.Context, image, overridePath string) (*RegisteredTool, error) {
 	if s.runtime == nil {
 		return nil, fmt.Errorf("container runtime is not configured")
@@ -172,10 +198,11 @@ func (s *RegistryService) Register(ctx context.Context, image, overridePath stri
 	}, nil
 }
 
-// Unregister removes a tool registration and its persisted config files.
+// Unregister removes a registered tool row and deletes its registry files.
 //
 // Unregister is idempotent for missing database rows and still attempts to
-// remove the tool directory.
+// remove the tool directory so filesystem state converges with the database.
+// It does not ask the runtime to delete or prune any underlying image.
 func (s *RegistryService) Unregister(ctx context.Context, name string) error {
 	s.logger.Info("unregistering tool", "tool", name)
 	if err := s.store.DeleteTool(ctx, name); err != nil && !s.store.IsNotFound(err) {
@@ -192,14 +219,17 @@ func (s *RegistryService) Unregister(ctx context.Context, name string) error {
 	return nil
 }
 
-// List returns the currently registered tools.
+// List returns the current registry rows ordered by the store implementation.
+//
+// List is row-oriented and does not read back the registry files on disk.
 func (s *RegistryService) List(ctx context.Context) ([]sqlite.ToolRecord, error) {
 	return s.store.ListTools(ctx)
 }
 
-// Load returns one registered tool row by name.
+// Load returns the persisted registry row for one tool name.
 //
-// Load returns sql.ErrNoRows when the tool is not registered.
+// Load is the row-oriented lookup used by higher-level orchestrator and runner
+// code. It returns sql.ErrNoRows when the tool is not registered.
 func (s *RegistryService) Load(ctx context.Context, name string) (sqlite.ToolRecord, error) {
 	record, err := s.store.GetTool(ctx, name)
 	if err != nil {

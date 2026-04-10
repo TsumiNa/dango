@@ -22,6 +22,9 @@ Write idiomatic Go documentation for `go doc`, `pkg.go.dev`, and local `pkgsite`
 - Put package documentation in `doc.go` unless there is a strong reason not to.
 - Start package docs with `Package <name> ...`.
 - Package docs should be complete enough to stand on their own in `pkgsite`: include a one-sentence summary, what the package is for, important constraints or guarantees, the main entry points to read first, and a short usage snippet only when it adds real value.
+- When a package is architectural or workflow-heavy, package docs should also explain the package's role in the larger system, the typical call or lifecycle flow through the package, and the dependency direction between its core types, functions, or neighboring packages.
+- For internal infrastructure packages, prefer package docs that help a new maintainer answer three questions quickly: why this package exists, how it is normally entered and used, and which other packages it coordinates with or deliberately does not own.
+- It is acceptable for package docs to be several paragraphs long when that is what is required to accurately describe architecture, workflow, invariants, and the relationships between the package's primary exported types.
 - Do not spread package docs across multiple files.
 
 ## Symbol Docs

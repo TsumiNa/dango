@@ -6,11 +6,11 @@ This document is for contributors and maintainers. It covers architecture contex
 
 `dango` is a three-tier orchestration design:
 
-- Tier 1 (`orchestrator`): planning, registry, DAG/task coordination
-- Tier 2 (`scheduler`): runtime execution dispatch and edge lifecycle tracking
+- Tier 1 (`orchestrator`): request intake, registry, task APIs, and persisted control state
+- Tier 2 (`runner`): background execution, runner-owned draft/refine/review planning, state transitions, edge dispatch, and executor supervision
 - Tier 3 (`executor`): tool-facing `describe` and `run` contract
 
-Current implementation includes a local runnable demo path and preserves extension points for production planners/models and remote storage backends.
+Built-in prompt assets for orchestrator intent understanding, runner planning, and executor AI live in `internal/prompts/` and are intended to be edited directly during iteration.
 
 The diagram below gives contributors a high-level view of how the orchestrator, scheduler, executor, storage, and tool runtime pieces fit together.
 
@@ -21,12 +21,15 @@ The diagram below gives contributors a high-level view of how the orchestrator, 
 ```text
 cmd/dango/                 binary entrypoint
 internal/cli/              CLI parsing and top-level wiring
+internal/llm/              LLM provider clients used by planning flows
+internal/prompts/          repository-owned prompt assets for built-in AI hooks
 internal/spec/             shared domain contracts and validation
 internal/datadir/          data-dir path locators
 internal/store/sqlite/     SQLite migrations, sqlc query definitions, and persistence
-internal/runtime/          runtime abstraction (Docker + host demo)
-internal/orchestrator/     registry, planner, scheduler, engine, HTTP server
-internal/executor/         executor describe/run implementation
+internal/orchestrator/     registry, task persistence, prompt assets, HTTP server
+internal/runner/           runner planning, state machine, and execution scheduling
+internal/runner/runtime/   runtime abstraction (Docker + host-local execution)
+internal/executor/         executor describe/run implementation and built-in AI fallback
 ```
 
 Go source is organized for reviewer navigation:
@@ -52,14 +55,6 @@ go run github.com/sqlc-dev/sqlc/cmd/sqlc@latest generate
 
 Add new SQLite schema changes as numbered migration pairs under
 `internal/store/sqlite/migrations/` using `.up.sql` and `.down.sql` files.
-
-Run the demo:
-
-```bash
-go run ./cmd/dango orchestrator demo-run \
-  --data-dir ./.dango-demo \
-  --request "Write a short project status update"
-```
 
 Run the HTTP server:
 
@@ -89,4 +84,4 @@ Repository-specific rules live in `.github/instructions/`:
 ## Security and Local Secrets
 
 - `.env` and `.env.*` are git-ignored.
-- Keep local model keys (for example OpenRouter keys) in untracked env files only.
+- Keep local model keys in untracked env files only.
