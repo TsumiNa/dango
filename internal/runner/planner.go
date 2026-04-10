@@ -9,7 +9,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/tsumina/dango/internal/aihook"
 	"github.com/tsumina/dango/internal/datadir"
 	"github.com/tsumina/dango/internal/llm"
 	"github.com/tsumina/dango/internal/logging"
@@ -29,9 +28,9 @@ type Planner struct {
 	locator    *datadir.Locator
 	store      *sqlite.Store
 	runtime    runtime.ContainerRuntime
-	draftHook  aihook.DraftPlanningHook
-	reviewHook aihook.ReviewPlanningHook
-	repairHook aihook.RepairPlanningHook
+	draftHook  llm.DraftPlanningHook
+	reviewHook llm.ReviewPlanningHook
+	repairHook llm.RepairPlanningHook
 	logger     *slog.Logger
 }
 
@@ -46,7 +45,7 @@ func NewPlannerWithClient(locator *datadir.Locator, store *sqlite.Store, rt runt
 }
 
 // NewPlannerWithHooks constructs the runner-owned planner with explicit hook implementations.
-func NewPlannerWithHooks(locator *datadir.Locator, store *sqlite.Store, rt runtime.ContainerRuntime, draftHook aihook.DraftPlanningHook, reviewHook aihook.ReviewPlanningHook, repairHook aihook.RepairPlanningHook, logger *slog.Logger) *Planner {
+func NewPlannerWithHooks(locator *datadir.Locator, store *sqlite.Store, rt runtime.ContainerRuntime, draftHook llm.DraftPlanningHook, reviewHook llm.ReviewPlanningHook, repairHook llm.RepairPlanningHook, logger *slog.Logger) *Planner {
 	return &Planner{
 		locator:    locator,
 		store:      store,
@@ -93,15 +92,15 @@ func (p *Planner) Plan(ctx context.Context, taskID string, request taskflow.Requ
 // Draft creates the initial workflow using the registered tool catalog.
 func (p *Planner) Draft(ctx context.Context, taskID string, request taskflow.RequestEnvelope, tools []catalogTool) (spec.DAGPlan, error) {
 	if p.draftHook == nil {
-		return spec.DAGPlan{}, aihook.NewCannotProceedError(
-			aihook.ModuleRunner,
-			aihook.KindDraftPlanning,
+		return spec.DAGPlan{}, llm.NewCannotProceedError(
+			llm.ModuleRunner,
+			llm.KindDraftPlanning,
 			"no draft planning hook is available for the runner",
 			nil,
 		)
 	}
 
-	plan, err := p.draftHook.Draft(ctx, aihook.DraftPlanRequest{
+	plan, err := p.draftHook.Draft(ctx, llm.DraftPlanRequest{
 		TaskID:  taskID,
 		Request: request,
 		Tools:   catalogEntries(tools),
@@ -155,7 +154,7 @@ func (p *Planner) Review(ctx context.Context, taskID string, request taskflow.Re
 		return plan, nil
 	}
 
-	reviewed, err := p.reviewHook.Review(ctx, aihook.ReviewPlanRequest{
+	reviewed, err := p.reviewHook.Review(ctx, llm.ReviewPlanRequest{
 		TaskID:  taskID,
 		Request: request,
 		Tools:   catalogEntries(tools),
@@ -165,7 +164,7 @@ func (p *Planner) Review(ctx context.Context, taskID string, request taskflow.Re
 		if p.repairHook == nil {
 			return spec.DAGPlan{}, err
 		}
-		repaired, repairErr := p.repairHook.Repair(ctx, aihook.RepairPlanRequest{
+		repaired, repairErr := p.repairHook.Repair(ctx, llm.RepairPlanRequest{
 			TaskID:  taskID,
 			Request: request,
 			Tools:   catalogEntries(tools),
@@ -188,9 +187,9 @@ func (p *Planner) Review(ctx context.Context, taskID string, request taskflow.Re
 
 func (p *Planner) refineEdge(ctx context.Context, taskID string, edge spec.PlannedEdge, tool sqlite.ToolRecord) (spec.PlannedEdge, error) {
 	if p.runtime == nil || p.locator == nil {
-		return spec.PlannedEdge{}, aihook.NewCannotProceedError(
-			aihook.ModuleRunner,
-			aihook.KindDetailPlanning,
+		return spec.PlannedEdge{}, llm.NewCannotProceedError(
+			llm.ModuleRunner,
+			llm.KindDetailPlanning,
 			fmt.Sprintf("executor detail planning is unavailable for tool %q", edge.ToolName),
 			nil,
 		)
@@ -203,9 +202,9 @@ func (p *Planner) refineEdge(ctx context.Context, taskID string, edge spec.Plann
 		ToolConfigHost: p.locator.ToolMergedPath(edge.ToolName),
 	})
 	if err != nil {
-		return spec.PlannedEdge{}, aihook.NewCannotProceedError(
-			aihook.ModuleRunner,
-			aihook.KindDetailPlanning,
+		return spec.PlannedEdge{}, llm.NewCannotProceedError(
+			llm.ModuleRunner,
+			llm.KindDetailPlanning,
 			fmt.Sprintf("executor detail planning failed for tool %q", edge.ToolName),
 			err,
 		)
@@ -213,17 +212,17 @@ func (p *Planner) refineEdge(ctx context.Context, taskID string, edge spec.Plann
 
 	var plan spec.ExecutorPlan
 	if err := json.Unmarshal(payload, &plan); err != nil {
-		return spec.PlannedEdge{}, aihook.NewCannotProceedError(
-			aihook.ModuleRunner,
-			aihook.KindDetailPlanning,
+		return spec.PlannedEdge{}, llm.NewCannotProceedError(
+			llm.ModuleRunner,
+			llm.KindDetailPlanning,
 			fmt.Sprintf("executor detail planning returned invalid output for tool %q", edge.ToolName),
 			err,
 		)
 	}
 	if !executorPlanProvidesDetail(plan) {
-		return spec.PlannedEdge{}, aihook.NewCannotProceedError(
-			aihook.ModuleRunner,
-			aihook.KindDetailPlanning,
+		return spec.PlannedEdge{}, llm.NewCannotProceedError(
+			llm.ModuleRunner,
+			llm.KindDetailPlanning,
 			fmt.Sprintf("executor detail planning returned no usable detail for tool %q", edge.ToolName),
 			nil,
 		)
@@ -240,17 +239,17 @@ func (p *Planner) refineEdge(ctx context.Context, taskID string, edge spec.Plann
 	}
 
 	if strings.TrimSpace(edge.Summary) == "" || strings.TrimSpace(edge.SubTask) == "" {
-		return spec.PlannedEdge{}, aihook.NewCannotProceedError(
-			aihook.ModuleRunner,
-			aihook.KindDetailPlanning,
+		return spec.PlannedEdge{}, llm.NewCannotProceedError(
+			llm.ModuleRunner,
+			llm.KindDetailPlanning,
 			fmt.Sprintf("executor detail planning left required fields empty for tool %q", edge.ToolName),
 			nil,
 		)
 	}
 	if len(edge.ExpectedOutputs) == 0 {
-		return spec.PlannedEdge{}, aihook.NewCannotProceedError(
-			aihook.ModuleRunner,
-			aihook.KindDetailPlanning,
+		return spec.PlannedEdge{}, llm.NewCannotProceedError(
+			llm.ModuleRunner,
+			llm.KindDetailPlanning,
 			fmt.Sprintf("executor detail planning did not declare expected outputs for tool %q", edge.ToolName),
 			nil,
 		)
@@ -280,10 +279,10 @@ func (p *Planner) loadCatalog(ctx context.Context) ([]catalogTool, error) {
 	return out, nil
 }
 
-func catalogEntries(tools []catalogTool) []aihook.ToolCatalogEntry {
-	entries := make([]aihook.ToolCatalogEntry, 0, len(tools))
+func catalogEntries(tools []catalogTool) []llm.ToolCatalogEntry {
+	entries := make([]llm.ToolCatalogEntry, 0, len(tools))
 	for _, tool := range tools {
-		entries = append(entries, aihook.ToolCatalogEntry{
+		entries = append(entries, llm.ToolCatalogEntry{
 			Name:        tool.Spec.Name,
 			Description: tool.Spec.Description,
 			InputTypes:  append([]string(nil), tool.Spec.InputTypes...),

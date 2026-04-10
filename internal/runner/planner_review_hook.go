@@ -8,7 +8,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/tsumina/dango/internal/aihook"
 	"github.com/tsumina/dango/internal/llm"
 	"github.com/tsumina/dango/internal/logging"
 	promptassets "github.com/tsumina/dango/internal/prompts"
@@ -35,25 +34,25 @@ type plannerReviewPlanPatch struct {
 	Edges []spec.PlannedEdge `json:"edges,omitempty"`
 }
 
-func newBuiltInReviewPlanningHook(client llm.Client, logger *slog.Logger) aihook.ReviewPlanningHook {
+func newBuiltInReviewPlanningHook(client llm.Client, logger *slog.Logger) llm.ReviewPlanningHook {
 	return &builtInReviewPlanningHook{
 		llm:    client,
 		logger: logging.Component(logger, "runner.planner.review_hook"),
 	}
 }
 
-func newBuiltInRepairPlanningHook(client llm.Client, logger *slog.Logger) aihook.RepairPlanningHook {
+func newBuiltInRepairPlanningHook(client llm.Client, logger *slog.Logger) llm.RepairPlanningHook {
 	return &builtInRepairPlanningHook{
 		llm:    client,
 		logger: logging.Component(logger, "runner.planner.repair_hook"),
 	}
 }
 
-func (h *builtInReviewPlanningHook) Review(ctx context.Context, request aihook.ReviewPlanRequest) (spec.DAGPlan, error) {
+func (h *builtInReviewPlanningHook) Review(ctx context.Context, request llm.ReviewPlanRequest) (spec.DAGPlan, error) {
 	if h.llm == nil {
-		return spec.DAGPlan{}, aihook.NewCannotProceedError(
-			aihook.ModuleRunner,
-			aihook.KindReviewPlanning,
+		return spec.DAGPlan{}, llm.NewCannotProceedError(
+			llm.ModuleRunner,
+			llm.KindReviewPlanning,
 			"built-in review planning LLM is not configured",
 			nil,
 		)
@@ -61,9 +60,9 @@ func (h *builtInReviewPlanningHook) Review(ctx context.Context, request aihook.R
 
 	prompt, err := promptassets.RenderPlannerReview(request.TaskID, request.Request, request.Tools, request.Plan)
 	if err != nil {
-		return spec.DAGPlan{}, aihook.NewCannotProceedError(
-			aihook.ModuleRunner,
-			aihook.KindReviewPlanning,
+		return spec.DAGPlan{}, llm.NewCannotProceedError(
+			llm.ModuleRunner,
+			llm.KindReviewPlanning,
 			"failed to render review planning prompt",
 			err,
 		)
@@ -75,22 +74,22 @@ func (h *builtInReviewPlanningHook) Review(ctx context.Context, request aihook.R
 		Temperature:  0.1,
 	})
 	if err != nil {
-		return spec.DAGPlan{}, aihook.NewCannotProceedError(
-			aihook.ModuleRunner,
-			aihook.KindReviewPlanning,
+		return spec.DAGPlan{}, llm.NewCannotProceedError(
+			llm.ModuleRunner,
+			llm.KindReviewPlanning,
 			"built-in review planning LLM failed",
 			err,
 		)
 	}
 
-	return normalizeReviewedPlanResponse(payload, request.Plan, request.Tools, aihook.KindReviewPlanning)
+	return normalizeReviewedPlanResponse(payload, request.Plan, request.Tools, llm.KindReviewPlanning)
 }
 
-func (h *builtInRepairPlanningHook) Repair(ctx context.Context, request aihook.RepairPlanRequest) (spec.DAGPlan, error) {
+func (h *builtInRepairPlanningHook) Repair(ctx context.Context, request llm.RepairPlanRequest) (spec.DAGPlan, error) {
 	if h.llm == nil {
-		return spec.DAGPlan{}, aihook.NewCannotProceedError(
-			aihook.ModuleRunner,
-			aihook.KindRepairPlanning,
+		return spec.DAGPlan{}, llm.NewCannotProceedError(
+			llm.ModuleRunner,
+			llm.KindRepairPlanning,
 			"built-in repair planning LLM is not configured",
 			nil,
 		)
@@ -98,9 +97,9 @@ func (h *builtInRepairPlanningHook) Repair(ctx context.Context, request aihook.R
 
 	prompt, err := promptassets.RenderPlannerRepair(request.TaskID, request.Request, request.Tools, request.Plan, request.Reason)
 	if err != nil {
-		return spec.DAGPlan{}, aihook.NewCannotProceedError(
-			aihook.ModuleRunner,
-			aihook.KindRepairPlanning,
+		return spec.DAGPlan{}, llm.NewCannotProceedError(
+			llm.ModuleRunner,
+			llm.KindRepairPlanning,
 			"failed to render repair planning prompt",
 			err,
 		)
@@ -112,22 +111,22 @@ func (h *builtInRepairPlanningHook) Repair(ctx context.Context, request aihook.R
 		Temperature:  0.1,
 	})
 	if err != nil {
-		return spec.DAGPlan{}, aihook.NewCannotProceedError(
-			aihook.ModuleRunner,
-			aihook.KindRepairPlanning,
+		return spec.DAGPlan{}, llm.NewCannotProceedError(
+			llm.ModuleRunner,
+			llm.KindRepairPlanning,
 			"built-in repair planning LLM failed",
 			err,
 		)
 	}
 
-	return normalizeReviewedPlanResponse(payload, request.Plan, request.Tools, aihook.KindRepairPlanning)
+	return normalizeReviewedPlanResponse(payload, request.Plan, request.Tools, llm.KindRepairPlanning)
 }
 
-func normalizeReviewedPlanResponse(payload []byte, original spec.DAGPlan, tools []aihook.ToolCatalogEntry, kind aihook.Kind) (spec.DAGPlan, error) {
+func normalizeReviewedPlanResponse(payload []byte, original spec.DAGPlan, tools []llm.ToolCatalogEntry, kind llm.Kind) (spec.DAGPlan, error) {
 	var response plannerReviewResponse
 	if err := json.Unmarshal(payload, &response); err != nil {
-		return spec.DAGPlan{}, aihook.NewCannotProceedError(
-			aihook.ModuleRunner,
+		return spec.DAGPlan{}, llm.NewCannotProceedError(
+			llm.ModuleRunner,
 			kind,
 			"built-in planning hook returned invalid JSON",
 			err,
@@ -142,8 +141,8 @@ func normalizeReviewedPlanResponse(payload []byte, original spec.DAGPlan, tools 
 			}
 			return original, nil
 		}
-		return spec.DAGPlan{}, aihook.NewCannotProceedError(
-			aihook.ModuleRunner,
+		return spec.DAGPlan{}, llm.NewCannotProceedError(
+			llm.ModuleRunner,
 			kind,
 			"built-in planning hook rejected the plan without returning a corrected plan",
 			nil,
@@ -152,8 +151,8 @@ func normalizeReviewedPlanResponse(payload []byte, original spec.DAGPlan, tools 
 
 	reviewed, err := validateReviewedPlan(*response.Plan, original, tools)
 	if err != nil {
-		return spec.DAGPlan{}, aihook.NewCannotProceedError(
-			aihook.ModuleRunner,
+		return spec.DAGPlan{}, llm.NewCannotProceedError(
+			llm.ModuleRunner,
 			kind,
 			"built-in planning hook returned an invalid reviewed plan",
 			err,
@@ -162,12 +161,12 @@ func normalizeReviewedPlanResponse(payload []byte, original spec.DAGPlan, tools 
 	return reviewed, nil
 }
 
-func validateReviewedPlan(candidate plannerReviewPlanPatch, original spec.DAGPlan, tools []aihook.ToolCatalogEntry) (spec.DAGPlan, error) {
+func validateReviewedPlan(candidate plannerReviewPlanPatch, original spec.DAGPlan, tools []llm.ToolCatalogEntry) (spec.DAGPlan, error) {
 	if len(candidate.Edges) == 0 {
 		return spec.DAGPlan{}, fmt.Errorf("reviewed plan must contain at least one edge")
 	}
 
-	catalog := make(map[string]aihook.ToolCatalogEntry, len(tools))
+	catalog := make(map[string]llm.ToolCatalogEntry, len(tools))
 	for _, tool := range tools {
 		catalog[tool.Name] = tool
 	}

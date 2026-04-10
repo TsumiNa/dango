@@ -11,7 +11,7 @@ import (
 	"os/exec"
 	"path/filepath"
 
-	"github.com/tsumina/dango/internal/aihook"
+	"github.com/tsumina/dango/internal/llm"
 	"github.com/tsumina/dango/internal/logging"
 	"gopkg.in/yaml.v3"
 )
@@ -125,9 +125,9 @@ func (e *Executor) Plan(ctx context.Context, options PlanOptions) error {
 			_, err = e.stdout.Write(append(payload, '\n'))
 			return err
 		}
-		return aihook.NewCannotProceedError(
-			aihook.ModuleExecutor,
-			aihook.KindDetailPlanning,
+		return llm.NewCannotProceedError(
+			llm.ModuleExecutor,
+			llm.KindDetailPlanning,
 			fmt.Sprintf("plan hook %q returned no executor plan output for tool %q", hookPath, toolSpec.Name),
 			nil,
 		)
@@ -206,9 +206,9 @@ func (e *Executor) Run(ctx context.Context, options RunOptions) error {
 			return nil
 		}
 
-		err := aihook.NewCannotProceedError(
-			aihook.ModuleExecutor,
-			aihook.KindExecuteGeneration,
+		err := llm.NewCannotProceedError(
+			llm.ModuleExecutor,
+			llm.KindExecuteGeneration,
 			fmt.Sprintf("run hook %q completed without writing _handoff.md for tool %q", hookPath, toolSpec.Name),
 			nil,
 		)

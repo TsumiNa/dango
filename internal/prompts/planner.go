@@ -9,7 +9,7 @@ import (
 	"strings"
 	"text/template"
 
-	"github.com/tsumina/dango/internal/aihook"
+	"github.com/tsumina/dango/internal/llm"
 )
 
 //go:embed planner_draft.md
@@ -22,8 +22,8 @@ type plannerDraftInput struct {
 }
 
 // RenderPlannerDraft renders the built-in runner draft-planning prompt.
-func RenderPlannerDraft(taskID string, request string, tools []aihook.ToolCatalogEntry) (string, error) {
-	entries := append([]aihook.ToolCatalogEntry(nil), tools...)
+func RenderPlannerDraft(taskID string, request string, tools []llm.ToolCatalogEntry) (string, error) {
+	entries := append([]llm.ToolCatalogEntry(nil), tools...)
 	sort.Slice(entries, func(i, j int) bool {
 		return strings.ToLower(entries[i].Name) < strings.ToLower(entries[j].Name)
 	})

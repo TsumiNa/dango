@@ -13,8 +13,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/tsumina/dango/internal/aihook"
 	"github.com/tsumina/dango/internal/datadir"
+	"github.com/tsumina/dango/internal/llm"
 	"github.com/tsumina/dango/internal/runner"
 	"github.com/tsumina/dango/internal/store/sqlite"
 	"github.com/tsumina/dango/internal/taskflow"
@@ -22,8 +22,8 @@ import (
 
 type passthroughIntentHook struct{}
 
-func (passthroughIntentHook) Understand(_ context.Context, request aihook.IntentRequest) (aihook.IntentResult, error) {
-	return aihook.IntentResult{Request: request.Request}, nil
+func (passthroughIntentHook) Understand(_ context.Context, request llm.IntentRequest) (llm.IntentResult, error) {
+	return llm.IntentResult{Request: request.Request}, nil
 }
 
 func newServerTestFixture(t *testing.T) (*Server, *runner.TaskRunnerService) {
@@ -167,7 +167,7 @@ func TestHandleTaskRunsPostNormalizesRequestWithIntentHook(t *testing.T) {
 	t.Parallel()
 
 	server, _ := newServerTestFixture(t)
-	server.intent = intentTestHook{result: aihook.IntentResult{
+	server.intent = intentTestHook{result: llm.IntentResult{
 		Request: taskflow.RequestEnvelope{Text: "normalized request", Meta: map[string]string{"intent": "write"}},
 		Summary: "normalized by test",
 	}}
@@ -200,13 +200,13 @@ func TestHandleTaskRunsPostNormalizesRequestWithIntentHook(t *testing.T) {
 }
 
 type intentTestHook struct {
-	result aihook.IntentResult
+	result llm.IntentResult
 	err    error
 }
 
-func (h intentTestHook) Understand(context.Context, aihook.IntentRequest) (aihook.IntentResult, error) {
+func (h intentTestHook) Understand(context.Context, llm.IntentRequest) (llm.IntentResult, error) {
 	if h.err != nil {
-		return aihook.IntentResult{}, h.err
+		return llm.IntentResult{}, h.err
 	}
 	return h.result, nil
 }

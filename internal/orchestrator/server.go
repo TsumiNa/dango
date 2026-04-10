@@ -13,7 +13,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/tsumina/dango/internal/aihook"
+	"github.com/tsumina/dango/internal/llm"
 	"github.com/tsumina/dango/internal/logging"
 	"github.com/tsumina/dango/internal/runner"
 	"github.com/tsumina/dango/internal/taskflow"
@@ -31,7 +31,7 @@ type Server struct {
 	registry *RegistryService
 	tasks    *TaskService
 	runners  *runner.TaskRunnerService
-	intent   aihook.IntentUnderstandingHook
+	intent   llm.IntentUnderstandingHook
 	logger   *slog.Logger
 }
 
@@ -101,7 +101,7 @@ var normalizedIntents = map[string]string{
 }
 
 // NewServer constructs the HTTP server wrapper for the orchestrator services.
-func NewServer(config ServerConfig, registry *RegistryService, taskService *TaskService, runners *runner.TaskRunnerService, intentHook aihook.IntentUnderstandingHook, logger *slog.Logger) *Server {
+func NewServer(config ServerConfig, registry *RegistryService, taskService *TaskService, runners *runner.TaskRunnerService, intentHook llm.IntentUnderstandingHook, logger *slog.Logger) *Server {
 	return &Server{
 		config:   config,
 		registry: registry,

@@ -11,7 +11,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/tsumina/dango/internal/aihook"
 	"github.com/tsumina/dango/internal/llm"
 	promptassets "github.com/tsumina/dango/internal/prompts"
 	"github.com/tsumina/dango/internal/spec"
@@ -27,9 +26,9 @@ func defaultLLMClientFactory(model string, logger *slog.Logger) llm.Client {
 func (e *Executor) planWithBuiltInAI(ctx context.Context, runtimeContext runtimeContext, toolSpec spec.ToolSpec) (spec.ExecutorPlan, error) {
 	prompt, err := e.renderDetailPlanPrompt(runtimeContext, toolSpec)
 	if err != nil {
-		return spec.ExecutorPlan{}, aihook.NewCannotProceedError(
-			aihook.ModuleExecutor,
-			aihook.KindDetailPlanning,
+		return spec.ExecutorPlan{}, llm.NewCannotProceedError(
+			llm.ModuleExecutor,
+			llm.KindDetailPlanning,
 			"failed to render built-in AI detail-planning prompt",
 			err,
 		)
@@ -37,9 +36,9 @@ func (e *Executor) planWithBuiltInAI(ctx context.Context, runtimeContext runtime
 
 	payload, err := e.completeJSON(ctx, toolSpec.Model, prompt, "Refine the executor stage now and return JSON only.")
 	if err != nil {
-		return spec.ExecutorPlan{}, aihook.NewCannotProceedError(
-			aihook.ModuleExecutor,
-			aihook.KindDetailPlanning,
+		return spec.ExecutorPlan{}, llm.NewCannotProceedError(
+			llm.ModuleExecutor,
+			llm.KindDetailPlanning,
 			"built-in AI detail planning failed",
 			err,
 		)
@@ -47,9 +46,9 @@ func (e *Executor) planWithBuiltInAI(ctx context.Context, runtimeContext runtime
 
 	var plan spec.ExecutorPlan
 	if err := json.Unmarshal(payload, &plan); err != nil {
-		return spec.ExecutorPlan{}, aihook.NewCannotProceedError(
-			aihook.ModuleExecutor,
-			aihook.KindDetailPlanning,
+		return spec.ExecutorPlan{}, llm.NewCannotProceedError(
+			llm.ModuleExecutor,
+			llm.KindDetailPlanning,
 			"built-in AI detail planning returned invalid JSON",
 			err,
 		)
@@ -59,9 +58,9 @@ func (e *Executor) planWithBuiltInAI(ctx context.Context, runtimeContext runtime
 	plan.SubTask = strings.TrimSpace(plan.SubTask)
 	plan.ExpectedOutputs = cleanOutputPaths(plan.ExpectedOutputs)
 	if plan.Summary == "" || plan.SubTask == "" || len(plan.ExpectedOutputs) == 0 {
-		return spec.ExecutorPlan{}, aihook.NewCannotProceedError(
-			aihook.ModuleExecutor,
-			aihook.KindDetailPlanning,
+		return spec.ExecutorPlan{}, llm.NewCannotProceedError(
+			llm.ModuleExecutor,
+			llm.KindDetailPlanning,
 			"built-in AI detail planning did not produce a complete executor plan",
 			nil,
 		)
@@ -73,9 +72,9 @@ func (e *Executor) planWithBuiltInAI(ctx context.Context, runtimeContext runtime
 func (e *Executor) runWithBuiltInAI(ctx context.Context, runtimeContext runtimeContext, toolSpec spec.ToolSpec) error {
 	prompt, err := e.renderExecutePrompt(runtimeContext, toolSpec)
 	if err != nil {
-		return aihook.NewCannotProceedError(
-			aihook.ModuleExecutor,
-			aihook.KindExecuteGeneration,
+		return llm.NewCannotProceedError(
+			llm.ModuleExecutor,
+			llm.KindExecuteGeneration,
 			"failed to render built-in AI execute-generation prompt",
 			err,
 		)
@@ -83,19 +82,19 @@ func (e *Executor) runWithBuiltInAI(ctx context.Context, runtimeContext runtimeC
 
 	payload, err := e.completeJSON(ctx, toolSpec.Model, prompt, "Generate the stage outputs now and return JSON only.")
 	if err != nil {
-		return aihook.NewCannotProceedError(
-			aihook.ModuleExecutor,
-			aihook.KindExecuteGeneration,
+		return llm.NewCannotProceedError(
+			llm.ModuleExecutor,
+			llm.KindExecuteGeneration,
 			"built-in AI execute generation failed",
 			err,
 		)
 	}
 
-	var result aihook.ExecuteGenerationResult
+	var result llm.ExecuteGenerationResult
 	if err := json.Unmarshal(payload, &result); err != nil {
-		return aihook.NewCannotProceedError(
-			aihook.ModuleExecutor,
-			aihook.KindExecuteGeneration,
+		return llm.NewCannotProceedError(
+			llm.ModuleExecutor,
+			llm.KindExecuteGeneration,
 			"built-in AI execute generation returned invalid JSON",
 			err,
 		)
@@ -103,9 +102,9 @@ func (e *Executor) runWithBuiltInAI(ctx context.Context, runtimeContext runtimeC
 
 	normalized, publicFiles, err := normalizeExecuteGenerationResult(result)
 	if err != nil {
-		return aihook.NewCannotProceedError(
-			aihook.ModuleExecutor,
-			aihook.KindExecuteGeneration,
+		return llm.NewCannotProceedError(
+			llm.ModuleExecutor,
+			llm.KindExecuteGeneration,
 			"built-in AI execute generation returned an invalid result",
 			err,
 		)
@@ -232,26 +231,26 @@ func defaultOutputHints(toolSpec spec.ToolSpec) []string {
 	return out
 }
 
-func normalizeExecuteGenerationResult(result aihook.ExecuteGenerationResult) (aihook.ExecuteGenerationResult, []string, error) {
+func normalizeExecuteGenerationResult(result llm.ExecuteGenerationResult) (llm.ExecuteGenerationResult, []string, error) {
 	result.Summary = strings.TrimSpace(result.Summary)
 	result.HandoffBody = strings.TrimSpace(result.HandoffBody)
 	if result.HandoffBody == "" && result.Summary != "" {
 		result.HandoffBody = "## Description\n\n" + result.Summary
 	}
 	if result.HandoffBody == "" {
-		return aihook.ExecuteGenerationResult{}, nil, fmt.Errorf("handoff_body is required")
+		return llm.ExecuteGenerationResult{}, nil, fmt.Errorf("handoff_body is required")
 	}
 
 	publicFiles := make([]string, 0, len(result.GeneratedArtifacts))
-	normalizedArtifacts := make([]aihook.GeneratedArtifact, 0, len(result.GeneratedArtifacts))
+	normalizedArtifacts := make([]llm.GeneratedArtifact, 0, len(result.GeneratedArtifacts))
 	publicSet := map[string]bool{}
 	for _, artifact := range result.GeneratedArtifacts {
 		cleanPath, err := normalizeGeneratedPath(artifact.Path)
 		if err != nil {
-			return aihook.ExecuteGenerationResult{}, nil, err
+			return llm.ExecuteGenerationResult{}, nil, err
 		}
 		if strings.TrimSpace(artifact.Content) == "" {
-			return aihook.ExecuteGenerationResult{}, nil, fmt.Errorf("generated artifact %q must include content", cleanPath)
+			return llm.ExecuteGenerationResult{}, nil, fmt.Errorf("generated artifact %q must include content", cleanPath)
 		}
 		artifact.Path = cleanPath
 		artifact.Description = strings.TrimSpace(artifact.Description)
@@ -262,10 +261,10 @@ func normalizeExecuteGenerationResult(result aihook.ExecuteGenerationResult) (ai
 		}
 	}
 	if len(normalizedArtifacts) == 0 {
-		return aihook.ExecuteGenerationResult{}, nil, fmt.Errorf("generated_artifacts must contain at least one artifact")
+		return llm.ExecuteGenerationResult{}, nil, fmt.Errorf("generated_artifacts must contain at least one artifact")
 	}
 	if len(publicFiles) == 0 {
-		return aihook.ExecuteGenerationResult{}, nil, fmt.Errorf("generated_artifacts must include at least one public artifact")
+		return llm.ExecuteGenerationResult{}, nil, fmt.Errorf("generated_artifacts must include at least one public artifact")
 	}
 	sort.Strings(publicFiles)
 
@@ -276,7 +275,7 @@ func normalizeExecuteGenerationResult(result aihook.ExecuteGenerationResult) (ai
 	}
 	for _, expected := range result.ExpectedOutputs {
 		if !publicSet[expected] {
-			return aihook.ExecuteGenerationResult{}, nil, fmt.Errorf("expected output %q does not match any public generated artifact", expected)
+			return llm.ExecuteGenerationResult{}, nil, fmt.Errorf("expected output %q does not match any public generated artifact", expected)
 		}
 	}
 
@@ -311,7 +310,7 @@ func normalizeGeneratedPath(value string) (string, error) {
 	return value, nil
 }
 
-func writeGeneratedArtifacts(publicOutputPath string, privateOutputPath string, artifacts []aihook.GeneratedArtifact) error {
+func writeGeneratedArtifacts(publicOutputPath string, privateOutputPath string, artifacts []llm.GeneratedArtifact) error {
 	for _, artifact := range artifacts {
 		privatePath := filepath.Join(privateOutputPath, filepath.FromSlash(artifact.Path))
 		if err := os.MkdirAll(filepath.Dir(privatePath), 0o755); err != nil {

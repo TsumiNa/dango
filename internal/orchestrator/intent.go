@@ -7,7 +7,6 @@ import (
 	"log/slog"
 	"strings"
 
-	"github.com/tsumina/dango/internal/aihook"
 	"github.com/tsumina/dango/internal/llm"
 	"github.com/tsumina/dango/internal/logging"
 	promptassets "github.com/tsumina/dango/internal/prompts"
@@ -20,23 +19,23 @@ type builtInIntentUnderstandingHook struct {
 }
 
 // NewIntentUnderstandingHook constructs the built-in orchestrator intent-understanding hook.
-func NewIntentUnderstandingHook(model string, logger *slog.Logger) aihook.IntentUnderstandingHook {
+func NewIntentUnderstandingHook(model string, logger *slog.Logger) llm.IntentUnderstandingHook {
 	return NewIntentUnderstandingHookWithClient(llm.NewOpenAICompatibleFromEnv(model, logger), logger)
 }
 
 // NewIntentUnderstandingHookWithClient constructs the built-in intent hook with an explicit LLM client.
-func NewIntentUnderstandingHookWithClient(client llm.Client, logger *slog.Logger) aihook.IntentUnderstandingHook {
+func NewIntentUnderstandingHookWithClient(client llm.Client, logger *slog.Logger) llm.IntentUnderstandingHook {
 	return &builtInIntentUnderstandingHook{
 		llm:    client,
 		logger: logging.Component(logger, "orchestrator.intent_hook"),
 	}
 }
 
-func (h *builtInIntentUnderstandingHook) Understand(ctx context.Context, request aihook.IntentRequest) (aihook.IntentResult, error) {
+func (h *builtInIntentUnderstandingHook) Understand(ctx context.Context, request llm.IntentRequest) (llm.IntentResult, error) {
 	if h.llm == nil {
-		return aihook.IntentResult{}, aihook.NewCannotProceedError(
-			aihook.ModuleOrchestrator,
-			aihook.KindIntentUnderstanding,
+		return llm.IntentResult{}, llm.NewCannotProceedError(
+			llm.ModuleOrchestrator,
+			llm.KindIntentUnderstanding,
 			"built-in intent-understanding LLM is not configured",
 			nil,
 		)
@@ -44,9 +43,9 @@ func (h *builtInIntentUnderstandingHook) Understand(ctx context.Context, request
 
 	prompt, err := promptassets.RenderIntentUnderstand(request.Request, request.Entry)
 	if err != nil {
-		return aihook.IntentResult{}, aihook.NewCannotProceedError(
-			aihook.ModuleOrchestrator,
-			aihook.KindIntentUnderstanding,
+		return llm.IntentResult{}, llm.NewCannotProceedError(
+			llm.ModuleOrchestrator,
+			llm.KindIntentUnderstanding,
 			"failed to render intent-understanding prompt",
 			err,
 		)
@@ -58,19 +57,19 @@ func (h *builtInIntentUnderstandingHook) Understand(ctx context.Context, request
 		Temperature:  0.1,
 	})
 	if err != nil {
-		return aihook.IntentResult{}, aihook.NewCannotProceedError(
-			aihook.ModuleOrchestrator,
-			aihook.KindIntentUnderstanding,
+		return llm.IntentResult{}, llm.NewCannotProceedError(
+			llm.ModuleOrchestrator,
+			llm.KindIntentUnderstanding,
 			"built-in intent-understanding LLM failed",
 			err,
 		)
 	}
 
-	var result aihook.IntentResult
+	var result llm.IntentResult
 	if err := json.Unmarshal(payload, &result); err != nil {
-		return aihook.IntentResult{}, aihook.NewCannotProceedError(
-			aihook.ModuleOrchestrator,
-			aihook.KindIntentUnderstanding,
+		return llm.IntentResult{}, llm.NewCannotProceedError(
+			llm.ModuleOrchestrator,
+			llm.KindIntentUnderstanding,
 			"built-in intent-understanding LLM returned invalid JSON",
 			err,
 		)
@@ -78,9 +77,9 @@ func (h *builtInIntentUnderstandingHook) Understand(ctx context.Context, request
 
 	normalized := taskflow.NormalizeRequestEnvelope(result.Request)
 	if taskflow.PrimaryRequestText(normalized) == "" && len(normalized.Parts) == 0 {
-		return aihook.IntentResult{}, aihook.NewCannotProceedError(
-			aihook.ModuleOrchestrator,
-			aihook.KindIntentUnderstanding,
+		return llm.IntentResult{}, llm.NewCannotProceedError(
+			llm.ModuleOrchestrator,
+			llm.KindIntentUnderstanding,
 			"built-in intent-understanding did not produce a usable request envelope",
 			nil,
 		)
@@ -93,7 +92,7 @@ func (h *builtInIntentUnderstandingHook) Understand(ctx context.Context, request
 	return result, nil
 }
 
-func applyIntentResult(original taskflow.RequestEnvelope, result aihook.IntentResult) taskflow.RequestEnvelope {
+func applyIntentResult(original taskflow.RequestEnvelope, result llm.IntentResult) taskflow.RequestEnvelope {
 	merged := taskflow.NormalizeRequestEnvelope(result.Request)
 	if merged.Meta == nil {
 		merged.Meta = map[string]string{}
@@ -112,17 +111,17 @@ func applyIntentResult(original taskflow.RequestEnvelope, result aihook.IntentRe
 	return merged
 }
 
-func understandRequest(ctx context.Context, hook aihook.IntentUnderstandingHook, request taskflow.RequestEnvelope) (taskflow.RequestEnvelope, error) {
+func understandRequest(ctx context.Context, hook llm.IntentUnderstandingHook, request taskflow.RequestEnvelope) (taskflow.RequestEnvelope, error) {
 	if hook == nil {
-		return taskflow.RequestEnvelope{}, aihook.NewCannotProceedError(
-			aihook.ModuleOrchestrator,
-			aihook.KindIntentUnderstanding,
+		return taskflow.RequestEnvelope{}, llm.NewCannotProceedError(
+			llm.ModuleOrchestrator,
+			llm.KindIntentUnderstanding,
 			"no intent-understanding hook is configured for the orchestrator entrypoint",
 			nil,
 		)
 	}
 
-	result, err := hook.Understand(ctx, aihook.IntentRequest{
+	result, err := hook.Understand(ctx, llm.IntentRequest{
 		Request: request,
 		Entry:   taskflow.RequestMetadataFromContext(ctx),
 	})

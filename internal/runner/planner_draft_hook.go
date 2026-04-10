@@ -8,7 +8,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/tsumina/dango/internal/aihook"
 	"github.com/tsumina/dango/internal/llm"
 	"github.com/tsumina/dango/internal/logging"
 	promptassets "github.com/tsumina/dango/internal/prompts"
@@ -38,18 +37,18 @@ type plannerDraftResponseEdge struct {
 	SubTask         string   `json:"sub_task"`
 }
 
-func newBuiltInDraftPlanningHook(client llm.Client, logger *slog.Logger) aihook.DraftPlanningHook {
+func newBuiltInDraftPlanningHook(client llm.Client, logger *slog.Logger) llm.DraftPlanningHook {
 	return &builtInDraftPlanningHook{
 		llm:    client,
 		logger: logging.Component(logger, "runner.planner.draft_hook"),
 	}
 }
 
-func (h *builtInDraftPlanningHook) Draft(ctx context.Context, request aihook.DraftPlanRequest) (spec.DAGPlan, error) {
+func (h *builtInDraftPlanningHook) Draft(ctx context.Context, request llm.DraftPlanRequest) (spec.DAGPlan, error) {
 	if h.llm == nil {
-		return spec.DAGPlan{}, aihook.NewCannotProceedError(
-			aihook.ModuleRunner,
-			aihook.KindDraftPlanning,
+		return spec.DAGPlan{}, llm.NewCannotProceedError(
+			llm.ModuleRunner,
+			llm.KindDraftPlanning,
 			"built-in draft planning LLM is not configured",
 			nil,
 		)
@@ -57,9 +56,9 @@ func (h *builtInDraftPlanningHook) Draft(ctx context.Context, request aihook.Dra
 
 	prompt, err := promptassets.RenderPlannerDraft(request.TaskID, taskflow.PrimaryRequestText(request.Request), request.Tools)
 	if err != nil {
-		return spec.DAGPlan{}, aihook.NewCannotProceedError(
-			aihook.ModuleRunner,
-			aihook.KindDraftPlanning,
+		return spec.DAGPlan{}, llm.NewCannotProceedError(
+			llm.ModuleRunner,
+			llm.KindDraftPlanning,
 			"failed to render draft planning prompt",
 			err,
 		)
@@ -71,9 +70,9 @@ func (h *builtInDraftPlanningHook) Draft(ctx context.Context, request aihook.Dra
 		Temperature:  0.1,
 	})
 	if err != nil {
-		return spec.DAGPlan{}, aihook.NewCannotProceedError(
-			aihook.ModuleRunner,
-			aihook.KindDraftPlanning,
+		return spec.DAGPlan{}, llm.NewCannotProceedError(
+			llm.ModuleRunner,
+			llm.KindDraftPlanning,
 			"built-in draft planning LLM failed",
 			err,
 		)
@@ -81,9 +80,9 @@ func (h *builtInDraftPlanningHook) Draft(ctx context.Context, request aihook.Dra
 
 	var draft plannerDraftResponse
 	if err := json.Unmarshal(payload, &draft); err != nil {
-		return spec.DAGPlan{}, aihook.NewCannotProceedError(
-			aihook.ModuleRunner,
-			aihook.KindDraftPlanning,
+		return spec.DAGPlan{}, llm.NewCannotProceedError(
+			llm.ModuleRunner,
+			llm.KindDraftPlanning,
 			"built-in draft planning LLM returned invalid JSON",
 			err,
 		)
@@ -91,9 +90,9 @@ func (h *builtInDraftPlanningHook) Draft(ctx context.Context, request aihook.Dra
 
 	edges, mode, err := normalizePlannerDraft(draft, request.Tools)
 	if err != nil {
-		return spec.DAGPlan{}, aihook.NewCannotProceedError(
-			aihook.ModuleRunner,
-			aihook.KindDraftPlanning,
+		return spec.DAGPlan{}, llm.NewCannotProceedError(
+			llm.ModuleRunner,
+			llm.KindDraftPlanning,
 			"built-in draft planning LLM returned an invalid plan",
 			err,
 		)
@@ -108,12 +107,12 @@ func (h *builtInDraftPlanningHook) Draft(ctx context.Context, request aihook.Dra
 	}, nil
 }
 
-func normalizePlannerDraft(draft plannerDraftResponse, tools []aihook.ToolCatalogEntry) ([]spec.PlannedEdge, string, error) {
+func normalizePlannerDraft(draft plannerDraftResponse, tools []llm.ToolCatalogEntry) ([]spec.PlannedEdge, string, error) {
 	if len(draft.Edges) == 0 {
 		return nil, "", fmt.Errorf("planner LLM returned an empty DAG")
 	}
 
-	catalog := make(map[string]aihook.ToolCatalogEntry, len(tools))
+	catalog := make(map[string]llm.ToolCatalogEntry, len(tools))
 	for _, tool := range tools {
 		catalog[tool.Name] = tool
 	}

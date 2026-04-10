@@ -9,7 +9,7 @@ import (
 	"strings"
 	"text/template"
 
-	"github.com/tsumina/dango/internal/aihook"
+	"github.com/tsumina/dango/internal/llm"
 	"github.com/tsumina/dango/internal/spec"
 	"github.com/tsumina/dango/internal/taskflow"
 )
@@ -29,7 +29,7 @@ type plannerReviewInput struct {
 }
 
 // RenderPlannerReview renders the built-in runner plan review prompt.
-func RenderPlannerReview(taskID string, request taskflow.RequestEnvelope, tools []aihook.ToolCatalogEntry, plan spec.DAGPlan) (string, error) {
+func RenderPlannerReview(taskID string, request taskflow.RequestEnvelope, tools []llm.ToolCatalogEntry, plan spec.DAGPlan) (string, error) {
 	return renderPlannerReviewPrompt("planner_review", plannerReviewPrompt, plannerReviewInput{
 		TaskID:      taskID,
 		RequestJSON: mustJSON(request),
@@ -39,7 +39,7 @@ func RenderPlannerReview(taskID string, request taskflow.RequestEnvelope, tools 
 }
 
 // RenderPlannerRepair renders the built-in runner plan repair prompt.
-func RenderPlannerRepair(taskID string, request taskflow.RequestEnvelope, tools []aihook.ToolCatalogEntry, plan spec.DAGPlan, reason string) (string, error) {
+func RenderPlannerRepair(taskID string, request taskflow.RequestEnvelope, tools []llm.ToolCatalogEntry, plan spec.DAGPlan, reason string) (string, error) {
 	return renderPlannerReviewPrompt("planner_repair", plannerRepairPrompt, plannerReviewInput{
 		TaskID:      taskID,
 		RequestJSON: mustJSON(request),
@@ -70,8 +70,8 @@ func mustJSON(value any) string {
 	return string(payload)
 }
 
-func mustSortedToolsJSON(tools []aihook.ToolCatalogEntry) string {
-	entries := append([]aihook.ToolCatalogEntry(nil), tools...)
+func mustSortedToolsJSON(tools []llm.ToolCatalogEntry) string {
+	entries := append([]llm.ToolCatalogEntry(nil), tools...)
 	sort.Slice(entries, func(i, j int) bool {
 		return strings.ToLower(entries[i].Name) < strings.ToLower(entries[j].Name)
 	})
