@@ -18,7 +18,7 @@ import (
 )
 
 // Request describes one structured completion request sent through a
-// repository-owned LLM client.
+// repository-owned AI client.
 //
 // Callers typically build Request after rendering a system prompt from package
 // prompts and deciding on a short user instruction that asks for JSON output.
@@ -37,7 +37,7 @@ type Request struct {
 	PreviousResponseID string
 }
 
-// Client generates structured responses from an LLM provider.
+// Client generates structured responses from an AI provider.
 //
 // Implementations are expected to be safe for reuse across concurrent planning
 // and execution flows.
@@ -49,11 +49,11 @@ type Client interface {
 	CompleteJSON(ctx context.Context, request Request) ([]byte, string, error)
 }
 
-// Config configures the OpenAI-compatible chat client used by the built-in AI
-// paths.
+// Config configures the OpenAI-compatible client used by AI-backed planning
+// and execution paths.
 //
 // The same structure is used for orchestrator intent understanding, runner
-// planning and review, and executor-side built-in AI generation.
+// planning and review, and executor-side AI generation.
 type Config struct {
 	// BaseURL is the OpenAI-compatible API root without a trailing slash.
 	BaseURL string
@@ -87,7 +87,7 @@ type openAICompatibleClient struct {
 // The lookup order is DANGO-prefixed variables first, then OPENAI-prefixed
 // variables, and finally hard-coded defaults for the base URL. When model or
 // API key configuration is missing, the function returns nil and leaves it to
-// higher-level planning or orchestration code to report that built-in AI is not
+// higher-level planning or orchestration code to report that AI is not
 // configured.
 func NewOpenAICompatibleFromEnv(model string, logger *slog.Logger) Client {
 	baseURL := firstNonEmpty(
@@ -124,7 +124,7 @@ func NewOpenAICompatibleFromEnv(model string, logger *slog.Logger) Client {
 // backed by the official openai-go/v3 SDK using the Responses API.
 //
 // The client always asks the upstream provider for JSON object output and is
-// the main transport used by the built-in intent, planning, review, repair,
+// the main transport used by the intent, planning, review, repair,
 // and executor generation paths. It also normalizes base URL and temperature
 // defaults so callers can pass partial configuration. When required config is
 // missing, NewOpenAICompatible returns nil.
@@ -153,7 +153,7 @@ func NewOpenAICompatible(config Config, logger *slog.Logger) Client {
 		sdkClient:   &sdkClient,
 		model:       strings.TrimSpace(config.Model),
 		temperature: temperature,
-		logger:      logging.Component(logger, "llm.openai_compatible"),
+		logger:      logging.Component(logger, "ai.openai_compatible"),
 	}
 }
 
@@ -187,12 +187,12 @@ func (c *openAICompatibleClient) CompleteJSON(ctx context.Context, request Reque
 
 	response, err := c.sdkClient.Responses.New(ctx, params)
 	if err != nil {
-		return nil, "", fmt.Errorf("llm request failed: %w", err)
+		return nil, "", fmt.Errorf("AI request failed: %w", err)
 	}
 
 	content := stripMarkdownCodeFence(response.OutputText())
 	if !json.Valid([]byte(content)) {
-		return nil, "", fmt.Errorf("llm response was not valid JSON")
+		return nil, "", fmt.Errorf("AI response was not valid JSON")
 	}
 	return []byte(content), response.ID, nil
 }
