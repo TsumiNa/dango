@@ -69,7 +69,7 @@ func (a *App) runOrchestratorServe(ctx context.Context, logCfg logging.Config, m
 	server := orchestrator.NewServer(orchestrator.ServerConfig{
 		TCPAddress:     ":" + strconv.Itoa(port),
 		UnixSocketPath: unixSocket,
-	}, registry, taskService, runners, llmClient, logger)
+	}, registry, runners, llmClient, logger)
 
 	serverCtx, cancel := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
 	defer cancel()

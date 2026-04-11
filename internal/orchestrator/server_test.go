@@ -55,7 +55,7 @@ func newServerTestFixture(t *testing.T) (*Server, *runner.TaskRunnerService) {
 	taskService := NewTaskService(locator, store, nil)
 	runners := runner.NewTaskRunnerService(locator, taskService, nil, nil, nil)
 	// nil client = passthrough (no intent understanding).
-	return NewServer(ServerConfig{}, nil, taskService, runners, nil, nil), runners
+	return NewServer(ServerConfig{}, nil, runners, nil, nil), runners
 }
 
 // testRouter returns a gin router wired to the given server using test mode.
@@ -116,7 +116,7 @@ func TestRemoveUnixSocketRejectsNonSocketPath(t *testing.T) {
 	}
 }
 
-func TestHandleRequestTaskListIntentReturnsTasks(t *testing.T) {
+func TestListTasksRouteReturnsTasks(t *testing.T) {
 	t.Parallel()
 
 	server, runners := newServerTestFixture(t)
@@ -127,7 +127,7 @@ func TestHandleRequestTaskListIntentReturnsTasks(t *testing.T) {
 		}
 	}
 
-	req := httptest.NewRequest(http.MethodPost, "/v0/request", strings.NewReader(`{"intent":"task/list"}`))
+	req := httptest.NewRequest(http.MethodGet, "/v0/tasks", nil)
 	recorder := httptest.NewRecorder()
 
 	testRouter(server).ServeHTTP(recorder, req)
@@ -156,11 +156,11 @@ func TestHandleRequestTaskListIntentReturnsTasks(t *testing.T) {
 	}
 }
 
-func TestHandleTasksPostCreatesTask(t *testing.T) {
+func TestRequestRouteCreatesTask(t *testing.T) {
 	t.Parallel()
 
 	server, _ := newServerTestFixture(t)
-	req := httptest.NewRequest(http.MethodPost, "/v0/tasks", strings.NewReader(`{"text":"task from collection endpoint"}`))
+	req := httptest.NewRequest(http.MethodPost, "/v0/request", strings.NewReader(`{"text":"task from request endpoint"}`))
 	recorder := httptest.NewRecorder()
 
 	testRouter(server).ServeHTTP(recorder, req)
@@ -173,8 +173,22 @@ func TestHandleTasksPostCreatesTask(t *testing.T) {
 	if err := json.NewDecoder(recorder.Body).Decode(&response); err != nil {
 		t.Fatalf("decode response error = %v", err)
 	}
-	if got, want := response.Task.Request, "task from collection endpoint"; got != want {
+	if got, want := response.Task.Request, "task from request endpoint"; got != want {
 		t.Fatalf("response.Task.Request = %q, want %q", got, want)
+	}
+}
+
+func TestTasksPostRejectsMissingStructuredRequest(t *testing.T) {
+	t.Parallel()
+
+	server, _ := newServerTestFixture(t)
+	req := httptest.NewRequest(http.MethodPost, "/v0/tasks", strings.NewReader(`{"meta":{"source":"http"}}`))
+	recorder := httptest.NewRecorder()
+
+	testRouter(server).ServeHTTP(recorder, req)
+
+	if got, want := recorder.Code, http.StatusBadRequest; got != want {
+		t.Fatalf("status code = %d, want %d; body = %s", got, want, recorder.Body.String())
 	}
 }
 
@@ -221,7 +235,7 @@ func TestHandleTaskRunsPostNormalizesRequestWithIntentHook(t *testing.T) {
 	}
 }
 
-func TestHandleTaskByIDDescribeActionReturnsTask(t *testing.T) {
+func TestGetTaskRouteReturnsTask(t *testing.T) {
 	t.Parallel()
 
 	server, runners := newServerTestFixture(t)
@@ -230,7 +244,7 @@ func TestHandleTaskByIDDescribeActionReturnsTask(t *testing.T) {
 		t.Fatalf("Create() error = %v", err)
 	}
 
-	path := fmt.Sprintf("/v0/tasks/%s/describe", created.Task.ID)
+	path := fmt.Sprintf("/v0/tasks/%s", created.Task.ID)
 	req := httptest.NewRequest(http.MethodGet, path, nil)
 	recorder := httptest.NewRecorder()
 
