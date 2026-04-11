@@ -65,6 +65,15 @@ type Config struct {
 	Temperature float64
 }
 
+// ToolCatalogEntry describes one registered tool exposed to planning prompts.
+type ToolCatalogEntry struct {
+	Name        string   `json:"name"`
+	Description string   `json:"description"`
+	InputTypes  []string `json:"input_types"`
+	OutputTypes []string `json:"output_types"`
+	Model       string   `json:"model,omitempty"`
+}
+
 type openAICompatibleClient struct {
 	sdkClient   *openai.Client
 	model       string

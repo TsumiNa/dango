@@ -38,15 +38,15 @@ type ServerConfig struct {
 // registry mutations, task persistence operations, request normalization, and
 // runner control calls. It depends on RegistryService for tool administration,
 // TaskService for durable task state, TaskRunnerService for execution control,
-// and an optional intent-understanding hook for request normalization. The zero
-// value is not usable; callers construct it with [NewServer].
+// and an optional LLM client for intent-understanding. The zero value is not
+// usable; callers construct it with [NewServer].
 type Server struct {
-	config   ServerConfig
-	registry *RegistryService
-	tasks    *TaskService
-	runners  *runner.TaskRunnerService
-	intent   llm.IntentUnderstandingHook
-	logger   *slog.Logger
+	config    ServerConfig
+	registry  *RegistryService
+	tasks     *TaskService
+	runners   *runner.TaskRunnerService
+	llmClient llm.Client
+	logger    *slog.Logger
 }
 
 type serverListener struct {
@@ -120,15 +120,15 @@ var normalizedIntents = map[string]string{
 // input, enriches requests with request metadata, and delegates domain work to
 // the supplied services instead of owning planning or execution logic itself.
 // Callers are responsible for providing already wired registry, task, runner,
-// and optional intent-understanding dependencies.
-func NewServer(config ServerConfig, registry *RegistryService, taskService *TaskService, runners *runner.TaskRunnerService, intentHook llm.IntentUnderstandingHook, logger *slog.Logger) *Server {
+// and optional LLM client dependencies.
+func NewServer(config ServerConfig, registry *RegistryService, taskService *TaskService, runners *runner.TaskRunnerService, llmClient llm.Client, logger *slog.Logger) *Server {
 	return &Server{
-		config:   config,
-		registry: registry,
-		tasks:    taskService,
-		runners:  runners,
-		intent:   intentHook,
-		logger:   logging.Component(logger, "orchestrator.server"),
+		config:    config,
+		registry:  registry,
+		tasks:     taskService,
+		runners:   runners,
+		llmClient: llmClient,
+		logger:    logging.Component(logger, "orchestrator.server"),
 	}
 }
 
@@ -352,7 +352,7 @@ func (s *Server) handleRequestTaskCloneIntent(w http.ResponseWriter, r *http.Req
 }
 
 func (s *Server) createOrRunTaskFromPayload(w http.ResponseWriter, ctx context.Context, payload requestPayload) {
-	request, err := understandRequest(ctx, s.intent, requestEnvelopeFromPayload(payload))
+	request, err := understandIntent(ctx, s.llmClient, s.logger, requestEnvelopeFromPayload(payload))
 	if err != nil {
 		writeJSON(w, http.StatusBadGateway, map[string]string{"error": err.Error()})
 		return
@@ -437,7 +437,7 @@ func (s *Server) handleTaskRuns(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
 	}
-	request, err := understandRequest(r.Context(), s.intent, requestEnvelopeFromPayload(payload))
+	request, err := understandIntent(r.Context(), s.llmClient, s.logger, requestEnvelopeFromPayload(payload))
 	if err != nil {
 		writeJSON(w, http.StatusBadGateway, map[string]string{"error": err.Error()})
 		return

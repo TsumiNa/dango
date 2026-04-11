@@ -62,14 +62,14 @@ func (a *App) runOrchestratorServe(ctx context.Context, logCfg logging.Config, m
 	rt := runtime.NewDefault(os.Getenv("DANGO_DOCKER_BIN"), logger)
 	registry := orchestrator.NewRegistryService(locator, store, rt, logger)
 	taskService := orchestrator.NewTaskService(locator, store, logger)
-	planner := runner.NewPlanner(locator, store, rt, model, logger)
-	intentHook := orchestrator.NewIntentUnderstandingHook(llm.NewOpenAICompatibleFromEnv(model, logger), logger)
+	llmClient := llm.NewOpenAICompatibleFromEnv(model, logger)
+	planner := runner.NewPlannerWithClient(locator, store, rt, llmClient, logger)
 	scheduler := runner.NewScheduler(locator, store, rt, logger)
 	runners := runner.NewTaskRunnerService(locator, taskService, planner, scheduler, logger)
 	server := orchestrator.NewServer(orchestrator.ServerConfig{
 		TCPAddress:     ":" + strconv.Itoa(port),
 		UnixSocketPath: unixSocket,
-	}, registry, taskService, runners, intentHook, logger)
+	}, registry, taskService, runners, llmClient, logger)
 
 	serverCtx, cancel := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
 	defer cancel()

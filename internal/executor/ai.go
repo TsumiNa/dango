@@ -23,6 +23,23 @@ func defaultLLMClientFactory(model string, logger *slog.Logger) llm.Client {
 	return llm.NewOpenAICompatibleFromEnv(model, logger)
 }
 
+// ExecuteGenerationResult is the structured output of the built-in
+// execute-generation AI call.
+type ExecuteGenerationResult struct {
+	Summary            string              `json:"summary,omitempty"`
+	HandoffBody        string              `json:"handoff_body"`
+	ExpectedOutputs    []string            `json:"expected_outputs,omitempty"`
+	GeneratedArtifacts []GeneratedArtifact `json:"generated_artifacts"`
+}
+
+// GeneratedArtifact describes one AI-generated file produced during execution.
+type GeneratedArtifact struct {
+	Path        string `json:"path"`
+	Description string `json:"description,omitempty"`
+	Content     string `json:"content"`
+	Private     bool   `json:"private,omitempty"`
+}
+
 // planWithBuiltInAI executes the built-in executor detail-planning path.
 //
 // It renders the detail-planning prompt, requests structured JSON from the
@@ -114,7 +131,7 @@ func (e *Executor) runWithBuiltInAI(ctx context.Context, runtimeContext runtimeC
 		)
 	}
 
-	var result llm.ExecuteGenerationResult
+	var result ExecuteGenerationResult
 	if err := json.Unmarshal(payload, &result); err != nil {
 		return llm.NewCannotProceedError(
 			llm.ModuleExecutor,
@@ -278,26 +295,26 @@ func defaultOutputHints(toolSpec spec.ToolSpec) []string {
 // The function ensures a handoff body exists, all generated artifact paths are
 // safe and non-empty, at least one public artifact is present, and the declared
 // expected outputs line up with the generated public artifacts.
-func normalizeExecuteGenerationResult(result llm.ExecuteGenerationResult) (llm.ExecuteGenerationResult, []string, error) {
+func normalizeExecuteGenerationResult(result ExecuteGenerationResult) (ExecuteGenerationResult, []string, error) {
 	result.Summary = strings.TrimSpace(result.Summary)
 	result.HandoffBody = strings.TrimSpace(result.HandoffBody)
 	if result.HandoffBody == "" && result.Summary != "" {
 		result.HandoffBody = "## Description\n\n" + result.Summary
 	}
 	if result.HandoffBody == "" {
-		return llm.ExecuteGenerationResult{}, nil, fmt.Errorf("handoff_body is required")
+		return ExecuteGenerationResult{}, nil, fmt.Errorf("handoff_body is required")
 	}
 
 	publicFiles := make([]string, 0, len(result.GeneratedArtifacts))
-	normalizedArtifacts := make([]llm.GeneratedArtifact, 0, len(result.GeneratedArtifacts))
+	normalizedArtifacts := make([]GeneratedArtifact, 0, len(result.GeneratedArtifacts))
 	publicSet := map[string]bool{}
 	for _, artifact := range result.GeneratedArtifacts {
 		cleanPath, err := normalizeGeneratedPath(artifact.Path)
 		if err != nil {
-			return llm.ExecuteGenerationResult{}, nil, err
+			return ExecuteGenerationResult{}, nil, err
 		}
 		if strings.TrimSpace(artifact.Content) == "" {
-			return llm.ExecuteGenerationResult{}, nil, fmt.Errorf("generated artifact %q must include content", cleanPath)
+			return ExecuteGenerationResult{}, nil, fmt.Errorf("generated artifact %q must include content", cleanPath)
 		}
 		artifact.Path = cleanPath
 		artifact.Description = strings.TrimSpace(artifact.Description)
@@ -308,10 +325,10 @@ func normalizeExecuteGenerationResult(result llm.ExecuteGenerationResult) (llm.E
 		}
 	}
 	if len(normalizedArtifacts) == 0 {
-		return llm.ExecuteGenerationResult{}, nil, fmt.Errorf("generated_artifacts must contain at least one artifact")
+		return ExecuteGenerationResult{}, nil, fmt.Errorf("generated_artifacts must contain at least one artifact")
 	}
 	if len(publicFiles) == 0 {
-		return llm.ExecuteGenerationResult{}, nil, fmt.Errorf("generated_artifacts must include at least one public artifact")
+		return ExecuteGenerationResult{}, nil, fmt.Errorf("generated_artifacts must include at least one public artifact")
 	}
 	sort.Strings(publicFiles)
 
@@ -322,7 +339,7 @@ func normalizeExecuteGenerationResult(result llm.ExecuteGenerationResult) (llm.E
 	}
 	for _, expected := range result.ExpectedOutputs {
 		if !publicSet[expected] {
-			return llm.ExecuteGenerationResult{}, nil, fmt.Errorf("expected output %q does not match any public generated artifact", expected)
+			return ExecuteGenerationResult{}, nil, fmt.Errorf("expected output %q does not match any public generated artifact", expected)
 		}
 	}
 
@@ -363,7 +380,7 @@ func normalizeGeneratedPath(value string) (string, error) {
 
 // writeGeneratedArtifacts materializes generated artifacts into the private
 // output tree and mirrors public artifacts into the public output tree.
-func writeGeneratedArtifacts(publicOutputPath string, privateOutputPath string, artifacts []llm.GeneratedArtifact) error {
+func writeGeneratedArtifacts(publicOutputPath string, privateOutputPath string, artifacts []GeneratedArtifact) error {
 	for _, artifact := range artifacts {
 		privatePath := filepath.Join(privateOutputPath, filepath.FromSlash(artifact.Path))
 		if err := os.MkdirAll(filepath.Dir(privatePath), 0o755); err != nil {
