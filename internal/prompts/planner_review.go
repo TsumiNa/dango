@@ -9,7 +9,7 @@ import (
 	"strings"
 	"text/template"
 
-	"github.com/tsumina/dango/internal/llm"
+	"github.com/tsumina/dango/internal/ai"
 	"github.com/tsumina/dango/internal/spec"
 	"github.com/tsumina/dango/internal/taskflow"
 )
@@ -33,7 +33,7 @@ type plannerReviewInput struct {
 // It packages the normalized request, a stably ordered tool catalog, and the
 // current DAG so the review stage can approve, reshape, or reject the refined
 // plan using the same system prompt every time.
-func RenderPlannerReview(taskID string, request taskflow.RequestEnvelope, tools []llm.ToolCatalogEntry, plan spec.DAGPlan) (string, error) {
+func RenderPlannerReview(taskID string, request taskflow.RequestEnvelope, tools []ai.ToolCatalogEntry, plan spec.DAGPlan) (string, error) {
 	return renderPlannerReviewPrompt("planner_review", plannerReviewPrompt, plannerReviewInput{
 		TaskID:      taskID,
 		RequestJSON: mustJSON(request),
@@ -47,7 +47,7 @@ func RenderPlannerReview(taskID string, request taskflow.RequestEnvelope, tools 
 // Repair uses the same request, tool, and DAG context as review, but also
 // injects the failure reason from the prior review pass so the model can emit a
 // corrected executable plan instead of starting over from scratch.
-func RenderPlannerRepair(taskID string, request taskflow.RequestEnvelope, tools []llm.ToolCatalogEntry, plan spec.DAGPlan, reason string) (string, error) {
+func RenderPlannerRepair(taskID string, request taskflow.RequestEnvelope, tools []ai.ToolCatalogEntry, plan spec.DAGPlan, reason string) (string, error) {
 	return renderPlannerReviewPrompt("planner_repair", plannerRepairPrompt, plannerReviewInput{
 		TaskID:      taskID,
 		RequestJSON: mustJSON(request),
@@ -78,8 +78,8 @@ func mustJSON(value any) string {
 	return string(payload)
 }
 
-func mustSortedToolsJSON(tools []llm.ToolCatalogEntry) string {
-	entries := append([]llm.ToolCatalogEntry(nil), tools...)
+func mustSortedToolsJSON(tools []ai.ToolCatalogEntry) string {
+	entries := append([]ai.ToolCatalogEntry(nil), tools...)
 	sort.Slice(entries, func(i, j int) bool {
 		return strings.ToLower(entries[i].Name) < strings.ToLower(entries[j].Name)
 	})

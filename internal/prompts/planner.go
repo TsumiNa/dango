@@ -9,7 +9,7 @@ import (
 	"strings"
 	"text/template"
 
-	"github.com/tsumina/dango/internal/llm"
+	"github.com/tsumina/dango/internal/ai"
 )
 
 //go:embed planner_draft.md
@@ -26,8 +26,8 @@ type plannerDraftInput struct {
 // The function sorts the tool catalog, serializes it as stable JSON, and
 // injects that catalog together with the task request into planner_draft.md so
 // draft planning receives deterministic context across repeated runs.
-func RenderPlannerDraft(taskID string, request string, tools []llm.ToolCatalogEntry) (string, error) {
-	entries := append([]llm.ToolCatalogEntry(nil), tools...)
+func RenderPlannerDraft(taskID string, request string, tools []ai.ToolCatalogEntry) (string, error) {
+	entries := append([]ai.ToolCatalogEntry(nil), tools...)
 	sort.Slice(entries, func(i, j int) bool {
 		return strings.ToLower(entries[i].Name) < strings.ToLower(entries[j].Name)
 	})

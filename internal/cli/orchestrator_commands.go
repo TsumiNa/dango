@@ -11,8 +11,8 @@ import (
 	"syscall"
 
 	"github.com/spf13/cobra"
+	"github.com/tsumina/dango/internal/ai"
 	"github.com/tsumina/dango/internal/datadir"
-	"github.com/tsumina/dango/internal/llm"
 	"github.com/tsumina/dango/internal/logging"
 	"github.com/tsumina/dango/internal/orchestrator"
 	"github.com/tsumina/dango/internal/runner"
@@ -62,8 +62,8 @@ func (a *App) runOrchestratorServe(ctx context.Context, logCfg logging.Config, m
 	rt := runtime.NewDefault(os.Getenv("DANGO_DOCKER_BIN"), logger)
 	registry := orchestrator.NewRegistryService(locator, store, rt, logger)
 	taskService := orchestrator.NewTaskService(locator, store, logger)
-	llmClient := llm.NewOpenAICompatibleFromEnv(model, logger)
-	planner := runner.NewPlannerWithClient(locator, store, rt, llmClient, logger)
+	llmClient := ai.NewOpenAICompatibleFromEnv(model, logger)
+	planner := runner.NewPlanner(locator, store, rt, llmClient, logger)
 	scheduler := runner.NewScheduler(locator, store, rt, logger)
 	runners := runner.NewTaskRunnerService(locator, taskService, planner, scheduler, logger)
 	server := orchestrator.NewServer(orchestrator.ServerConfig{

@@ -13,8 +13,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/tsumina/dango/internal/ai"
 	"github.com/tsumina/dango/internal/datadir"
-	"github.com/tsumina/dango/internal/llm"
 	"github.com/tsumina/dango/internal/runner"
 	"github.com/tsumina/dango/internal/store/sqlite"
 	"github.com/tsumina/dango/internal/taskflow"
@@ -26,7 +26,7 @@ type staticIntentLLMClient struct {
 	err     error
 }
 
-func (c staticIntentLLMClient) CompleteJSON(_ context.Context, _ llm.Request) ([]byte, string, error) {
+func (c staticIntentLLMClient) CompleteJSON(_ context.Context, _ ai.Request) ([]byte, string, error) {
 	if c.err != nil {
 		return nil, "", c.err
 	}

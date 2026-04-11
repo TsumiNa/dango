@@ -6,7 +6,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/tsumina/dango/internal/llm"
+	"github.com/tsumina/dango/internal/ai"
 	"github.com/tsumina/dango/internal/spec"
 )
 
@@ -20,11 +20,11 @@ type plannerReviewPlanPatch struct {
 	Edges []spec.PlannedEdge `json:"edges,omitempty"`
 }
 
-func normalizeReviewedPlanResponse(payload []byte, original spec.DAGPlan, tools []llm.ToolCatalogEntry, kind llm.Kind) (spec.DAGPlan, error) {
+func normalizeReviewedPlanResponse(payload []byte, original spec.DAGPlan, tools []ai.ToolCatalogEntry, kind ai.Kind) (spec.DAGPlan, error) {
 	var response plannerReviewResponse
 	if err := json.Unmarshal(payload, &response); err != nil {
-		return spec.DAGPlan{}, llm.NewCannotProceedError(
-			llm.ModuleRunner,
+		return spec.DAGPlan{}, ai.NewCannotProceedError(
+			ai.ModuleRunner,
 			kind,
 			"planning review returned invalid JSON",
 			err,
@@ -39,8 +39,8 @@ func normalizeReviewedPlanResponse(payload []byte, original spec.DAGPlan, tools 
 			}
 			return original, nil
 		}
-		return spec.DAGPlan{}, llm.NewCannotProceedError(
-			llm.ModuleRunner,
+		return spec.DAGPlan{}, ai.NewCannotProceedError(
+			ai.ModuleRunner,
 			kind,
 			"planning review rejected the plan without returning a corrected plan",
 			nil,
@@ -49,8 +49,8 @@ func normalizeReviewedPlanResponse(payload []byte, original spec.DAGPlan, tools 
 
 	reviewed, err := validateReviewedPlan(*response.Plan, original, tools)
 	if err != nil {
-		return spec.DAGPlan{}, llm.NewCannotProceedError(
-			llm.ModuleRunner,
+		return spec.DAGPlan{}, ai.NewCannotProceedError(
+			ai.ModuleRunner,
 			kind,
 			"planning review returned an invalid reviewed plan",
 			err,
@@ -59,12 +59,12 @@ func normalizeReviewedPlanResponse(payload []byte, original spec.DAGPlan, tools 
 	return reviewed, nil
 }
 
-func validateReviewedPlan(candidate plannerReviewPlanPatch, original spec.DAGPlan, tools []llm.ToolCatalogEntry) (spec.DAGPlan, error) {
+func validateReviewedPlan(candidate plannerReviewPlanPatch, original spec.DAGPlan, tools []ai.ToolCatalogEntry) (spec.DAGPlan, error) {
 	if len(candidate.Edges) == 0 {
 		return spec.DAGPlan{}, fmt.Errorf("reviewed plan must contain at least one edge")
 	}
 
-	catalog := make(map[string]llm.ToolCatalogEntry, len(tools))
+	catalog := make(map[string]ai.ToolCatalogEntry, len(tools))
 	for _, tool := range tools {
 		catalog[tool.Name] = tool
 	}

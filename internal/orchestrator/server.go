@@ -13,7 +13,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/tsumina/dango/internal/llm"
+	"github.com/tsumina/dango/internal/ai"
 	"github.com/tsumina/dango/internal/logging"
 	"github.com/tsumina/dango/internal/runner"
 	"github.com/tsumina/dango/internal/taskflow"
@@ -45,7 +45,7 @@ type Server struct {
 	registry  *RegistryService
 	tasks     *TaskService
 	runners   *runner.TaskRunnerService
-	llmClient llm.Client
+	llmClient ai.Client
 	logger    *slog.Logger
 }
 
@@ -121,7 +121,7 @@ var normalizedIntents = map[string]string{
 // the supplied services instead of owning planning or execution logic itself.
 // Callers are responsible for providing already wired registry, task, runner,
 // and optional LLM client dependencies.
-func NewServer(config ServerConfig, registry *RegistryService, taskService *TaskService, runners *runner.TaskRunnerService, llmClient llm.Client, logger *slog.Logger) *Server {
+func NewServer(config ServerConfig, registry *RegistryService, taskService *TaskService, runners *runner.TaskRunnerService, llmClient ai.Client, logger *slog.Logger) *Server {
 	return &Server{
 		config:    config,
 		registry:  registry,
