@@ -13,6 +13,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/gin-gonic/gin"
 	"github.com/tsumina/dango/internal/ai"
 	"github.com/tsumina/dango/internal/datadir"
 	"github.com/tsumina/dango/internal/runner"
@@ -55,6 +56,12 @@ func newServerTestFixture(t *testing.T) (*Server, *runner.TaskRunnerService) {
 	runners := runner.NewTaskRunnerService(locator, taskService, nil, nil, nil)
 	// nil client = passthrough (no intent understanding).
 	return NewServer(ServerConfig{}, nil, taskService, runners, nil, nil), runners
+}
+
+// testRouter returns a gin router wired to the given server using test mode.
+func testRouter(s *Server) *gin.Engine {
+	gin.SetMode(gin.TestMode)
+	return s.buildRouter("test")
 }
 
 func TestRemoveUnixSocketRemovesStaleSocket(t *testing.T) {
@@ -123,7 +130,7 @@ func TestHandleRequestTaskListIntentReturnsTasks(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/v0/request", strings.NewReader(`{"intent":"task/list"}`))
 	recorder := httptest.NewRecorder()
 
-	server.handleRequest(recorder, req)
+	testRouter(server).ServeHTTP(recorder, req)
 
 	if got, want := recorder.Code, http.StatusOK; got != want {
 		t.Fatalf("status code = %d, want %d; body = %s", got, want, recorder.Body.String())
@@ -156,7 +163,7 @@ func TestHandleTasksPostCreatesTask(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/v0/tasks", strings.NewReader(`{"text":"task from collection endpoint"}`))
 	recorder := httptest.NewRecorder()
 
-	server.handleTasks(recorder, req)
+	testRouter(server).ServeHTTP(recorder, req)
 
 	if got, want := recorder.Code, http.StatusCreated; got != want {
 		t.Fatalf("status code = %d, want %d; body = %s", got, want, recorder.Body.String())
@@ -187,10 +194,10 @@ func TestHandleTaskRunsPostNormalizesRequestWithIntentHook(t *testing.T) {
 	}
 	server.llmClient = staticIntentLLMClient{payload: payload}
 
-	req := httptest.NewRequest(http.MethodPost, "/v0/task-runs", strings.NewReader(`{"text":"raw request","meta":{"source":"http"}}`))
+	req := httptest.NewRequest(http.MethodPost, "/v0/tasks/run", strings.NewReader(`{"text":"raw request","meta":{"source":"http"}}`))
 	recorder := httptest.NewRecorder()
 
-	server.handleTaskRuns(recorder, req)
+	testRouter(server).ServeHTTP(recorder, req)
 
 	if got, want := recorder.Code, http.StatusAccepted; got != want {
 		t.Fatalf("status code = %d, want %d; body = %s", got, want, recorder.Body.String())
@@ -227,7 +234,7 @@ func TestHandleTaskByIDDescribeActionReturnsTask(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, path, nil)
 	recorder := httptest.NewRecorder()
 
-	server.handleTaskByID(recorder, req)
+	testRouter(server).ServeHTTP(recorder, req)
 
 	if got, want := recorder.Code, http.StatusOK; got != want {
 		t.Fatalf("status code = %d, want %d; body = %s", got, want, recorder.Body.String())
