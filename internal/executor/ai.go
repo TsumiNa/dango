@@ -27,11 +27,13 @@ func defaultLLMClientFactory(model string, logger *slog.Logger) llm.Client {
 //
 // It renders the detail-planning prompt, requests structured JSON from the
 // configured model, and validates that the returned executor plan includes the
-// minimum information required for downstream execution.
-func (e *Executor) planWithBuiltInAI(ctx context.Context, runtimeContext runtimeContext, toolSpec spec.ToolSpec) (spec.ExecutorPlan, error) {
+// minimum information required for downstream execution. The response ID from
+// the underlying Responses API call is returned alongside the plan so callers
+// can continue the conversation in a subsequent turn.
+func (e *Executor) planWithBuiltInAI(ctx context.Context, runtimeContext runtimeContext, toolSpec spec.ToolSpec) (spec.ExecutorPlan, string, error) {
 	prompt, err := e.renderDetailPlanPrompt(runtimeContext, toolSpec)
 	if err != nil {
-		return spec.ExecutorPlan{}, llm.NewCannotProceedError(
+		return spec.ExecutorPlan{}, "", llm.NewCannotProceedError(
 			llm.ModuleExecutor,
 			llm.KindDetailPlanning,
 			"failed to render built-in AI detail-planning prompt",
@@ -39,9 +41,9 @@ func (e *Executor) planWithBuiltInAI(ctx context.Context, runtimeContext runtime
 		)
 	}
 
-	payload, err := e.completeJSON(ctx, toolSpec.Model, prompt, "Refine the executor stage now and return JSON only.")
+	payload, responseID, err := e.completeJSON(ctx, toolSpec.Model, prompt, "Refine the executor stage now and return JSON only.", "")
 	if err != nil {
-		return spec.ExecutorPlan{}, llm.NewCannotProceedError(
+		return spec.ExecutorPlan{}, "", llm.NewCannotProceedError(
 			llm.ModuleExecutor,
 			llm.KindDetailPlanning,
 			"built-in AI detail planning failed",
@@ -51,7 +53,7 @@ func (e *Executor) planWithBuiltInAI(ctx context.Context, runtimeContext runtime
 
 	var plan spec.ExecutorPlan
 	if err := json.Unmarshal(payload, &plan); err != nil {
-		return spec.ExecutorPlan{}, llm.NewCannotProceedError(
+		return spec.ExecutorPlan{}, "", llm.NewCannotProceedError(
 			llm.ModuleExecutor,
 			llm.KindDetailPlanning,
 			"built-in AI detail planning returned invalid JSON",
@@ -63,7 +65,7 @@ func (e *Executor) planWithBuiltInAI(ctx context.Context, runtimeContext runtime
 	plan.SubTask = strings.TrimSpace(plan.SubTask)
 	plan.ExpectedOutputs = cleanOutputPaths(plan.ExpectedOutputs)
 	if plan.Summary == "" || plan.SubTask == "" || len(plan.ExpectedOutputs) == 0 {
-		return spec.ExecutorPlan{}, llm.NewCannotProceedError(
+		return spec.ExecutorPlan{}, "", llm.NewCannotProceedError(
 			llm.ModuleExecutor,
 			llm.KindDetailPlanning,
 			"built-in AI detail planning did not produce a complete executor plan",
@@ -71,15 +73,27 @@ func (e *Executor) planWithBuiltInAI(ctx context.Context, runtimeContext runtime
 		)
 	}
 
-	return plan, nil
+	return plan, responseID, nil
 }
 
-// runWithBuiltInAI executes the built-in executor execute-generation path.
+// runWithBuiltInAI executes the built-in executor execute-generation path
+// using a two-turn conversation via the OpenAI Responses API.
 //
-// It renders the execute-time prompt, validates the generated artifacts, writes
-// those artifacts into the public and private output trees, and emits matching
-// handoff files for the runner.
+// Turn one sends the detail-planning prompt and validates the resulting executor
+// plan. The response ID from that turn is then passed as PreviousResponseID in
+// turn two, so the model carries forward the planning context when generating
+// the concrete stage artifacts. This two-turn design avoids duplicating the full
+// planning context in the generation request while keeping the model grounded in
+// the decisions made during planning.
 func (e *Executor) runWithBuiltInAI(ctx context.Context, runtimeContext runtimeContext, toolSpec spec.ToolSpec) error {
+	// Turn 1: planning — validate the executor stage before generation.
+	_, planResponseID, err := e.planWithBuiltInAI(ctx, runtimeContext, toolSpec)
+	if err != nil {
+		return err
+	}
+
+	// Turn 2: generation — continue the conversation so the model retains the
+	// planning context and produces concrete artifacts.
 	prompt, err := e.renderExecutePrompt(runtimeContext, toolSpec)
 	if err != nil {
 		return llm.NewCannotProceedError(
@@ -90,7 +104,7 @@ func (e *Executor) runWithBuiltInAI(ctx context.Context, runtimeContext runtimeC
 		)
 	}
 
-	payload, err := e.completeJSON(ctx, toolSpec.Model, prompt, "Generate the stage outputs now and return JSON only.")
+	payload, _, err := e.completeJSON(ctx, toolSpec.Model, prompt, "Generate the stage outputs now and return JSON only.", planResponseID)
 	if err != nil {
 		return llm.NewCannotProceedError(
 			llm.ModuleExecutor,
@@ -199,19 +213,21 @@ func (e *Executor) promptContext(runtimeContext runtimeContext, toolSpec spec.To
 }
 
 // completeJSON resolves a model-scoped LLM client and requests structured JSON
-// for the provided prompts.
-func (e *Executor) completeJSON(ctx context.Context, model string, systemPrompt string, userPrompt string) ([]byte, error) {
+// for the provided prompts. When previousResponseID is non-empty the underlying
+// Responses API continues the identified conversation turn.
+func (e *Executor) completeJSON(ctx context.Context, model string, systemPrompt string, userPrompt string, previousResponseID string) ([]byte, string, error) {
 	if e.llmFactory == nil {
-		return nil, fmt.Errorf("built-in executor AI client factory is not configured")
+		return nil, "", fmt.Errorf("built-in executor AI client factory is not configured")
 	}
 	client := e.llmFactory(strings.TrimSpace(model), e.logger)
 	if client == nil {
-		return nil, fmt.Errorf("built-in executor AI client is not configured")
+		return nil, "", fmt.Errorf("built-in executor AI client is not configured")
 	}
 	return client.CompleteJSON(ctx, llm.Request{
-		SystemPrompt: systemPrompt,
-		UserPrompt:   userPrompt,
-		Temperature:  0.1,
+		SystemPrompt:       systemPrompt,
+		UserPrompt:         userPrompt,
+		Temperature:        0.1,
+		PreviousResponseID: previousResponseID,
 	})
 }
 

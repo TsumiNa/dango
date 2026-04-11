@@ -145,7 +145,7 @@ func (e *Executor) Plan(ctx context.Context, options PlanOptions) error {
 	}
 
 	planLogger.Info("using built-in AI detail planning", "tool", toolSpec.Name)
-	plan, err := e.planWithBuiltInAI(ctx, runtimeContext, toolSpec)
+	plan, _, err := e.planWithBuiltInAI(ctx, runtimeContext, toolSpec)
 	if err != nil {
 		return err
 	}

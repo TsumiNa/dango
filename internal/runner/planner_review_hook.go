@@ -68,7 +68,7 @@ func (h *builtInReviewPlanningHook) Review(ctx context.Context, request llm.Revi
 		)
 	}
 
-	payload, err := h.llm.CompleteJSON(ctx, llm.Request{
+	payload, _, err := h.llm.CompleteJSON(ctx, llm.Request{
 		SystemPrompt: prompt,
 		UserPrompt:   "Review the current plan now and return JSON only.",
 		Temperature:  0.1,
@@ -105,7 +105,7 @@ func (h *builtInRepairPlanningHook) Repair(ctx context.Context, request llm.Repa
 		)
 	}
 
-	payload, err := h.llm.CompleteJSON(ctx, llm.Request{
+	payload, _, err := h.llm.CompleteJSON(ctx, llm.Request{
 		SystemPrompt: prompt,
 		UserPrompt:   "Repair the current plan now and return JSON only.",
 		Temperature:  0.1,

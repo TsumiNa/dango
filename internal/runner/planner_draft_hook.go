@@ -64,7 +64,7 @@ func (h *builtInDraftPlanningHook) Draft(ctx context.Context, request llm.DraftP
 		)
 	}
 
-	payload, err := h.llm.CompleteJSON(ctx, llm.Request{
+	payload, _, err := h.llm.CompleteJSON(ctx, llm.Request{
 		SystemPrompt: prompt,
 		UserPrompt:   "Generate the task DAG now and return JSON only.",
 		Temperature:  0.1,

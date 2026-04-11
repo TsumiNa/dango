@@ -221,7 +221,7 @@ func staticPlannerClient(t *testing.T, payloads ...[]byte) *staticPlannerLLMClie
 	return &staticPlannerLLMClient{testing: t, steps: steps}
 }
 
-func (c *staticPlannerLLMClient) CompleteJSON(context.Context, llm.Request) ([]byte, error) {
+func (c *staticPlannerLLMClient) CompleteJSON(context.Context, llm.Request) ([]byte, string, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if len(c.steps) == 0 {
@@ -232,7 +232,7 @@ func (c *staticPlannerLLMClient) CompleteJSON(context.Context, llm.Request) ([]b
 	}
 	payload := c.steps[c.index]
 	c.index++
-	return append([]byte(nil), payload...), nil
+	return append([]byte(nil), payload...), "", nil
 }
 
 func staticPlannerDraftJSON(edges []plannerDraftResponseEdge) []byte {

@@ -58,7 +58,7 @@ func (h *builtInIntentUnderstandingHook) Understand(ctx context.Context, request
 		)
 	}
 
-	payload, err := h.llm.CompleteJSON(ctx, llm.Request{
+	payload, _, err := h.llm.CompleteJSON(ctx, llm.Request{
 		SystemPrompt: prompt,
 		UserPrompt:   "Normalize the request now and return JSON only.",
 		Temperature:  0.1,

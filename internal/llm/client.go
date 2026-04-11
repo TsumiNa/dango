@@ -8,10 +8,11 @@ import (
 	"os"
 	"strings"
 
-	"github.com/openai/openai-go"
-	"github.com/openai/openai-go/option"
-	"github.com/openai/openai-go/packages/param"
-	"github.com/openai/openai-go/shared"
+	openai "github.com/openai/openai-go/v3"
+	"github.com/openai/openai-go/v3/option"
+	"github.com/openai/openai-go/v3/packages/param"
+	"github.com/openai/openai-go/v3/responses"
+	"github.com/openai/openai-go/v3/shared"
 
 	"github.com/tsumina/dango/internal/logging"
 )
@@ -21,6 +22,8 @@ import (
 //
 // Callers typically build Request after rendering a system prompt from package
 // prompts and deciding on a short user instruction that asks for JSON output.
+// Set PreviousResponseID to continue a multi-turn conversation using the
+// OpenAI Responses API.
 type Request struct {
 	// SystemPrompt contains the main instruction set and structured context.
 	SystemPrompt string
@@ -28,6 +31,10 @@ type Request struct {
 	UserPrompt string
 	// Temperature requests the sampling temperature for the completion.
 	Temperature float64
+	// PreviousResponseID carries the response ID returned by a prior CompleteJSON
+	// call. When non-empty the upstream Responses API continues the existing
+	// conversation so the model retains context from that previous turn.
+	PreviousResponseID string
 }
 
 // Client generates structured responses from an LLM provider.
@@ -36,8 +43,10 @@ type Request struct {
 // and execution flows.
 type Client interface {
 	// CompleteJSON submits request and returns the raw JSON payload selected by
-	// the model.
-	CompleteJSON(ctx context.Context, request Request) ([]byte, error)
+	// the model together with the response ID of the completed turn. The
+	// response ID can be passed in a subsequent Request.PreviousResponseID to
+	// continue a multi-turn conversation.
+	CompleteJSON(ctx context.Context, request Request) ([]byte, string, error)
 }
 
 // Config configures the OpenAI-compatible chat client used by the built-in AI
@@ -103,7 +112,7 @@ func NewOpenAICompatibleFromEnv(model string, logger *slog.Logger) Client {
 }
 
 // NewOpenAICompatible constructs an OpenAI-compatible JSON completion client
-// backed by the official openai-go SDK.
+// backed by the official openai-go/v3 SDK using the Responses API.
 //
 // The client always asks the upstream provider for JSON object output and is
 // the main transport used by the built-in intent, planning, review, repair,
@@ -139,37 +148,44 @@ func NewOpenAICompatible(config Config, logger *slog.Logger) Client {
 	}
 }
 
-// CompleteJSON requests a JSON object from an OpenAI-compatible chat endpoint.
+// CompleteJSON requests a JSON object via the OpenAI Responses API.
 //
-// The method converts Request into a two-message chat completion call using the
-// official openai-go SDK, strips any surrounding Markdown code fence from the
-// chosen answer, and validates that the resulting payload is well-formed JSON
-// before returning it.
-func (c *openAICompatibleClient) CompleteJSON(ctx context.Context, request Request) ([]byte, error) {
+// The method maps Request into a Responses API call: SystemPrompt becomes the
+// Instructions field, UserPrompt is the user-role input message, and a
+// non-empty PreviousResponseID continues an existing multi-turn conversation.
+// The returned string is the response ID, which callers can pass back in
+// Request.PreviousResponseID to chain a follow-up turn.
+func (c *openAICompatibleClient) CompleteJSON(ctx context.Context, request Request) ([]byte, string, error) {
 	jsonFmt := shared.NewResponseFormatJSONObjectParam()
-	completion, err := c.sdkClient.Chat.Completions.New(ctx, openai.ChatCompletionNewParams{
+	params := responses.ResponseNewParams{
 		Model: c.model,
-		Messages: []openai.ChatCompletionMessageParamUnion{
-			openai.SystemMessage(request.SystemPrompt),
-			openai.UserMessage(request.UserPrompt),
+		Text: responses.ResponseTextConfigParam{
+			Format: responses.ResponseFormatTextConfigUnionParam{
+				OfJSONObject: &jsonFmt,
+			},
 		},
 		Temperature: param.NewOpt(c.temperature),
-		ResponseFormat: openai.ChatCompletionNewParamsResponseFormatUnion{
-			OfJSONObject: &jsonFmt,
+		Input: responses.ResponseNewParamsInputUnion{
+			OfString: param.NewOpt(request.UserPrompt),
 		},
-	})
-	if err != nil {
-		return nil, fmt.Errorf("llm request failed: %w", err)
 	}
-	if len(completion.Choices) == 0 {
-		return nil, fmt.Errorf("llm response did not include any choices")
+	if request.SystemPrompt != "" {
+		params.Instructions = param.NewOpt(request.SystemPrompt)
+	}
+	if request.PreviousResponseID != "" {
+		params.PreviousResponseID = param.NewOpt(request.PreviousResponseID)
 	}
 
-	content := stripMarkdownCodeFence(completion.Choices[0].Message.Content)
-	if !json.Valid([]byte(content)) {
-		return nil, fmt.Errorf("llm response was not valid JSON")
+	response, err := c.sdkClient.Responses.New(ctx, params)
+	if err != nil {
+		return nil, "", fmt.Errorf("llm request failed: %w", err)
 	}
-	return []byte(content), nil
+
+	content := stripMarkdownCodeFence(response.OutputText())
+	if !json.Valid([]byte(content)) {
+		return nil, "", fmt.Errorf("llm response was not valid JSON")
+	}
+	return []byte(content), response.ID, nil
 }
 
 func stripMarkdownCodeFence(value string) string {
