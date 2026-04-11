@@ -1,15 +1,17 @@
 package llm
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"log/slog"
-	"net/http"
 	"os"
 	"strings"
+
+	"github.com/openai/openai-go"
+	"github.com/openai/openai-go/option"
+	"github.com/openai/openai-go/packages/param"
+	"github.com/openai/openai-go/shared"
 
 	"github.com/tsumina/dango/internal/logging"
 )
@@ -55,35 +57,10 @@ type Config struct {
 }
 
 type openAICompatibleClient struct {
-	httpClient  *http.Client
-	baseURL     string
-	apiKey      string
+	sdkClient   *openai.Client
 	model       string
 	temperature float64
 	logger      *slog.Logger
-}
-
-type openAIChatRequest struct {
-	Model          string              `json:"model"`
-	Messages       []openAIChatMessage `json:"messages"`
-	Temperature    float64             `json:"temperature,omitempty"`
-	ResponseFormat any                 `json:"response_format,omitempty"`
-}
-
-type openAIChatMessage struct {
-	Role    string `json:"role"`
-	Content string `json:"content"`
-}
-
-type openAIChatResponse struct {
-	Choices []struct {
-		Message struct {
-			Content string `json:"content"`
-		} `json:"message"`
-	} `json:"choices"`
-	Error *struct {
-		Message string `json:"message"`
-	} `json:"error,omitempty"`
 }
 
 // NewOpenAICompatibleFromEnv constructs an OpenAI-compatible client from the
@@ -125,7 +102,8 @@ func NewOpenAICompatibleFromEnv(model string, logger *slog.Logger) Client {
 	}, logger)
 }
 
-// NewOpenAICompatible constructs an OpenAI-compatible JSON completion client.
+// NewOpenAICompatible constructs an OpenAI-compatible JSON completion client
+// backed by the official openai-go SDK.
 //
 // The client always asks the upstream provider for JSON object output and is
 // the main transport used by the built-in intent, planning, review, repair,
@@ -148,10 +126,13 @@ func NewOpenAICompatible(config Config, logger *slog.Logger) Client {
 		temperature = 0.1
 	}
 
+	sdkClient := openai.NewClient(
+		option.WithAPIKey(strings.TrimSpace(config.APIKey)),
+		option.WithBaseURL(baseURL),
+	)
+
 	return &openAICompatibleClient{
-		httpClient:  http.DefaultClient,
-		baseURL:     baseURL,
-		apiKey:      strings.TrimSpace(config.APIKey),
+		sdkClient:   &sdkClient,
 		model:       strings.TrimSpace(config.Model),
 		temperature: temperature,
 		logger:      logging.Component(logger, "llm.openai_compatible"),
@@ -160,58 +141,31 @@ func NewOpenAICompatible(config Config, logger *slog.Logger) Client {
 
 // CompleteJSON requests a JSON object from an OpenAI-compatible chat endpoint.
 //
-// The method converts Request into a two-message chat completion call, strips
-// any surrounding Markdown code fence from the chosen answer, and validates
-// that the resulting payload is well-formed JSON before returning it.
+// The method converts Request into a two-message chat completion call using the
+// official openai-go SDK, strips any surrounding Markdown code fence from the
+// chosen answer, and validates that the resulting payload is well-formed JSON
+// before returning it.
 func (c *openAICompatibleClient) CompleteJSON(ctx context.Context, request Request) ([]byte, error) {
-	payload, err := json.Marshal(openAIChatRequest{
+	jsonFmt := shared.NewResponseFormatJSONObjectParam()
+	completion, err := c.sdkClient.Chat.Completions.New(ctx, openai.ChatCompletionNewParams{
 		Model: c.model,
-		Messages: []openAIChatMessage{
-			{Role: "system", Content: request.SystemPrompt},
-			{Role: "user", Content: request.UserPrompt},
+		Messages: []openai.ChatCompletionMessageParamUnion{
+			openai.SystemMessage(request.SystemPrompt),
+			openai.UserMessage(request.UserPrompt),
 		},
-		Temperature: c.temperature,
-		ResponseFormat: map[string]string{
-			"type": "json_object",
+		Temperature: param.NewOpt(c.temperature),
+		ResponseFormat: openai.ChatCompletionNewParamsResponseFormatUnion{
+			OfJSONObject: &jsonFmt,
 		},
 	})
 	if err != nil {
-		return nil, fmt.Errorf("marshal llm request: %w", err)
+		return nil, fmt.Errorf("llm request failed: %w", err)
 	}
-
-	httpRequest, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+"/chat/completions", bytes.NewReader(payload))
-	if err != nil {
-		return nil, fmt.Errorf("build llm request: %w", err)
-	}
-	httpRequest.Header.Set("Authorization", "Bearer "+c.apiKey)
-	httpRequest.Header.Set("Content-Type", "application/json")
-
-	response, err := c.httpClient.Do(httpRequest)
-	if err != nil {
-		return nil, fmt.Errorf("send llm request: %w", err)
-	}
-	defer response.Body.Close()
-
-	body, err := io.ReadAll(response.Body)
-	if err != nil {
-		return nil, fmt.Errorf("read llm response: %w", err)
-	}
-
-	var parsed openAIChatResponse
-	if err := json.Unmarshal(body, &parsed); err != nil {
-		return nil, fmt.Errorf("decode llm response: %w", err)
-	}
-	if response.StatusCode < 200 || response.StatusCode >= 300 {
-		if parsed.Error != nil && strings.TrimSpace(parsed.Error.Message) != "" {
-			return nil, fmt.Errorf("llm request failed: %s", strings.TrimSpace(parsed.Error.Message))
-		}
-		return nil, fmt.Errorf("llm request failed with status %s", response.Status)
-	}
-	if len(parsed.Choices) == 0 {
+	if len(completion.Choices) == 0 {
 		return nil, fmt.Errorf("llm response did not include any choices")
 	}
 
-	content := stripMarkdownCodeFence(parsed.Choices[0].Message.Content)
+	content := stripMarkdownCodeFence(completion.Choices[0].Message.Content)
 	if !json.Valid([]byte(content)) {
 		return nil, fmt.Errorf("llm response was not valid JSON")
 	}
