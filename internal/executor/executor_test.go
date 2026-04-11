@@ -13,7 +13,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/tsumina/dango/internal/ai"
+	"github.com/tsumina/dango/internal/llm"
 	"github.com/tsumina/dango/internal/spec"
 )
 
@@ -28,7 +28,7 @@ type staticLLMResponse struct {
 	err     error
 }
 
-func (c *staticLLMClient) CompleteJSON(_ context.Context, _ ai.Request) ([]byte, string, error) {
+func (c *staticLLMClient) CompleteJSON(_ context.Context, _ llm.Request) ([]byte, string, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.index >= len(c.responses) {
@@ -48,15 +48,15 @@ func (c *staticLLMClient) CompleteJSON(_ context.Context, _ ai.Request) ([]byte,
 	return append([]byte(nil), r.payload...), fmt.Sprintf("resp_%d", c.index), nil
 }
 
-func staticAIFactory(payload []byte, err error) aiClientFactory {
-	return func(string, *slog.Logger) ai.Client {
+func staticLLMFactory(payload []byte, err error) llmClientFactory {
+	return func(string, *slog.Logger) llm.Client {
 		return &staticLLMClient{responses: []staticLLMResponse{{payload: payload, err: err}}}
 	}
 }
 
-func sequentialAIFactory(resps ...staticLLMResponse) aiClientFactory {
+func sequentialLLMFactory(resps ...staticLLMResponse) llmClientFactory {
 	client := &staticLLMClient{responses: resps}
-	return func(string, *slog.Logger) ai.Client {
+	return func(string, *slog.Logger) llm.Client {
 		return client
 	}
 }
@@ -97,7 +97,7 @@ func TestExecutorRunWithoutHookUsesBuiltInAI(t *testing.T) {
 	t.Setenv("OUTPUT_PATH", outputPath)
 	t.Setenv("PRIVATE_OUTPUT_PATH", privateOutputPath)
 
-	execMode := newForTest(os.Stdout, os.Stderr, nil, sequentialAIFactory(
+	execMode := newForTest(os.Stdout, os.Stderr, nil, sequentialLLMFactory(
 		// Turn 1: detail-planning response
 		staticLLMResponse{payload: []byte(`{
 			"summary":"Generated the final report.",
@@ -182,7 +182,7 @@ func TestExecutorPlanWithoutHookUsesBuiltInAI(t *testing.T) {
 	t.Setenv("TOOL_CONFIG", toolPath)
 
 	var stdout bytes.Buffer
-	err := newForTest(&stdout, os.Stderr, nil, staticAIFactory([]byte(`{
+	err := newForTest(&stdout, os.Stderr, nil, staticLLMFactory([]byte(`{
 		"summary":"Produce the final answer.",
 		"sub_task":"Read the request and produce the final artifact.",
 		"expected_outputs":["final-answer.md"]
@@ -231,7 +231,7 @@ func TestExecutorRunWithoutHookFailsWhenBuiltInAIUnavailable(t *testing.T) {
 	t.Setenv("OUTPUT_PATH", outputPath)
 	t.Setenv("PRIVATE_OUTPUT_PATH", privateOutputPath)
 
-	err := newForTest(os.Stdout, os.Stderr, nil, staticAIFactory(nil, errors.New("LLM unavailable"))).Run(context.Background(), RunOptions{})
+	err := newForTest(os.Stdout, os.Stderr, nil, staticLLMFactory(nil, errors.New("LLM unavailable"))).Run(context.Background(), RunOptions{})
 	if err == nil {
 		t.Fatal("Run() error = nil, want cannot-proceed error")
 	}

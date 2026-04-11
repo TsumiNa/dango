@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/tsumina/dango/internal/ai"
+	"github.com/tsumina/dango/internal/llm"
 	"github.com/tsumina/dango/internal/spec"
 )
 
@@ -25,12 +25,12 @@ type plannerDraftResponseEdge struct {
 	SubTask         string   `json:"sub_task"`
 }
 
-func normalizePlannerDraft(draft plannerDraftResponse, tools []ai.ToolCatalogEntry) ([]spec.PlannedEdge, string, error) {
+func normalizePlannerDraft(draft plannerDraftResponse, tools []llm.ToolCatalogEntry) ([]spec.PlannedEdge, string, error) {
 	if len(draft.Edges) == 0 {
 		return nil, "", fmt.Errorf("planner LLM returned an empty DAG")
 	}
 
-	catalog := make(map[string]ai.ToolCatalogEntry, len(tools))
+	catalog := make(map[string]llm.ToolCatalogEntry, len(tools))
 	for _, tool := range tools {
 		catalog[tool.Name] = tool
 	}

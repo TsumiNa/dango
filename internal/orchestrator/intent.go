@@ -7,7 +7,7 @@ import (
 	"log/slog"
 	"strings"
 
-	"github.com/tsumina/dango/internal/ai"
+	"github.com/tsumina/dango/internal/llm"
 	"github.com/tsumina/dango/internal/logging"
 	promptassets "github.com/tsumina/dango/internal/prompts"
 	"github.com/tsumina/dango/internal/taskflow"
@@ -33,7 +33,7 @@ type intentResult struct {
 // the orchestrator can run without a configured AI backend. When the LLM is
 // available, the result is merged back onto the original envelope so ingress
 // metadata is always preserved.
-func understandIntent(ctx context.Context, client ai.Client, logger *slog.Logger, request taskflow.RequestEnvelope) (taskflow.RequestEnvelope, error) {
+func understandIntent(ctx context.Context, client llm.Client, logger *slog.Logger, request taskflow.RequestEnvelope) (taskflow.RequestEnvelope, error) {
 	if client == nil {
 		return request, nil
 	}
@@ -41,23 +41,23 @@ func understandIntent(ctx context.Context, client ai.Client, logger *slog.Logger
 	entry := taskflow.RequestMetadataFromContext(ctx)
 	prompt, err := promptassets.RenderIntentUnderstand(request, entry)
 	if err != nil {
-		return taskflow.RequestEnvelope{}, ai.NewCannotProceedError(
-			ai.ModuleOrchestrator,
-			ai.KindIntentUnderstanding,
+		return taskflow.RequestEnvelope{}, llm.NewCannotProceedError(
+			llm.ModuleOrchestrator,
+			llm.KindIntentUnderstanding,
 			"failed to render intent-understanding prompt",
 			err,
 		)
 	}
 
-	payload, _, err := client.CompleteJSON(ctx, ai.Request{
+	payload, _, err := client.CompleteJSON(ctx, llm.Request{
 		SystemPrompt: prompt,
 		UserPrompt:   "Normalize the request now and return JSON only.",
 		Temperature:  0.1,
 	})
 	if err != nil {
-		return taskflow.RequestEnvelope{}, ai.NewCannotProceedError(
-			ai.ModuleOrchestrator,
-			ai.KindIntentUnderstanding,
+		return taskflow.RequestEnvelope{}, llm.NewCannotProceedError(
+			llm.ModuleOrchestrator,
+			llm.KindIntentUnderstanding,
 			"intent-understanding LLM call failed",
 			err,
 		)
@@ -65,9 +65,9 @@ func understandIntent(ctx context.Context, client ai.Client, logger *slog.Logger
 
 	var result intentResult
 	if err := json.Unmarshal(payload, &result); err != nil {
-		return taskflow.RequestEnvelope{}, ai.NewCannotProceedError(
-			ai.ModuleOrchestrator,
-			ai.KindIntentUnderstanding,
+		return taskflow.RequestEnvelope{}, llm.NewCannotProceedError(
+			llm.ModuleOrchestrator,
+			llm.KindIntentUnderstanding,
 			"intent-understanding LLM returned invalid JSON",
 			err,
 		)
@@ -75,9 +75,9 @@ func understandIntent(ctx context.Context, client ai.Client, logger *slog.Logger
 
 	normalized := taskflow.NormalizeRequestEnvelope(result.Request)
 	if taskflow.PrimaryRequestText(normalized) == "" && len(normalized.Parts) == 0 {
-		return taskflow.RequestEnvelope{}, ai.NewCannotProceedError(
-			ai.ModuleOrchestrator,
-			ai.KindIntentUnderstanding,
+		return taskflow.RequestEnvelope{}, llm.NewCannotProceedError(
+			llm.ModuleOrchestrator,
+			llm.KindIntentUnderstanding,
 			"intent understanding did not produce a usable request envelope",
 			nil,
 		)

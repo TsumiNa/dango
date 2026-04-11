@@ -11,7 +11,7 @@ import (
 	"os/exec"
 	"path/filepath"
 
-	"github.com/tsumina/dango/internal/ai"
+	"github.com/tsumina/dango/internal/llm"
 	"github.com/tsumina/dango/internal/logging"
 	"gopkg.in/yaml.v3"
 )
@@ -24,7 +24,7 @@ type Executor struct {
 	stdout        io.Writer
 	stderr        io.Writer
 	logger        *slog.Logger
-	clientFactory aiClientFactory
+	clientFactory llmClientFactory
 }
 
 // RunOptions describes the CLI-provided inputs for executor runs.
@@ -53,12 +53,12 @@ type PlanOptions struct {
 // execute-generation fallbacks. When logger is nil, logging falls back to a
 // discard logger.
 func New(stdout, stderr io.Writer, logger *slog.Logger) *Executor {
-	return newForTest(stdout, stderr, logger, defaultAIClientFactory)
+	return newForTest(stdout, stderr, logger, defaultLLMClientFactory)
 }
 
-func newForTest(stdout, stderr io.Writer, logger *slog.Logger, clientFactory aiClientFactory) *Executor {
+func newForTest(stdout, stderr io.Writer, logger *slog.Logger, clientFactory llmClientFactory) *Executor {
 	if clientFactory == nil {
-		clientFactory = defaultAIClientFactory
+		clientFactory = defaultLLMClientFactory
 	}
 	return &Executor{
 		stdout:        stdout,
@@ -136,16 +136,16 @@ func (e *Executor) Plan(ctx context.Context, options PlanOptions) error {
 			_, err = e.stdout.Write(append(payload, '\n'))
 			return err
 		}
-		return ai.NewCannotProceedError(
-			ai.ModuleExecutor,
-			ai.KindDetailPlanning,
+		return llm.NewCannotProceedError(
+			llm.ModuleExecutor,
+			llm.KindDetailPlanning,
 			fmt.Sprintf("plan hook %q returned no executor plan output for tool %q", hookPath, toolSpec.Name),
 			nil,
 		)
 	}
 
 	planLogger.Info("using AI detail planning", "tool", toolSpec.Name)
-	plan, _, err := e.planAI(ctx, runtimeContext, toolSpec)
+	plan, _, err := e.planLLM(ctx, runtimeContext, toolSpec)
 	if err != nil {
 		return err
 	}
@@ -217,9 +217,9 @@ func (e *Executor) Run(ctx context.Context, options RunOptions) error {
 			return nil
 		}
 
-		err := ai.NewCannotProceedError(
-			ai.ModuleExecutor,
-			ai.KindExecuteGeneration,
+		err := llm.NewCannotProceedError(
+			llm.ModuleExecutor,
+			llm.KindExecuteGeneration,
 			fmt.Sprintf("run hook %q completed without writing _handoff.md for tool %q", hookPath, toolSpec.Name),
 			nil,
 		)
@@ -236,7 +236,7 @@ func (e *Executor) Run(ctx context.Context, options RunOptions) error {
 	}
 
 	runLogger.Info("using AI execute generation", "tool", toolSpec.Name)
-	if err := e.runAI(ctx, runtimeContext, toolSpec); err != nil {
+	if err := e.runLLM(ctx, runtimeContext, toolSpec); err != nil {
 		runLogger.Error("AI execute generation failed", "error", err)
 		_ = writeFailureHandoffsWithSummary(
 			runtimeContext.PublicOutputPath,

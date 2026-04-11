@@ -7,8 +7,8 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/tsumina/dango/internal/ai"
 	"github.com/tsumina/dango/internal/datadir"
+	"github.com/tsumina/dango/internal/llm"
 	"github.com/tsumina/dango/internal/runner"
 	"github.com/tsumina/dango/internal/runner/runtime"
 	"github.com/tsumina/dango/internal/spec"
@@ -221,7 +221,7 @@ func staticPlannerClient(t *testing.T, payloads ...[]byte) *staticPlannerLLMClie
 	return &staticPlannerLLMClient{testing: t, steps: steps}
 }
 
-func (c *staticPlannerLLMClient) CompleteJSON(context.Context, ai.Request) ([]byte, string, error) {
+func (c *staticPlannerLLMClient) CompleteJSON(context.Context, llm.Request) ([]byte, string, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if len(c.steps) == 0 {

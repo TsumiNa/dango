@@ -1,8 +1,8 @@
-package ai
+package llm
 
 import "fmt"
 
-// Module identifies the subsystem that owns an AI step.
+// Module identifies the subsystem that owns an LLM step.
 type Module string
 
 const (
@@ -10,11 +10,11 @@ const (
 	ModuleOrchestrator Module = "orchestrator"
 	// ModuleRunner identifies the runner execution plane.
 	ModuleRunner Module = "runner"
-	// ModuleExecutor identifies executor-local AI steps.
+	// ModuleExecutor identifies executor-local LLM steps.
 	ModuleExecutor Module = "executor"
 )
 
-// Kind identifies one AI-assisted step category.
+// Kind identifies one LLM-assisted step category.
 type Kind string
 
 const (
@@ -32,7 +32,7 @@ const (
 	KindExecuteGeneration Kind = "execute_generation"
 )
 
-// CannotProceedError reports that an AI-assisted stage could not produce a valid result.
+// CannotProceedError reports that an LLM-assisted stage could not produce a valid result.
 type CannotProceedError struct {
 	Module  Module
 	Kind    Kind

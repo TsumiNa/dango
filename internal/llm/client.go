@@ -1,4 +1,4 @@
-package ai
+package llm
 
 import (
 	"context"
@@ -18,7 +18,7 @@ import (
 )
 
 // Request describes one structured completion request sent through a
-// repository-owned AI client.
+// repository-owned LLM client.
 //
 // Callers typically build Request after rendering a system prompt from package
 // prompts and deciding on a short user instruction that asks for JSON output.
@@ -37,7 +37,7 @@ type Request struct {
 	PreviousResponseID string
 }
 
-// Client generates structured responses from an AI provider.
+// Client generates structured responses from an LLM provider.
 //
 // Implementations are expected to be safe for reuse across concurrent planning
 // and execution flows.
@@ -49,11 +49,11 @@ type Client interface {
 	CompleteJSON(ctx context.Context, request Request) ([]byte, string, error)
 }
 
-// Config configures the OpenAI-compatible client used by AI-backed planning
+// Config configures the OpenAI-compatible client used by LLM-backed planning
 // and execution paths.
 //
 // The same structure is used for orchestrator intent understanding, runner
-// planning and review, and executor-side AI generation.
+// planning and review, and executor-side LLM generation.
 type Config struct {
 	// BaseURL is the OpenAI-compatible API root without a trailing slash.
 	BaseURL string
@@ -153,7 +153,7 @@ func NewOpenAICompatible(config Config, logger *slog.Logger) Client {
 		sdkClient:   &sdkClient,
 		model:       strings.TrimSpace(config.Model),
 		temperature: temperature,
-		logger:      logging.Component(logger, "ai.openai_compatible"),
+		logger:      logging.Component(logger, "llm.openai_compatible"),
 	}
 }
 
@@ -187,12 +187,12 @@ func (c *openAICompatibleClient) CompleteJSON(ctx context.Context, request Reque
 
 	response, err := c.sdkClient.Responses.New(ctx, params)
 	if err != nil {
-		return nil, "", fmt.Errorf("AI request failed: %w", err)
+		return nil, "", fmt.Errorf("LLM request failed: %w", err)
 	}
 
 	content := stripMarkdownCodeFence(response.OutputText())
 	if !json.Valid([]byte(content)) {
-		return nil, "", fmt.Errorf("AI response was not valid JSON")
+		return nil, "", fmt.Errorf("LLM response was not valid JSON")
 	}
 	return []byte(content), response.ID, nil
 }

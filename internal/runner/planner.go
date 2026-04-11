@@ -9,8 +9,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/tsumina/dango/internal/ai"
 	"github.com/tsumina/dango/internal/datadir"
+	"github.com/tsumina/dango/internal/llm"
 	"github.com/tsumina/dango/internal/logging"
 	promptassets "github.com/tsumina/dango/internal/prompts"
 	"github.com/tsumina/dango/internal/runner/runtime"
@@ -35,7 +35,7 @@ type Planner struct {
 	locator   *datadir.Locator
 	store     *sqlite.Store
 	runtime   runtime.ContainerRuntime
-	llmClient ai.Client
+	llmClient llm.Client
 	logger    *slog.Logger
 }
 
@@ -44,7 +44,7 @@ type Planner struct {
 // This is the standard constructor used for production wiring and tests. Pass
 // nil to disable AI-backed planning; the planner will still stamp the plan as
 // reviewed and return it unchanged.
-func NewPlanner(locator *datadir.Locator, store *sqlite.Store, rt runtime.ContainerRuntime, client ai.Client, logger *slog.Logger) *Planner {
+func NewPlanner(locator *datadir.Locator, store *sqlite.Store, rt runtime.ContainerRuntime, client llm.Client, logger *slog.Logger) *Planner {
 	return &Planner{
 		locator:   locator,
 		store:     store,
@@ -100,9 +100,9 @@ func (p *Planner) Plan(ctx context.Context, taskID string, request taskflow.Requ
 // detail refinement.
 func (p *Planner) Draft(ctx context.Context, taskID string, request taskflow.RequestEnvelope, tools []catalogTool) (spec.DAGPlan, error) {
 	if p.llmClient == nil {
-		return spec.DAGPlan{}, ai.NewCannotProceedError(
-			ai.ModuleRunner,
-			ai.KindDraftPlanning,
+		return spec.DAGPlan{}, llm.NewCannotProceedError(
+			llm.ModuleRunner,
+			llm.KindDraftPlanning,
 			"no LLM client is configured for the runner planner",
 			nil,
 		)
@@ -110,23 +110,23 @@ func (p *Planner) Draft(ctx context.Context, taskID string, request taskflow.Req
 
 	prompt, err := promptassets.RenderPlannerDraft(taskID, taskflow.PrimaryRequestText(request), catalogEntries(tools))
 	if err != nil {
-		return spec.DAGPlan{}, ai.NewCannotProceedError(
-			ai.ModuleRunner,
-			ai.KindDraftPlanning,
+		return spec.DAGPlan{}, llm.NewCannotProceedError(
+			llm.ModuleRunner,
+			llm.KindDraftPlanning,
 			"failed to render draft planning prompt",
 			err,
 		)
 	}
 
-	payload, _, err := p.llmClient.CompleteJSON(ctx, ai.Request{
+	payload, _, err := p.llmClient.CompleteJSON(ctx, llm.Request{
 		SystemPrompt: prompt,
 		UserPrompt:   "Generate the task DAG now and return JSON only.",
 		Temperature:  0.1,
 	})
 	if err != nil {
-		return spec.DAGPlan{}, ai.NewCannotProceedError(
-			ai.ModuleRunner,
-			ai.KindDraftPlanning,
+		return spec.DAGPlan{}, llm.NewCannotProceedError(
+			llm.ModuleRunner,
+			llm.KindDraftPlanning,
 			"draft planning LLM call failed",
 			err,
 		)
@@ -134,9 +134,9 @@ func (p *Planner) Draft(ctx context.Context, taskID string, request taskflow.Req
 
 	var draft plannerDraftResponse
 	if err := json.Unmarshal(payload, &draft); err != nil {
-		return spec.DAGPlan{}, ai.NewCannotProceedError(
-			ai.ModuleRunner,
-			ai.KindDraftPlanning,
+		return spec.DAGPlan{}, llm.NewCannotProceedError(
+			llm.ModuleRunner,
+			llm.KindDraftPlanning,
 			"draft planning LLM returned invalid JSON",
 			err,
 		)
@@ -144,9 +144,9 @@ func (p *Planner) Draft(ctx context.Context, taskID string, request taskflow.Req
 
 	edges, mode, err := normalizePlannerDraft(draft, catalogEntries(tools))
 	if err != nil {
-		return spec.DAGPlan{}, ai.NewCannotProceedError(
-			ai.ModuleRunner,
-			ai.KindDraftPlanning,
+		return spec.DAGPlan{}, llm.NewCannotProceedError(
+			llm.ModuleRunner,
+			llm.KindDraftPlanning,
 			"draft planning LLM returned an invalid plan",
 			err,
 		)
@@ -214,29 +214,29 @@ func (p *Planner) Review(ctx context.Context, taskID string, request taskflow.Re
 
 	prompt, err := promptassets.RenderPlannerReview(taskID, request, catalogEntries(tools), plan)
 	if err != nil {
-		return spec.DAGPlan{}, ai.NewCannotProceedError(
-			ai.ModuleRunner,
-			ai.KindReviewPlanning,
+		return spec.DAGPlan{}, llm.NewCannotProceedError(
+			llm.ModuleRunner,
+			llm.KindReviewPlanning,
 			"failed to render review planning prompt",
 			err,
 		)
 	}
 
-	payload, _, err := p.llmClient.CompleteJSON(ctx, ai.Request{
+	payload, _, err := p.llmClient.CompleteJSON(ctx, llm.Request{
 		SystemPrompt: prompt,
 		UserPrompt:   "Review the current plan now and return JSON only.",
 		Temperature:  0.1,
 	})
 	if err != nil {
-		return spec.DAGPlan{}, ai.NewCannotProceedError(
-			ai.ModuleRunner,
-			ai.KindReviewPlanning,
+		return spec.DAGPlan{}, llm.NewCannotProceedError(
+			llm.ModuleRunner,
+			llm.KindReviewPlanning,
 			"review planning LLM call failed",
 			err,
 		)
 	}
 
-	reviewed, reviewErr := normalizeReviewedPlanResponse(payload, plan, catalogEntries(tools), ai.KindReviewPlanning)
+	reviewed, reviewErr := normalizeReviewedPlanResponse(payload, plan, catalogEntries(tools), llm.KindReviewPlanning)
 	if reviewErr == nil {
 		if reviewed.ReviewedAt.IsZero() {
 			reviewed.ReviewedAt = time.Now().UTC()
@@ -250,29 +250,29 @@ func (p *Planner) Review(ctx context.Context, taskID string, request taskflow.Re
 	// Attempt repair when review fails.
 	repairPrompt, err := promptassets.RenderPlannerRepair(taskID, request, catalogEntries(tools), plan, reviewErr.Error())
 	if err != nil {
-		return spec.DAGPlan{}, ai.NewCannotProceedError(
-			ai.ModuleRunner,
-			ai.KindRepairPlanning,
+		return spec.DAGPlan{}, llm.NewCannotProceedError(
+			llm.ModuleRunner,
+			llm.KindRepairPlanning,
 			"failed to render repair planning prompt",
 			err,
 		)
 	}
 
-	repairPayload, _, err := p.llmClient.CompleteJSON(ctx, ai.Request{
+	repairPayload, _, err := p.llmClient.CompleteJSON(ctx, llm.Request{
 		SystemPrompt: repairPrompt,
 		UserPrompt:   "Repair the current plan now and return JSON only.",
 		Temperature:  0.1,
 	})
 	if err != nil {
-		return spec.DAGPlan{}, ai.NewCannotProceedError(
-			ai.ModuleRunner,
-			ai.KindRepairPlanning,
+		return spec.DAGPlan{}, llm.NewCannotProceedError(
+			llm.ModuleRunner,
+			llm.KindRepairPlanning,
 			"repair planning LLM call failed",
 			err,
 		)
 	}
 
-	repaired, err := normalizeReviewedPlanResponse(repairPayload, plan, catalogEntries(tools), ai.KindRepairPlanning)
+	repaired, err := normalizeReviewedPlanResponse(repairPayload, plan, catalogEntries(tools), llm.KindRepairPlanning)
 	if err != nil {
 		return spec.DAGPlan{}, err
 	}
@@ -287,9 +287,9 @@ func (p *Planner) Review(ctx context.Context, taskID string, request taskflow.Re
 
 func (p *Planner) refineEdge(ctx context.Context, taskID string, edge spec.PlannedEdge, tool sqlite.ToolRecord) (spec.PlannedEdge, error) {
 	if p.runtime == nil || p.locator == nil {
-		return spec.PlannedEdge{}, ai.NewCannotProceedError(
-			ai.ModuleRunner,
-			ai.KindDetailPlanning,
+		return spec.PlannedEdge{}, llm.NewCannotProceedError(
+			llm.ModuleRunner,
+			llm.KindDetailPlanning,
 			fmt.Sprintf("executor detail planning is unavailable for tool %q", edge.ToolName),
 			nil,
 		)
@@ -302,9 +302,9 @@ func (p *Planner) refineEdge(ctx context.Context, taskID string, edge spec.Plann
 		ToolConfigHost: p.locator.ToolMergedPath(edge.ToolName),
 	})
 	if err != nil {
-		return spec.PlannedEdge{}, ai.NewCannotProceedError(
-			ai.ModuleRunner,
-			ai.KindDetailPlanning,
+		return spec.PlannedEdge{}, llm.NewCannotProceedError(
+			llm.ModuleRunner,
+			llm.KindDetailPlanning,
 			fmt.Sprintf("executor detail planning failed for tool %q", edge.ToolName),
 			err,
 		)
@@ -312,17 +312,17 @@ func (p *Planner) refineEdge(ctx context.Context, taskID string, edge spec.Plann
 
 	var plan spec.ExecutorPlan
 	if err := json.Unmarshal(payload, &plan); err != nil {
-		return spec.PlannedEdge{}, ai.NewCannotProceedError(
-			ai.ModuleRunner,
-			ai.KindDetailPlanning,
+		return spec.PlannedEdge{}, llm.NewCannotProceedError(
+			llm.ModuleRunner,
+			llm.KindDetailPlanning,
 			fmt.Sprintf("executor detail planning returned invalid output for tool %q", edge.ToolName),
 			err,
 		)
 	}
 	if !executorPlanProvidesDetail(plan) {
-		return spec.PlannedEdge{}, ai.NewCannotProceedError(
-			ai.ModuleRunner,
-			ai.KindDetailPlanning,
+		return spec.PlannedEdge{}, llm.NewCannotProceedError(
+			llm.ModuleRunner,
+			llm.KindDetailPlanning,
 			fmt.Sprintf("executor detail planning returned no usable detail for tool %q", edge.ToolName),
 			nil,
 		)
@@ -339,17 +339,17 @@ func (p *Planner) refineEdge(ctx context.Context, taskID string, edge spec.Plann
 	}
 
 	if strings.TrimSpace(edge.Summary) == "" || strings.TrimSpace(edge.SubTask) == "" {
-		return spec.PlannedEdge{}, ai.NewCannotProceedError(
-			ai.ModuleRunner,
-			ai.KindDetailPlanning,
+		return spec.PlannedEdge{}, llm.NewCannotProceedError(
+			llm.ModuleRunner,
+			llm.KindDetailPlanning,
 			fmt.Sprintf("executor detail planning left required fields empty for tool %q", edge.ToolName),
 			nil,
 		)
 	}
 	if len(edge.ExpectedOutputs) == 0 {
-		return spec.PlannedEdge{}, ai.NewCannotProceedError(
-			ai.ModuleRunner,
-			ai.KindDetailPlanning,
+		return spec.PlannedEdge{}, llm.NewCannotProceedError(
+			llm.ModuleRunner,
+			llm.KindDetailPlanning,
 			fmt.Sprintf("executor detail planning did not declare expected outputs for tool %q", edge.ToolName),
 			nil,
 		)
@@ -379,10 +379,10 @@ func (p *Planner) loadCatalog(ctx context.Context) ([]catalogTool, error) {
 	return out, nil
 }
 
-func catalogEntries(tools []catalogTool) []ai.ToolCatalogEntry {
-	entries := make([]ai.ToolCatalogEntry, 0, len(tools))
+func catalogEntries(tools []catalogTool) []llm.ToolCatalogEntry {
+	entries := make([]llm.ToolCatalogEntry, 0, len(tools))
 	for _, tool := range tools {
-		entries = append(entries, ai.ToolCatalogEntry{
+		entries = append(entries, llm.ToolCatalogEntry{
 			Name:        tool.Spec.Name,
 			Description: tool.Spec.Description,
 			InputTypes:  append([]string(nil), tool.Spec.InputTypes...),

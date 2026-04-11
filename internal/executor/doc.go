@@ -11,7 +11,7 @@
 // scheduling contract.
 //
 // The normal workflow begins with [New], which constructs an [Executor] around
-// output writers, a logger, and the built-in AI client factory. Describe loads
+// output writers, a logger, and the built-in LLM client factory. Describe loads
 // the local tool spec and serializes it for the registry. Plan loads the
 // scheduler-provided runtime context, prefers a tool-provided planning hook
 // when one exists, and otherwise falls back to repository-owned built-in AI via
