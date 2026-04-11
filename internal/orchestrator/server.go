@@ -2,7 +2,6 @@ package orchestrator
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -50,13 +49,15 @@ type Server struct {
 	logger    *slog.Logger
 }
 
-type serverListener struct {
-	entrypoint string
-	listener   net.Listener
-	server     *http.Server
+// activeListener pairs a named network listener with the HTTP server that serves it.
+type activeListener struct {
+	name     string
+	listener net.Listener
+	server   *http.Server
 }
 
-type requestPayload struct {
+// taskRequest is the JSON body accepted by the orchestrator API endpoints.
+type taskRequest struct {
 	Intent      string                 `json:"intent,omitempty"`
 	TaskID      string                 `json:"task_id,omitempty"`
 	Text        string                 `json:"text,omitempty"`
@@ -66,16 +67,16 @@ type requestPayload struct {
 	CloneReason string                 `json:"clone_reason,omitempty"`
 }
 
-type requestIntentHandler func(*Server, *gin.Context, requestPayload)
+const readHeaderTimeout = 5 * time.Second
 
-const serverReadHeaderTimeout = 5 * time.Second
-
-var requestIntentHandlers = map[string]requestIntentHandler{
-	"task/list":     (*Server).handleRequestTaskListIntent,
-	"task/describe": (*Server).handleRequestTaskDescribeIntent,
-	"task/cancel":   (*Server).handleRequestTaskCancelIntent,
-	"task/resume":   (*Server).handleRequestTaskResumeIntent,
-	"task/clone":    (*Server).handleRequestTaskCloneIntent,
+// intentHandlers maps canonical intent strings to their in-request handler
+// functions, used by the generic /v0/request endpoint.
+var intentHandlers = map[string]func(*Server, *gin.Context, taskRequest){
+	"task/list":     func(s *Server, c *gin.Context, _ taskRequest) { s.listTasks(c) },
+	"task/describe": func(s *Server, c *gin.Context, r taskRequest) { s.getTaskByID(c, r.TaskID) },
+	"task/cancel":   func(s *Server, c *gin.Context, r taskRequest) { s.cancelTaskByID(c, r.TaskID) },
+	"task/resume":   func(s *Server, c *gin.Context, r taskRequest) { s.resumeTaskByID(c, r.TaskID) },
+	"task/clone":    func(s *Server, c *gin.Context, r taskRequest) { s.cloneTaskByID(c, r.TaskID, r.CloneReason) },
 }
 
 var normalizedIntents = map[string]string{
@@ -115,24 +116,32 @@ func NewServer(config ServerConfig, registry *RegistryService, taskService *Task
 
 // buildRouter constructs a gin router with all API routes registered.
 //
-// Each listener calls buildRouter with its own entrypoint label so the
-// request-metadata middleware tags requests with the correct origin.
-func (s *Server) buildRouter(entrypoint string) *gin.Engine {
+// Each listener calls buildRouter with its own name so the request-metadata
+// middleware tags requests with the correct origin.
+func (s *Server) buildRouter(name string) *gin.Engine {
 	router := gin.New()
-	router.Use(s.requestMetadataMiddleware(entrypoint))
+	router.Use(s.requestMetadata(name))
 
-	router.GET("/healthz", s.handleHealth)
-	router.GET("/v0/tools", s.handleTools)
-	router.POST("/v0/request", s.handleRequest)
-	router.GET("/v0/task/list", s.handleTaskList)
-	router.POST("/v0/tasks/run", s.handleTaskRuns)
-	router.GET("/v0/tasks", s.handleTasksList)
-	router.POST("/v0/tasks", s.handleTasksCreate)
-	router.GET("/v0/tasks/:id", s.handleTaskDescribe)
-	router.GET("/v0/tasks/:id/describe", s.handleTaskDescribe)
-	router.POST("/v0/tasks/:id/cancel", s.handleTaskCancel)
-	router.POST("/v0/tasks/:id/resume", s.handleTaskResume)
-	router.POST("/v0/tasks/:id/clone", s.handleTaskClone)
+	router.GET("/healthz", s.healthz)
+
+	v0 := router.Group("/v0")
+	{
+		v0.GET("/tools", s.listTools)
+		v0.POST("/request", s.handleRequest)
+		v0.GET("/task/list", s.listTasks)
+		v0.POST("/tasks/run", s.runTask)
+
+		tasks := v0.Group("/tasks")
+		{
+			tasks.GET("", s.listTasks)
+			tasks.POST("", s.createTask)
+			tasks.GET("/:id", s.getTask)
+			tasks.GET("/:id/describe", s.getTask)
+			tasks.POST("/:id/cancel", s.cancelTask)
+			tasks.POST("/:id/resume", s.resumeTask)
+			tasks.POST("/:id/clone", s.cloneTask)
+		}
+	}
 
 	return router
 }
@@ -154,10 +163,10 @@ func (s *Server) ListenAndServe(ctx context.Context) error {
 	defer s.cleanupListeners(listeners)
 
 	errCh := make(chan error, len(listeners))
-	for _, item := range listeners {
-		go func(item serverListener) {
-			errCh <- item.server.Serve(item.listener)
-		}(item)
+	for _, l := range listeners {
+		go func(l activeListener) {
+			errCh <- l.server.Serve(l.listener)
+		}(l)
 	}
 
 	s.logger.Info("server listening", "tcp", s.config.TCPAddress, "unix", s.config.UnixSocketPath)
@@ -166,9 +175,9 @@ func (s *Server) ListenAndServe(ctx context.Context) error {
 	case <-ctx.Done():
 		shutdownCtx, cancel := finalizeContext(ctx)
 		defer cancel()
-		for _, item := range listeners {
-			if err := item.server.Shutdown(shutdownCtx); err != nil && !errors.Is(err, http.ErrServerClosed) {
-				s.logger.Error("server shutdown failed", "entrypoint", item.entrypoint, "error", err)
+		for _, l := range listeners {
+			if err := l.server.Shutdown(shutdownCtx); err != nil && !errors.Is(err, http.ErrServerClosed) {
+				s.logger.Error("server shutdown failed", "listener", l.name, "error", err)
 			}
 		}
 		return ctx.Err()
@@ -180,24 +189,24 @@ func (s *Server) ListenAndServe(ctx context.Context) error {
 	}
 }
 
-func (s *Server) openListeners(ctx context.Context) ([]serverListener, error) {
-	var listeners []serverListener
-	cleanupOnError := func(openErr error) ([]serverListener, error) {
+func (s *Server) openListeners(ctx context.Context) ([]activeListener, error) {
+	var listeners []activeListener
+	cleanupOnError := func(openErr error) ([]activeListener, error) {
 		s.cleanupListeners(listeners)
 		return nil, openErr
 	}
 
 	if strings.TrimSpace(s.config.TCPAddress) != "" {
-		listener, err := net.Listen("tcp", s.config.TCPAddress)
+		ln, err := net.Listen("tcp", s.config.TCPAddress)
 		if err != nil {
 			return nil, err
 		}
-		listeners = append(listeners, serverListener{
-			entrypoint: "tcp",
-			listener:   listener,
+		listeners = append(listeners, activeListener{
+			name:     "tcp",
+			listener: ln,
 			server: &http.Server{
 				Handler:           s.buildRouter("tcp"),
-				ReadHeaderTimeout: serverReadHeaderTimeout,
+				ReadHeaderTimeout: readHeaderTimeout,
 				BaseContext: func(_ net.Listener) context.Context {
 					return ctx
 				},
@@ -212,16 +221,16 @@ func (s *Server) openListeners(ctx context.Context) ([]serverListener, error) {
 		if err := removeUnixSocket(s.config.UnixSocketPath); err != nil {
 			return cleanupOnError(err)
 		}
-		listener, err := net.Listen("unix", s.config.UnixSocketPath)
+		ln, err := net.Listen("unix", s.config.UnixSocketPath)
 		if err != nil {
 			return cleanupOnError(err)
 		}
-		listeners = append(listeners, serverListener{
-			entrypoint: "unix",
-			listener:   listener,
+		listeners = append(listeners, activeListener{
+			name:     "unix",
+			listener: ln,
 			server: &http.Server{
 				Handler:           s.buildRouter("unix"),
-				ReadHeaderTimeout: serverReadHeaderTimeout,
+				ReadHeaderTimeout: readHeaderTimeout,
 				BaseContext: func(_ net.Listener) context.Context {
 					return ctx
 				},
@@ -238,9 +247,9 @@ func (s *Server) openListeners(ctx context.Context) ([]serverListener, error) {
 	return listeners, nil
 }
 
-func (s *Server) cleanupListeners(listeners []serverListener) {
-	for _, item := range listeners {
-		_ = item.listener.Close()
+func (s *Server) cleanupListeners(listeners []activeListener) {
+	for _, l := range listeners {
+		_ = l.listener.Close()
 	}
 	if strings.TrimSpace(s.config.UnixSocketPath) != "" {
 		_ = removeUnixSocket(s.config.UnixSocketPath)
@@ -268,231 +277,167 @@ func removeUnixSocket(path string) error {
 	return nil
 }
 
-// requestMetadataMiddleware returns a gin middleware that enriches each request
-// context with [taskflow.RequestMetadata] identifying the listener entrypoint.
-func (s *Server) requestMetadataMiddleware(entrypoint string) gin.HandlerFunc {
+// requestMetadata returns a gin middleware that enriches each request context
+// with [taskflow.RequestMetadata] identifying the listener by name.
+func (s *Server) requestMetadata(name string) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		metadata := taskflow.RequestMetadata{
-			Entrypoint: entrypoint,
+		md := taskflow.RequestMetadata{
+			Entrypoint: name,
 			RemoteAddr: c.Request.RemoteAddr,
 			ReceivedAt: time.Now().UTC(),
 		}
 		if localAddr, ok := c.Request.Context().Value(http.LocalAddrContextKey).(net.Addr); ok && localAddr != nil {
-			metadata.LocalAddr = localAddr.String()
+			md.LocalAddr = localAddr.String()
 		}
-		ctx := taskflow.WithRequestMetadata(c.Request.Context(), metadata)
-		c.Request = c.Request.WithContext(ctx)
+		c.Request = c.Request.WithContext(taskflow.WithRequestMetadata(c.Request.Context(), md))
 		c.Next()
 	}
 }
 
-func (s *Server) handleHealth(c *gin.Context) {
-	c.JSON(http.StatusOK, map[string]string{"status": "ok"})
+func (s *Server) healthz(c *gin.Context) {
+	c.JSON(http.StatusOK, gin.H{"status": "ok"})
 }
 
-func (s *Server) handleTools(c *gin.Context) {
+func (s *Server) listTools(c *gin.Context) {
 	tools, err := s.registry.List(c.Request.Context())
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		c.AbortWithStatusJSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
-	c.JSON(http.StatusOK, map[string]any{"tools": tools})
+	c.JSON(http.StatusOK, gin.H{"tools": tools})
 }
 
 func (s *Server) handleRequest(c *gin.Context) {
-	payload, err := decodeRequestPayload(c.Request)
+	var req taskRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.AbortWithStatusJSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	if fn, ok := intentHandlers[normalizeIntent(req.Intent)]; ok {
+		fn(s, c, req)
+		return
+	}
+
+	s.submitTask(c, req)
+}
+
+func (s *Server) listTasks(c *gin.Context) {
+	items, err := s.runners.List(c.Request.Context())
 	if err != nil {
-		c.JSON(http.StatusBadRequest, map[string]string{"error": err.Error()})
+		c.AbortWithStatusJSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
+	c.JSON(http.StatusOK, gin.H{"tasks": items})
+}
 
-	if s.dispatchRequestIntent(c, payload) {
+func (s *Server) createTask(c *gin.Context) {
+	var req taskRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.AbortWithStatusJSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
-
-	s.createOrRunTaskFromPayload(c, payload)
+	s.submitTask(c, req)
 }
 
-func (s *Server) dispatchRequestIntent(c *gin.Context, payload requestPayload) bool {
-	handler, ok := requestIntentHandlers[normalizeIntent(payload.Intent)]
-	if !ok {
-		return false
+func (s *Server) runTask(c *gin.Context) {
+	var req taskRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.AbortWithStatusJSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
 	}
-	handler(s, c, payload)
-	return true
-}
-
-func (s *Server) handleRequestTaskListIntent(c *gin.Context, _ requestPayload) {
-	s.writeTaskList(c)
-}
-
-func (s *Server) handleRequestTaskDescribeIntent(c *gin.Context, payload requestPayload) {
-	s.describeTaskByID(c, payload.TaskID)
-}
-
-func (s *Server) handleRequestTaskCancelIntent(c *gin.Context, payload requestPayload) {
-	s.cancelTaskByID(c, payload.TaskID)
-}
-
-func (s *Server) handleRequestTaskResumeIntent(c *gin.Context, payload requestPayload) {
-	s.resumeTaskByID(c, payload.TaskID)
-}
-
-func (s *Server) handleRequestTaskCloneIntent(c *gin.Context, payload requestPayload) {
-	s.cloneTaskByID(c, payload.TaskID, payload.CloneReason)
-}
-
-func (s *Server) createOrRunTaskFromPayload(c *gin.Context, payload requestPayload) {
-	request, err := understandIntent(c.Request.Context(), s.llmClient, s.logger, requestEnvelopeFromPayload(payload))
+	envelope := taskflow.RequestEnvelope{Text: req.Text, Parts: req.Parts, Meta: req.Meta}
+	request, err := understandIntent(c.Request.Context(), s.llmClient, s.logger, envelope)
 	if err != nil {
-		c.JSON(http.StatusBadGateway, map[string]string{"error": err.Error()})
+		c.AbortWithStatusJSON(http.StatusBadGateway, gin.H{"error": err.Error()})
 		return
 	}
-	if payload.AutoRun {
-		s.startTaskRequest(c, request)
-		return
-	}
-	s.createTaskRequest(c, request)
-}
-
-func (s *Server) createTaskRequest(c *gin.Context, request taskflow.RequestEnvelope) {
-	description, err := s.runners.Create(c.Request.Context(), request)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
-		return
-	}
-	c.JSON(http.StatusCreated, description)
-}
-
-func (s *Server) startTaskRequest(c *gin.Context, request taskflow.RequestEnvelope) {
 	description, err := s.runners.Start(c.Request.Context(), request)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		c.AbortWithStatusJSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
 	c.JSON(http.StatusAccepted, description)
 }
 
-func (s *Server) writeTaskList(c *gin.Context) {
-	items, err := s.runners.List(c.Request.Context())
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
-		return
-	}
-	c.JSON(http.StatusOK, map[string]any{"tasks": items})
+func (s *Server) getTask(c *gin.Context) {
+	s.getTaskByID(c, c.Param("id"))
 }
 
-func (s *Server) handleTaskList(c *gin.Context) {
-	s.writeTaskList(c)
-}
-
-func (s *Server) handleTasksList(c *gin.Context) {
-	s.writeTaskList(c)
-}
-
-func (s *Server) handleTasksCreate(c *gin.Context) {
-	payload, err := decodeRequestPayload(c.Request)
-	if err != nil {
-		c.JSON(http.StatusBadRequest, map[string]string{"error": err.Error()})
-		return
-	}
-	s.createOrRunTaskFromPayload(c, payload)
-}
-
-func (s *Server) handleTaskRuns(c *gin.Context) {
-	payload, err := decodeRequestPayload(c.Request)
-	if err != nil {
-		c.JSON(http.StatusBadRequest, map[string]string{"error": err.Error()})
-		return
-	}
-	request, err := understandIntent(c.Request.Context(), s.llmClient, s.logger, requestEnvelopeFromPayload(payload))
-	if err != nil {
-		c.JSON(http.StatusBadGateway, map[string]string{"error": err.Error()})
-		return
-	}
-	s.startTaskRequest(c, request)
-}
-
-func (s *Server) handleTaskDescribe(c *gin.Context) {
-	s.describeTaskByID(c, c.Param("id"))
-}
-
-func (s *Server) handleTaskCancel(c *gin.Context) {
+func (s *Server) cancelTask(c *gin.Context) {
 	s.cancelTaskByID(c, c.Param("id"))
 }
 
-func (s *Server) handleTaskResume(c *gin.Context) {
+func (s *Server) resumeTask(c *gin.Context) {
 	s.resumeTaskByID(c, c.Param("id"))
 }
 
-func (s *Server) handleTaskClone(c *gin.Context) {
-	payload, err := decodeRequestPayload(c.Request)
-	if err != nil && !errors.Is(err, errEmptyBody) {
-		c.JSON(http.StatusBadRequest, map[string]string{"error": err.Error()})
-		return
-	}
-	s.cloneTaskByID(c, c.Param("id"), payload.CloneReason)
+func (s *Server) cloneTask(c *gin.Context) {
+	var req taskRequest
+	_ = c.ShouldBindJSON(&req) // body is optional; clone reason may be omitted
+	s.cloneTaskByID(c, c.Param("id"), req.CloneReason)
 }
 
-func (s *Server) describeTaskByID(c *gin.Context, taskID string) {
-	description, err := s.runners.Describe(c.Request.Context(), taskID)
+// submitTask resolves the request intent and either creates or immediately starts
+// a task, depending on the AutoRun flag.
+func (s *Server) submitTask(c *gin.Context, req taskRequest) {
+	envelope := taskflow.RequestEnvelope{Text: req.Text, Parts: req.Parts, Meta: req.Meta}
+	request, err := understandIntent(c.Request.Context(), s.llmClient, s.logger, envelope)
 	if err != nil {
-		c.JSON(http.StatusNotFound, map[string]string{"error": err.Error()})
+		c.AbortWithStatusJSON(http.StatusBadGateway, gin.H{"error": err.Error()})
 		return
 	}
-	c.JSON(http.StatusOK, description)
-}
-
-func (s *Server) cancelTaskByID(c *gin.Context, taskID string) {
-	description, err := s.runners.Cancel(c.Request.Context(), taskID)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
+	if req.AutoRun {
+		description, err := s.runners.Start(c.Request.Context(), request)
+		if err != nil {
+			c.AbortWithStatusJSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
+		}
+		c.JSON(http.StatusAccepted, description)
 		return
 	}
-	c.JSON(http.StatusOK, description)
-}
-
-func (s *Server) resumeTaskByID(c *gin.Context, taskID string) {
-	description, err := s.runners.Resume(c.Request.Context(), taskID)
+	description, err := s.runners.Create(c.Request.Context(), request)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
-		return
-	}
-	c.JSON(http.StatusOK, description)
-}
-
-func (s *Server) cloneTaskByID(c *gin.Context, taskID string, reason string) {
-	description, err := s.runners.Clone(c.Request.Context(), taskID, reason)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		c.AbortWithStatusJSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
 	c.JSON(http.StatusCreated, description)
 }
 
-var errEmptyBody = errors.New("empty request body")
-
-func requestEnvelopeFromPayload(payload requestPayload) taskflow.RequestEnvelope {
-	return taskflow.RequestEnvelope{Text: payload.Text, Parts: payload.Parts, Meta: payload.Meta}
+func (s *Server) getTaskByID(c *gin.Context, id string) {
+	description, err := s.runners.Describe(c.Request.Context(), id)
+	if err != nil {
+		c.AbortWithStatusJSON(http.StatusNotFound, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, description)
 }
 
-func decodeRequestPayload(r *http.Request) (requestPayload, error) {
-	defer r.Body.Close()
-	if r.Body == nil {
-		return requestPayload{}, errEmptyBody
+func (s *Server) cancelTaskByID(c *gin.Context, id string) {
+	description, err := s.runners.Cancel(c.Request.Context(), id)
+	if err != nil {
+		c.AbortWithStatusJSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
 	}
-	var payload requestPayload
-	decoder := json.NewDecoder(r.Body)
-	if err := decoder.Decode(&payload); err != nil {
-		if errors.Is(err, os.ErrClosed) {
-			return requestPayload{}, errEmptyBody
-		}
-		if strings.Contains(err.Error(), "EOF") {
-			return requestPayload{}, errEmptyBody
-		}
-		return requestPayload{}, fmt.Errorf("decode request body: %w", err)
+	c.JSON(http.StatusOK, description)
+}
+
+func (s *Server) resumeTaskByID(c *gin.Context, id string) {
+	description, err := s.runners.Resume(c.Request.Context(), id)
+	if err != nil {
+		c.AbortWithStatusJSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
 	}
-	return payload, nil
+	c.JSON(http.StatusOK, description)
+}
+
+func (s *Server) cloneTaskByID(c *gin.Context, id string, reason string) {
+	description, err := s.runners.Clone(c.Request.Context(), id, reason)
+	if err != nil {
+		c.AbortWithStatusJSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusCreated, description)
 }
 
 func normalizeIntent(intent string) string {
