@@ -113,7 +113,7 @@ func TestTaskRunnerServiceStartRunsInBackground(t *testing.T) {
 	}
 
 	taskService := NewTaskService(locator, store, nil)
-	planner := runner.NewPlannerWithClient(locator, store, rt, staticPlannerClient(t,
+	planner := runner.NewPlanner(locator, store, rt, staticPlannerClient(t,
 		staticPlannerDraftJSON(
 			[]plannerDraftResponseEdge{{
 				Ref:             "final",

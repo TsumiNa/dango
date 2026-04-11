@@ -7,8 +7,8 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/tsumina/dango/internal/ai"
 	"github.com/tsumina/dango/internal/datadir"
-	"github.com/tsumina/dango/internal/llm"
 	"github.com/tsumina/dango/internal/runner"
 	"github.com/tsumina/dango/internal/runner/runtime"
 	"github.com/tsumina/dango/internal/spec"
@@ -90,7 +90,7 @@ func TestPlannerPlanUsesLLMOutput(t *testing.T) {
 		Model:       "demo/toy-packager",
 	})
 
-	planner := runner.NewPlannerWithClient(locator, store, staticExecutorPlanRuntime{payload: staticExecutorPlanJSON("Executor detail plan", "Refine and execute the assigned stage.", []string{"detail-output.txt"})}, staticPlannerClient(t,
+	planner := runner.NewPlanner(locator, store, staticExecutorPlanRuntime{payload: staticExecutorPlanJSON("Executor detail plan", "Refine and execute the assigned stage.", []string{"detail-output.txt"})}, staticPlannerClient(t,
 		staticPlannerDraftJSON(
 			[]plannerDraftResponseEdge{
 				{Ref: "brief", ToolName: "toy-brief", Dependencies: nil, InputType: "request", OutputType: "brief", Title: "Create brief", Summary: "Produce a brief from the request.", ExpectedOutputs: []string{"brief.md"}, SubTask: "Read the request and produce a short brief artifact."},
@@ -157,7 +157,7 @@ func TestPlannerPlanRepairsRejectedReview(t *testing.T) {
 		t.Fatalf("UpsertTool() error = %v", err)
 	}
 
-	planner := runner.NewPlannerWithClient(locator, store, staticExecutorPlanRuntime{payload: staticExecutorPlanJSON("Executor detail plan", "Refine and execute the assigned stage.", []string{"result.final"})}, staticPlannerClient(t,
+	planner := runner.NewPlanner(locator, store, staticExecutorPlanRuntime{payload: staticExecutorPlanJSON("Executor detail plan", "Refine and execute the assigned stage.", []string{"result.final"})}, staticPlannerClient(t,
 		staticPlannerDraftJSON([]plannerDraftResponseEdge{{
 			Ref:             "final",
 			ToolName:        "toy-finalizer",
@@ -221,7 +221,7 @@ func staticPlannerClient(t *testing.T, payloads ...[]byte) *staticPlannerLLMClie
 	return &staticPlannerLLMClient{testing: t, steps: steps}
 }
 
-func (c *staticPlannerLLMClient) CompleteJSON(context.Context, llm.Request) ([]byte, error) {
+func (c *staticPlannerLLMClient) CompleteJSON(context.Context, ai.Request) ([]byte, string, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if len(c.steps) == 0 {
@@ -232,7 +232,7 @@ func (c *staticPlannerLLMClient) CompleteJSON(context.Context, llm.Request) ([]b
 	}
 	payload := c.steps[c.index]
 	c.index++
-	return append([]byte(nil), payload...), nil
+	return append([]byte(nil), payload...), "", nil
 }
 
 func staticPlannerDraftJSON(edges []plannerDraftResponseEdge) []byte {

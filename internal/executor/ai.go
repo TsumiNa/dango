@@ -11,50 +11,69 @@ import (
 	"strings"
 	"time"
 
-	"github.com/tsumina/dango/internal/llm"
+	"github.com/tsumina/dango/internal/ai"
 	promptassets "github.com/tsumina/dango/internal/prompts"
 	"github.com/tsumina/dango/internal/spec"
 	"gopkg.in/yaml.v3"
 )
 
-type llmClientFactory func(model string, logger *slog.Logger) llm.Client
+type aiClientFactory func(model string, logger *slog.Logger) ai.Client
 
-func defaultLLMClientFactory(model string, logger *slog.Logger) llm.Client {
-	return llm.NewOpenAICompatibleFromEnv(model, logger)
+func defaultAIClientFactory(model string, logger *slog.Logger) ai.Client {
+	return ai.NewOpenAICompatibleFromEnv(model, logger)
 }
 
-// planWithBuiltInAI executes the built-in executor detail-planning path.
+// ExecuteGenerationResult is the structured output of the built-in
+// execute-generation AI call.
+type ExecuteGenerationResult struct {
+	Summary            string              `json:"summary,omitempty"`
+	HandoffBody        string              `json:"handoff_body"`
+	ExpectedOutputs    []string            `json:"expected_outputs,omitempty"`
+	GeneratedArtifacts []GeneratedArtifact `json:"generated_artifacts"`
+}
+
+// GeneratedArtifact describes one AI-generated file produced during execution.
+type GeneratedArtifact struct {
+	Path        string `json:"path"`
+	Description string `json:"description,omitempty"`
+	Content     string `json:"content"`
+	Private     bool   `json:"private,omitempty"`
+}
+
+// planAI executes the executor AI detail-planning stage.
 //
 // It renders the detail-planning prompt, requests structured JSON from the
 // configured model, and validates that the returned executor plan includes the
-// minimum information required for downstream execution.
-func (e *Executor) planWithBuiltInAI(ctx context.Context, runtimeContext runtimeContext, toolSpec spec.ToolSpec) (spec.ExecutorPlan, error) {
+// minimum information required for downstream execution. The response ID from
+// the underlying Responses API call is returned alongside the plan so callers
+// can continue the conversation in a subsequent turn.
+func (e *Executor) planAI(ctx context.Context, runtimeContext runtimeContext, toolSpec spec.ToolSpec) (spec.ExecutorPlan, string, error) {
 	prompt, err := e.renderDetailPlanPrompt(runtimeContext, toolSpec)
 	if err != nil {
-		return spec.ExecutorPlan{}, llm.NewCannotProceedError(
-			llm.ModuleExecutor,
-			llm.KindDetailPlanning,
-			"failed to render built-in AI detail-planning prompt",
+		return spec.ExecutorPlan{}, "", ai.NewCannotProceedError(
+			ai.ModuleExecutor,
+			ai.KindDetailPlanning,
+			"failed to render AI detail-planning prompt",
 			err,
 		)
 	}
 
-	payload, err := e.completeJSON(ctx, toolSpec.Model, prompt, "Refine the executor stage now and return JSON only.")
+	payload, responseID, err := e.completeJSON(ctx, toolSpec.Model, prompt, "Refine the executor stage now and return JSON only.", "")
 	if err != nil {
-		return spec.ExecutorPlan{}, llm.NewCannotProceedError(
-			llm.ModuleExecutor,
-			llm.KindDetailPlanning,
-			"built-in AI detail planning failed",
+		return spec.ExecutorPlan{}, "", ai.NewCannotProceedError(
+			ai.ModuleExecutor,
+			ai.KindDetailPlanning,
+			"AI detail planning failed",
 			err,
 		)
 	}
 
 	var plan spec.ExecutorPlan
 	if err := json.Unmarshal(payload, &plan); err != nil {
-		return spec.ExecutorPlan{}, llm.NewCannotProceedError(
-			llm.ModuleExecutor,
-			llm.KindDetailPlanning,
-			"built-in AI detail planning returned invalid JSON",
+		return spec.ExecutorPlan{}, "", ai.NewCannotProceedError(
+			ai.ModuleExecutor,
+			ai.KindDetailPlanning,
+			"AI detail planning returned invalid JSON",
 			err,
 		)
 	}
@@ -63,59 +82,71 @@ func (e *Executor) planWithBuiltInAI(ctx context.Context, runtimeContext runtime
 	plan.SubTask = strings.TrimSpace(plan.SubTask)
 	plan.ExpectedOutputs = cleanOutputPaths(plan.ExpectedOutputs)
 	if plan.Summary == "" || plan.SubTask == "" || len(plan.ExpectedOutputs) == 0 {
-		return spec.ExecutorPlan{}, llm.NewCannotProceedError(
-			llm.ModuleExecutor,
-			llm.KindDetailPlanning,
-			"built-in AI detail planning did not produce a complete executor plan",
+		return spec.ExecutorPlan{}, "", ai.NewCannotProceedError(
+			ai.ModuleExecutor,
+			ai.KindDetailPlanning,
+			"AI detail planning did not produce a complete executor plan",
 			nil,
 		)
 	}
 
-	return plan, nil
+	return plan, responseID, nil
 }
 
-// runWithBuiltInAI executes the built-in executor execute-generation path.
+// runAI executes the executor AI execute-generation stage
+// using a two-turn conversation via the OpenAI Responses API.
 //
-// It renders the execute-time prompt, validates the generated artifacts, writes
-// those artifacts into the public and private output trees, and emits matching
-// handoff files for the runner.
-func (e *Executor) runWithBuiltInAI(ctx context.Context, runtimeContext runtimeContext, toolSpec spec.ToolSpec) error {
+// Turn one sends the detail-planning prompt and validates the resulting executor
+// plan. The response ID from that turn is then passed as PreviousResponseID in
+// turn two, so the model carries forward the planning context when generating
+// the concrete stage artifacts. This two-turn design avoids duplicating the full
+// planning context in the generation request while keeping the model grounded in
+// the decisions made during planning.
+func (e *Executor) runAI(ctx context.Context, runtimeContext runtimeContext, toolSpec spec.ToolSpec) error {
+	// Turn 1: planning — validate the executor stage before generation.
+	_, planResponseID, err := e.planAI(ctx, runtimeContext, toolSpec)
+	if err != nil {
+		return err
+	}
+
+	// Turn 2: generation — continue the conversation so the model retains the
+	// planning context and produces concrete artifacts.
 	prompt, err := e.renderExecutePrompt(runtimeContext, toolSpec)
 	if err != nil {
-		return llm.NewCannotProceedError(
-			llm.ModuleExecutor,
-			llm.KindExecuteGeneration,
-			"failed to render built-in AI execute-generation prompt",
+		return ai.NewCannotProceedError(
+			ai.ModuleExecutor,
+			ai.KindExecuteGeneration,
+			"failed to render AI execute-generation prompt",
 			err,
 		)
 	}
 
-	payload, err := e.completeJSON(ctx, toolSpec.Model, prompt, "Generate the stage outputs now and return JSON only.")
+	payload, _, err := e.completeJSON(ctx, toolSpec.Model, prompt, "Generate the stage outputs now and return JSON only.", planResponseID)
 	if err != nil {
-		return llm.NewCannotProceedError(
-			llm.ModuleExecutor,
-			llm.KindExecuteGeneration,
-			"built-in AI execute generation failed",
+		return ai.NewCannotProceedError(
+			ai.ModuleExecutor,
+			ai.KindExecuteGeneration,
+			"AI execute generation failed",
 			err,
 		)
 	}
 
-	var result llm.ExecuteGenerationResult
+	var result ExecuteGenerationResult
 	if err := json.Unmarshal(payload, &result); err != nil {
-		return llm.NewCannotProceedError(
-			llm.ModuleExecutor,
-			llm.KindExecuteGeneration,
-			"built-in AI execute generation returned invalid JSON",
+		return ai.NewCannotProceedError(
+			ai.ModuleExecutor,
+			ai.KindExecuteGeneration,
+			"AI execute generation returned invalid JSON",
 			err,
 		)
 	}
 
 	normalized, publicFiles, err := normalizeExecuteGenerationResult(result)
 	if err != nil {
-		return llm.NewCannotProceedError(
-			llm.ModuleExecutor,
-			llm.KindExecuteGeneration,
-			"built-in AI execute generation returned an invalid result",
+		return ai.NewCannotProceedError(
+			ai.ModuleExecutor,
+			ai.KindExecuteGeneration,
+			"AI execute generation returned an invalid result",
 			err,
 		)
 	}
@@ -199,19 +230,21 @@ func (e *Executor) promptContext(runtimeContext runtimeContext, toolSpec spec.To
 }
 
 // completeJSON resolves a model-scoped LLM client and requests structured JSON
-// for the provided prompts.
-func (e *Executor) completeJSON(ctx context.Context, model string, systemPrompt string, userPrompt string) ([]byte, error) {
-	if e.llmFactory == nil {
-		return nil, fmt.Errorf("built-in executor AI client factory is not configured")
+// for the provided prompts. When previousResponseID is non-empty the underlying
+// Responses API continues the identified conversation turn.
+func (e *Executor) completeJSON(ctx context.Context, model string, systemPrompt string, userPrompt string, previousResponseID string) ([]byte, string, error) {
+	if e.clientFactory == nil {
+		return nil, "", fmt.Errorf("AI client factory is not configured")
 	}
-	client := e.llmFactory(strings.TrimSpace(model), e.logger)
+	client := e.clientFactory(strings.TrimSpace(model), e.logger)
 	if client == nil {
-		return nil, fmt.Errorf("built-in executor AI client is not configured")
+		return nil, "", fmt.Errorf("AI client is not configured")
 	}
-	return client.CompleteJSON(ctx, llm.Request{
-		SystemPrompt: systemPrompt,
-		UserPrompt:   userPrompt,
-		Temperature:  0.1,
+	return client.CompleteJSON(ctx, ai.Request{
+		SystemPrompt:       systemPrompt,
+		UserPrompt:         userPrompt,
+		Temperature:        0.1,
+		PreviousResponseID: previousResponseID,
 	})
 }
 
@@ -262,26 +295,26 @@ func defaultOutputHints(toolSpec spec.ToolSpec) []string {
 // The function ensures a handoff body exists, all generated artifact paths are
 // safe and non-empty, at least one public artifact is present, and the declared
 // expected outputs line up with the generated public artifacts.
-func normalizeExecuteGenerationResult(result llm.ExecuteGenerationResult) (llm.ExecuteGenerationResult, []string, error) {
+func normalizeExecuteGenerationResult(result ExecuteGenerationResult) (ExecuteGenerationResult, []string, error) {
 	result.Summary = strings.TrimSpace(result.Summary)
 	result.HandoffBody = strings.TrimSpace(result.HandoffBody)
 	if result.HandoffBody == "" && result.Summary != "" {
 		result.HandoffBody = "## Description\n\n" + result.Summary
 	}
 	if result.HandoffBody == "" {
-		return llm.ExecuteGenerationResult{}, nil, fmt.Errorf("handoff_body is required")
+		return ExecuteGenerationResult{}, nil, fmt.Errorf("handoff_body is required")
 	}
 
 	publicFiles := make([]string, 0, len(result.GeneratedArtifacts))
-	normalizedArtifacts := make([]llm.GeneratedArtifact, 0, len(result.GeneratedArtifacts))
+	normalizedArtifacts := make([]GeneratedArtifact, 0, len(result.GeneratedArtifacts))
 	publicSet := map[string]bool{}
 	for _, artifact := range result.GeneratedArtifacts {
 		cleanPath, err := normalizeGeneratedPath(artifact.Path)
 		if err != nil {
-			return llm.ExecuteGenerationResult{}, nil, err
+			return ExecuteGenerationResult{}, nil, err
 		}
 		if strings.TrimSpace(artifact.Content) == "" {
-			return llm.ExecuteGenerationResult{}, nil, fmt.Errorf("generated artifact %q must include content", cleanPath)
+			return ExecuteGenerationResult{}, nil, fmt.Errorf("generated artifact %q must include content", cleanPath)
 		}
 		artifact.Path = cleanPath
 		artifact.Description = strings.TrimSpace(artifact.Description)
@@ -292,10 +325,10 @@ func normalizeExecuteGenerationResult(result llm.ExecuteGenerationResult) (llm.E
 		}
 	}
 	if len(normalizedArtifacts) == 0 {
-		return llm.ExecuteGenerationResult{}, nil, fmt.Errorf("generated_artifacts must contain at least one artifact")
+		return ExecuteGenerationResult{}, nil, fmt.Errorf("generated_artifacts must contain at least one artifact")
 	}
 	if len(publicFiles) == 0 {
-		return llm.ExecuteGenerationResult{}, nil, fmt.Errorf("generated_artifacts must include at least one public artifact")
+		return ExecuteGenerationResult{}, nil, fmt.Errorf("generated_artifacts must include at least one public artifact")
 	}
 	sort.Strings(publicFiles)
 
@@ -306,7 +339,7 @@ func normalizeExecuteGenerationResult(result llm.ExecuteGenerationResult) (llm.E
 	}
 	for _, expected := range result.ExpectedOutputs {
 		if !publicSet[expected] {
-			return llm.ExecuteGenerationResult{}, nil, fmt.Errorf("expected output %q does not match any public generated artifact", expected)
+			return ExecuteGenerationResult{}, nil, fmt.Errorf("expected output %q does not match any public generated artifact", expected)
 		}
 	}
 
@@ -347,7 +380,7 @@ func normalizeGeneratedPath(value string) (string, error) {
 
 // writeGeneratedArtifacts materializes generated artifacts into the private
 // output tree and mirrors public artifacts into the public output tree.
-func writeGeneratedArtifacts(publicOutputPath string, privateOutputPath string, artifacts []llm.GeneratedArtifact) error {
+func writeGeneratedArtifacts(publicOutputPath string, privateOutputPath string, artifacts []GeneratedArtifact) error {
 	for _, artifact := range artifacts {
 		privatePath := filepath.Join(privateOutputPath, filepath.FromSlash(artifact.Path))
 		if err := os.MkdirAll(filepath.Dir(privatePath), 0o755); err != nil {

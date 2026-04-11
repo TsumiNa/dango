@@ -54,7 +54,7 @@ func TestTaskRunnerRunEndToEndWithHostRuntime(t *testing.T) {
 	}
 
 	taskService := NewTaskService(locator, store, nil)
-	planner := runner.NewPlannerWithClient(locator, store, rt, staticPlannerClient(t,
+	planner := runner.NewPlanner(locator, store, rt, staticPlannerClient(t,
 		staticPlannerDraftJSON(
 			[]plannerDraftResponseEdge{
 				{Ref: "brief", ToolName: "toy-brief", Dependencies: nil, InputType: "request", OutputType: "brief", Title: "Create brief", Summary: "Produce a brief from the request.", ExpectedOutputs: []string{"brief.md"}, SubTask: "Read the request and produce a short brief artifact."},
@@ -121,7 +121,7 @@ func TestTaskRunnerRunEndToEndWithHostRuntimeWithoutToolHooks(t *testing.T) {
 	}
 
 	taskService := NewTaskService(locator, store, nil)
-	planner := runner.NewPlannerWithClient(locator, store, rt, staticPlannerClient(t,
+	planner := runner.NewPlanner(locator, store, rt, staticPlannerClient(t,
 		staticPlannerDraftJSON([]plannerDraftResponseEdge{{
 			Ref:             "final",
 			ToolName:        "toy-no-hooks",

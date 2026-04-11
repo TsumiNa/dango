@@ -72,7 +72,7 @@ func TestTaskRunnerRunPersistsCancellationAfterCancellation(t *testing.T) {
 	}
 
 	taskService := NewTaskService(locator, store, nil)
-	planner := runner.NewPlannerWithClient(locator, store, rt, staticPlannerClient(t,
+	planner := runner.NewPlanner(locator, store, rt, staticPlannerClient(t,
 		staticPlannerDraftJSON(
 			[]plannerDraftResponseEdge{
 				{Ref: "cancel", ToolName: "canceling-tool", Dependencies: nil, InputType: "request", OutputType: "final", Title: "Cancel run", Summary: "Invoke the canceling tool once.", ExpectedOutputs: []string{"result.final"}, SubTask: "Run the canceling tool for this request."},

@@ -1,24 +1,29 @@
-package llm
+package ai
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"log/slog"
-	"net/http"
 	"os"
 	"strings"
+
+	openai "github.com/openai/openai-go/v3"
+	"github.com/openai/openai-go/v3/option"
+	"github.com/openai/openai-go/v3/packages/param"
+	"github.com/openai/openai-go/v3/responses"
+	"github.com/openai/openai-go/v3/shared"
 
 	"github.com/tsumina/dango/internal/logging"
 )
 
 // Request describes one structured completion request sent through a
-// repository-owned LLM client.
+// repository-owned AI client.
 //
 // Callers typically build Request after rendering a system prompt from package
 // prompts and deciding on a short user instruction that asks for JSON output.
+// Set PreviousResponseID to continue a multi-turn conversation using the
+// OpenAI Responses API.
 type Request struct {
 	// SystemPrompt contains the main instruction set and structured context.
 	SystemPrompt string
@@ -26,23 +31,29 @@ type Request struct {
 	UserPrompt string
 	// Temperature requests the sampling temperature for the completion.
 	Temperature float64
+	// PreviousResponseID carries the response ID returned by a prior CompleteJSON
+	// call. When non-empty the upstream Responses API continues the existing
+	// conversation so the model retains context from that previous turn.
+	PreviousResponseID string
 }
 
-// Client generates structured responses from an LLM provider.
+// Client generates structured responses from an AI provider.
 //
 // Implementations are expected to be safe for reuse across concurrent planning
 // and execution flows.
 type Client interface {
 	// CompleteJSON submits request and returns the raw JSON payload selected by
-	// the model.
-	CompleteJSON(ctx context.Context, request Request) ([]byte, error)
+	// the model together with the response ID of the completed turn. The
+	// response ID can be passed in a subsequent Request.PreviousResponseID to
+	// continue a multi-turn conversation.
+	CompleteJSON(ctx context.Context, request Request) ([]byte, string, error)
 }
 
-// Config configures the OpenAI-compatible chat client used by the built-in AI
-// paths.
+// Config configures the OpenAI-compatible client used by AI-backed planning
+// and execution paths.
 //
 // The same structure is used for orchestrator intent understanding, runner
-// planning and review, and executor-side built-in AI generation.
+// planning and review, and executor-side AI generation.
 type Config struct {
 	// BaseURL is the OpenAI-compatible API root without a trailing slash.
 	BaseURL string
@@ -54,36 +65,20 @@ type Config struct {
 	Temperature float64
 }
 
+// ToolCatalogEntry describes one registered tool exposed to planning prompts.
+type ToolCatalogEntry struct {
+	Name        string   `json:"name"`
+	Description string   `json:"description"`
+	InputTypes  []string `json:"input_types"`
+	OutputTypes []string `json:"output_types"`
+	Model       string   `json:"model,omitempty"`
+}
+
 type openAICompatibleClient struct {
-	httpClient  *http.Client
-	baseURL     string
-	apiKey      string
+	sdkClient   *openai.Client
 	model       string
 	temperature float64
 	logger      *slog.Logger
-}
-
-type openAIChatRequest struct {
-	Model          string              `json:"model"`
-	Messages       []openAIChatMessage `json:"messages"`
-	Temperature    float64             `json:"temperature,omitempty"`
-	ResponseFormat any                 `json:"response_format,omitempty"`
-}
-
-type openAIChatMessage struct {
-	Role    string `json:"role"`
-	Content string `json:"content"`
-}
-
-type openAIChatResponse struct {
-	Choices []struct {
-		Message struct {
-			Content string `json:"content"`
-		} `json:"message"`
-	} `json:"choices"`
-	Error *struct {
-		Message string `json:"message"`
-	} `json:"error,omitempty"`
 }
 
 // NewOpenAICompatibleFromEnv constructs an OpenAI-compatible client from the
@@ -92,7 +87,7 @@ type openAIChatResponse struct {
 // The lookup order is DANGO-prefixed variables first, then OPENAI-prefixed
 // variables, and finally hard-coded defaults for the base URL. When model or
 // API key configuration is missing, the function returns nil and leaves it to
-// higher-level planning or orchestration code to report that built-in AI is not
+// higher-level planning or orchestration code to report that AI is not
 // configured.
 func NewOpenAICompatibleFromEnv(model string, logger *slog.Logger) Client {
 	baseURL := firstNonEmpty(
@@ -125,10 +120,11 @@ func NewOpenAICompatibleFromEnv(model string, logger *slog.Logger) Client {
 	}, logger)
 }
 
-// NewOpenAICompatible constructs an OpenAI-compatible JSON completion client.
+// NewOpenAICompatible constructs an OpenAI-compatible JSON completion client
+// backed by the official openai-go/v3 SDK using the Responses API.
 //
 // The client always asks the upstream provider for JSON object output and is
-// the main transport used by the built-in intent, planning, review, repair,
+// the main transport used by the intent, planning, review, repair,
 // and executor generation paths. It also normalizes base URL and temperature
 // defaults so callers can pass partial configuration. When required config is
 // missing, NewOpenAICompatible returns nil.
@@ -148,74 +144,57 @@ func NewOpenAICompatible(config Config, logger *slog.Logger) Client {
 		temperature = 0.1
 	}
 
+	sdkClient := openai.NewClient(
+		option.WithAPIKey(strings.TrimSpace(config.APIKey)),
+		option.WithBaseURL(baseURL),
+	)
+
 	return &openAICompatibleClient{
-		httpClient:  http.DefaultClient,
-		baseURL:     baseURL,
-		apiKey:      strings.TrimSpace(config.APIKey),
+		sdkClient:   &sdkClient,
 		model:       strings.TrimSpace(config.Model),
 		temperature: temperature,
-		logger:      logging.Component(logger, "llm.openai_compatible"),
+		logger:      logging.Component(logger, "ai.openai_compatible"),
 	}
 }
 
-// CompleteJSON requests a JSON object from an OpenAI-compatible chat endpoint.
+// CompleteJSON requests a JSON object via the OpenAI Responses API.
 //
-// The method converts Request into a two-message chat completion call, strips
-// any surrounding Markdown code fence from the chosen answer, and validates
-// that the resulting payload is well-formed JSON before returning it.
-func (c *openAICompatibleClient) CompleteJSON(ctx context.Context, request Request) ([]byte, error) {
-	payload, err := json.Marshal(openAIChatRequest{
+// The method maps Request into a Responses API call: SystemPrompt becomes the
+// Instructions field, UserPrompt is the user-role input message, and a
+// non-empty PreviousResponseID continues an existing multi-turn conversation.
+// The returned string is the response ID, which callers can pass back in
+// Request.PreviousResponseID to chain a follow-up turn.
+func (c *openAICompatibleClient) CompleteJSON(ctx context.Context, request Request) ([]byte, string, error) {
+	jsonFmt := shared.NewResponseFormatJSONObjectParam()
+	params := responses.ResponseNewParams{
 		Model: c.model,
-		Messages: []openAIChatMessage{
-			{Role: "system", Content: request.SystemPrompt},
-			{Role: "user", Content: request.UserPrompt},
+		Text: responses.ResponseTextConfigParam{
+			Format: responses.ResponseFormatTextConfigUnionParam{
+				OfJSONObject: &jsonFmt,
+			},
 		},
-		Temperature: c.temperature,
-		ResponseFormat: map[string]string{
-			"type": "json_object",
+		Temperature: param.NewOpt(c.temperature),
+		Input: responses.ResponseNewParamsInputUnion{
+			OfString: param.NewOpt(request.UserPrompt),
 		},
-	})
+	}
+	if request.SystemPrompt != "" {
+		params.Instructions = param.NewOpt(request.SystemPrompt)
+	}
+	if request.PreviousResponseID != "" {
+		params.PreviousResponseID = param.NewOpt(request.PreviousResponseID)
+	}
+
+	response, err := c.sdkClient.Responses.New(ctx, params)
 	if err != nil {
-		return nil, fmt.Errorf("marshal llm request: %w", err)
+		return nil, "", fmt.Errorf("AI request failed: %w", err)
 	}
 
-	httpRequest, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+"/chat/completions", bytes.NewReader(payload))
-	if err != nil {
-		return nil, fmt.Errorf("build llm request: %w", err)
-	}
-	httpRequest.Header.Set("Authorization", "Bearer "+c.apiKey)
-	httpRequest.Header.Set("Content-Type", "application/json")
-
-	response, err := c.httpClient.Do(httpRequest)
-	if err != nil {
-		return nil, fmt.Errorf("send llm request: %w", err)
-	}
-	defer response.Body.Close()
-
-	body, err := io.ReadAll(response.Body)
-	if err != nil {
-		return nil, fmt.Errorf("read llm response: %w", err)
-	}
-
-	var parsed openAIChatResponse
-	if err := json.Unmarshal(body, &parsed); err != nil {
-		return nil, fmt.Errorf("decode llm response: %w", err)
-	}
-	if response.StatusCode < 200 || response.StatusCode >= 300 {
-		if parsed.Error != nil && strings.TrimSpace(parsed.Error.Message) != "" {
-			return nil, fmt.Errorf("llm request failed: %s", strings.TrimSpace(parsed.Error.Message))
-		}
-		return nil, fmt.Errorf("llm request failed with status %s", response.Status)
-	}
-	if len(parsed.Choices) == 0 {
-		return nil, fmt.Errorf("llm response did not include any choices")
-	}
-
-	content := stripMarkdownCodeFence(parsed.Choices[0].Message.Content)
+	content := stripMarkdownCodeFence(response.OutputText())
 	if !json.Valid([]byte(content)) {
-		return nil, fmt.Errorf("llm response was not valid JSON")
+		return nil, "", fmt.Errorf("AI response was not valid JSON")
 	}
-	return []byte(content), nil
+	return []byte(content), response.ID, nil
 }
 
 func stripMarkdownCodeFence(value string) string {

@@ -13,17 +13,24 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/tsumina/dango/internal/ai"
 	"github.com/tsumina/dango/internal/datadir"
-	"github.com/tsumina/dango/internal/llm"
 	"github.com/tsumina/dango/internal/runner"
 	"github.com/tsumina/dango/internal/store/sqlite"
 	"github.com/tsumina/dango/internal/taskflow"
 )
 
-type passthroughIntentHook struct{}
+// staticIntentLLMClient is a test LLM client that returns a pre-baked JSON payload.
+type staticIntentLLMClient struct {
+	payload []byte
+	err     error
+}
 
-func (passthroughIntentHook) Understand(_ context.Context, request llm.IntentRequest) (llm.IntentResult, error) {
-	return llm.IntentResult{Request: request.Request}, nil
+func (c staticIntentLLMClient) CompleteJSON(_ context.Context, _ ai.Request) ([]byte, string, error) {
+	if c.err != nil {
+		return nil, "", c.err
+	}
+	return append([]byte(nil), c.payload...), "", nil
 }
 
 func newServerTestFixture(t *testing.T) (*Server, *runner.TaskRunnerService) {
@@ -46,7 +53,8 @@ func newServerTestFixture(t *testing.T) (*Server, *runner.TaskRunnerService) {
 
 	taskService := NewTaskService(locator, store, nil)
 	runners := runner.NewTaskRunnerService(locator, taskService, nil, nil, nil)
-	return NewServer(ServerConfig{}, nil, taskService, runners, passthroughIntentHook{}, nil), runners
+	// nil client = passthrough (no intent understanding).
+	return NewServer(ServerConfig{}, nil, taskService, runners, nil, nil), runners
 }
 
 func TestRemoveUnixSocketRemovesStaleSocket(t *testing.T) {
@@ -167,10 +175,17 @@ func TestHandleTaskRunsPostNormalizesRequestWithIntentHook(t *testing.T) {
 	t.Parallel()
 
 	server, _ := newServerTestFixture(t)
-	server.intent = intentTestHook{result: llm.IntentResult{
+
+	// Build the intent result JSON that the mock client will return.
+	result := intentResult{
 		Request: taskflow.RequestEnvelope{Text: "normalized request", Meta: map[string]string{"intent": "write"}},
 		Summary: "normalized by test",
-	}}
+	}
+	payload, err := json.Marshal(result)
+	if err != nil {
+		t.Fatalf("json.Marshal(intentResult) error = %v", err)
+	}
+	server.llmClient = staticIntentLLMClient{payload: payload}
 
 	req := httptest.NewRequest(http.MethodPost, "/v0/task-runs", strings.NewReader(`{"text":"raw request","meta":{"source":"http"}}`))
 	recorder := httptest.NewRecorder()
@@ -197,18 +212,6 @@ func TestHandleTaskRunsPostNormalizesRequestWithIntentHook(t *testing.T) {
 	if got, want := response.Metadata.Request.Meta["intent_summary"], "normalized by test"; got != want {
 		t.Fatalf("response.Metadata.Request.Meta[intent_summary] = %q, want %q", got, want)
 	}
-}
-
-type intentTestHook struct {
-	result llm.IntentResult
-	err    error
-}
-
-func (h intentTestHook) Understand(context.Context, llm.IntentRequest) (llm.IntentResult, error) {
-	if h.err != nil {
-		return llm.IntentResult{}, h.err
-	}
-	return h.result, nil
 }
 
 func TestHandleTaskByIDDescribeActionReturnsTask(t *testing.T) {
