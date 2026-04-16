@@ -32,7 +32,7 @@ func (e *Runtime) ExecuteNext() error {
 // The previousTask parameter let [Runtime] know how to link a previous one to the new one, so it can manage the execution flow.
 // The shared parameter is used to share data with file path or S3-like url between tasks.
 // [ExecuteNext] will execute the next task in the runtime, and it can access the shared data through the share parameter.
-func (e *Runtime) AddTask(newTask any, previousTaskId uint32, shared any) error {
+func (e *Runtime) AddTask(newTask any, previousTaskId uint32, shared ...SharedData) error {
 	e.logger.Info("Adding a new task...")
 	return nil
 }
