@@ -4,6 +4,7 @@ import (
 	"context"
 	"log/slog"
 	"sync"
+	"time"
 
 	"github.com/lithammer/shortuuid/v4"
 )
@@ -49,17 +50,19 @@ type RuntimeSnapshot struct {
 	CompletedNodes map[string]any
 	PendingNodes   map[string]int
 	GraphEdges     map[string][]string // parent -> children IDs
+	NodesData      map[string]*Node    // Make nodes accessible for snapshot reading
 }
 
 // Node represents a single unit of work within the Runtime's execution graph.
 type Node struct {
 	Id      string  `json:"id" yaml:"id"`
 	Parents []*Node `json:"parents,omitempty" yaml:"parents,omitempty"`
-	// Run executes the node's logic.
-	// It takes a map of parent outputs as inputs keyed by parent ID.
-	// Run can return newly constructed nodes (newNodes) which will be
-	// dynamically appended to the computation graph.
-	Run func(ctx context.Context, parentOutputs map[string]any) (output any, newNodes []*Node, err error)
+	// Executor contains the execution logic of the node.
+	Executor *Executor `json:"-" yaml:"-"`
+
+	CreatedAt  time.Time `json:"created_at" yaml:"created_at"`
+	UpdatedAt  time.Time `json:"updated_at" yaml:"updated_at"`
+	FinishedAt time.Time `json:"finished_at" yaml:"finished_at"`
 }
 
 type executionResult struct {
@@ -166,11 +169,12 @@ func (r *Runtime) Start(ctx context.Context) error {
 			inputs[p.Id] = outputs[p.Id]
 		}
 
+		n.UpdatedAt = time.Now()
 		activeCount++
 		broadcast(RuntimeEvent{Type: EventNodeStarted, NodeID: n.Id})
 
 		go func() {
-			out, dynNodes, err := n.Run(ctx, inputs)
+			out, dynNodes, err := n.Executor.Execute(ctx, inputs)
 			select {
 			case <-ctx.Done():
 			case r.resultCh <- executionResult{nodeID: n.Id, output: out, newNodes: dynNodes, err: err}:
@@ -179,10 +183,16 @@ func (r *Runtime) Start(ctx context.Context) error {
 	}
 
 	addNodesInternal := func(newNodes []*Node) {
+		now := time.Now()
 		for _, n := range newNodes {
 			if _, exists := nodes[n.Id]; exists {
 				continue
 			}
+
+			if n.CreatedAt.IsZero() {
+				n.CreatedAt = now
+			}
+			n.UpdatedAt = now
 			nodes[n.Id] = n
 
 			for _, p := range n.Parents {
@@ -215,6 +225,9 @@ func (r *Runtime) Start(ctx context.Context) error {
 			addNodesInternal(newNodes)
 
 		case res := <-r.resultCh:
+			n := nodes[res.nodeID]
+			n.UpdatedAt = time.Now()
+			n.FinishedAt = n.UpdatedAt
 			activeCount--
 
 			if res.err != nil {
@@ -241,11 +254,16 @@ func (r *Runtime) Start(ctx context.Context) error {
 				CompletedNodes: make(map[string]any),
 				PendingNodes:   make(map[string]int),
 				GraphEdges:     make(map[string][]string),
+				NodesData:      make(map[string]*Node),
 				ActiveCount:    activeCount,
 			}
 			// Copy internal maps safely for snapshot reading
 			for k, v := range outputs {
 				snap.CompletedNodes[k] = v
+			}
+			for k, v := range nodes {
+				// shallow copy the node struct reference
+				snap.NodesData[k] = v
 			}
 			for k, v := range pendingParents {
 				snap.PendingNodes[k] = v

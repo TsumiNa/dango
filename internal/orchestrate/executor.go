@@ -1,6 +1,7 @@
 package orchestrate
 
 import (
+	"context"
 	"log"
 	"net/url"
 	"os"
@@ -55,6 +56,9 @@ type Executor struct {
 	planner   *ExecutionPlanner
 	Result    *ExecutionResult
 	Status    Status
+
+	// Added for mockability during engine execution. Temporary placeholder to pass current tests
+	RunE func(ctx context.Context, parentOutputs map[string]any) (output any, newNodes []*Node, err error)
 
 	// Metadata about the skill, such as name, description, license, etc.
 	Metadata
@@ -120,8 +124,16 @@ func (e *Executor) planTask() error {
 	return nil
 }
 
-func (e *Executor) Execute(shared ...SharedData) error {
+func (e *Executor) Execute(ctx context.Context, parentOutputs map[string]any) (any, []*Node, error) {
 	// Implement the logic to execute tasks based on the request, manage state, handle results, etc.
-	e.logger.Println("Executing tasks...")
-	return nil
+	if e.logger != nil {
+		e.logger.Println("Executing tasks...")
+	}
+
+	// Temporary bridge to preserve compatibility with existing dynamic closures until Executor is fully refactored.
+	if e.RunE != nil {
+		return e.RunE(ctx, parentOutputs)
+	}
+
+	return nil, nil, nil
 }
