@@ -8,6 +8,8 @@ import (
 	"strings"
 
 	"github.com/adrg/frontmatter"
+
+	"github.com/tsumina/dango/internal/llm"
 )
 
 type Status int
@@ -59,6 +61,11 @@ type Executor struct {
 
 	// Added for mockability during engine execution. Temporary placeholder to pass current tests
 	RunE func(ctx context.Context, parentOutputs map[string]any) (output any, newNodes []*Node, err error)
+
+	// LLM is an optional client used by Execute-time logic to reason about the
+	// task. It is typically populated from llm.NewClientFromEnv so that the
+	// Executor can issue Responses API requests during planning or execution.
+	LLM *llm.Client
 
 	// Metadata about the skill, such as name, description, license, etc.
 	Metadata
