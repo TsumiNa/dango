@@ -77,6 +77,16 @@ var ErrNoAPIKey = errors.New("llm: no supported API key found (OPENAI_API_KEY, O
 // ErrNoModel is returned when ORCHESTRATION_MODEL is not set.
 var ErrNoModel = errors.New("llm: ORCHESTRATION_MODEL environment variable is not set")
 
+// NewClient wraps an already-constructed openai SDK client.
+//
+// NewClient is useful when callers need to supply a pre-configured SDK client
+// (for example, to route requests through a custom HTTP transport or a test
+// server). provider and model are stored on the returned Client and returned
+// by [Client.Provider] and [Client.Model].
+func NewClient(provider Provider, model string, raw openai.Client) *Client {
+	return &Client{provider: provider, model: model, raw: raw}
+}
+
 // NewClientFromEnv constructs a Client from the environment.
 //
 // If a .env file is present in the current working directory, its values are

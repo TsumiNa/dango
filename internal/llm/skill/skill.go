@@ -1,6 +1,7 @@
 package skill
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -32,11 +33,17 @@ type Skill struct {
 	License     string `yaml:"license,omitempty" toml:"license,omitempty" json:"license,omitempty"`
 	Instruction string
 
+	dir    string
 	client *llm.Client
 }
 
 // Client returns the LLM client this skill is bound to.
 func (s *Skill) Client() *llm.Client { return s.client }
+
+// Dir returns the absolute path of the skill directory this Skill was loaded
+// from. It is the root used to resolve references, examples, scripts, and
+// any filesystem-scoped built-in tools created by [BuiltinTools].
+func (s *Skill) Dir() string { return s.dir }
 
 // NewSkillFromDir loads a Skill from a skill directory rooted at dir and binds
 // it to the given LLM client.
@@ -77,5 +84,30 @@ func NewSkillFromDir(dir string, client *llm.Client) (*Skill, error) {
 	}
 	skill.Instruction = string(rest)
 	skill.client = client
+	skill.dir = dir
 	return &skill, nil
+}
+
+// Run executes the skill against userInput.
+//
+// Run constructs an [Agent] wired with the skill's bound LLM client and the
+// built-in filesystem and shell tools scoped to [Skill.Dir], then drives a
+// tool-using loop using Instruction as the system instruction and userInput
+// as the first user message. The returned string is the final assistant
+// response. Additional tools specific to the caller can be registered with
+// [Skill.RunWith].
+func (s *Skill) Run(ctx context.Context, userInput string) (string, error) {
+	return s.RunWith(ctx, userInput, nil)
+}
+
+// RunWith behaves like [Skill.Run] but also advertises extraTools to the
+// model in addition to the default built-in tools.
+func (s *Skill) RunWith(ctx context.Context, userInput string, extraTools []Tool) (string, error) {
+	tools := BuiltinTools(s.dir)
+	tools = append(tools, extraTools...)
+	agent, err := NewAgent(s.client, tools)
+	if err != nil {
+		return "", err
+	}
+	return agent.Run(ctx, s.Instruction, userInput)
 }
