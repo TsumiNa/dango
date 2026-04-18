@@ -107,8 +107,9 @@ func NewExecutor(logger *log.Logger, workspace string, planner *ExecutionPlanner
 	}, nil
 }
 
-func (e *Executor) Plan() error {
-	// Implement the logic to plan the execution of tasks based on the request, manage state, etc.
+// PolishPlan generates a plan based on [PlanFromRequest]'s results.
+// It updates the planner with the reasoning and solution for the task, which can be used by Execute to perform the actual execution.
+func (e *Executor) PolishPlan() error {
 	e.logger.Println("Planning tasks...")
 
 	if err := e.planTask(); err != nil {

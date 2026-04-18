@@ -21,3 +21,9 @@ func NewOrchestrator(logger *slog.Logger) *Orchestrator {
 		runtime: NewRuntime(logger),
 	}
 }
+
+// PlanFromRequest generates an execution plan based on the provided request.
+// It returns an abstract representation of the plan that can be further polished and executed by the Orchestrator.
+func (o *Orchestrator) PlanFromRequest(req *Request) (plan *any, err error) {
+	return nil, nil
+}
