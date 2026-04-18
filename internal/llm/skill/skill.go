@@ -1,7 +1,6 @@
 package skill
 
 import (
-	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -33,8 +32,10 @@ type Skill struct {
 	License     string `yaml:"license,omitempty" toml:"license,omitempty" json:"license,omitempty"`
 	Instruction string
 
-	dir    string
-	client *llm.Client
+	dir       string
+	client    *llm.Client
+	bashAllow []string
+	bashBlock []string
 }
 
 // Client returns the LLM client this skill is bound to.
@@ -42,38 +43,68 @@ func (s *Skill) Client() *llm.Client { return s.client }
 
 // Dir returns the absolute path of the skill directory this Skill was loaded
 // from. It is the root used to resolve references, examples, scripts, and
-// any filesystem-scoped built-in tools created by [BuiltinTools].
+// any filesystem-scoped built-in tools (for example those returned by
+// [github.com/tsumina/dango/internal/llm/skill/builtin.All]).
 func (s *Skill) Dir() string { return s.dir }
 
-// NewSkillFromDir loads a Skill from a skill directory rooted at dir and binds
-// it to the given LLM client.
+// BashAllow returns the executables this skill wants to permit on top of
+// the built-in default bash allowlist. Callers pass it alongside
+// [Skill.BashBlock] to
+// [github.com/tsumina/dango/internal/llm/skill/builtin.WithAllowlistAdjust]
+// when wiring the built-in tools.
+func (s *Skill) BashAllow() []string { return append([]string(nil), s.bashAllow...) }
+
+// BashBlock returns the executables this skill wants to remove from the
+// built-in default bash allowlist. Entries in BashBlock override both the
+// default list and [Skill.BashAllow].
+func (s *Skill) BashBlock() []string { return append([]string(nil), s.bashBlock...) }
+
+// Config configures how a [Skill] is loaded.
 //
-// dir must point to a directory containing a SKILL.md file. The frontmatter
-// in SKILL.md is decoded into the Skill metadata fields and the remaining
-// body is stored in Instruction. client must be non-nil and is retained on the
-// returned Skill so it can later invoke the LLM. Other entries in the
-// directory such as scripts, references, and examples are not read here;
-// callers that need them can resolve their own paths relative to dir.
-func NewSkillFromDir(dir string, client *llm.Client) (*Skill, error) {
-	if client == nil {
+// Dir must point to a skill directory containing a [SkillFile]. Client is
+// the LLM client the loaded Skill will be bound to and must be non-nil.
+// BashAllow and BashBlock let callers narrow or widen the built-in bash
+// allowlist; the effective set the built-in tools should honour is
+// builtin.DefaultAllowlist ∪ BashAllow \ BashBlock. Config is the
+// canonical input shape for callers (for example the orchestrate Executor)
+// that wire a Skill into a larger runtime.
+type Config struct {
+	Dir       string
+	Client    *llm.Client
+	BashAllow []string
+	BashBlock []string
+}
+
+// New loads a [Skill] from the directory described by cfg and binds it to
+// cfg.Client.
+//
+// cfg.Dir must point to a directory containing a [SkillFile]. The
+// frontmatter in that file is decoded into the Skill metadata fields and
+// the remaining body is stored in Instruction. cfg.Client must be non-nil
+// and is retained on the returned Skill so it can later invoke the LLM.
+// Other entries in the directory such as scripts, references, and examples
+// are not read here; callers that need them can resolve their own paths
+// relative to [Skill.Dir].
+func New(cfg Config) (*Skill, error) {
+	if cfg.Client == nil {
 		return nil, fmt.Errorf("llm: skill requires a non-nil client")
 	}
 
-	info, err := os.Stat(dir)
+	info, err := os.Stat(cfg.Dir)
 	if err != nil {
 		return nil, err
 	}
 	if !info.IsDir() {
-		return nil, fmt.Errorf("skill path %q is not a directory", dir)
+		return nil, fmt.Errorf("skill path %q is not a directory", cfg.Dir)
 	}
 
-	skillPath := filepath.Join(dir, SkillFile)
+	skillPath := filepath.Join(cfg.Dir, SkillFile)
 	file, err := os.Open(skillPath)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return nil, fmt.Errorf("skill directory %q is missing required %s: %w", dir, SkillFile, err)
+			return nil, fmt.Errorf("skill directory %q is missing required %s: %w", cfg.Dir, SkillFile, err)
 		}
-		return nil, fmt.Errorf("open %s in %q: %w", SkillFile, dir, err)
+		return nil, fmt.Errorf("open %s in %q: %w", SkillFile, cfg.Dir, err)
 	}
 	defer file.Close()
 
@@ -83,31 +114,9 @@ func NewSkillFromDir(dir string, client *llm.Client) (*Skill, error) {
 		return nil, err
 	}
 	skill.Instruction = string(rest)
-	skill.client = client
-	skill.dir = dir
+	skill.client = cfg.Client
+	skill.dir = cfg.Dir
+	skill.bashAllow = append([]string(nil), cfg.BashAllow...)
+	skill.bashBlock = append([]string(nil), cfg.BashBlock...)
 	return &skill, nil
-}
-
-// Run executes the skill against userInput.
-//
-// Run constructs an [Agent] wired with the skill's bound LLM client and the
-// built-in filesystem and shell tools scoped to [Skill.Dir], then drives a
-// tool-using loop using Instruction as the system instruction and userInput
-// as the first user message. The returned string is the final assistant
-// response. Additional tools specific to the caller can be registered with
-// [Skill.RunWith].
-func (s *Skill) Run(ctx context.Context, userInput string) (string, error) {
-	return s.RunWith(ctx, userInput, nil)
-}
-
-// RunWith behaves like [Skill.Run] but also advertises extraTools to the
-// model in addition to the default built-in tools.
-func (s *Skill) RunWith(ctx context.Context, userInput string, extraTools []Tool) (string, error) {
-	tools := BuiltinTools(s.dir)
-	tools = append(tools, extraTools...)
-	agent, err := NewAgent(s.client, tools)
-	if err != nil {
-		return "", err
-	}
-	return agent.Run(ctx, s.Instruction, userInput)
 }

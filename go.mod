@@ -29,6 +29,7 @@ require (
 	modernc.org/gc/v2 v2.6.5 // indirect
 	modernc.org/gc/v3 v3.1.2 // indirect
 	modernc.org/sortutil v1.2.1 // indirect
+	mvdan.cc/sh/v3 v3.13.1 // indirect
 )
 
 require (

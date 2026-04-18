@@ -2,16 +2,13 @@ package orchestrate
 
 import (
 	"context"
+	"fmt"
 	"log"
-	"net/url"
-	"os"
-	"strings"
 
-	"github.com/adrg/frontmatter"
-
-	"github.com/tsumina/dango/internal/llm"
+	"github.com/tsumina/dango/internal/llm/skill"
 )
 
+// Status reports the lifecycle state of an [Executor].
 type Status int
 
 const (
@@ -21,7 +18,9 @@ const (
 	StatusFailed
 )
 
-// Description of the plan, reason for the plan, and potential solution.
+// ExecutionPlanner carries the working description, reasoning, and proposed
+// solution for a task that an [Executor] is about to run. It is mutated in
+// place by planning steps such as [Executor.PolishPlan].
 type ExecutionPlanner struct {
 	id              string
 	TaskDescription string `json:"task_description" yaml:"description"`
@@ -30,6 +29,8 @@ type ExecutionPlanner struct {
 	Version         uint32 `json:"version" yaml:"version"`
 }
 
+// ExecutionResult is the structured outcome an [Executor] produces after a
+// task finishes, including any data it wants to share with downstream nodes.
 type ExecutionResult struct {
 	Success    bool         `json:"success" yaml:"success"`
 	Message    string       `json:"message" yaml:"message"`
@@ -37,111 +38,100 @@ type ExecutionResult struct {
 	SharedData []SharedData `json:"shared_data,omitempty" yaml:"shared_data,omitempty"`
 }
 
+// SharedData describes a single artifact an [Executor] hands off to other
+// tasks via [ExecutionResult.SharedData].
 type SharedData struct {
-	// Define the structure of the shared data that can be passed between tasks.
 	FilePath    string `json:"file_path" yaml:"file_path"`
 	Description string `json:"description" yaml:"description"`
 }
 
-type Metadata struct {
-	Name        string `yaml:"name"`
-	Description string `yaml:"description"`
-	License     string `yaml:"license"`
-}
-
+// Executor runs a single task on top of a loaded [skill.Skill].
+//
+// An Executor is bound to one Skill at construction time and uses the
+// Skill's directory, prompt, and bound LLM client to plan and run the
+// task. The zero value is not usable; construct instances with
+// [NewExecutor].
 type Executor struct {
-	// Add fields for managing state, configuration, etc.
-	logger *log.Logger
+	logger  *log.Logger
+	skill   *skill.Skill
+	planner *ExecutionPlanner
 
-	// The workspace field is used to specify the directory path of the skill, which contains the SKILL.md file and other necessary files for the execution of tasks.
-	workspace string
-	planner   *ExecutionPlanner
-	Result    *ExecutionResult
-	Status    Status
+	// Result holds the structured outcome of the most recent execution.
+	Result *ExecutionResult
+	// Status reports the executor's current lifecycle state.
+	Status Status
 
-	// Added for mockability during engine execution. Temporary placeholder to pass current tests
+	// RunE optionally overrides the default execution path. It is the
+	// hook the runtime tests use to inject behavior into an Executor
+	// without depending on a real skill or LLM client.
 	RunE func(ctx context.Context, parentOutputs map[string]any) (output any, newNodes []*Node, err error)
-
-	// LLM is an optional client used by Execute-time logic to reason about the
-	// task. It is typically populated from llm.NewClientFromEnv so that the
-	// Executor can issue Responses API requests during planning or execution.
-	LLM *llm.Client
-
-	// Metadata about the skill, such as name, description, license, etc.
-	Metadata
 }
 
-func NewExecutor(logger *log.Logger, workspace string, planner *ExecutionPlanner) (*Executor, error) {
-	u, err := url.Parse(workspace)
-	_ = u
-	// Check if the skill is a valid directory path and contains SKILL.md
-	info, err := os.Stat(workspace)
-	if err != nil || !info.IsDir() {
-		logger.Fatalf("skill is not a valid directory path: %s", workspace)
-		return nil, err
+// NewExecutor constructs an [Executor] bound to sk and planner.
+//
+// logger receives lifecycle log messages and may be nil to silence them.
+// sk and planner must be non-nil; sk supplies the workspace directory,
+// metadata, instruction prompt, and LLM client used during execution.
+func NewExecutor(logger *log.Logger, sk *skill.Skill, planner *ExecutionPlanner) (*Executor, error) {
+	if sk == nil {
+		return nil, fmt.Errorf("orchestrate: executor requires a non-nil skill")
 	}
-	if _, err := os.Stat(workspace + string(os.PathSeparator) + "SKILL.md"); os.IsNotExist(err) {
-		logger.Fatalf("SKILL.md not found in skill directory: %s", workspace)
-		return nil, err
+	if planner == nil {
+		return nil, fmt.Errorf("orchestrate: executor requires a non-nil planner")
 	}
-	skillPath := workspace + string(os.PathSeparator) + "SKILL.md"
-	content, err := os.ReadFile(skillPath)
-	if err != nil {
-		logger.Fatalf("failed to read SKILL.md: %v", err)
-		return nil, err
+	if logger != nil {
+		logger.Println("Creating a new Executor...")
 	}
-
-	metadata := Metadata{}
-	_, err = frontmatter.Parse(strings.NewReader(string(content)), &metadata)
-	if err != nil {
-		logger.Fatalf("failed to parse SKILL.md front matter: %v", err)
-		return nil, err
-	}
-
-	logger.Println("Creating a new Executor...")
 	return &Executor{
-		logger:    logger,
-		workspace: workspace,
-		planner:   planner,
-		Metadata:  metadata,
+		logger:  logger,
+		skill:   sk,
+		planner: planner,
 	}, nil
 }
 
-// PolishPlan generates a plan based on [PlanFromRequest]'s results.
-// It updates the planner with the reasoning and solution for the task, which can be used by Execute to perform the actual execution.
+// Skill returns the [skill.Skill] this executor was bound to.
+func (e *Executor) Skill() *skill.Skill { return e.skill }
+
+// Planner returns the [ExecutionPlanner] this executor mutates during
+// planning.
+func (e *Executor) Planner() *ExecutionPlanner { return e.planner }
+
+// PolishPlan refines the planner's reasoning and solution based on the
+// current task description. It bumps [ExecutionPlanner.Version] on success.
 func (e *Executor) PolishPlan() error {
-	e.logger.Println("Planning tasks...")
+	e.logf("Planning tasks...")
 
 	if err := e.planTask(); err != nil {
-		e.logger.Printf("Error planning tasks: %v", err)
+		e.logf("Error planning tasks: %v", err)
 		return err
 	}
-
 	return nil
 }
 
 func (e *Executor) planTask() error {
-	// Implement the logic to plan a task based on the execution plan, manage state, etc.
-	e.logger.Println("Planning a task...")
+	e.logf("Planning a task...")
 
 	e.planner.Reason = "The task requires processing data and generating a report."
 	e.planner.Solution = "Use a data processing library to analyze the data and generate the report."
-
-	e.planner.Version += 1
-
+	e.planner.Version++
 	return nil
 }
 
+// Execute runs the task. When [Executor.RunE] is set it is invoked
+// directly; otherwise Execute is currently a no-op placeholder until the
+// real skill-driven execution path is implemented.
 func (e *Executor) Execute(ctx context.Context, parentOutputs map[string]any) (any, []*Node, error) {
-	// Implement the logic to execute tasks based on the request, manage state, handle results, etc.
-	if e.logger != nil {
-		e.logger.Println("Executing tasks...")
-	}
+	e.logf("Executing tasks...")
 
-	// Temporary bridge to preserve compatibility with existing dynamic closures until Executor is fully refactored.
 	if e.RunE != nil {
 		return e.RunE(ctx, parentOutputs)
 	}
-
 	return nil, nil, nil
+}
+
+func (e *Executor) logf(format string, args ...any) {
+	if e.logger == nil {
+		return
+	}
+	e.logger.Printf(format, args...)
 }

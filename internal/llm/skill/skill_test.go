@@ -23,7 +23,7 @@ func writeSkillDir(t *testing.T, content string) string {
 // verify the Skill carries a client reference.
 func stubClient() *llm.Client { return &llm.Client{} }
 
-func TestNewSkillFromDir_ParsesYAMLFrontmatter(t *testing.T) {
+func TestNew_ParsesYAMLFrontmatter(t *testing.T) {
 	const body = "This is the skill instruction body.\n\nIt may span multiple lines.\n"
 	content := "---\n" +
 		"name: test-skill\n" +
@@ -34,9 +34,9 @@ func TestNewSkillFromDir_ParsesYAMLFrontmatter(t *testing.T) {
 
 	dir := writeSkillDir(t, content)
 	client := stubClient()
-	skill, err := NewSkillFromDir(dir, client)
+	skill, err := New(Config{Dir: dir, Client: client})
 	if err != nil {
-		t.Fatalf("NewSkillFromDir: %v", err)
+		t.Fatalf("New: %v", err)
 	}
 
 	if skill.Client() != client {
@@ -56,16 +56,16 @@ func TestNewSkillFromDir_ParsesYAMLFrontmatter(t *testing.T) {
 	}
 }
 
-func TestNewSkillFromDir_OmitsOptionalLicense(t *testing.T) {
+func TestNew_OmitsOptionalLicense(t *testing.T) {
 	content := "---\n" +
 		"name: minimal\n" +
 		"description: Minimal skill.\n" +
 		"---\n" +
 		"body\n"
 
-	skill, err := NewSkillFromDir(writeSkillDir(t, content), stubClient())
+	skill, err := New(Config{Dir: writeSkillDir(t, content), Client: stubClient()})
 	if err != nil {
-		t.Fatalf("NewSkillFromDir: %v", err)
+		t.Fatalf("New: %v", err)
 	}
 	if skill.License != "" {
 		t.Errorf("License = %q, want empty", skill.License)
@@ -75,7 +75,7 @@ func TestNewSkillFromDir_OmitsOptionalLicense(t *testing.T) {
 	}
 }
 
-func TestNewSkillFromDir_AllowsOptionalSubdirectories(t *testing.T) {
+func TestNew_AllowsOptionalSubdirectories(t *testing.T) {
 	dir := writeSkillDir(t, "---\nname: with-subdirs\ndescription: d\n---\nbody")
 	for _, sub := range []string{"scripts", "references", "examples"} {
 		if err := os.Mkdir(filepath.Join(dir, sub), 0o755); err != nil {
@@ -83,29 +83,29 @@ func TestNewSkillFromDir_AllowsOptionalSubdirectories(t *testing.T) {
 		}
 	}
 
-	skill, err := NewSkillFromDir(dir, stubClient())
+	skill, err := New(Config{Dir: dir, Client: stubClient()})
 	if err != nil {
-		t.Fatalf("NewSkillFromDir: %v", err)
+		t.Fatalf("New: %v", err)
 	}
 	if skill.Name != "with-subdirs" {
 		t.Errorf("Name = %q, want %q", skill.Name, "with-subdirs")
 	}
 }
 
-func TestNewSkillFromDir_ErrorWhenPathIsFile(t *testing.T) {
+func TestNew_ErrorWhenPathIsFile(t *testing.T) {
 	tmp := t.TempDir()
 	file := filepath.Join(tmp, "not-a-dir")
 	if err := os.WriteFile(file, []byte("x"), 0o644); err != nil {
 		t.Fatalf("write file: %v", err)
 	}
-	if _, err := NewSkillFromDir(file, stubClient()); err == nil {
+	if _, err := New(Config{Dir: file, Client: stubClient()}); err == nil {
 		t.Fatal("expected error for non-directory path, got nil")
 	}
 }
 
-func TestNewSkillFromDir_ErrorWhenSkillFileMissing(t *testing.T) {
+func TestNew_ErrorWhenSkillFileMissing(t *testing.T) {
 	dir := t.TempDir()
-	_, err := NewSkillFromDir(dir, stubClient())
+	_, err := New(Config{Dir: dir, Client: stubClient()})
 	if err == nil {
 		t.Fatal("expected error when SKILL.md is missing, got nil")
 	}
@@ -118,17 +118,56 @@ func TestNewSkillFromDir_ErrorWhenSkillFileMissing(t *testing.T) {
 	}
 }
 
-func TestNewSkillFromDir_ErrorOnInvalidFrontmatter(t *testing.T) {
+func TestNew_ErrorOnInvalidFrontmatter(t *testing.T) {
 	content := "---\nname: [unterminated\n---\nbody\n"
-	_, err := NewSkillFromDir(writeSkillDir(t, content), stubClient())
+	_, err := New(Config{Dir: writeSkillDir(t, content), Client: stubClient()})
 	if err == nil {
 		t.Fatal("expected error for malformed frontmatter, got nil")
 	}
 }
 
-func TestNewSkillFromDir_ErrorWhenClientNil(t *testing.T) {
+func TestNew_ErrorWhenClientNil(t *testing.T) {
 	dir := writeSkillDir(t, "---\nname: x\ndescription: d\n---\n")
-	if _, err := NewSkillFromDir(dir, nil); err == nil {
+	if _, err := New(Config{Dir: dir, Client: nil}); err == nil {
 		t.Fatal("expected error when client is nil, got nil")
 	}
+}
+
+func TestNew_CarriesBashAllowAndBlock(t *testing.T) {
+	dir := writeSkillDir(t, "---\nname: x\ndescription: d\n---\n")
+	allow := []string{"rg", "fd"}
+	block := []string{"curl", "wget"}
+	sk, err := New(Config{
+		Dir:       dir,
+		Client:    stubClient(),
+		BashAllow: allow,
+		BashBlock: block,
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	if got := sk.BashAllow(); !equalStrings(got, allow) {
+		t.Errorf("BashAllow() = %v, want %v", got, allow)
+	}
+	if got := sk.BashBlock(); !equalStrings(got, block) {
+		t.Errorf("BashBlock() = %v, want %v", got, block)
+	}
+	// Returned slices must be independent copies so callers cannot mutate
+	// the Skill's internal state.
+	sk.BashAllow()[0] = "mutated"
+	if sk.BashAllow()[0] != "rg" {
+		t.Errorf("BashAllow() returned a shared slice")
+	}
+}
+
+func equalStrings(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
 }
