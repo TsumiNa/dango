@@ -7,14 +7,15 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/tsumina/dango/internal/llm"
 	"github.com/tsumina/dango/internal/llm/skill"
 )
 
 // NewWriteFile returns a Tool that writes UTF-8 content to a file within
 // root, creating parent directories as needed. Existing files are
 // overwritten.
-func NewWriteFile(root string) skill.Tool {
-	return skill.NewFuncTool(
+func NewWriteFile(root string) llm.Tool {
+	return llm.NewFuncTool(
 		"write_file",
 		"Write UTF-8 text content to a file within the skill workspace, creating parent directories as needed. Overwrites existing files.",
 		map[string]any{

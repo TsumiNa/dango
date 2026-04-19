@@ -32,24 +32,35 @@ func newTestClient(t *testing.T, baseURL string) *llm.Client {
 	return c
 }
 
-func TestNewAgentRejectsNilClient(t *testing.T) {
-	if _, err := NewAgent(nil, nil); err == nil {
-		t.Fatal("expected error for nil client")
+// newRunSkill builds a minimal Skill backed by a temp SKILL.md and the
+// given runtime configuration. The frontmatter's prompt body is used as
+// the conversation's system instructions.
+func newRunSkill(t *testing.T, cfg Config) *Skill {
+	t.Helper()
+	if cfg.Dir == "" {
+		cfg.Dir = writeSkillDir(t, "---\nname: run-test\ndescription: d\n---\nsystem\n")
 	}
+	sk, err := New(cfg)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	return sk
 }
 
-func TestNewAgentRejectsDuplicateToolNames(t *testing.T) {
+func TestSkillRejectsDuplicateToolNames(t *testing.T) {
 	c := newTestClient(t, "http://unused")
-	a := NewFuncTool("x", "", map[string]any{}, func(context.Context, string) (string, error) { return "", nil })
-	b := NewFuncTool("x", "", map[string]any{}, func(context.Context, string) (string, error) { return "", nil })
-	if _, err := NewAgent(c, []Tool{a, b}); err == nil {
+	a := llm.NewFuncTool("x", "", map[string]any{}, func(context.Context, string) (string, error) { return "", nil })
+	b := llm.NewFuncTool("x", "", map[string]any{}, func(context.Context, string) (string, error) { return "", nil })
+	dir := writeSkillDir(t, "---\nname: x\ndescription: d\n---\n")
+	if _, err := New(Config{Dir: dir, Client: c, Tools: []llm.Tool{a, b}}); err == nil {
 		t.Fatal("expected error for duplicate tool names")
 	}
 }
 
-// TestAgentRunToolLoop drives the loop through a fake Responses API: the first
-// response requests a function_call; the second returns the final message.
-func TestAgentRunToolLoop(t *testing.T) {
+// TestSkillRunToolLoop drives the loop through a fake Responses API: the
+// first response requests a function_call; the second returns the final
+// message.
+func TestSkillRunToolLoop(t *testing.T) {
 	var requests [][]byte
 	var responded int
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -80,7 +91,7 @@ func TestAgentRunToolLoop(t *testing.T) {
 	t.Cleanup(srv.Close)
 
 	var echoed string
-	echo := NewFuncTool("echo", "echo msg", map[string]any{
+	echo := llm.NewFuncTool("echo", "echo msg", map[string]any{
 		"type": "object",
 		"properties": map[string]any{
 			"msg": map[string]any{"type": "string"},
@@ -95,11 +106,11 @@ func TestAgentRunToolLoop(t *testing.T) {
 		return a.Msg, nil
 	})
 
-	agent, err := NewAgent(newTestClient(t, srv.URL), []Tool{echo})
-	if err != nil {
-		t.Fatalf("NewAgent: %v", err)
-	}
-	out, err := agent.Run(context.Background(), "system", "please echo hello")
+	sk := newRunSkill(t, Config{
+		Client: newTestClient(t, srv.URL),
+		Tools:  []llm.Tool{echo},
+	})
+	out, err := sk.Run(context.Background(), "please echo hello", "")
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -121,7 +132,7 @@ func TestAgentRunToolLoop(t *testing.T) {
 	}
 }
 
-func TestAgentRunUnknownToolReportsError(t *testing.T) {
+func TestSkillRunUnknownToolReportsError(t *testing.T) {
 	var responded int
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -142,11 +153,8 @@ func TestAgentRunUnknownToolReportsError(t *testing.T) {
 	}))
 	t.Cleanup(srv.Close)
 
-	agent, err := NewAgent(newTestClient(t, srv.URL), nil)
-	if err != nil {
-		t.Fatalf("NewAgent: %v", err)
-	}
-	out, err := agent.Run(context.Background(), "", "go")
+	sk := newRunSkill(t, Config{Client: newTestClient(t, srv.URL)})
+	out, err := sk.Run(context.Background(), "go", "")
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -155,7 +163,7 @@ func TestAgentRunUnknownToolReportsError(t *testing.T) {
 	}
 }
 
-func TestAgentRunMaxStepsExceeded(t *testing.T) {
+func TestSkillRunMaxStepsExceeded(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{
@@ -166,23 +174,24 @@ func TestAgentRunMaxStepsExceeded(t *testing.T) {
 	}))
 	t.Cleanup(srv.Close)
 
-	loop := NewFuncTool("loop", "", map[string]any{"type": "object"},
+	loop := llm.NewFuncTool("loop", "", map[string]any{"type": "object"},
 		func(context.Context, string) (string, error) { return "", nil })
 
-	agent, err := NewAgent(newTestClient(t, srv.URL), []Tool{loop}, WithMaxSteps(2))
-	if err != nil {
-		t.Fatalf("NewAgent: %v", err)
-	}
-	if _, err := agent.Run(context.Background(), "", "go"); err == nil {
+	sk := newRunSkill(t, Config{
+		Client:   newTestClient(t, srv.URL),
+		Tools:    []llm.Tool{loop},
+		MaxSteps: 2,
+	})
+	if _, err := sk.Run(context.Background(), "go", ""); err == nil {
 		t.Fatal("expected error when max steps exceeded")
 	}
 }
 
-// TestAgentWithSummarizerAndAutoTrim verifies that WithAutoTrim and
-// WithSummarizer are applied to the conversation built inside Run by
+// TestSkillWithSummarizerAndAutoTrim verifies that Config.AutoTrim and
+// Config.Summarizer are applied to the conversation built inside New by
 // observing that the registered summarizer is invoked once the second
 // response reports input tokens above the threshold.
-func TestAgentWithSummarizerAndAutoTrim(t *testing.T) {
+func TestSkillWithSummarizerAndAutoTrim(t *testing.T) {
 	var responded int
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -212,7 +221,7 @@ func TestAgentWithSummarizerAndAutoTrim(t *testing.T) {
 	}))
 	t.Cleanup(srv.Close)
 
-	echo := NewFuncTool("echo", "", map[string]any{"type": "object"},
+	echo := llm.NewFuncTool("echo", "", map[string]any{"type": "object"},
 		func(context.Context, string) (string, error) { return "out", nil })
 
 	called := 0
@@ -221,19 +230,18 @@ func TestAgentWithSummarizerAndAutoTrim(t *testing.T) {
 		return "compact", nil
 	})
 
-	agent, err := NewAgent(newTestClient(t, srv.URL), []Tool{echo},
-		WithAutoTrim(llm.AutoShrinkConfig{
+	sk := newRunSkill(t, Config{
+		Client: newTestClient(t, srv.URL),
+		Tools:  []llm.Tool{echo},
+		AutoTrim: &llm.AutoShrinkConfig{
 			ContextWindow:     1000,
 			Threshold:         0.5,
 			KeepToolExchanges: 1,
 			KeepTurns:         1,
-		}),
-		WithSummarizer(sum),
-	)
-	if err != nil {
-		t.Fatalf("NewAgent: %v", err)
-	}
-	if _, err := agent.Run(context.Background(), "", "go"); err != nil {
+		},
+		Summarizer: sum,
+	})
+	if _, err := sk.Run(context.Background(), "go", ""); err != nil {
 		t.Fatalf("Run: %v", err)
 	}
 	if called != 1 {
@@ -241,9 +249,9 @@ func TestAgentWithSummarizerAndAutoTrim(t *testing.T) {
 	}
 }
 
-// TestAgentWithSession verifies that a persisted session is loaded on a
+// TestSkillWithSession verifies that a persisted session is loaded on a
 // second Run so the saved conversation is reused and extended.
-func TestAgentWithSession(t *testing.T) {
+func TestSkillWithSession(t *testing.T) {
 	var requests [][]byte
 	var responded int
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -265,11 +273,12 @@ func TestAgentWithSession(t *testing.T) {
 		t.Fatalf("NewJSONStore: %v", err)
 	}
 
-	agent, err := NewAgent(newTestClient(t, srv.URL), nil, WithSession(store, "job-1"))
-	if err != nil {
-		t.Fatalf("NewAgent: %v", err)
-	}
-	if _, err := agent.Run(context.Background(), "sys", "first"); err != nil {
+	sk := newRunSkill(t, Config{
+		Client:       newTestClient(t, srv.URL),
+		SessionStore: store,
+		SessionID:    "job-1",
+	})
+	if _, err := sk.Run(context.Background(), "first", ""); err != nil {
 		t.Fatalf("Run 1: %v", err)
 	}
 
@@ -277,13 +286,13 @@ func TestAgentWithSession(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load after run 1: %v", err)
 	}
-	if sess.Conv == nil || sess.Conv.Len() != 2 {
-		t.Fatalf("after run 1: conv len = %d, want 2", sess.Conv.Len())
+	if turns := countTurnEvents(sess); turns != 2 {
+		t.Fatalf("after run 1: turn events = %d, want 2", turns)
 	}
 
 	// Second run with the same session should ship the prior turns in
 	// the request body alongside the new user input.
-	if _, err := agent.Run(context.Background(), "sys", "second"); err != nil {
+	if _, err := sk.Run(context.Background(), "second", ""); err != nil {
 		t.Fatalf("Run 2: %v", err)
 	}
 	if len(requests) != 2 {
@@ -298,7 +307,21 @@ func TestAgentWithSession(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load after run 2: %v", err)
 	}
-	if sess2.Conv.Len() != 4 {
-		t.Errorf("after run 2: conv len = %d, want 4", sess2.Conv.Len())
+	if turns := countTurnEvents(sess2); turns != 4 {
+		t.Errorf("after run 2: turn events = %d, want 4", turns)
 	}
+}
+
+// countTurnEvents returns the number of events in the session log that
+// represent appended turns (user/assistant/reasoning/tool_call/tool_output).
+func countTurnEvents(events []llm.Event) int {
+	n := 0
+	for _, ev := range events {
+		switch ev.Kind {
+		case llm.EventAppendUser, llm.EventAppendAssistant,
+			llm.EventAppendReasoning, llm.EventAppendToolCall, llm.EventAppendToolOutput:
+			n++
+		}
+	}
+	return n
 }

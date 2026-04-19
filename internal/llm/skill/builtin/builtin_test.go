@@ -5,7 +5,7 @@ import (
 	"encoding/json"
 	"testing"
 
-	"github.com/tsumina/dango/internal/llm/skill"
+	"github.com/tsumina/dango/internal/llm"
 )
 
 func TestAllReturnsExpectedNames(t *testing.T) {
@@ -24,7 +24,7 @@ func TestAllReturnsExpectedNames(t *testing.T) {
 func TestAllForwardsAllowlistOption(t *testing.T) {
 	root := t.TempDir()
 	tools := All(root, WithAllowlist([]string{"echo"}))
-	var bash skill.Tool
+	var bash llm.Tool
 	for _, tool := range tools {
 		if tool.Name() == "bash" {
 			bash = tool
@@ -44,7 +44,7 @@ func TestWithAllowlistAdjust(t *testing.T) {
 	root := t.TempDir()
 	// Block curl (default-allowed) and allow a bespoke command.
 	tools := All(root, WithAllowlistAdjust([]string{"helper-bin"}, []string{"curl"}))
-	var bash skill.Tool
+	var bash llm.Tool
 	for _, tool := range tools {
 		if tool.Name() == "bash" {
 			bash = tool

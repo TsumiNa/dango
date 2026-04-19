@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/tsumina/dango/internal/llm"
 	"github.com/tsumina/dango/internal/llm/skill"
 	"mvdan.cc/sh/v3/syntax"
 )
@@ -46,13 +47,13 @@ const bashMaxOutputBytes = 16 * 1024
 //     returned to the model. The tool returns a short summary (path and byte
 //     count) so the model can follow up with grep or read_file for the
 //     sections it actually cares about, keeping its context small.
-func NewBash(root string, opts ...Option) skill.Tool {
+func NewBash(root string, opts ...Option) llm.Tool {
 	return newBashWithConfig(root, newConfig(opts))
 }
 
-func newBashWithConfig(root string, cfg *config) skill.Tool {
+func newBashWithConfig(root string, cfg *config) llm.Tool {
 	allowlist := cfg.resolveAllowlist()
-	return skill.NewFuncTool(
+	return llm.NewFuncTool(
 		"bash",
 		"Run a shell command via /bin/bash -c. Use for ad-hoc scripting, invoking skill scripts, or running helper programs. Returns combined stdout+stderr unless output_file is set. Commands are restricted to the configured allowlist (see DefaultAllowlist).",
 		map[string]any{

@@ -8,13 +8,14 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/tsumina/dango/internal/llm"
 	"github.com/tsumina/dango/internal/llm/skill"
 )
 
 // NewListDir returns a Tool that lists entries in a directory within root.
 // Entries are returned one per line; directories are suffixed with "/".
-func NewListDir(root string) skill.Tool {
-	return skill.NewFuncTool(
+func NewListDir(root string) llm.Tool {
+	return llm.NewFuncTool(
 		"list_dir",
 		"List the entries of a directory within the skill workspace. Directories are suffixed with '/'.",
 		map[string]any{

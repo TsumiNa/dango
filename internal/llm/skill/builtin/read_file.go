@@ -7,6 +7,7 @@ import (
 	"os"
 	"strings"
 
+	"github.com/tsumina/dango/internal/llm"
 	"github.com/tsumina/dango/internal/llm/skill"
 )
 
@@ -17,8 +18,8 @@ import (
 // tool returns only that slice of lines, which is useful for sampling long
 // files without sending every byte back to the model. end_line is clamped
 // to the last line of the file.
-func NewReadFile(root string) skill.Tool {
-	return skill.NewFuncTool(
+func NewReadFile(root string) llm.Tool {
+	return llm.NewFuncTool(
 		"read_file",
 		"Read the contents of a file within the skill workspace and return it as text. Optional start_line/end_line (1-indexed, inclusive) return only a slice of lines, useful for long files.",
 		map[string]any{

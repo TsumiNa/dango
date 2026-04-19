@@ -2,13 +2,14 @@ package llm
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"strings"
 	"testing"
 )
 
 func TestConversationAppendRoles(t *testing.T) {
-	conv := NewConversation("sys", []ToolSpec{{Name: "echo"}})
+	conv := NewConversation(nil, "sys", []Tool{NewFuncTool("echo", "", nil, nil)})
 	conv.AppendUser("hi")
 	conv.AppendAssistantText("hello")
 	conv.AppendToolCall(ToolCall{CallID: "c1", Name: "echo", Arguments: `{"msg":"x"}`})
@@ -33,7 +34,7 @@ func TestConversationAppendRoles(t *testing.T) {
 }
 
 func TestConversationTurnsReturnsDefensiveCopy(t *testing.T) {
-	conv := NewConversation("", nil)
+	conv := NewConversation(nil, "", nil)
 	conv.AppendUser("hi")
 	turns := conv.Turns()
 	turns[0].Text = "mutated"
@@ -43,7 +44,7 @@ func TestConversationTurnsReturnsDefensiveCopy(t *testing.T) {
 }
 
 func TestConversationTrimKeepsPairs(t *testing.T) {
-	conv := NewConversation("", nil)
+	conv := NewConversation(nil, "", nil)
 	conv.AppendUser("u1")
 	conv.AppendAssistantText("a1")
 	conv.AppendToolCall(ToolCall{CallID: "c1", Name: "t"})
@@ -72,7 +73,7 @@ func TestConversationTrimKeepsPairs(t *testing.T) {
 // one response). Without rewinding past reasoning, Trim would stop on the
 // reasoning turn and strand the tool_output from its tool_call.
 func TestConversationTrimKeepsPairWithInterleavedReasoning(t *testing.T) {
-	conv := NewConversation("", nil)
+	conv := NewConversation(nil, "", nil)
 	conv.AppendUser("u1")
 	conv.AppendAssistantText("a1")
 	conv.AppendToolCall(ToolCall{CallID: "c1", Name: "t"})
@@ -106,7 +107,7 @@ func TestConversationTrimKeepsPairWithInterleavedReasoning(t *testing.T) {
 }
 
 func TestConversationTrimNoOpWhenWithinLimit(t *testing.T) {
-	conv := NewConversation("", nil)
+	conv := NewConversation(nil, "", nil)
 	conv.AppendUser("u1")
 	conv.AppendAssistantText("a1")
 	if dropped := conv.Trim(10); dropped != 0 {
@@ -118,7 +119,7 @@ func TestConversationTrimNoOpWhenWithinLimit(t *testing.T) {
 }
 
 func TestConversationDropToolDetailsTruncatesOldOutputs(t *testing.T) {
-	conv := NewConversation("", nil)
+	conv := NewConversation(nil, "", nil)
 	for i := 0; i < 3; i++ {
 		conv.AppendToolCall(ToolCall{CallID: "c", Name: "t"})
 		conv.AppendToolOutput("c", strings.Repeat("x", 100), nil)
@@ -145,7 +146,7 @@ func TestConversationDropToolDetailsTruncatesOldOutputs(t *testing.T) {
 }
 
 func TestConversationReplaceRange(t *testing.T) {
-	conv := NewConversation("", nil)
+	conv := NewConversation(nil, "", nil)
 	conv.AppendUser("u1")
 	conv.AppendAssistantText("a1")
 	conv.AppendUser("u2")
@@ -158,7 +159,7 @@ func TestConversationReplaceRange(t *testing.T) {
 }
 
 func TestConversationAutoShrinkTriggersTierOrder(t *testing.T) {
-	conv := NewConversation("sys", nil)
+	conv := NewConversation(nil, "sys", nil)
 	conv.SetAutoShrink(AutoShrinkConfig{
 		ContextWindow:     1000,
 		Threshold:         0.5,
@@ -194,7 +195,7 @@ func TestConversationAutoShrinkTriggersTierOrder(t *testing.T) {
 }
 
 func TestConversationAutoShrinkDisabledByDefault(t *testing.T) {
-	conv := NewConversation("", nil)
+	conv := NewConversation(nil, "", nil)
 	for i := 0; i < 20; i++ {
 		conv.AppendUser("msg")
 	}
@@ -207,7 +208,7 @@ func TestConversationAutoShrinkDisabledByDefault(t *testing.T) {
 }
 
 func TestConversationAppendToolOutputRecordsError(t *testing.T) {
-	conv := NewConversation("", nil)
+	conv := NewConversation(nil, "", nil)
 	conv.AppendToolOutput("c1", "partial", errors.New("boom"))
 	turn := conv.Turns()[0]
 	if turn.Tool.Error != "boom" || turn.Tool.Output != "partial" {
@@ -216,7 +217,7 @@ func TestConversationAppendToolOutputRecordsError(t *testing.T) {
 }
 
 func TestConversationUsageByRoleSumsToNonCached(t *testing.T) {
-	conv := NewConversation("instr", []ToolSpec{{Name: "echo", Description: "e"}})
+	conv := NewConversation(nil, "instr", []Tool{NewFuncTool("echo", "e", nil, nil)})
 	conv.AppendUser("hello world")
 	conv.AppendAssistantText("hi")
 	if err := conv.recordUsage(t.Context(), TokenUsage{Input: 120, Cached: 20}); err != nil {
@@ -235,7 +236,7 @@ func TestConversationUsageByRoleSumsToNonCached(t *testing.T) {
 }
 
 func TestConversationCompressReplacesPrefixWithSummary(t *testing.T) {
-	conv := NewConversation("", nil)
+	conv := NewConversation(nil, "", nil)
 	conv.AppendUser("u1")
 	conv.AppendAssistantText("a1")
 	conv.AppendUser("u2")
@@ -270,7 +271,7 @@ func TestConversationCompressReplacesPrefixWithSummary(t *testing.T) {
 }
 
 func TestConversationCompressRespectsToolPair(t *testing.T) {
-	conv := NewConversation("", nil)
+	conv := NewConversation(nil, "", nil)
 	conv.AppendUser("u1")
 	conv.AppendToolCall(ToolCall{CallID: "c", Name: "t"})
 	conv.AppendToolOutput("c", "out", nil)
@@ -305,7 +306,7 @@ func TestConversationCompressRespectsToolPair(t *testing.T) {
 // tool_output in the tail, and discard the tool_call - leaving the next
 // Send with a function_call_output that has no matching function_call.
 func TestConversationCompressRewindsPastReasoning(t *testing.T) {
-	conv := NewConversation("", nil)
+	conv := NewConversation(nil, "", nil)
 	conv.AppendUser("u1")
 	conv.AppendToolCall(ToolCall{CallID: "c", Name: "t"})
 	conv.AppendReasoning("midway thought", nil)
@@ -340,7 +341,7 @@ func TestConversationCompressRewindsPastReasoning(t *testing.T) {
 }
 
 func TestConversationCompressNoOpOnNilSummarizer(t *testing.T) {
-	conv := NewConversation("", nil)
+	conv := NewConversation(nil, "", nil)
 	conv.AppendUser("u1")
 	conv.AppendUser("u2")
 	replaced, err := conv.Compress(t.Context(), nil, 2)
@@ -353,7 +354,7 @@ func TestConversationCompressNoOpOnNilSummarizer(t *testing.T) {
 }
 
 func TestConversationCompressReturnsSummarizerError(t *testing.T) {
-	conv := NewConversation("", nil)
+	conv := NewConversation(nil, "", nil)
 	conv.AppendUser("u1")
 	conv.AppendUser("u2")
 	bad := SummarizerFunc(func(_ context.Context, _ []Turn) (string, error) {
@@ -368,7 +369,7 @@ func TestConversationCompressReturnsSummarizerError(t *testing.T) {
 }
 
 func TestConversationAutoShrinkUsesSummarizerWhenSet(t *testing.T) {
-	conv := NewConversation("sys", nil)
+	conv := NewConversation(nil, "sys", nil)
 	conv.SetAutoShrink(AutoShrinkConfig{
 		ContextWindow:     1000,
 		Threshold:         0.5,
@@ -400,7 +401,7 @@ func TestConversationAutoShrinkUsesSummarizerWhenSet(t *testing.T) {
 }
 
 func TestConversationAutoShrinkFallsBackOnSummarizerError(t *testing.T) {
-	conv := NewConversation("", nil)
+	conv := NewConversation(nil, "", nil)
 	conv.SetAutoShrink(AutoShrinkConfig{
 		ContextWindow:     1000,
 		Threshold:         0.5,
@@ -419,5 +420,191 @@ func TestConversationAutoShrinkFallsBackOnSummarizerError(t *testing.T) {
 	}
 	if conv.Len() != 2 {
 		t.Errorf("fallback Trim did not run: Len()=%d", conv.Len())
+	}
+}
+
+func TestConversationJSONRoundTrip(t *testing.T) {
+	c := NewConversation(nil, "be brief", []Tool{NewFuncTool(
+		"echo",
+		"repeat",
+		map[string]any{"type": "object"},
+		nil,
+	)})
+	c.SetAutoShrink(AutoShrinkConfig{ContextWindow: 8000, Threshold: 0.8, KeepToolExchanges: 3, KeepTurns: 5})
+	c.AppendUser("hi")
+	c.AppendToolCall(ToolCall{CallID: "c1", Name: "echo", Arguments: `{"x":1}`})
+	c.AppendToolOutput("c1", "ok", nil)
+	c.AppendAssistantText("done")
+	if err := c.recordUsage(context.Background(), TokenUsage{Input: 10, Output: 4, Total: 14}); err != nil {
+		t.Fatalf("recordUsage: %v", err)
+	}
+
+	data, err := json.Marshal(c)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	var restored Conversation
+	if err := json.Unmarshal(data, &restored); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+
+	if got, want := restored.Instructions(), "be brief"; got != want {
+		t.Errorf("instructions = %q, want %q", got, want)
+	}
+	if got := restored.Tools(); len(got) != 1 || got[0].Name != "echo" {
+		t.Errorf("tools = %+v", got)
+	}
+	if got := restored.Turns(); len(got) != 4 {
+		t.Fatalf("turns = %d, want 4", len(got))
+	} else {
+		if got[1].Role != RoleToolCall || got[1].Tool == nil || got[1].Tool.CallID != "c1" {
+			t.Errorf("tool_call turn = %+v", got[1])
+		}
+		if got[2].Role != RoleToolOutput || got[2].Tool == nil || got[2].Tool.Output != "ok" {
+			t.Errorf("tool_output turn = %+v", got[2])
+		}
+	}
+	if got, want := restored.Usage().Total, 14; got != want {
+		t.Errorf("usage.total = %d, want %d", got, want)
+	}
+	if got := restored.autoShrink; got.ContextWindow != 8000 || got.KeepTurns != 5 {
+		t.Errorf("autoShrink = %+v", got)
+	}
+}
+
+func TestOpenSessionSeedsInitEvent(t *testing.T) {
+	store := mustNewStore(t, t.TempDir())
+	ctx := context.Background()
+
+	conv := NewConversation(nil, "sys prompt", []Tool{NewFuncTool("echo", "x", nil, nil)})
+	if err := conv.OpenSession(ctx, store, "s1"); err != nil {
+		t.Fatalf("OpenSession: %v", err)
+	}
+	if conv.SessionID() != "s1" {
+		t.Errorf("SessionID = %q", conv.SessionID())
+	}
+
+	events, err := store.Load(ctx, "s1")
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if len(events) != 1 || events[0].Kind != EventInit {
+		t.Fatalf("events = %+v, want [init]", events)
+	}
+	if events[0].Instructions != "sys prompt" {
+		t.Errorf("init.Instructions = %q", events[0].Instructions)
+	}
+	if len(events[0].Tools) != 1 || events[0].Tools[0].Name != "echo" {
+		t.Errorf("init.Tools = %+v", events[0].Tools)
+	}
+}
+
+func TestOpenSessionReplaysExistingLog(t *testing.T) {
+	store := mustNewStore(t, t.TempDir())
+	ctx := context.Background()
+
+	// Original session: seed + a few mutations.
+	orig := NewConversation(nil, "sys", []Tool{NewFuncTool("t", "", nil, nil)})
+	if err := orig.OpenSession(ctx, store, "s"); err != nil {
+		t.Fatalf("OpenSession: %v", err)
+	}
+	orig.AppendUser("hi")
+	orig.AppendAssistantText("ok")
+	orig.AppendToolCall(ToolCall{CallID: "c", Name: "t", Arguments: "{}"})
+	orig.AppendToolOutput("c", "done", nil)
+	if err := orig.recordUsage(ctx, TokenUsage{Input: 5, Output: 2, Total: 7}); err != nil {
+		t.Fatalf("recordUsage: %v", err)
+	}
+	if err := orig.LastError(); err != nil {
+		t.Fatalf("LastError on orig: %v", err)
+	}
+
+	// Replay into a fresh conversation. The provided instructions are
+	// ignored since the log's init event is authoritative, but the
+	// tools must supply at least the ones required by the log.
+	restored := NewConversation(nil, "IGNORED", []Tool{NewFuncTool("t", "", nil, nil)})
+	if err := restored.OpenSession(ctx, store, "s"); err != nil {
+		t.Fatalf("OpenSession replay: %v", err)
+	}
+	if got := restored.Instructions(); got != "sys" {
+		t.Errorf("Instructions = %q, want %q", got, "sys")
+	}
+	if got := restored.Tools(); len(got) != 1 || got[0].Name != "t" {
+		t.Errorf("Tools = %+v", got)
+	}
+	if got := restored.Len(); got != 4 {
+		t.Errorf("Len = %d, want 4", got)
+	}
+	if got := restored.Usage().Total; got != 7 {
+		t.Errorf("Usage.Total = %d, want 7", got)
+	}
+}
+
+func TestOpenSessionReplayDoesNotReEmit(t *testing.T) {
+	store := mustNewStore(t, t.TempDir())
+	ctx := context.Background()
+
+	c := NewConversation(nil, "sys", nil)
+	if err := c.OpenSession(ctx, store, "s"); err != nil {
+		t.Fatalf("OpenSession: %v", err)
+	}
+	c.AppendUser("hi")
+	c.AppendAssistantText("ok")
+
+	before, err := store.Load(ctx, "s")
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+
+	// A second OpenSession on a fresh conversation must not append
+	// any replay events to the store.
+	c2 := NewConversation(nil, "x", nil)
+	if err := c2.OpenSession(ctx, store, "s"); err != nil {
+		t.Fatalf("OpenSession replay: %v", err)
+	}
+	after, err := store.Load(ctx, "s")
+	if err != nil {
+		t.Fatalf("Load after replay: %v", err)
+	}
+	if len(after) != len(before) {
+		t.Errorf("replay emitted events: before=%d after=%d", len(before), len(after))
+	}
+}
+
+func TestOpenSessionRejectsNonEmptyConversation(t *testing.T) {
+	store := mustNewStore(t, t.TempDir())
+	conv := NewConversation(nil, "sys", nil)
+	conv.AppendUser("pre-bind")
+	err := conv.OpenSession(context.Background(), store, "s")
+	if err == nil {
+		t.Fatal("OpenSession accepted conversation with existing turns")
+	}
+}
+
+func TestConversationTruncateRollsBack(t *testing.T) {
+	store := mustNewStore(t, t.TempDir())
+	ctx := context.Background()
+
+	conv := NewConversation(nil, "sys", nil)
+	if err := conv.OpenSession(ctx, store, "s"); err != nil {
+		t.Fatalf("OpenSession: %v", err)
+	}
+	conv.AppendUser("one")
+	conv.AppendAssistantText("two")
+	conv.AppendUser("three")
+	if conv.Len() != 3 {
+		t.Fatalf("pre-truncate Len = %d, want 3", conv.Len())
+	}
+
+	// Events seq: 1=init, 2=user, 3=assistant, 4=user. Truncate to 2
+	// should leave only the first user turn.
+	if err := conv.Truncate(ctx, 2); err != nil {
+		t.Fatalf("Truncate: %v", err)
+	}
+	if got := conv.Len(); got != 1 {
+		t.Errorf("post-truncate Len = %d, want 1", got)
+	}
+	if got := conv.Turns()[0].Text; got != "one" {
+		t.Errorf("remaining turn text = %q, want %q", got, "one")
 	}
 }

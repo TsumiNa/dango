@@ -221,10 +221,10 @@ func TestClient_SendAppendsAssistantAndUsage(t *testing.T) {
 	t.Cleanup(srv.Close)
 
 	c := testClient(srv.URL)
-	conv := c.NewConversation("sys", nil)
+	conv := NewConversation(c, "sys", nil)
 	conv.AppendUser("hi")
 
-	resp, err := c.Send(t.Context(), conv)
+	resp, err := conv.Send(t.Context(), "")
 	if err != nil {
 		t.Fatalf("Send: %v", err)
 	}
@@ -261,10 +261,10 @@ func TestClient_SendRecordsToolCalls(t *testing.T) {
 	t.Cleanup(srv.Close)
 
 	c := testClient(srv.URL)
-	conv := c.NewConversation("", []ToolSpec{{Name: "echo", Parameters: map[string]any{"type": "object"}}})
+	conv := NewConversation(c, "", []Tool{NewFuncTool("echo", "", map[string]any{"type": "object"}, nil)})
 	conv.AppendUser("please echo")
 
-	resp, err := c.Send(t.Context(), conv)
+	resp, err := conv.Send(t.Context(), "")
 	if err != nil {
 		t.Fatalf("Send: %v", err)
 	}
@@ -301,15 +301,15 @@ func TestClient_SendPrefixStable(t *testing.T) {
 	t.Cleanup(srv.Close)
 
 	c := testClient(srv.URL)
-	conv := c.NewConversation("system prompt", []ToolSpec{{Name: "echo", Description: "e", Parameters: map[string]any{"type": "object"}}})
+	conv := NewConversation(c, "system prompt", []Tool{NewFuncTool("echo", "e", map[string]any{"type": "object"}, nil)})
 	conv.AppendUser("hello")
 
-	if _, err := c.Send(t.Context(), conv); err != nil {
+	if _, err := conv.Send(t.Context(), ""); err != nil {
 		t.Fatalf("first Send: %v", err)
 	}
 	// Caller adds another user turn; the prior prefix must not shift.
 	conv.AppendUser("follow-up")
-	if _, err := c.Send(t.Context(), conv); err != nil {
+	if _, err := conv.Send(t.Context(), ""); err != nil {
 		t.Fatalf("second Send: %v", err)
 	}
 
@@ -339,10 +339,11 @@ func TestClient_SendPrefixStable(t *testing.T) {
 	}
 }
 
-func TestClient_SendRejectsNilConversation(t *testing.T) {
-	c := testClient("http://unused")
-	if _, err := c.Send(t.Context(), nil); err == nil {
-		t.Error("expected error for nil conversation")
+func TestConversation_SendRejectsNilClient(t *testing.T) {
+	conv := NewConversation(nil, "", nil)
+	conv.AppendUser("hi")
+	if _, err := conv.Send(t.Context(), ""); err != ErrNoClient {
+		t.Errorf("err = %v, want ErrNoClient", err)
 	}
 }
 
@@ -454,9 +455,9 @@ func TestClient_ReasoningEffortInRequest(t *testing.T) {
 	}
 	assertEffort("Respond(high)", "high")
 
-	conv := c.NewConversation("sys", nil)
+	conv := NewConversation(c, "sys", nil)
 	conv.AppendUser("hello")
-	if _, err := c.Send(t.Context(), conv); err != nil {
+	if _, err := conv.Send(t.Context(), ""); err != nil {
 		t.Fatalf("Send: %v", err)
 	}
 	assertEffort("Send(high)", "high")
@@ -467,12 +468,98 @@ func TestClient_ReasoningEffortInRequest(t *testing.T) {
 		t.Fatalf("Respond: %v", err)
 	}
 	assertEffort("Respond(empty)", "")
-	conv2 := c2.NewConversation("sys", nil)
+	conv2 := NewConversation(c2, "sys", nil)
 	conv2.AppendUser("hello")
-	if _, err := c2.Send(t.Context(), conv2); err != nil {
+	if _, err := conv2.Send(t.Context(), ""); err != nil {
 		t.Fatalf("Send: %v", err)
 	}
 	assertEffort("Send(empty)", "")
+}
+
+// TestConversation_SendEffortOverride verifies that a per-call effort
+// passed to Send overrides the client's configured default and that an
+// empty effort falls back to the client's default, including the case
+// where the client itself has no effort configured.
+func TestConversation_SendEffortOverride(t *testing.T) {
+	var lastBody []byte
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		lastBody, _ = io.ReadAll(r.Body)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{
+			"id":"r","object":"response","created_at":0,"model":"test-model","status":"completed",
+			"output":[{"id":"m","type":"message","role":"assistant","status":"completed",
+			 "content":[{"type":"output_text","text":"ok","annotations":[]}]}],
+			"parallel_tool_calls":false,"tool_choice":"auto","tools":[]
+		}`))
+	}))
+	t.Cleanup(srv.Close)
+
+	mk := func(effort ReasoningEffort) *Client {
+		c, err := NewClient(ClientConfig{
+			Provider: ProviderOpenAI,
+			Model:    "test-model",
+			Raw: openai.NewClient(
+				option.WithAPIKey("test-key"),
+				option.WithBaseURL(srv.URL+"/"),
+			),
+			ReasoningEffort: effort,
+		})
+		if err != nil {
+			t.Fatalf("NewClient: %v", err)
+		}
+		return c
+	}
+
+	readEffort := func() any {
+		var req map[string]any
+		if err := json.Unmarshal(lastBody, &req); err != nil {
+			t.Fatalf("body not JSON: %v (%s)", err, lastBody)
+		}
+		r, ok := req["reasoning"]
+		if !ok {
+			return nil
+		}
+		m, _ := r.(map[string]any)
+		return m["effort"]
+	}
+
+	// Client default is high; per-call "low" must override it.
+	c := mk(ReasoningEffortHigh)
+	conv := NewConversation(c, "sys", nil)
+	conv.AppendUser("hello")
+	if _, err := conv.Send(t.Context(), ReasoningEffortLow); err != nil {
+		t.Fatalf("Send override: %v", err)
+	}
+	if got := readEffort(); got != "low" {
+		t.Errorf("override: reasoning.effort = %v, want low", got)
+	}
+
+	// Empty effort falls back to the client's configured default.
+	if _, err := conv.Send(t.Context(), ""); err != nil {
+		t.Fatalf("Send fallback: %v", err)
+	}
+	if got := readEffort(); got != "high" {
+		t.Errorf("fallback: reasoning.effort = %v, want high", got)
+	}
+
+	// Client has no default and no per-call effort: field is omitted.
+	c2 := mk("")
+	conv2 := NewConversation(c2, "sys", nil)
+	conv2.AppendUser("hello")
+	if _, err := conv2.Send(t.Context(), ""); err != nil {
+		t.Fatalf("Send empty+empty: %v", err)
+	}
+	if got := readEffort(); got != nil {
+		t.Errorf("empty+empty: reasoning should be absent, got %v", got)
+	}
+
+	// Client has no default but a per-call effort is supplied.
+	if _, err := conv2.Send(t.Context(), ReasoningEffortMedium); err != nil {
+		t.Fatalf("Send empty+medium: %v", err)
+	}
+	if got := readEffort(); got != "medium" {
+		t.Errorf("empty+medium: reasoning.effort = %v, want medium", got)
+	}
 }
 
 func TestNewClientFromEnv_ReasoningEffort(t *testing.T) {
@@ -526,9 +613,9 @@ func TestClient_SendCapturesReasoning(t *testing.T) {
 	t.Cleanup(srv.Close)
 
 	c := testClient(srv.URL)
-	conv := c.NewConversation("sys", nil)
+	conv := NewConversation(c, "sys", nil)
 	conv.AppendUser("hi")
-	if _, err := c.Send(t.Context(), conv); err != nil {
+	if _, err := conv.Send(t.Context(), ""); err != nil {
 		t.Fatalf("Send 1: %v", err)
 	}
 
@@ -573,7 +660,7 @@ func TestClient_SendCapturesReasoning(t *testing.T) {
 
 	// Second Send: reasoning must not appear in the outbound request body.
 	conv.AppendUser("follow-up")
-	if _, err := c.Send(t.Context(), conv); err != nil {
+	if _, err := conv.Send(t.Context(), ""); err != nil {
 		t.Fatalf("Send 2: %v", err)
 	}
 	if strings.Contains(string(lastBody), "checked arithmetic") ||

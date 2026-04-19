@@ -3,6 +3,8 @@ package llm
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"strconv"
 	"time"
 )
@@ -134,8 +136,8 @@ type AutoShrinkConfig struct {
 // summary string. Implementations are typically backed by an LLM call but
 // can also be deterministic (for example, joining titles for tests).
 //
-// Summarize must be safe to call from inside [Client.Send] - in
-// particular, it must not call [Client.Send] on the same conversation it
+// Summarize must be safe to call from inside [Conversation.Send] - in
+// particular, it must not call [Conversation.Send] on the same conversation it
 // is summarising, or it will recurse.
 type Summarizer interface {
 	Summarize(ctx context.Context, turns []Turn) (string, error)
@@ -154,22 +156,91 @@ func (f SummarizerFunc) Summarize(ctx context.Context, turns []Turn) (string, er
 // The zero value is not usable; construct one with [NewConversation].
 // Conversation is not safe for concurrent use.
 type Conversation struct {
+	client       *Client
 	instructions string
-	tools        []ToolSpec
-	turns        []Turn
-	usage        TokenUsage
-	autoShrink   AutoShrinkConfig
-	summarizer   Summarizer
+
+	// tools holds the executable [Tool] implementations registered at
+	// construction time. toolSpecs is the wire format derived from
+	// tools (and used directly when a conversation is restored from
+	// JSON or an event log, where no executables are available).
+	// toolByName indexes tools by Name for fast dispatch during
+	// [Conversation.Run].
+	tools      []Tool
+	toolSpecs  []ToolSpec
+	toolByName map[string]Tool
+
+	turns      []Turn
+	usage      TokenUsage
+	autoShrink AutoShrinkConfig
+	summarizer Summarizer
+
+	// maxSteps bounds the number of request/tool-call iterations
+	// [Conversation.Run] will perform before giving up. Zero is
+	// treated as [DefaultMaxSteps].
+	maxSteps int
+
+	// Persistence. store and sessionID are set by [Conversation.OpenSession];
+	// when store is nil all mutating methods are pure in-memory
+	// updates. replaying suppresses emission while applying a loaded
+	// log so replay does not feed back into the store. lastErr
+	// captures the most recent emit failure for [Conversation.LastError].
+	store     SessionStore
+	sessionID string
+	replaying bool
+	lastErr   error
 }
 
-// NewConversation creates an empty [Conversation] anchored on instructions
-// and tools. Both values form the cache-stable prefix and are treated as
-// immutable for the life of the conversation. A defensive copy of tools is
-// made so later mutations by the caller do not disturb the cache key.
-func NewConversation(instructions string, tools []ToolSpec) *Conversation {
+// DefaultMaxSteps bounds the number of request/tool-call iterations
+// [Conversation.Run] performs before giving up. It protects against
+// runaway loops where the model keeps requesting tool calls without
+// ever producing a final message.
+const DefaultMaxSteps = 20
+
+// NewConversation creates an empty [Conversation] anchored on
+// instructions and tools and bound to client. client is the transport
+// used by [Conversation.Send] and [Conversation.Stream]; when nil the
+// conversation is a pure-history object that supports local mutations
+// and JSON round-trips but will return [ErrNoClient] from any method
+// that issues an LLM request.
+//
+// Each [Tool] in tools is advertised to the model via its Name,
+// Description, and Parameters, and is dispatched directly by
+// [Conversation.Run] when the model emits a matching function call.
+// Tool names must be unique; duplicates cause NewConversation to panic
+// because the ambiguity would silently shadow a tool at call time.
+//
+// Instructions and the derived tool schema form the cache-stable
+// prefix and are treated as immutable for the life of the
+// conversation. NewConversation builds a private copy of both so
+// later mutations by the caller do not disturb the cache key.
+func NewConversation(client *Client, instructions string, tools []Tool) *Conversation {
+	specs := make([]ToolSpec, len(tools))
+	byName := make(map[string]Tool, len(tools))
+	for i, t := range tools {
+		if t == nil {
+			panic("llm: NewConversation received a nil tool")
+		}
+		name := t.Name()
+		if name == "" {
+			panic("llm: NewConversation received a tool with empty name")
+		}
+		if _, dup := byName[name]; dup {
+			panic(fmt.Sprintf("llm: NewConversation received duplicate tool %q", name))
+		}
+		specs[i] = ToolSpec{
+			Name:        name,
+			Description: t.Description(),
+			Parameters:  t.Parameters(),
+		}
+		byName[name] = t
+	}
 	return &Conversation{
+		client:       client,
 		instructions: instructions,
-		tools:        append([]ToolSpec(nil), tools...),
+		tools:        append([]Tool(nil), tools...),
+		toolSpecs:    specs,
+		toolByName:   byName,
+		maxSteps:     DefaultMaxSteps,
 		autoShrink: AutoShrinkConfig{
 			Threshold:         0.85,
 			KeepToolExchanges: 2,
@@ -178,11 +249,149 @@ func NewConversation(instructions string, tools []ToolSpec) *Conversation {
 	}
 }
 
+// Client returns the [Client] bound at construction time, or nil when
+// the conversation was created without one.
+func (c *Conversation) Client() *Client { return c.client }
+
+// SetClient replaces the bound [Client]. It is primarily intended for
+// conversations restored from JSON, whose client field is dropped by
+// the persistence layer; callers must rebind a client before invoking
+// [Conversation.Send] or [Conversation.Stream].
+func (c *Conversation) SetClient(client *Client) { c.client = client }
+
+// OpenSession binds c to store under sessionID and either replays the
+// existing event log or seeds a fresh one with c's current
+// instructions and tools.
+//
+// On a fresh session (no events on the store) OpenSession emits an
+// [EventInit] carrying c's current instructions and tools so future
+// loads can reconstruct the cache anchor.
+//
+// On an existing session every recorded event is applied to c in
+// order, replacing c's current instructions/tool schema/turns/usage with
+// the persisted values. The arguments passed to [NewConversation] are
+// therefore ignored when resuming an existing session, though any tool
+// name advertised by the persisted session must still be present in the
+// initial registered tool set so dispatch succeeds. The persisted
+// init event is authoritative.
+//
+// OpenSession must be called before any mutating method (AppendUser,
+// AppendAssistantText, ...) so the recorded log is a complete record
+// of c's state. Calling it on a conversation that already has turns
+// returns an error rather than silently mixing transient and
+// persisted history.
+func (c *Conversation) OpenSession(ctx context.Context, store SessionStore, sessionID string) error {
+	if store == nil {
+		return fmt.Errorf("llm: OpenSession requires a non-nil store")
+	}
+	if c.store != nil {
+		return fmt.Errorf("llm: conversation is already bound to a session")
+	}
+	if len(c.turns) > 0 {
+		return fmt.Errorf("llm: OpenSession requires a fresh conversation (has %d turns)", len(c.turns))
+	}
+
+	events, err := store.Load(ctx, sessionID)
+	switch {
+	case err == nil:
+		c.replaying = true
+		for i := range events {
+			if applyErr := events[i].apply(c); applyErr != nil {
+				c.replaying = false
+				return fmt.Errorf("llm: replay event seq=%d kind=%s: %w",
+					events[i].Seq, events[i].Kind, applyErr)
+			}
+			if events[i].Kind == EventInit {
+				for _, ts := range events[i].Tools {
+					if _, ok := c.toolByName[ts.Name]; !ok {
+						c.replaying = false
+						return fmt.Errorf("llm: session %q requires tool %q which is not registered", sessionID, ts.Name)
+					}
+				}
+			}
+		}
+		c.replaying = false
+	case errors.Is(err, ErrSessionNotFound):
+		init := &Event{
+			Kind:         EventInit,
+			Instructions: c.instructions,
+			Tools:        append([]ToolSpec(nil), c.toolSpecs...),
+		}
+		if _, appendErr := store.Append(ctx, sessionID, init); appendErr != nil {
+			return fmt.Errorf("llm: seed session %q: %w", sessionID, appendErr)
+		}
+	default:
+		return fmt.Errorf("llm: load session %q: %w", sessionID, err)
+	}
+
+	c.store = store
+	c.sessionID = sessionID
+	return nil
+}
+
+// SessionID returns the id this conversation is persisted under, or an
+// empty string when no session is bound.
+func (c *Conversation) SessionID() string { return c.sessionID }
+
+// LastError returns the first persistence error (if any) encountered
+// since the session was bound. A failed emit is latched because the event
+// log is already divergent; it is not reset on subsequent successful emits.
+// Callers that require strict persistence should check it after each
+// batch of mutations.
+func (c *Conversation) LastError() error { return c.lastErr }
+
+// Truncate rolls back the bound session's log to toSeq, discarding
+// every event with Seq > toSeq, and reloads c from the truncated log.
+// Passing toSeq <= 0 leaves only the [EventInit] anchor (and an empty
+// turn list). Truncate is a no-op error when no session is bound.
+func (c *Conversation) Truncate(ctx context.Context, toSeq int64) error {
+	if c.store == nil {
+		return fmt.Errorf("llm: Truncate requires an open session")
+	}
+	if err := c.store.Truncate(ctx, c.sessionID, toSeq); err != nil {
+		return err
+	}
+	events, err := c.store.Load(ctx, c.sessionID)
+	if err != nil {
+		return err
+	}
+	c.instructions = ""
+	c.toolSpecs = nil
+	c.turns = nil
+	c.usage = TokenUsage{}
+	c.replaying = true
+	defer func() { c.replaying = false }()
+	for i := range events {
+		if applyErr := events[i].apply(c); applyErr != nil {
+			return fmt.Errorf("llm: replay event seq=%d kind=%s: %w",
+				events[i].Seq, events[i].Kind, applyErr)
+		}
+	}
+	return nil
+}
+
+// emit records ev to the bound session store, if any. Errors are
+// retained on c so callers can observe them via [Conversation.LastError]
+// without requiring every mutating method to return an error. The first
+// emit failure is latched; it is not cleared by subsequent successful
+// emits because the event log is already divergent. emit is a no-op
+// when no store is bound or when c is replaying a loaded log.
+func (c *Conversation) emit(ev *Event) {
+	if c.store == nil || c.replaying {
+		return
+	}
+	if _, err := c.store.Append(context.Background(), c.sessionID, ev); err != nil {
+		if c.lastErr == nil {
+			c.lastErr = err
+		}
+	}
+}
+
 // Instructions returns the system prompt bound at construction time.
 func (c *Conversation) Instructions() string { return c.instructions }
 
 // Tools returns a defensive copy of the advertised tool schema.
-func (c *Conversation) Tools() []ToolSpec { return append([]ToolSpec(nil), c.tools...) }
+func (c *Conversation) Tools() []ToolSpec { return append([]ToolSpec(nil), c.toolSpecs...) }
 
 // Turns returns a defensive copy of the recorded turns in insertion order.
 func (c *Conversation) Turns() []Turn {
@@ -225,7 +434,7 @@ type conversationJSON struct {
 func (c *Conversation) MarshalJSON() ([]byte, error) {
 	return json.Marshal(conversationJSON{
 		Instructions: c.instructions,
-		Tools:        c.tools,
+		Tools:        c.toolSpecs,
 		Turns:        c.turns,
 		Usage:        c.usage,
 		AutoShrink:   c.autoShrink,
@@ -233,15 +442,21 @@ func (c *Conversation) MarshalJSON() ([]byte, error) {
 }
 
 // UnmarshalJSON restores a conversation previously produced by
-// [Conversation.MarshalJSON]. Defensive copies of slices are stored so
-// later caller mutations do not disturb the restored state.
+// [Conversation.MarshalJSON]. The executable [Tool] set is not part of
+// the wire format; restored conversations therefore have no
+// [Conversation.Run] dispatch table until the caller passes the
+// original tools through a fresh [NewConversation] + [Conversation.OpenSession]
+// pair. Defensive copies of slices are stored so later caller
+// mutations do not disturb the restored state.
 func (c *Conversation) UnmarshalJSON(data []byte) error {
 	var raw conversationJSON
 	if err := json.Unmarshal(data, &raw); err != nil {
 		return err
 	}
 	c.instructions = raw.Instructions
-	c.tools = append([]ToolSpec(nil), raw.Tools...)
+	c.tools = nil
+	c.toolSpecs = append([]ToolSpec(nil), raw.Tools...)
+	c.toolByName = nil
 	c.turns = append([]Turn(nil), raw.Turns...)
 	c.usage = raw.Usage
 	c.autoShrink = raw.AutoShrink
@@ -251,29 +466,33 @@ func (c *Conversation) UnmarshalJSON(data []byte) error {
 
 // AppendUser records a user message.
 func (c *Conversation) AppendUser(text string) {
-	c.turns = append(c.turns, Turn{
+	turn := Turn{
 		Role:      RoleUser,
 		Text:      text,
 		Tier:      TierVolatile,
 		CreatedAt: time.Now(),
-	})
+	}
+	c.turns = append(c.turns, turn)
+	c.emit(&Event{Kind: EventAppendUser, Turn: &turn})
 }
 
 // AppendAssistantText records an assistant text reply.
 func (c *Conversation) AppendAssistantText(text string) {
-	c.turns = append(c.turns, Turn{
+	turn := Turn{
 		Role:      RoleAssistant,
 		Text:      text,
 		Tier:      TierStableHistory,
 		CreatedAt: time.Now(),
-	})
+	}
+	c.turns = append(c.turns, turn)
+	c.emit(&Event{Kind: EventAppendAssistant, Turn: &turn})
 }
 
 // AppendReasoning records a reasoning trace emitted by the model. text
 // typically combines the provider-visible summary and any
 // reasoning_text content and is stored for observability. raw is an
 // optional provider-opaque payload (see [Turn.Raw]) that, when set,
-// lets [Client.Send] replay the captured reasoning item (including
+// lets [Conversation.Send] replay the captured reasoning item (including
 // its id and encrypted_content) on subsequent requests so
 // tool-calling continuity is preserved. An empty text with a nil raw
 // is ignored so providers that never emit reasoning items do not
@@ -282,18 +501,20 @@ func (c *Conversation) AppendReasoning(text string, raw json.RawMessage) {
 	if text == "" && len(raw) == 0 {
 		return
 	}
-	c.turns = append(c.turns, Turn{
+	turn := Turn{
 		Role:      RoleReasoning,
 		Text:      text,
 		Tier:      TierToolIO,
 		CreatedAt: time.Now(),
 		Raw:       raw,
-	})
+	}
+	c.turns = append(c.turns, turn)
+	c.emit(&Event{Kind: EventAppendReasoning, Turn: &turn})
 }
 
 // AppendToolCall records a function call requested by the model.
 func (c *Conversation) AppendToolCall(call ToolCall) {
-	c.turns = append(c.turns, Turn{
+	turn := Turn{
 		Role:      RoleToolCall,
 		Tier:      TierToolIO,
 		CreatedAt: time.Now(),
@@ -302,7 +523,9 @@ func (c *Conversation) AppendToolCall(call ToolCall) {
 			Name:      call.Name,
 			Arguments: call.Arguments,
 		},
-	})
+	}
+	c.turns = append(c.turns, turn)
+	c.emit(&Event{Kind: EventAppendToolCall, Turn: &turn})
 }
 
 // AppendToolOutput records the output produced for a previous tool call.
@@ -313,12 +536,14 @@ func (c *Conversation) AppendToolOutput(callID, output string, execErr error) {
 	if execErr != nil {
 		p.Error = execErr.Error()
 	}
-	c.turns = append(c.turns, Turn{
+	turn := Turn{
 		Role:      RoleToolOutput,
 		Tier:      TierToolIO,
 		Tool:      p,
 		CreatedAt: time.Now(),
-	})
+	}
+	c.turns = append(c.turns, turn)
+	c.emit(&Event{Kind: EventAppendToolOutput, Turn: &turn})
 }
 
 // Trim drops the oldest turns so that at most keepLastTurns remain. Tool
@@ -349,6 +574,7 @@ func (c *Conversation) Trim(keepLastTurns int) int {
 	}
 	dropped := cut
 	c.turns = append([]Turn(nil), c.turns[cut:]...)
+	c.emit(&Event{Kind: EventTrim, KeepLast: keepLastTurns})
 	return dropped
 }
 
@@ -378,6 +604,9 @@ func (c *Conversation) DropToolDetails(keepLastN int) int {
 		t.Tool.Output = summarizeTruncated(orig)
 		truncated++
 	}
+	if truncated > 0 {
+		c.emit(&Event{Kind: EventDropToolDetails, KeepLast: keepLastN})
+	}
 	return truncated
 }
 
@@ -399,15 +628,23 @@ func (c *Conversation) ReplaceRange(from, to int, replacement []Turn) {
 	merged = append(merged, replacement...)
 	merged = append(merged, c.turns[to:]...)
 	c.turns = merged
+	c.emit(&Event{
+		Kind:        EventReplaceRange,
+		From:        from,
+		To:          to,
+		Replacement: append([]Turn(nil), replacement...),
+	})
 }
 
 // recordUsage stores the latest provider-reported usage and triggers an
-// auto-shrink pass if the policy says so. It is called by [Client.Send].
+// auto-shrink pass if the policy says so. It is called by [Conversation.Send].
 // The returned error is non-nil only when a registered [Summarizer]
 // failed; in that case the conversation has already been shrunk by
 // [Conversation.Trim] as a fallback so the next request still fits.
 func (c *Conversation) recordUsage(ctx context.Context, u TokenUsage) error {
 	c.usage = u
+	usageCopy := u
+	c.emit(&Event{Kind: EventRecordUsage, Usage: &usageCopy})
 	return c.maybeAutoShrink(ctx)
 }
 
@@ -509,7 +746,7 @@ func (c *Conversation) UsageByRole() RoleUsage {
 
 	instrBytes := len(c.instructions)
 	toolBytes := 0
-	for _, t := range c.tools {
+	for _, t := range c.toolSpecs {
 		toolBytes += len(t.Name) + len(t.Description)
 	}
 	var userBytes, assistantBytes, toolIOBytes int

@@ -1,19 +1,19 @@
-package skill
+package llm
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
-	"path/filepath"
-	"strings"
 )
 
-// Tool is the contract the [Agent] uses to invoke a single function tool.
+// Tool is the contract a [Conversation] uses to invoke a single function
+// tool during its tool-calling loop.
 //
 // A Tool exposes the metadata needed to advertise itself to the LLM and a
 // handler that executes a single call. Implementations must be safe for
-// concurrent use when the same instance is shared across multiple [Agent]
-// runs. Handlers should return a compact string representation of the tool's
-// output; that string is sent back to the model verbatim as the
+// concurrent use when the same instance is shared across multiple
+// conversations. Handlers should return a compact string representation of
+// the tool's output; that string is sent back to the model verbatim as the
 // function_call_output.
 //
 // The default set of filesystem and shell tools lives in the
@@ -49,44 +49,30 @@ func NewFuncTool(name, description string, parameters map[string]any, handler fu
 	return &FuncTool{
 		name:        name,
 		description: description,
-		parameters:  parameters,
+		parameters:  cloneMap(parameters),
 		handler:     handler,
 	}
 }
 
-func (t *FuncTool) Name() string               { return t.name }
-func (t *FuncTool) Description() string        { return t.description }
-func (t *FuncTool) Parameters() map[string]any { return t.parameters }
-func (t *FuncTool) Execute(ctx context.Context, arguments string) (string, error) {
-	if t.handler == nil {
-		return "", fmt.Errorf("skill: tool %q has no handler", t.name)
+func cloneMap(m map[string]any) map[string]any {
+	if m == nil {
+		return nil
 	}
-	return t.handler(ctx, arguments)
+	b, err := json.Marshal(m)
+	if err != nil {
+		return m
+	}
+	var out map[string]any
+	_ = json.Unmarshal(b, &out)
+	return out
 }
 
-// ResolveWorkspacePath resolves rel against root and ensures the cleaned
-// result stays inside root. It returns a cleaned absolute path on success
-// and is the standard helper that built-in filesystem tools (and
-// third-party tools that want the same containment guarantees) should use
-// to validate user-supplied paths.
-//
-// rel must be non-empty and relative; absolute paths and parent traversals
-// that escape root are rejected.
-func ResolveWorkspacePath(root, rel string) (string, error) {
-	if rel == "" {
-		return "", fmt.Errorf("path is required")
+func (t *FuncTool) Name() string               { return t.name }
+func (t *FuncTool) Description() string        { return t.description }
+func (t *FuncTool) Parameters() map[string]any { return cloneMap(t.parameters) }
+func (t *FuncTool) Execute(ctx context.Context, arguments string) (string, error) {
+	if t.handler == nil {
+		return "", fmt.Errorf("llm: tool %q has no handler", t.name)
 	}
-	if filepath.IsAbs(rel) {
-		return "", fmt.Errorf("path %q must be relative to the workspace root", rel)
-	}
-	absRoot, err := filepath.Abs(root)
-	if err != nil {
-		return "", fmt.Errorf("resolve root: %w", err)
-	}
-	cleaned := filepath.Clean(filepath.Join(absRoot, rel))
-	relCheck, err := filepath.Rel(absRoot, cleaned)
-	if err != nil || relCheck == ".." || strings.HasPrefix(relCheck, ".."+string(filepath.Separator)) {
-		return "", fmt.Errorf("path %q escapes workspace root", rel)
-	}
-	return cleaned, nil
+	return t.handler(ctx, arguments)
 }

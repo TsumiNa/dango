@@ -2,7 +2,7 @@
 // that dango skills expose to the LLM.
 //
 // Each tool is implemented in its own source file (for example [NewBash] in
-// bash.go, [NewGrep] in grep.go) and returns a [skill.Tool] scoped to a
+// bash.go, [NewGrep] in grep.go) and returns a [llm.Tool] scoped to a
 // workspace root. [All] composes the whole default set in the order agents
 // see them, and [Option] values configure shared settings such as the bash
 // allowlist.
@@ -14,9 +14,7 @@
 // overridden via [WithAllowlist] or [WithoutAllowlist].
 package builtin
 
-import (
-	"github.com/tsumina/dango/internal/llm/skill"
-)
+import "github.com/tsumina/dango/internal/llm"
 
 // Option customizes the set of tools returned by [All] and the configuration
 // of [NewBash]. The zero-value behaviour applies the [DefaultAllowlist] to
@@ -107,9 +105,9 @@ func WithoutAllowlist() Option {
 // root should be an existing directory; typically it is the skill directory.
 // Options apply to tools that honour shared configuration (currently only
 // the bash allowlist).
-func All(root string, opts ...Option) []skill.Tool {
+func All(root string, opts ...Option) []llm.Tool {
 	cfg := newConfig(opts)
-	return []skill.Tool{
+	return []llm.Tool{
 		newBashWithConfig(root, cfg),
 		NewReadFile(root),
 		NewWriteFile(root),
