@@ -277,8 +277,8 @@ func TestAgentWithSession(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load after run 1: %v", err)
 	}
-	if sess.Conv == nil || sess.Conv.Len() != 2 {
-		t.Fatalf("after run 1: conv len = %d, want 2", sess.Conv.Len())
+	if turns := countTurnEvents(sess); turns != 2 {
+		t.Fatalf("after run 1: turn events = %d, want 2", turns)
 	}
 
 	// Second run with the same session should ship the prior turns in
@@ -298,7 +298,21 @@ func TestAgentWithSession(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load after run 2: %v", err)
 	}
-	if sess2.Conv.Len() != 4 {
-		t.Errorf("after run 2: conv len = %d, want 4", sess2.Conv.Len())
+	if turns := countTurnEvents(sess2); turns != 4 {
+		t.Errorf("after run 2: turn events = %d, want 4", turns)
 	}
+}
+
+// countTurnEvents returns the number of events in the session log that
+// represent appended turns (user/assistant/reasoning/tool_call/tool_output).
+func countTurnEvents(events []llm.Event) int {
+	n := 0
+	for _, ev := range events {
+		switch ev.Kind {
+		case llm.EventAppendUser, llm.EventAppendAssistant,
+			llm.EventAppendReasoning, llm.EventAppendToolCall, llm.EventAppendToolOutput:
+			n++
+		}
+	}
+	return n
 }

@@ -2,131 +2,164 @@ package llm
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
-	"time"
 )
 
-func TestConversationJSONRoundTrip(t *testing.T) {
-	c := NewConversation(nil, "be brief", []ToolSpec{{
-		Name:        "echo",
-		Description: "repeat",
-		Parameters:  map[string]any{"type": "object"},
-	}})
-	c.SetAutoShrink(AutoShrinkConfig{ContextWindow: 8000, Threshold: 0.8, KeepToolExchanges: 3, KeepTurns: 5})
-	c.AppendUser("hi")
-	c.AppendToolCall(ToolCall{CallID: "c1", Name: "echo", Arguments: `{"x":1}`})
-	c.AppendToolOutput("c1", "ok", nil)
-	c.AppendAssistantText("done")
-	if err := c.recordUsage(context.Background(), TokenUsage{Input: 10, Output: 4, Total: 14}); err != nil {
-		t.Fatalf("recordUsage: %v", err)
-	}
-
-	data, err := json.Marshal(c)
-	if err != nil {
-		t.Fatalf("marshal: %v", err)
-	}
-	var restored Conversation
-	if err := json.Unmarshal(data, &restored); err != nil {
-		t.Fatalf("unmarshal: %v", err)
-	}
-
-	if got, want := restored.Instructions(), "be brief"; got != want {
-		t.Errorf("instructions = %q, want %q", got, want)
-	}
-	if got := restored.Tools(); len(got) != 1 || got[0].Name != "echo" {
-		t.Errorf("tools = %+v", got)
-	}
-	if got := restored.Turns(); len(got) != 4 {
-		t.Fatalf("turns = %d, want 4", len(got))
-	} else {
-		if got[1].Role != RoleToolCall || got[1].Tool == nil || got[1].Tool.CallID != "c1" {
-			t.Errorf("tool_call turn = %+v", got[1])
-		}
-		if got[2].Role != RoleToolOutput || got[2].Tool == nil || got[2].Tool.Output != "ok" {
-			t.Errorf("tool_output turn = %+v", got[2])
-		}
-	}
-	if got, want := restored.Usage().Total, 14; got != want {
-		t.Errorf("usage.total = %d, want %d", got, want)
-	}
-	if got := restored.autoShrink; got.ContextWindow != 8000 || got.KeepTurns != 5 {
-		t.Errorf("autoShrink = %+v", got)
-	}
-}
-
-func TestJSONStoreSaveLoadRoundTrip(t *testing.T) {
-	dir := t.TempDir()
-	store, err := NewJSONStore(dir)
-	if err != nil {
-		t.Fatalf("NewJSONStore: %v", err)
-	}
+func TestJSONStoreAppendAssignsMonotonicSeq(t *testing.T) {
+	store := mustNewStore(t, t.TempDir())
 	ctx := context.Background()
+	const id = "alpha"
 
-	conv := NewConversation(nil, "sys", nil)
-	conv.AppendUser("hello")
-	conv.AppendAssistantText("hi")
-	sess := NewSession("alpha", conv)
-
-	if err := store.Save(ctx, sess); err != nil {
-		t.Fatalf("Save: %v", err)
-	}
-	if sess.CreatedAt.IsZero() || sess.UpdatedAt.IsZero() {
-		t.Errorf("timestamps not populated: %+v", sess)
-	}
-	first := sess.CreatedAt
-
-	// Confirm the file exists with the expected name and no stray temps.
-	entries, err := os.ReadDir(dir)
+	seq, err := store.Append(ctx, id, &Event{Kind: EventInit, Instructions: "sys"})
 	if err != nil {
-		t.Fatalf("ReadDir: %v", err)
+		t.Fatalf("Append init: %v", err)
 	}
-	var names []string
-	for _, e := range entries {
-		names = append(names, e.Name())
+	if seq != 1 {
+		t.Errorf("init Seq = %d, want 1", seq)
 	}
-	if len(names) != 1 || names[0] != "alpha.json" {
-		t.Errorf("dir entries = %v, want [alpha.json]", names)
+	seq2, err := store.Append(ctx, id, &Event{Kind: EventAppendUser, Turn: &Turn{Role: RoleUser, Text: "hi"}})
+	if err != nil {
+		t.Fatalf("Append user: %v", err)
+	}
+	if seq2 != 2 {
+		t.Errorf("user Seq = %d, want 2", seq2)
 	}
 
-	loaded, err := store.Load(ctx, "alpha")
+	events, err := store.Load(ctx, id)
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
-	if loaded.ID != "alpha" {
-		t.Errorf("id = %q", loaded.ID)
+	if len(events) != 2 {
+		t.Fatalf("events = %d, want 2", len(events))
 	}
-	if !loaded.CreatedAt.Equal(first) {
-		t.Errorf("createdAt = %v, want %v", loaded.CreatedAt, first)
+	if events[0].Kind != EventInit || events[0].Seq != 1 {
+		t.Errorf("events[0] = %+v", events[0])
 	}
-	if loaded.Conv == nil || loaded.Conv.Len() != 2 {
-		t.Fatalf("conv not restored: %+v", loaded.Conv)
+	if events[1].Kind != EventAppendUser || events[1].Seq != 2 {
+		t.Errorf("events[1] = %+v", events[1])
 	}
+	if events[0].Timestamp.IsZero() {
+		t.Error("Append did not stamp Timestamp")
+	}
+}
 
-	// Second save preserves CreatedAt but bumps UpdatedAt.
-	time.Sleep(2 * time.Millisecond)
-	loaded.Conv.AppendUser("again")
-	if err := store.Save(ctx, loaded); err != nil {
-		t.Fatalf("Save 2: %v", err)
+func TestJSONStoreFirstAppendMustBeInit(t *testing.T) {
+	store := mustNewStore(t, t.TempDir())
+	_, err := store.Append(context.Background(), "a", &Event{Kind: EventAppendUser, Turn: &Turn{Role: RoleUser, Text: "x"}})
+	if !errors.Is(err, ErrSessionNotInitialised) {
+		t.Errorf("err = %v, want ErrSessionNotInitialised", err)
 	}
-	if !loaded.CreatedAt.Equal(first) {
-		t.Errorf("createdAt mutated: %v, want %v", loaded.CreatedAt, first)
+}
+
+func TestJSONStoreRejectsDoubleInit(t *testing.T) {
+	store := mustNewStore(t, t.TempDir())
+	ctx := context.Background()
+	if _, err := store.Append(ctx, "a", &Event{Kind: EventInit}); err != nil {
+		t.Fatalf("Append init: %v", err)
 	}
-	if !loaded.UpdatedAt.After(first) {
-		t.Errorf("updatedAt did not advance: %v", loaded.UpdatedAt)
+	_, err := store.Append(ctx, "a", &Event{Kind: EventInit})
+	if !errors.Is(err, ErrSessionAlreadyInitialised) {
+		t.Errorf("err = %v, want ErrSessionAlreadyInitialised", err)
 	}
 }
 
 func TestJSONStoreLoadMissing(t *testing.T) {
-	store, err := NewJSONStore(t.TempDir())
-	if err != nil {
-		t.Fatalf("NewJSONStore: %v", err)
+	store := mustNewStore(t, t.TempDir())
+	_, err := store.Load(context.Background(), "nope")
+	if !errors.Is(err, ErrSessionNotFound) {
+		t.Errorf("err = %v, want ErrSessionNotFound", err)
 	}
-	_, err = store.Load(context.Background(), "nope")
+}
+
+func TestJSONStoreLoadToleratesPartialTrailingLine(t *testing.T) {
+	dir := t.TempDir()
+	store := mustNewStore(t, dir)
+	ctx := context.Background()
+	if _, err := store.Append(ctx, "a", &Event{Kind: EventInit}); err != nil {
+		t.Fatalf("Append init: %v", err)
+	}
+	// Simulate a crash mid-write by appending an unterminated JSON fragment.
+	f, err := os.OpenFile(filepath.Join(dir, "a.jsonl"), os.O_APPEND|os.O_WRONLY, 0)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	if _, err := f.WriteString(`{"seq":2,"kind":"append_user","turn":`); err != nil {
+		t.Fatalf("write partial: %v", err)
+	}
+	f.Close()
+
+	events, err := store.Load(ctx, "a")
+	if err != nil {
+		t.Fatalf("Load with partial tail: %v", err)
+	}
+	if len(events) != 1 || events[0].Kind != EventInit {
+		t.Errorf("events = %+v, want [init]", events)
+	}
+}
+
+func TestJSONStoreAppendAfterPartialLineContinuesSeq(t *testing.T) {
+	dir := t.TempDir()
+	store := mustNewStore(t, dir)
+	ctx := context.Background()
+	if _, err := store.Append(ctx, "a", &Event{Kind: EventInit}); err != nil {
+		t.Fatalf("Append init: %v", err)
+	}
+	f, err := os.OpenFile(filepath.Join(dir, "a.jsonl"), os.O_APPEND|os.O_WRONLY, 0)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	f.WriteString(`{"seq":2,"kind":"`)
+	f.Close()
+
+	seq, err := store.Append(ctx, "a", &Event{Kind: EventAppendUser, Turn: &Turn{Role: RoleUser, Text: "x"}})
+	if err != nil {
+		t.Fatalf("Append after partial: %v", err)
+	}
+	if seq != 2 {
+		t.Errorf("seq = %d, want 2 (partial line must not consume a seq)", seq)
+	}
+}
+
+func TestJSONStoreTruncateKeepsPrefix(t *testing.T) {
+	store := mustNewStore(t, t.TempDir())
+	ctx := context.Background()
+	const id = "tr"
+	if _, err := store.Append(ctx, id, &Event{Kind: EventInit}); err != nil {
+		t.Fatalf("Append init: %v", err)
+	}
+	for i := 0; i < 3; i++ {
+		if _, err := store.Append(ctx, id, &Event{Kind: EventAppendUser, Turn: &Turn{Role: RoleUser, Text: "x"}}); err != nil {
+			t.Fatalf("Append %d: %v", i, err)
+		}
+	}
+	if err := store.Truncate(ctx, id, 2); err != nil {
+		t.Fatalf("Truncate: %v", err)
+	}
+	events, err := store.Load(ctx, id)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if len(events) != 2 {
+		t.Fatalf("events = %d, want 2", len(events))
+	}
+	// Next Append continues from Seq 3.
+	seq, err := store.Append(ctx, id, &Event{Kind: EventAppendAssistant, Turn: &Turn{Role: RoleAssistant, Text: "y"}})
+	if err != nil {
+		t.Fatalf("Append after truncate: %v", err)
+	}
+	if seq != 3 {
+		t.Errorf("Seq = %d, want 3 after truncate", seq)
+	}
+}
+
+func TestJSONStoreTruncateMissing(t *testing.T) {
+	store := mustNewStore(t, t.TempDir())
+	err := store.Truncate(context.Background(), "nope", 0)
 	if !errors.Is(err, ErrSessionNotFound) {
 		t.Errorf("err = %v, want ErrSessionNotFound", err)
 	}
@@ -134,55 +167,85 @@ func TestJSONStoreLoadMissing(t *testing.T) {
 
 func TestJSONStoreDelete(t *testing.T) {
 	dir := t.TempDir()
-	store, err := NewJSONStore(dir)
-	if err != nil {
-		t.Fatalf("NewJSONStore: %v", err)
-	}
+	store := mustNewStore(t, dir)
 	ctx := context.Background()
-	sess := NewSession("gone", NewConversation(nil, "x", nil))
-	if err := store.Save(ctx, sess); err != nil {
-		t.Fatalf("Save: %v", err)
+	if _, err := store.Append(ctx, "a", &Event{Kind: EventInit}); err != nil {
+		t.Fatalf("Append init: %v", err)
 	}
-	if err := store.Delete(ctx, "gone"); err != nil {
+	if err := store.Delete(ctx, "a"); err != nil {
 		t.Fatalf("Delete: %v", err)
 	}
-	if err := store.Delete(ctx, "gone"); !errors.Is(err, ErrSessionNotFound) {
+	if err := store.Delete(ctx, "a"); !errors.Is(err, ErrSessionNotFound) {
 		t.Errorf("second Delete err = %v, want ErrSessionNotFound", err)
-	}
-	if _, err := os.Stat(filepath.Join(dir, "gone.json")); !errors.Is(err, os.ErrNotExist) {
-		t.Errorf("file still present after Delete: %v", err)
 	}
 }
 
 func TestJSONStoreRejectsUnsafeIDs(t *testing.T) {
-	store, err := NewJSONStore(t.TempDir())
-	if err != nil {
-		t.Fatalf("NewJSONStore: %v", err)
-	}
+	store := mustNewStore(t, t.TempDir())
 	ctx := context.Background()
 	for _, id := range []string{"", "../escape", "a/b", ".hidden", "a..b"} {
 		if _, err := store.Load(ctx, id); err == nil {
 			t.Errorf("Load(%q) accepted unsafe id", id)
 		}
-		sess := &Session{ID: id, Conv: NewConversation(nil, "x", nil)}
-		if err := store.Save(ctx, sess); err == nil {
-			t.Errorf("Save(%q) accepted unsafe id", id)
+		if _, err := store.Append(ctx, id, &Event{Kind: EventInit}); err == nil {
+			t.Errorf("Append(%q) accepted unsafe id", id)
 		}
 	}
 }
 
-func TestJSONStoreAtomicWriteLeavesNoTemp(t *testing.T) {
-	dir := t.TempDir()
-	store, err := NewJSONStore(dir)
-	if err != nil {
-		t.Fatalf("NewJSONStore: %v", err)
-	}
+func TestJSONStoreConcurrentAppendSerialises(t *testing.T) {
+	store := mustNewStore(t, t.TempDir())
 	ctx := context.Background()
-	for i := 0; i < 3; i++ {
-		sess := NewSession("stress", NewConversation(nil, "x", nil))
-		if err := store.Save(ctx, sess); err != nil {
-			t.Fatalf("Save: %v", err)
+	const id = "par"
+	if _, err := store.Append(ctx, id, &Event{Kind: EventInit}); err != nil {
+		t.Fatalf("Append init: %v", err)
+	}
+	const writers = 8
+	const perWriter = 25
+	var wg sync.WaitGroup
+	wg.Add(writers)
+	for w := 0; w < writers; w++ {
+		go func() {
+			defer wg.Done()
+			for i := 0; i < perWriter; i++ {
+				_, err := store.Append(ctx, id, &Event{Kind: EventAppendUser, Turn: &Turn{Role: RoleUser, Text: "x"}})
+				if err != nil {
+					t.Errorf("Append: %v", err)
+					return
+				}
+			}
+		}()
+	}
+	wg.Wait()
+
+	events, err := store.Load(ctx, id)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	want := 1 + writers*perWriter
+	if len(events) != want {
+		t.Fatalf("events = %d, want %d", len(events), want)
+	}
+	for i, ev := range events {
+		if ev.Seq != int64(i+1) {
+			t.Fatalf("events[%d].Seq = %d, want %d", i, ev.Seq, i+1)
 		}
+	}
+}
+
+func TestJSONStoreTruncateRewritesCleanly(t *testing.T) {
+	dir := t.TempDir()
+	store := mustNewStore(t, dir)
+	ctx := context.Background()
+	const id = "rw"
+	if _, err := store.Append(ctx, id, &Event{Kind: EventInit}); err != nil {
+		t.Fatalf("Append init: %v", err)
+	}
+	if _, err := store.Append(ctx, id, &Event{Kind: EventAppendUser, Turn: &Turn{Role: RoleUser, Text: "x"}}); err != nil {
+		t.Fatalf("Append: %v", err)
+	}
+	if err := store.Truncate(ctx, id, 1); err != nil {
+		t.Fatalf("Truncate: %v", err)
 	}
 	entries, err := os.ReadDir(dir)
 	if err != nil {
@@ -193,4 +256,13 @@ func TestJSONStoreAtomicWriteLeavesNoTemp(t *testing.T) {
 			t.Errorf("leftover temp file: %s", e.Name())
 		}
 	}
+}
+
+func mustNewStore(t *testing.T, dir string) *JSONStore {
+	t.Helper()
+	s, err := NewJSONStore(dir)
+	if err != nil {
+		t.Fatalf("NewJSONStore: %v", err)
+	}
+	return s
 }

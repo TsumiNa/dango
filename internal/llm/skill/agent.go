@@ -2,7 +2,6 @@ package skill
 
 import (
 	"context"
-	"errors"
 	"fmt"
 
 	"github.com/tsumina/dango/internal/llm"
@@ -135,22 +134,15 @@ func (a *Agent) Tools() []llm.Tool { return a.tools }
 // text response or the step budget is exhausted. The returned string is
 // the concatenated output_text of the final response.
 //
-// When [WithSession] is set, Run first tries to load the existing
-// session and reuse its saved conversation; the instructions argument is
-// ignored in that case so the cache anchor does not shift between runs.
-// The session is saved back to the store in a deferred call so partial
-// progress survives even when Run returns an error.
+// When [WithSession] is set, Run binds the conversation to the
+// configured session on the store and replays any existing event log;
+// the instructions argument is ignored in that case so the cache anchor
+// does not shift between runs. Every mutation the conversation performs
+// during Run is appended to the log automatically.
 func (a *Agent) Run(ctx context.Context, instructions, userInput string) (string, error) {
-	sess, conv, err := a.loadOrCreateConversation(ctx, instructions)
+	conv, err := a.openConversation(ctx, instructions)
 	if err != nil {
 		return "", err
-	}
-	if a.sessStore != nil {
-		defer func() {
-			// Best-effort persistence: a save failure should not mask
-			// the Run outcome, but we still try to capture it.
-			_ = a.sessStore.Save(ctx, sess)
-		}()
 	}
 	conv.AppendUser(userInput)
 
@@ -160,6 +152,9 @@ func (a *Agent) Run(ctx context.Context, instructions, userInput string) (string
 			return "", fmt.Errorf("skill: agent request failed at step %d: %w", step, err)
 		}
 		if len(resp.ToolCalls) == 0 {
+			if lastErr := conv.LastError(); lastErr != nil {
+				return resp.Text, fmt.Errorf("skill: session persistence failed: %w", lastErr)
+			}
 			return resp.Text, nil
 		}
 		for _, call := range resp.ToolCalls {
@@ -172,39 +167,18 @@ func (a *Agent) Run(ctx context.Context, instructions, userInput string) (string
 	return "", fmt.Errorf("skill: agent exceeded max steps (%d) without final response", a.maxSteps)
 }
 
-// loadOrCreateConversation returns the conversation that Run will drive,
-// plus the session wrapping it when [WithSession] is set. When no
-// session is configured it returns (nil, fresh conversation, nil).
-func (a *Agent) loadOrCreateConversation(ctx context.Context, instructions string) (*llm.Session, *llm.Conversation, error) {
+// openConversation builds the [llm.Conversation] that Run will drive,
+// binding it to the configured session store when [WithSession] is set.
+// When no session is configured it returns a fresh conversation.
+func (a *Agent) openConversation(ctx context.Context, instructions string) (*llm.Conversation, error) {
+	conv := a.newConversation(instructions)
 	if a.sessStore == nil {
-		conv := a.newConversation(instructions)
-		return nil, conv, nil
+		return conv, nil
 	}
-	sess, err := a.sessStore.Load(ctx, a.sessID)
-	if err != nil {
-		if !errors.Is(err, llm.ErrSessionNotFound) {
-			return nil, nil, fmt.Errorf("skill: load session %q: %w", a.sessID, err)
-		}
-		conv := a.newConversation(instructions)
-		sess = llm.NewSession(a.sessID, conv)
-		return sess, conv, nil
+	if err := conv.OpenSession(ctx, a.sessStore, a.sessID); err != nil {
+		return nil, fmt.Errorf("skill: open session %q: %w", a.sessID, err)
 	}
-	if sess.Conv == nil {
-		conv := a.newConversation(instructions)
-		sess.Conv = conv
-		return sess, conv, nil
-	}
-	// JSON-restored conversations have no bound client; rebind before
-	// Run drives them.
-	sess.Conv.SetClient(a.client)
-	// Restore runtime-only knobs that the JSON encoding drops.
-	if a.hasShrink {
-		sess.Conv.SetAutoShrink(a.autoShrink)
-	}
-	if a.summarizer != nil {
-		sess.Conv.SetSummarizer(a.summarizer)
-	}
-	return sess, sess.Conv, nil
+	return conv, nil
 }
 
 // newConversation builds a fresh conversation anchored on instructions
