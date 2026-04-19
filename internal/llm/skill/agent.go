@@ -30,6 +30,9 @@ type Agent struct {
 	tools      []Tool
 	toolByName map[string]Tool
 	maxSteps   int
+	autoShrink llm.AutoShrinkConfig
+	hasShrink  bool
+	summarizer llm.Summarizer
 }
 
 // AgentOption customizes [NewAgent].
@@ -43,6 +46,25 @@ func WithMaxSteps(n int) AgentOption {
 			a.maxSteps = n
 		}
 	}
+}
+
+// WithAutoTrim configures the agent's [llm.Conversation] to shrink its
+// history automatically when the last request's input tokens cross
+// cfg.ContextWindow * cfg.Threshold. The policy is applied to every
+// conversation built by [Agent.Run].
+func WithAutoTrim(cfg llm.AutoShrinkConfig) AgentOption {
+	return func(a *Agent) {
+		a.autoShrink = cfg
+		a.hasShrink = true
+	}
+}
+
+// WithSummarizer registers a [llm.Summarizer] used by the auto-shrink
+// pass to collapse old history into a single summary turn instead of
+// dropping it. Without a summarizer the auto-shrink pass falls back to
+// trimming.
+func WithSummarizer(s llm.Summarizer) AgentOption {
+	return func(a *Agent) { a.summarizer = s }
 }
 
 // NewAgent creates an [Agent] bound to client and the given tools.
@@ -96,6 +118,12 @@ func (a *Agent) Tools() []Tool { return a.tools }
 // the concatenated output_text of the final response.
 func (a *Agent) Run(ctx context.Context, instructions, userInput string) (string, error) {
 	conv := a.client.NewConversation(instructions, a.toolSpecs())
+	if a.hasShrink {
+		conv.SetAutoShrink(a.autoShrink)
+	}
+	if a.summarizer != nil {
+		conv.SetSummarizer(a.summarizer)
+	}
 	conv.AppendUser(userInput)
 
 	for step := 0; step < a.maxSteps; step++ {

@@ -1,6 +1,7 @@
 package llm
 
 import (
+	"context"
 	"strconv"
 	"time"
 )
@@ -111,6 +112,25 @@ type AutoShrinkConfig struct {
 	KeepTurns         int
 }
 
+// Summarizer collapses an older slice of turns into a single compact
+// summary string. Implementations are typically backed by an LLM call but
+// can also be deterministic (for example, joining titles for tests).
+//
+// Summarize must be safe to call from inside [Client.Send] - in
+// particular, it must not call [Client.Send] on the same conversation it
+// is summarising, or it will recurse.
+type Summarizer interface {
+	Summarize(ctx context.Context, turns []Turn) (string, error)
+}
+
+// SummarizerFunc adapts a plain function into a [Summarizer].
+type SummarizerFunc func(ctx context.Context, turns []Turn) (string, error)
+
+// Summarize implements [Summarizer].
+func (f SummarizerFunc) Summarize(ctx context.Context, turns []Turn) (string, error) {
+	return f(ctx, turns)
+}
+
 // Conversation is the ordered state of a single chat session.
 //
 // The zero value is not usable; construct one with [NewConversation].
@@ -121,6 +141,7 @@ type Conversation struct {
 	turns        []Turn
 	usage        TokenUsage
 	autoShrink   AutoShrinkConfig
+	summarizer   Summarizer
 }
 
 // NewConversation creates an empty [Conversation] anchored on instructions
@@ -161,6 +182,12 @@ func (c *Conversation) Usage() TokenUsage { return c.usage }
 // SetAutoShrink replaces the auto-shrink policy. Passing a zero-valued
 // [AutoShrinkConfig] effectively disables auto shrinking.
 func (c *Conversation) SetAutoShrink(cfg AutoShrinkConfig) { c.autoShrink = cfg }
+
+// SetSummarizer registers a [Summarizer] used by [Conversation.Compress]
+// and the auto-shrink pass to collapse old history into a summary turn.
+// Passing nil disables summarisation; the auto-shrink pass then falls
+// back to dropping old turns via [Conversation.Trim].
+func (c *Conversation) SetSummarizer(s Summarizer) { c.summarizer = s }
 
 // AppendUser records a user message.
 func (c *Conversation) AppendUser(text string) {
@@ -285,32 +312,87 @@ func (c *Conversation) ReplaceRange(from, to int, replacement []Turn) {
 
 // recordUsage stores the latest provider-reported usage and triggers an
 // auto-shrink pass if the policy says so. It is called by [Client.Send].
-func (c *Conversation) recordUsage(u TokenUsage) {
+// The returned error is non-nil only when a registered [Summarizer]
+// failed; in that case the conversation has already been shrunk by
+// [Conversation.Trim] as a fallback so the next request still fits.
+func (c *Conversation) recordUsage(ctx context.Context, u TokenUsage) error {
 	c.usage = u
-	c.maybeAutoShrink()
+	return c.maybeAutoShrink(ctx)
 }
 
-// maybeAutoShrink applies tier-ordered trimming when the last request's
+// maybeAutoShrink applies tier-ordered shrinking when the last request's
 // input tokens exceed the configured threshold. It runs at most one pass
 // per recorded usage sample to avoid repeatedly rewriting history between
 // turns. The tier order is:
 //
 //  1. T2 - truncate old tool_output bodies (DropToolDetails);
-//  2. T1 - drop the oldest turns beyond KeepTurns (Trim).
+//  2. T1.5 - if a [Summarizer] is registered, collapse the oldest turns
+//     into a single summary turn via [Conversation.Compress];
+//  3. T1 - otherwise drop the oldest turns beyond KeepTurns (Trim).
 //
-// Phase B will insert a summarisation step between these, replacing the
-// dropped prefix with a compact summary turn.
-func (c *Conversation) maybeAutoShrink() {
+// When the summariser fails, maybeAutoShrink falls back to Trim so the
+// next request still fits, and surfaces the original summariser error.
+func (c *Conversation) maybeAutoShrink(ctx context.Context) error {
 	cfg := c.autoShrink
 	if cfg.ContextWindow <= 0 || cfg.Threshold <= 0 {
-		return
+		return nil
 	}
 	limit := int(float64(cfg.ContextWindow) * cfg.Threshold)
 	if limit <= 0 || c.usage.Input < limit {
-		return
+		return nil
 	}
 	c.DropToolDetails(cfg.KeepToolExchanges)
+	if c.summarizer != nil && len(c.turns) > cfg.KeepTurns {
+		upto := len(c.turns) - cfg.KeepTurns
+		if _, err := c.Compress(ctx, c.summarizer, upto); err != nil {
+			c.Trim(cfg.KeepTurns)
+			return err
+		}
+		return nil
+	}
 	c.Trim(cfg.KeepTurns)
+	return nil
+}
+
+// summaryPrefix is prepended to the text of a summary turn produced by
+// [Conversation.Compress]. It is deliberately short and deterministic so
+// downstream prompt caches can treat the summary block as cacheable
+// content once written.
+const summaryPrefix = "Conversation summary (compressed history):\n"
+
+// Compress collapses turns[0:uptoTurn] into a single assistant turn whose
+// text is produced by summarizer. uptoTurn is nudged backward when it
+// would split a tool_call/tool_output pair, preserving call/output
+// adjacency. Compress is a no-op when summarizer is nil, when uptoTurn
+// is <= 0, or when the adjusted cut would discard nothing. The number of
+// turns replaced is returned alongside any summariser error; on error the
+// conversation is left untouched.
+func (c *Conversation) Compress(ctx context.Context, summarizer Summarizer, uptoTurn int) (int, error) {
+	if summarizer == nil || uptoTurn <= 0 {
+		return 0, nil
+	}
+	if uptoTurn > len(c.turns) {
+		uptoTurn = len(c.turns)
+	}
+	for uptoTurn > 0 && uptoTurn < len(c.turns) && c.turns[uptoTurn].Role == RoleToolOutput {
+		uptoTurn--
+	}
+	if uptoTurn <= 0 {
+		return 0, nil
+	}
+	snapshot := append([]Turn(nil), c.turns[:uptoTurn]...)
+	summary, err := summarizer.Summarize(ctx, snapshot)
+	if err != nil {
+		return 0, err
+	}
+	summaryTurn := Turn{
+		Role:      RoleAssistant,
+		Text:      summaryPrefix + summary,
+		Tier:      TierStableHistory,
+		CreatedAt: time.Now(),
+	}
+	c.ReplaceRange(0, uptoTurn, []Turn{summaryTurn})
+	return uptoTurn, nil
 }
 
 // UsageByRole returns an approximate per-role breakdown of the last

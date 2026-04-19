@@ -168,3 +168,66 @@ func TestAgentRunMaxStepsExceeded(t *testing.T) {
 		t.Fatal("expected error when max steps exceeded")
 	}
 }
+
+// TestAgentWithSummarizerAndAutoTrim verifies that WithAutoTrim and
+// WithSummarizer are applied to the conversation built inside Run by
+// observing that the registered summarizer is invoked once the second
+// response reports input tokens above the threshold.
+func TestAgentWithSummarizerAndAutoTrim(t *testing.T) {
+	var responded int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		// First response: a function_call so the loop continues to a
+		// second request whose Usage will trigger auto-shrink.
+		if responded == 0 {
+			responded++
+			_, _ = w.Write([]byte(`{
+				"id":"r","object":"response","created_at":0,"model":"test-model","status":"completed",
+				"output":[{"id":"fc","type":"function_call","status":"completed","call_id":"c","name":"echo","arguments":"{}"}],
+				"parallel_tool_calls":false,"tool_choice":"auto","tools":[]
+			}`))
+			return
+		}
+		// Second response: final text reply with usage above threshold.
+		_, _ = w.Write([]byte(`{
+			"id":"r2","object":"response","created_at":0,"model":"test-model","status":"completed",
+			"output":[{"id":"m","type":"message","role":"assistant","status":"completed",
+			 "content":[{"type":"output_text","text":"done","annotations":[]}]}],
+			"parallel_tool_calls":false,"tool_choice":"auto","tools":[],
+			"usage":{
+				"input_tokens":900,"input_tokens_details":{"cached_tokens":0},
+				"output_tokens":1,"output_tokens_details":{"reasoning_tokens":0},
+				"total_tokens":901
+			}
+		}`))
+	}))
+	t.Cleanup(srv.Close)
+
+	echo := NewFuncTool("echo", "", map[string]any{"type": "object"},
+		func(context.Context, string) (string, error) { return "out", nil })
+
+	called := 0
+	sum := llm.SummarizerFunc(func(_ context.Context, _ []llm.Turn) (string, error) {
+		called++
+		return "compact", nil
+	})
+
+	agent, err := NewAgent(newTestClient(srv.URL), []Tool{echo},
+		WithAutoTrim(llm.AutoShrinkConfig{
+			ContextWindow:     1000,
+			Threshold:         0.5,
+			KeepToolExchanges: 1,
+			KeepTurns:         1,
+		}),
+		WithSummarizer(sum),
+	)
+	if err != nil {
+		t.Fatalf("NewAgent: %v", err)
+	}
+	if _, err := agent.Run(context.Background(), "", "go"); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if called != 1 {
+		t.Errorf("summarizer called %d times, want 1", called)
+	}
+}
