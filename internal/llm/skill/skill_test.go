@@ -160,6 +160,44 @@ func TestNew_CarriesBashAllowAndBlock(t *testing.T) {
 	}
 }
 
+func TestLoad_ParsesMetadataWithoutClient(t *testing.T) {
+	const body = "This is a lightweight skill loading test.\n"
+	content := "---\n" +
+		"name: lightweight-skill\n" +
+		"description: A skill used to test Load.\n" +
+		"license: Apache-2.0\n" +
+		"---\n" +
+		body
+
+	dir := writeSkillDir(t, content)
+	skill, err := Load(dir)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+
+	if skill.Client() != nil {
+		t.Errorf("Client() = %p, want nil for Load()", skill.Client())
+	}
+	if skill.Name != "lightweight-skill" {
+		t.Errorf("Name = %q, want %q", skill.Name, "lightweight-skill")
+	}
+	if skill.Description != "A skill used to test Load." {
+		t.Errorf("Description = %q, want %q", skill.Description, "A skill used to test Load.")
+	}
+	if skill.License != "Apache-2.0" {
+		t.Errorf("License = %q, want %q", skill.License, "Apache-2.0")
+	}
+	if skill.Instruction != body {
+		t.Errorf("Instruction = %q, want %q", skill.Instruction, body)
+	}
+	if skill.Dir() != dir {
+		t.Errorf("Dir() = %q, want %q", skill.Dir(), dir)
+	}
+	if skill.Conversation() != nil {
+		t.Errorf("Conversation() should be nil after Load()")
+	}
+}
+
 func equalStrings(a, b []string) bool {
 	if len(a) != len(b) {
 		return false

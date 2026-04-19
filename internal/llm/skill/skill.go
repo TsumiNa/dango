@@ -91,6 +91,40 @@ type Config struct {
 	SessionID    string
 }
 
+// Load reads the [SkillFile] in dir and parses its metadata and
+// instruction body into a [Skill] without binding an LLM client or
+// conversation. The returned Skill is lightweight and useful for
+// discovering and inspecting skills, but cannot be executed.
+func Load(dir string) (*Skill, error) {
+	info, err := os.Stat(dir)
+	if err != nil {
+		return nil, err
+	}
+	if !info.IsDir() {
+		return nil, fmt.Errorf("skill path %q is not a directory", dir)
+	}
+
+	skillPath := filepath.Join(dir, SkillFile)
+	file, err := os.Open(skillPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, fmt.Errorf("skill directory %q is missing required %s: %w", dir, SkillFile, err)
+		}
+		return nil, fmt.Errorf("open %s in %q: %w", SkillFile, dir, err)
+	}
+	defer file.Close()
+
+	var sk Skill
+	rest, err := frontmatter.Parse(file, &sk)
+	if err != nil {
+		return nil, err
+	}
+	sk.Instruction = string(rest)
+	sk.dir = dir
+
+	return &sk, nil
+}
+
 // New loads a [Skill] from cfg.Dir, binds it to cfg.Client, and builds
 // the conversation that [Skill.Run] will drive.
 //
@@ -112,32 +146,12 @@ func New(cfg Config) (*Skill, error) {
 		return nil, err
 	}
 
-	info, err := os.Stat(cfg.Dir)
+	sk, err := Load(cfg.Dir)
 	if err != nil {
 		return nil, err
 	}
-	if !info.IsDir() {
-		return nil, fmt.Errorf("skill path %q is not a directory", cfg.Dir)
-	}
 
-	skillPath := filepath.Join(cfg.Dir, SkillFile)
-	file, err := os.Open(skillPath)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return nil, fmt.Errorf("skill directory %q is missing required %s: %w", cfg.Dir, SkillFile, err)
-		}
-		return nil, fmt.Errorf("open %s in %q: %w", SkillFile, cfg.Dir, err)
-	}
-	defer file.Close()
-
-	var sk Skill
-	rest, err := frontmatter.Parse(file, &sk)
-	if err != nil {
-		return nil, err
-	}
-	sk.Instruction = string(rest)
 	sk.client = cfg.Client
-	sk.dir = cfg.Dir
 	sk.bashAllow = append([]string(nil), cfg.BashAllow...)
 	sk.bashBlock = append([]string(nil), cfg.BashBlock...)
 
@@ -153,7 +167,7 @@ func New(cfg Config) (*Skill, error) {
 	}
 	sk.sessStore = cfg.SessionStore
 	sk.sessID = cfg.SessionID
-	return &sk, nil
+	return sk, nil
 }
 
 func validateTools(tools []llm.Tool) error {
