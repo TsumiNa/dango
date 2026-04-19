@@ -18,6 +18,11 @@ const (
 	RoleAssistant  Role = "assistant"
 	RoleToolCall   Role = "tool_call"
 	RoleToolOutput Role = "tool_output"
+	// RoleReasoning marks a debug-only trace of the model's chain of
+	// thought (summary and/or public reasoning text) emitted by
+	// reasoning-capable providers. It is captured for traceability and
+	// is not replayed back to the model on subsequent requests.
+	RoleReasoning Role = "reasoning"
 )
 
 // Tier groups turns by how likely they are to mutate, which in turn decides
@@ -248,6 +253,24 @@ func (c *Conversation) AppendAssistantText(text string) {
 		Role:      RoleAssistant,
 		Text:      text,
 		Tier:      TierStableHistory,
+		CreatedAt: time.Now(),
+	})
+}
+
+// AppendReasoning records a reasoning trace emitted by the model. The
+// text typically combines the provider-visible summary and any
+// reasoning_text content; it is stored for observability and is not
+// forwarded back to the provider on subsequent requests. Empty text is
+// ignored so providers that never emit reasoning items do not pollute
+// the turn log.
+func (c *Conversation) AppendReasoning(text string) {
+	if text == "" {
+		return
+	}
+	c.turns = append(c.turns, Turn{
+		Role:      RoleReasoning,
+		Text:      text,
+		Tier:      TierToolIO,
 		CreatedAt: time.Now(),
 	})
 }

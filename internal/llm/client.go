@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"reflect"
+	"strings"
 
 	"github.com/joho/godotenv"
 	"github.com/openai/openai-go/v3"
@@ -186,6 +187,25 @@ func (c *Client) Send(ctx context.Context, conv *Conversation) (*Response, error
 			}
 			out.ToolCalls = append(out.ToolCalls, tc)
 			conv.AppendToolCall(tc)
+		case "reasoning":
+			// Capture the model's chain-of-thought for observability.
+			// Summary is the redacted public summary; Content is the
+			// full reasoning_text when the provider emits it.
+			r := item.AsReasoning()
+			var buf []string
+			for _, s := range r.Summary {
+				if s.Text != "" {
+					buf = append(buf, s.Text)
+				}
+			}
+			for _, c := range r.Content {
+				if c.Text != "" {
+					buf = append(buf, c.Text)
+				}
+			}
+			if len(buf) > 0 {
+				conv.AppendReasoning(strings.Join(buf, "\n"))
+			}
 		}
 	}
 	// Auto-shrink is best-effort: when a registered Summarizer fails,
