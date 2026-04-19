@@ -66,6 +66,45 @@ func TestConversationTrimKeepsPairs(t *testing.T) {
 	}
 }
 
+// TestConversationTrimKeepsPairWithInterleavedReasoning covers the case
+// where a RoleReasoning turn lands between a tool_call and its tool_output
+// (for example because a model emitted [function_call, reasoning] inside
+// one response). Without rewinding past reasoning, Trim would stop on the
+// reasoning turn and strand the tool_output from its tool_call.
+func TestConversationTrimKeepsPairWithInterleavedReasoning(t *testing.T) {
+	conv := NewConversation("", nil)
+	conv.AppendUser("u1")
+	conv.AppendAssistantText("a1")
+	conv.AppendToolCall(ToolCall{CallID: "c1", Name: "t"})
+	conv.AppendReasoning("midway thought")
+	conv.AppendToolOutput("c1", "out1", nil)
+	conv.AppendUser("u2")
+	conv.AppendAssistantText("a2")
+
+	// keep=3 puts the cut on tool_output; backup must rewind past both
+	// the reasoning turn and the tool_call so the pair survives.
+	conv.Trim(3)
+
+	var calls, outputs int
+	for _, tr := range conv.Turns() {
+		switch tr.Role {
+		case RoleToolCall:
+			calls++
+		case RoleToolOutput:
+			outputs++
+		}
+	}
+	if outputs > calls {
+		t.Errorf("Trim orphaned tool_output: %d tool_call vs %d tool_output; turns=%+v",
+			calls, outputs, conv.Turns())
+	}
+
+	// The replay path must still produce a valid input sequence.
+	if in := buildResponseInput(conv.Turns()); len(in) == 0 {
+		t.Fatal("buildResponseInput returned empty input after Trim")
+	}
+}
+
 func TestConversationTrimNoOpWhenWithinLimit(t *testing.T) {
 	conv := NewConversation("", nil)
 	conv.AppendUser("u1")
@@ -256,6 +295,47 @@ func TestConversationCompressRespectsToolPair(t *testing.T) {
 	// Surviving tool_call/output pair must remain adjacent.
 	if turns[1].Role != RoleToolCall || turns[2].Role != RoleToolOutput {
 		t.Errorf("tool pair broken after compress: %+v", turns)
+	}
+}
+
+// TestConversationCompressRewindsPastReasoning covers the case where
+// the Compress cut lands on a tool_output preceded by
+// [tool_call, reasoning, tool_output]. Without rewinding past reasoning
+// as well, Compress would back up only one step, keep the reasoning and
+// tool_output in the tail, and discard the tool_call - leaving the next
+// Send with a function_call_output that has no matching function_call.
+func TestConversationCompressRewindsPastReasoning(t *testing.T) {
+	conv := NewConversation("", nil)
+	conv.AppendUser("u1")
+	conv.AppendToolCall(ToolCall{CallID: "c", Name: "t"})
+	conv.AppendReasoning("midway thought")
+	conv.AppendToolOutput("c", "out", nil)
+	conv.AppendAssistantText("a1")
+
+	sum := SummarizerFunc(func(_ context.Context, turns []Turn) (string, error) {
+		// Cut at index 3 initially; rewind must pull it back to 1
+		// (before the tool_call) so the pair stays together.
+		if len(turns) != 1 {
+			t.Errorf("summarizer received %d turns, want 1", len(turns))
+		}
+		return "s", nil
+	})
+	if _, err := conv.Compress(t.Context(), sum, 3); err != nil {
+		t.Fatalf("Compress: %v", err)
+	}
+
+	var calls, outputs int
+	for _, tr := range conv.Turns() {
+		switch tr.Role {
+		case RoleToolCall:
+			calls++
+		case RoleToolOutput:
+			outputs++
+		}
+	}
+	if outputs > calls {
+		t.Errorf("Compress orphaned tool_output: %d tool_call vs %d tool_output; turns=%+v",
+			calls, outputs, conv.Turns())
 	}
 }
 

@@ -489,3 +489,95 @@ func TestNewClientFromEnv_ReasoningEffort(t *testing.T) {
 		t.Errorf("ReasoningEffort() = %q, want low", c.ReasoningEffort())
 	}
 }
+
+// TestClient_SendCapturesReasoning verifies that reasoning items emitted
+// by the model are recorded as RoleReasoning turns on the conversation
+// (for debugging / traceability) but are omitted from the request body
+// on the next Send so they do not round-trip to the provider.
+func TestClient_SendCapturesReasoning(t *testing.T) {
+	var lastBody []byte
+	var responded int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		lastBody, _ = io.ReadAll(r.Body)
+		w.Header().Set("Content-Type", "application/json")
+		responded++
+		if responded == 1 {
+			// First response mixes a reasoning item and an assistant message.
+			_, _ = w.Write([]byte(`{
+				"id":"r1","object":"response","created_at":0,"model":"test-model","status":"completed",
+				"output":[
+					{"id":"rs1","type":"reasoning","status":"completed",
+					 "summary":[{"type":"summary_text","text":"checked arithmetic"}],
+					 "content":[{"type":"reasoning_text","text":"12^2+3^2=153; sqrt=12.37"}]},
+					{"id":"m1","type":"message","role":"assistant","status":"completed",
+					 "content":[{"type":"output_text","text":"12.37","annotations":[]}]}
+				],
+				"parallel_tool_calls":false,"tool_choice":"auto","tools":[]
+			}`))
+			return
+		}
+		_, _ = w.Write([]byte(`{
+			"id":"r2","object":"response","created_at":0,"model":"test-model","status":"completed",
+			"output":[{"id":"m2","type":"message","role":"assistant","status":"completed",
+			 "content":[{"type":"output_text","text":"ok","annotations":[]}]}],
+			"parallel_tool_calls":false,"tool_choice":"auto","tools":[]
+		}`))
+	}))
+	t.Cleanup(srv.Close)
+
+	c := testClient(srv.URL)
+	conv := c.NewConversation("sys", nil)
+	conv.AppendUser("hi")
+	if _, err := c.Send(t.Context(), conv); err != nil {
+		t.Fatalf("Send 1: %v", err)
+	}
+
+	turns := conv.Turns()
+	var reasoning *Turn
+	for i := range turns {
+		if turns[i].Role == RoleReasoning {
+			reasoning = &turns[i]
+			break
+		}
+	}
+	if reasoning == nil {
+		t.Fatalf("no RoleReasoning turn recorded; turns=%+v", turns)
+	}
+	if !strings.Contains(reasoning.Text, "checked arithmetic") ||
+		!strings.Contains(reasoning.Text, "12.37") {
+		t.Errorf("reasoning text = %q, want summary+content", reasoning.Text)
+	}
+	if reasoning.Tier != TierToolIO {
+		t.Errorf("reasoning tier = %v, want TierToolIO", reasoning.Tier)
+	}
+
+	// Round-trip through JSON to confirm persistence works for sessions.
+	data, err := json.Marshal(conv)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	var restored Conversation
+	if err := json.Unmarshal(data, &restored); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	var found bool
+	for _, t := range restored.Turns() {
+		if t.Role == RoleReasoning {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Error("reasoning turn lost after JSON round-trip")
+	}
+
+	// Second Send: reasoning must not appear in the outbound request body.
+	conv.AppendUser("follow-up")
+	if _, err := c.Send(t.Context(), conv); err != nil {
+		t.Fatalf("Send 2: %v", err)
+	}
+	if strings.Contains(string(lastBody), "checked arithmetic") ||
+		strings.Contains(string(lastBody), "reasoning_text") {
+		t.Errorf("reasoning leaked into next request body: %s", lastBody)
+	}
+}
