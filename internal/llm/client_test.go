@@ -443,13 +443,21 @@ func TestClient_ReasoningEffortInRequest(t *testing.T) {
 		t.Errorf("Send body missing reasoning effort: %s", lastBody)
 	}
 
-	// Empty effort is omitted from the payload.
+	// Empty effort is omitted from the payload on both paths.
 	c2 := mk("")
 	if _, err := c2.Respond(t.Context(), "hi"); err != nil {
 		t.Fatalf("Respond: %v", err)
 	}
 	if strings.Contains(string(lastBody), `"reasoning"`) {
 		t.Errorf("Respond body should omit reasoning when effort is empty: %s", lastBody)
+	}
+	conv2 := c2.NewConversation("sys", nil)
+	conv2.AppendUser("hello")
+	if _, err := c2.Send(t.Context(), conv2); err != nil {
+		t.Fatalf("Send: %v", err)
+	}
+	if strings.Contains(string(lastBody), `"reasoning"`) {
+		t.Errorf("Send body should omit reasoning when effort is empty: %s", lastBody)
 	}
 }
 
