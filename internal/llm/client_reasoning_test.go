@@ -10,6 +10,7 @@ import (
 
 	"github.com/openai/openai-go/v3"
 	"github.com/openai/openai-go/v3/option"
+	"github.com/openai/openai-go/v3/responses"
 )
 
 // reasoningReplayResponseBody is a Responses API payload that emits a
@@ -86,6 +87,16 @@ func TestClient_ReplayReasoning_CapturesRaw(t *testing.T) {
 	}
 	if got["encrypted_content"] != "ENC_BLOB" {
 		t.Errorf("Raw.encrypted_content = %v, want ENC_BLOB", got["encrypted_content"])
+	}
+	// The capture path round-trips raw through
+	// ResponseReasoningItemParam so buildResponseInput is guaranteed
+	// to decode it on replay. Assert that invariant here so future
+	// SDK shape drift between the output and input types surfaces as
+	// a test failure at capture time instead of a silent skip at
+	// replay time.
+	var probe responses.ResponseReasoningItemParam
+	if err := json.Unmarshal(reasoning.Raw, &probe); err != nil {
+		t.Fatalf("Raw does not decode into ResponseReasoningItemParam: %v", err)
 	}
 }
 

@@ -220,8 +220,17 @@ func (c *Client) Send(ctx context.Context, conv *Conversation) (*Response, error
 			text := strings.Join(buf, "\n")
 			var raw json.RawMessage
 			if c.replayReasoning {
+				// Round-trip through ResponseReasoningItemParam so the
+				// bytes stored on the turn are known to decode cleanly
+				// on replay. Any failure here means the SDK's output
+				// and input shapes diverged for this item; drop raw so
+				// the turn stays observability-only rather than
+				// silently disabling replay later in buildResponseInput.
 				if b, err := json.Marshal(r); err == nil {
-					raw = b
+					var probe responses.ResponseReasoningItemParam
+					if json.Unmarshal(b, &probe) == nil {
+						raw = b
+					}
 				}
 			}
 			if text != "" || len(raw) > 0 {
@@ -397,8 +406,9 @@ func NewClient(cfg ClientConfig) (*Client, error) {
 // the provider and base URL. The ORCHESTRATION_MODEL variable must be set.
 // REASONING_EFFORT is optional; when set, its value is forwarded verbatim
 // as the reasoning effort (expected values: none, minimal, low, medium,
-// high, xhigh). REASONING_REPLAY, when set to "1" or "true", enables
-// reasoning replay for tool-calling continuity.
+// high, xhigh). REASONING_REPLAY, when set to a truthy value ("1",
+// "true", "yes", or "on"; case- and surrounding-whitespace-insensitive),
+// enables reasoning replay for tool-calling continuity.
 func NewClientFromEnv() (*Client, error) {
 	_ = godotenv.Load()
 
