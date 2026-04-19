@@ -198,9 +198,9 @@ func (c *Client) Send(ctx context.Context, conv *Conversation) (*Response, error
 					buf = append(buf, s.Text)
 				}
 			}
-			for _, c := range r.Content {
-				if c.Text != "" {
-					buf = append(buf, c.Text)
+			for _, part := range r.Content {
+				if part.Text != "" {
+					buf = append(buf, part.Text)
 				}
 			}
 			if len(buf) > 0 {

@@ -449,7 +449,15 @@ func (c *Conversation) Compress(ctx context.Context, summarizer Summarizer, upto
 	if uptoTurn > len(c.turns) {
 		uptoTurn = len(c.turns)
 	}
-	for uptoTurn > 0 && uptoTurn < len(c.turns) && c.turns[uptoTurn].Role == RoleToolOutput {
+	// Rewind past tool_output and reasoning so the summariser never
+	// strands a tool_output from its tool_call. Reasoning carries no
+	// structural meaning and is safe to fold into the summary with
+	// its neighbouring tool_call.
+	for uptoTurn > 0 && uptoTurn < len(c.turns) {
+		r := c.turns[uptoTurn].Role
+		if r != RoleToolOutput && r != RoleReasoning {
+			break
+		}
 		uptoTurn--
 	}
 	if uptoTurn <= 0 {
