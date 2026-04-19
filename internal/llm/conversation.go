@@ -18,10 +18,13 @@ const (
 	RoleAssistant  Role = "assistant"
 	RoleToolCall   Role = "tool_call"
 	RoleToolOutput Role = "tool_output"
-	// RoleReasoning marks a debug-only trace of the model's chain of
-	// thought (summary and/or public reasoning text) emitted by
-	// reasoning-capable providers. It is captured for traceability and
-	// is not replayed back to the model on subsequent requests.
+	// RoleReasoning marks a trace of the model's chain of thought
+	// (summary and/or public reasoning text) emitted by
+	// reasoning-capable providers. It is captured for observability
+	// and, when the turn carries a provider-opaque [Turn.Raw] payload
+	// written by a Client with [ClientConfig.ReplayReasoning] enabled,
+	// is replayed to the model on subsequent requests in the same
+	// open tool-calling cycle to preserve reasoning continuity.
 	RoleReasoning Role = "reasoning"
 )
 
