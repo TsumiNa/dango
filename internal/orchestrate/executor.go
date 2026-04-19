@@ -3,7 +3,7 @@ package orchestrate
 import (
 	"context"
 	"fmt"
-	"log"
+	"log/slog"
 
 	"github.com/tsumina/dango/internal/llm/skill"
 )
@@ -52,7 +52,7 @@ type SharedData struct {
 // task. The zero value is not usable; construct instances with
 // [NewExecutor].
 type Executor struct {
-	logger  *log.Logger
+	logger  *slog.Logger
 	skill   *skill.Skill
 	planner *ExecutionPlanner
 
@@ -72,7 +72,7 @@ type Executor struct {
 // logger receives lifecycle log messages and may be nil to silence them.
 // sk and planner must be non-nil; sk supplies the workspace directory,
 // metadata, instruction prompt, and LLM client used during execution.
-func NewExecutor(logger *log.Logger, sk *skill.Skill, planner *ExecutionPlanner) (*Executor, error) {
+func NewExecutor(logger *slog.Logger, sk *skill.Skill, planner *ExecutionPlanner) (*Executor, error) {
 	if sk == nil {
 		return nil, fmt.Errorf("orchestrate: executor requires a non-nil skill")
 	}
@@ -80,7 +80,7 @@ func NewExecutor(logger *log.Logger, sk *skill.Skill, planner *ExecutionPlanner)
 		return nil, fmt.Errorf("orchestrate: executor requires a non-nil planner")
 	}
 	if logger != nil {
-		logger.Println("Creating a new Executor...")
+		logger.Info("Creating a new Executor")
 	}
 	return &Executor{
 		logger:  logger,
@@ -133,5 +133,5 @@ func (e *Executor) logf(format string, args ...any) {
 	if e.logger == nil {
 		return
 	}
-	e.logger.Printf(format, args...)
+	e.logger.Debug(fmt.Sprintf(format, args...))
 }

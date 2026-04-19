@@ -12,6 +12,20 @@ import (
 
 var testLogger = slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelError}))
 
+func TestNewRuntime_AssignsUniqueID(t *testing.T) {
+	first := NewRuntime(testLogger)
+	second := NewRuntime(testLogger)
+	if first.ID() == "" {
+		t.Fatal("expected first runtime to have a non-empty ID")
+	}
+	if second.ID() == "" {
+		t.Fatal("expected second runtime to have a non-empty ID")
+	}
+	if first.ID() == second.ID() {
+		t.Fatalf("runtime IDs should be unique, got %q", first.ID())
+	}
+}
+
 func TestRuntime_StaticGraphExecution(t *testing.T) {
 	r := NewRuntime(testLogger)
 

@@ -2,7 +2,7 @@ package orchestrate
 
 import (
 	"context"
-	"log"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"testing"
@@ -92,7 +92,7 @@ func TestExecute_UsesRunEWhenSet(t *testing.T) {
 }
 
 func TestExecute_NoRunEReturnsZero(t *testing.T) {
-	exec, err := NewExecutor(log.New(os.Stderr, "", 0), loadTestSkill(t), &ExecutionPlanner{})
+	exec, err := NewExecutor(slog.New(slog.NewTextHandler(os.Stderr, nil)), loadTestSkill(t), &ExecutionPlanner{})
 	if err != nil {
 		t.Fatalf("NewExecutor: %v", err)
 	}
