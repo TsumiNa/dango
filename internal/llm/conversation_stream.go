@@ -126,11 +126,15 @@ const streamBuffer = 16
 // The iteration pattern mirrors the openai-go responses-streaming
 // example: the value returned by Responses.NewStreaming is driven
 // with Next / Current / Err without naming its concrete type.
-func (c *Conversation) Stream(ctx context.Context) (<-chan StreamEvent, error) {
+//
+// effort overrides the reasoning-effort level for this request only;
+// pass an empty string to use the level configured on the bound
+// [Client].
+func (c *Conversation) Stream(ctx context.Context, effort ReasoningEffort) (<-chan StreamEvent, error) {
 	if c.client == nil {
 		return nil, ErrNoClient
 	}
-	params := c.buildRequestParams()
+	params := c.buildRequestParams(effort)
 	stream := c.client.raw.Responses.NewStreaming(ctx, params)
 	out := make(chan StreamEvent, streamBuffer)
 	// Resolve at call time too so a Client constructed with a

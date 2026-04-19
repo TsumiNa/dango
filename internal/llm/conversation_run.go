@@ -35,7 +35,11 @@ func (c *Conversation) SetMaxSteps(n int) {
 // A session persistence failure observed during Run does not interrupt
 // the loop; it is reported via the returned error once the model has
 // produced a final response so the caller can still observe the reply.
-func (c *Conversation) Run(ctx context.Context, userInput string) (string, error) {
+//
+// effort overrides the reasoning-effort level applied to every
+// [Conversation.Send] this Run issues. Pass an empty string to fall
+// back to the level configured on the bound [Client].
+func (c *Conversation) Run(ctx context.Context, userInput string, effort ReasoningEffort) (string, error) {
 	if c.client == nil {
 		return "", ErrNoClient
 	}
@@ -46,7 +50,7 @@ func (c *Conversation) Run(ctx context.Context, userInput string) (string, error
 	c.AppendUser(userInput)
 
 	for step := 0; step < budget; step++ {
-		resp, err := c.Send(ctx)
+		resp, err := c.Send(ctx, effort)
 		if err != nil {
 			return "", fmt.Errorf("llm: run step %d: %w", step, err)
 		}

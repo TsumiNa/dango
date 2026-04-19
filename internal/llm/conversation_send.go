@@ -43,11 +43,16 @@ var ErrNoClient = fmt.Errorf("llm: conversation has no client")
 // parsed [Response] is returned. Tool execution is the caller's
 // responsibility; supply the outputs via
 // [Conversation.AppendToolOutput] before the next Send.
-func (c *Conversation) Send(ctx context.Context) (*Response, error) {
+//
+// effort overrides the reasoning-effort level for this request only.
+// Pass an empty string to fall back to the level configured on the
+// bound [Client]; any non-empty value is forwarded verbatim on the
+// request body and leaves the client's default untouched.
+func (c *Conversation) Send(ctx context.Context, effort ReasoningEffort) (*Response, error) {
 	if c.client == nil {
 		return nil, ErrNoClient
 	}
-	params := c.buildRequestParams()
+	params := c.buildRequestParams(effort)
 	resp, err := c.client.raw.Responses.New(ctx, params)
 	if err != nil {
 		return nil, err
@@ -139,7 +144,11 @@ func (c *Conversation) applyResponseOutput(ctx context.Context, resp *responses.
 // conversation's current state and the bound client's configuration. It
 // is shared by the non-streaming and streaming request paths so both
 // endpoints see exactly the same prefix and include list.
-func (c *Conversation) buildRequestParams() responses.ResponseNewParams {
+//
+// effort, when non-empty, overrides the client's default reasoning
+// effort on the resulting params; an empty effort falls back to
+// [Client.ReasoningEffort].
+func (c *Conversation) buildRequestParams(effort ReasoningEffort) responses.ResponseNewParams {
 	params := responses.ResponseNewParams{
 		Model: c.client.model,
 		Input: responses.ResponseNewParamsInputUnion{OfInputItemList: buildResponseInput(c.turns)},
@@ -148,9 +157,13 @@ func (c *Conversation) buildRequestParams() responses.ResponseNewParams {
 	if c.instructions != "" {
 		params.Instructions = openai.String(c.instructions)
 	}
-	if c.client.reasoningEffort != "" {
+	resolvedEffort := effort
+	if resolvedEffort == "" {
+		resolvedEffort = c.client.reasoningEffort
+	}
+	if resolvedEffort != "" {
 		params.Reasoning = shared.ReasoningParam{
-			Effort: shared.ReasoningEffort(c.client.reasoningEffort),
+			Effort: shared.ReasoningEffort(resolvedEffort),
 		}
 	}
 	if c.client.replayReasoning {

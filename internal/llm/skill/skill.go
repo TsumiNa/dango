@@ -208,11 +208,17 @@ func (s *Skill) Conversation() *llm.Conversation { return s.conv }
 // userInput is appended as a user turn before the loop starts. The
 // returned string is the concatenated output_text of the model's final
 // response.
-func (s *Skill) Run(ctx context.Context, userInput string) (string, error) {
+//
+// effort overrides the reasoning-effort level for every request this
+// Run issues, letting different driver stages (for example planning
+// vs. execution) pick different levels without reconfiguring the
+// underlying [llm.Client]. Pass an empty string to use the level
+// configured on the client.
+func (s *Skill) Run(ctx context.Context, userInput string, effort llm.ReasoningEffort) (string, error) {
 	if s.sessStore != nil && s.conv.SessionID() == "" {
 		if err := s.conv.OpenSession(ctx, s.sessStore, s.sessID); err != nil {
 			return "", fmt.Errorf("skill: open session %q: %w", s.sessID, err)
 		}
 	}
-	return s.conv.Run(ctx, userInput)
+	return s.conv.Run(ctx, userInput, effort)
 }

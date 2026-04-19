@@ -110,7 +110,7 @@ func TestSkillRunToolLoop(t *testing.T) {
 		Client: newTestClient(t, srv.URL),
 		Tools:  []llm.Tool{echo},
 	})
-	out, err := sk.Run(context.Background(), "please echo hello")
+	out, err := sk.Run(context.Background(), "please echo hello", "")
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -154,7 +154,7 @@ func TestSkillRunUnknownToolReportsError(t *testing.T) {
 	t.Cleanup(srv.Close)
 
 	sk := newRunSkill(t, Config{Client: newTestClient(t, srv.URL)})
-	out, err := sk.Run(context.Background(), "go")
+	out, err := sk.Run(context.Background(), "go", "")
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -182,7 +182,7 @@ func TestSkillRunMaxStepsExceeded(t *testing.T) {
 		Tools:    []llm.Tool{loop},
 		MaxSteps: 2,
 	})
-	if _, err := sk.Run(context.Background(), "go"); err == nil {
+	if _, err := sk.Run(context.Background(), "go", ""); err == nil {
 		t.Fatal("expected error when max steps exceeded")
 	}
 }
@@ -241,7 +241,7 @@ func TestSkillWithSummarizerAndAutoTrim(t *testing.T) {
 		},
 		Summarizer: sum,
 	})
-	if _, err := sk.Run(context.Background(), "go"); err != nil {
+	if _, err := sk.Run(context.Background(), "go", ""); err != nil {
 		t.Fatalf("Run: %v", err)
 	}
 	if called != 1 {
@@ -278,7 +278,7 @@ func TestSkillWithSession(t *testing.T) {
 		SessionStore: store,
 		SessionID:    "job-1",
 	})
-	if _, err := sk.Run(context.Background(), "first"); err != nil {
+	if _, err := sk.Run(context.Background(), "first", ""); err != nil {
 		t.Fatalf("Run 1: %v", err)
 	}
 
@@ -292,7 +292,7 @@ func TestSkillWithSession(t *testing.T) {
 
 	// Second run with the same session should ship the prior turns in
 	// the request body alongside the new user input.
-	if _, err := sk.Run(context.Background(), "second"); err != nil {
+	if _, err := sk.Run(context.Background(), "second", ""); err != nil {
 		t.Fatalf("Run 2: %v", err)
 	}
 	if len(requests) != 2 {

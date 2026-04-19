@@ -106,7 +106,7 @@ func TestClient_Stream_ForwardsTextDeltas(t *testing.T) {
 	conv := NewConversation(c, "sys", nil)
 	conv.AppendUser("hi")
 
-	ch, err := conv.Stream(t.Context())
+	ch, err := conv.Stream(t.Context(), "")
 	if err != nil {
 		t.Fatalf("Stream: %v", err)
 	}
@@ -164,7 +164,7 @@ func TestClient_Stream_ForwardsReasoningDeltas(t *testing.T) {
 	conv := NewConversation(c, "sys", nil)
 	conv.AppendUser("hi")
 
-	ch, err := conv.Stream(t.Context())
+	ch, err := conv.Stream(t.Context(), "")
 	if err != nil {
 		t.Fatalf("Stream: %v", err)
 	}
@@ -224,7 +224,7 @@ func TestClient_Stream_CategoryFilter(t *testing.T) {
 	conv := NewConversation(c, "sys", nil)
 	conv.AppendUser("hi")
 
-	ch, err := conv.Stream(t.Context())
+	ch, err := conv.Stream(t.Context(), "")
 	if err != nil {
 		t.Fatalf("Stream: %v", err)
 	}
@@ -267,7 +267,7 @@ func TestClient_Stream_CommitsToolCalls(t *testing.T) {
 	conv := NewConversation(c, "sys", []Tool{NewFuncTool("echo", "", map[string]any{"type": "object"}, nil)})
 	conv.AppendUser("please echo")
 
-	ch, err := conv.Stream(t.Context())
+	ch, err := conv.Stream(t.Context(), "")
 	if err != nil {
 		t.Fatalf("Stream: %v", err)
 	}
@@ -294,7 +294,7 @@ func TestClient_Stream_CommitsToolCalls(t *testing.T) {
 func TestConversation_Stream_RejectsNilClient(t *testing.T) {
 	conv := NewConversation(nil, "", nil)
 	conv.AppendUser("hi")
-	ch, err := conv.Stream(t.Context())
+	ch, err := conv.Stream(t.Context(), "")
 	if err != ErrNoClient {
 		t.Fatalf("err = %v, want ErrNoClient", err)
 	}
@@ -320,7 +320,7 @@ data: {"type":"response.failed","sequence_number":0,"response":{"id":"r1","objec
 	conv := NewConversation(c, "sys", nil)
 	conv.AppendUser("hi")
 
-	ch, err := conv.Stream(t.Context())
+	ch, err := conv.Stream(t.Context(), "")
 	if err != nil {
 		t.Fatalf("Stream: %v", err)
 	}
@@ -368,7 +368,7 @@ func TestClient_Stream_CtxCancel(t *testing.T) {
 	conv.AppendUser("hi")
 
 	ctx, cancel := context.WithCancel(t.Context())
-	ch, err := conv.Stream(ctx)
+	ch, err := conv.Stream(ctx, "")
 	if err != nil {
 		t.Fatalf("Stream: %v", err)
 	}
@@ -411,7 +411,7 @@ func TestClient_Stream_SurfacesMissingCompleted(t *testing.T) {
 	conv := NewConversation(c, "sys", nil)
 	conv.AppendUser("hi")
 
-	ch, err := conv.Stream(t.Context())
+	ch, err := conv.Stream(t.Context(), "")
 	if err != nil {
 		t.Fatalf("Stream: %v", err)
 	}
