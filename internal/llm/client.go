@@ -2,6 +2,7 @@ package llm
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -65,6 +66,7 @@ type Client struct {
 	model           string
 	raw             openai.Client
 	reasoningEffort ReasoningEffort
+	replayReasoning bool
 }
 
 // Provider returns the provider this client is bound to.
@@ -80,6 +82,11 @@ func (c *Client) Raw() *openai.Client { return &c.raw }
 // request this client issues, or an empty string when the provider
 // default should be used.
 func (c *Client) ReasoningEffort() ReasoningEffort { return c.reasoningEffort }
+
+// ReplayReasoning reports whether this client captures and replays
+// reasoning items to preserve tool-calling continuity on reasoning
+// models. See [ClientConfig.ReplayReasoning] for details.
+func (c *Client) ReplayReasoning() bool { return c.replayReasoning }
 
 // Respond issues a single-turn request against the Responses API using the
 // configured model and returns the concatenated output text.
@@ -154,6 +161,10 @@ func (c *Client) Send(ctx context.Context, conv *Conversation) (*Response, error
 		params.Instructions = openai.String(instr)
 	}
 	c.applyReasoning(&params)
+	if c.replayReasoning {
+		params.Include = append(params.Include,
+			responses.ResponseIncludableReasoningEncryptedContent)
+	}
 
 	resp, err := c.raw.Responses.New(ctx, params)
 	if err != nil {
@@ -190,7 +201,10 @@ func (c *Client) Send(ctx context.Context, conv *Conversation) (*Response, error
 		case "reasoning":
 			// Capture the model's chain-of-thought for observability.
 			// Summary is the redacted public summary; Content is the
-			// full reasoning_text when the provider emits it.
+			// full reasoning_text when the provider emits it. When
+			// ReplayReasoning is enabled the full item (including
+			// encrypted_content when the provider returned it) is
+			// stored on the turn so buildResponseInput can replay it.
 			r := item.AsReasoning()
 			var buf []string
 			for _, s := range r.Summary {
@@ -203,8 +217,24 @@ func (c *Client) Send(ctx context.Context, conv *Conversation) (*Response, error
 					buf = append(buf, part.Text)
 				}
 			}
-			if len(buf) > 0 {
-				conv.AppendReasoning(strings.Join(buf, "\n"))
+			text := strings.Join(buf, "\n")
+			var raw json.RawMessage
+			if c.replayReasoning {
+				// Round-trip through ResponseReasoningItemParam so the
+				// bytes stored on the turn are known to decode cleanly
+				// on replay. Any failure here means the SDK's output
+				// and input shapes diverged for this item; drop raw so
+				// the turn stays observability-only rather than
+				// silently disabling replay later in buildResponseInput.
+				if b, err := json.Marshal(r); err == nil {
+					var probe responses.ResponseReasoningItemParam
+					if json.Unmarshal(b, &probe) == nil {
+						raw = b
+					}
+				}
+			}
+			if text != "" || len(raw) > 0 {
+				conv.AppendReasoning(text, raw)
 			}
 		}
 	}
@@ -218,9 +248,22 @@ func (c *Client) Send(ctx context.Context, conv *Conversation) (*Response, error
 // buildResponseInput translates recorded [Turn]s into the Responses API
 // input item list. Ordering is preserved verbatim so prompt-cache-sensitive
 // prefixes stay stable across consecutive Send calls.
+//
+// Reasoning turns are replayed when they carry a provider-opaque Raw
+// payload and sit after the most recent user turn (i.e., inside the
+// currently open tool-calling chain). Reasoning items produced before
+// the latest user turn belong to a closed conversation cycle and are
+// skipped to avoid bloating the request prefix and breaking the
+// prompt cache.
 func buildResponseInput(turns []Turn) responses.ResponseInputParam {
+	lastUser := -1
+	for i, t := range turns {
+		if t.Role == RoleUser {
+			lastUser = i
+		}
+	}
 	input := make(responses.ResponseInputParam, 0, len(turns))
-	for _, t := range turns {
+	for i, t := range turns {
 		switch t.Role {
 		case RoleUser:
 			input = append(input, responses.ResponseInputItemParamOfMessage(
@@ -228,6 +271,17 @@ func buildResponseInput(turns []Turn) responses.ResponseInputParam {
 		case RoleAssistant:
 			input = append(input, responses.ResponseInputItemParamOfMessage(
 				t.Text, responses.EasyInputMessageRoleAssistant))
+		case RoleReasoning:
+			if len(t.Raw) == 0 || i <= lastUser {
+				continue
+			}
+			var item responses.ResponseReasoningItemParam
+			if err := json.Unmarshal(t.Raw, &item); err != nil {
+				continue
+			}
+			input = append(input, responses.ResponseInputItemUnionParam{
+				OfReasoning: &item,
+			})
 		case RoleToolCall:
 			if t.Tool == nil {
 				continue
@@ -308,6 +362,15 @@ type ClientConfig struct {
 	// ReasoningEffort, when non-empty, is forwarded on every request
 	// so reasoning-capable models think at the requested level.
 	ReasoningEffort ReasoningEffort
+	// ReplayReasoning enables capture and replay of reasoning items to
+	// preserve tool-calling continuity on reasoning models. When true,
+	// [Client.Send] requests reasoning.encrypted_content from the
+	// provider, stores the full reasoning item on each [Turn], and
+	// replays those items on subsequent requests that still belong to
+	// the same user turn. Defaults to false so non-reasoning models
+	// and debug-only setups keep the Phase 1 observability-only
+	// behavior.
+	ReplayReasoning bool
 }
 
 // NewClient wraps an already-constructed openai SDK client using cfg.
@@ -331,6 +394,7 @@ func NewClient(cfg ClientConfig) (*Client, error) {
 		model:           cfg.Model,
 		raw:             cfg.Raw,
 		reasoningEffort: cfg.ReasoningEffort,
+		replayReasoning: cfg.ReplayReasoning,
 	}, nil
 }
 
@@ -342,7 +406,9 @@ func NewClient(cfg ClientConfig) (*Client, error) {
 // the provider and base URL. The ORCHESTRATION_MODEL variable must be set.
 // REASONING_EFFORT is optional; when set, its value is forwarded verbatim
 // as the reasoning effort (expected values: none, minimal, low, medium,
-// high, xhigh).
+// high, xhigh). REASONING_REPLAY, when set to a truthy value ("1",
+// "true", "yes", or "on"; case- and surrounding-whitespace-insensitive),
+// enables reasoning replay for tool-calling continuity.
 func NewClientFromEnv() (*Client, error) {
 	_ = godotenv.Load()
 
@@ -366,7 +432,18 @@ func NewClientFromEnv() (*Client, error) {
 		model:           model,
 		raw:             openai.NewClient(opts...),
 		reasoningEffort: ReasoningEffort(os.Getenv("REASONING_EFFORT")),
+		replayReasoning: parseBoolEnv(os.Getenv("REASONING_REPLAY")),
 	}, nil
+}
+
+// parseBoolEnv reports whether s names a truthy boolean environment
+// value. Empty and unknown strings are treated as false.
+func parseBoolEnv(s string) bool {
+	switch strings.ToLower(strings.TrimSpace(s)) {
+	case "1", "true", "yes", "on":
+		return true
+	}
+	return false
 }
 
 // detectProvider inspects well-known environment variables and returns the

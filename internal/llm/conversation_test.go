@@ -76,7 +76,7 @@ func TestConversationTrimKeepsPairWithInterleavedReasoning(t *testing.T) {
 	conv.AppendUser("u1")
 	conv.AppendAssistantText("a1")
 	conv.AppendToolCall(ToolCall{CallID: "c1", Name: "t"})
-	conv.AppendReasoning("midway thought")
+	conv.AppendReasoning("midway thought", nil)
 	conv.AppendToolOutput("c1", "out1", nil)
 	conv.AppendUser("u2")
 	conv.AppendAssistantText("a2")
@@ -308,7 +308,7 @@ func TestConversationCompressRewindsPastReasoning(t *testing.T) {
 	conv := NewConversation("", nil)
 	conv.AppendUser("u1")
 	conv.AppendToolCall(ToolCall{CallID: "c", Name: "t"})
-	conv.AppendReasoning("midway thought")
+	conv.AppendReasoning("midway thought", nil)
 	conv.AppendToolOutput("c", "out", nil)
 	conv.AppendAssistantText("a1")
 

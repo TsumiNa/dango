@@ -196,7 +196,7 @@ func TestClient_Respond(t *testing.T) {
 // environment (including any .env file loaded via godotenv.Load).
 func clearProviderEnv(t *testing.T) {
 	t.Helper()
-	for _, k := range []string{"OPENAI_API_KEY", "OPENROUTER_API_KEY", "GEMINI_API_KEY", "ORCHESTRATION_MODEL", "REASONING_EFFORT"} {
+	for _, k := range []string{"OPENAI_API_KEY", "OPENROUTER_API_KEY", "GEMINI_API_KEY", "ORCHESTRATION_MODEL", "REASONING_EFFORT", "REASONING_REPLAY"} {
 		t.Setenv(k, "")
 	}
 }
