@@ -151,26 +151,21 @@ func (c *Client) Send(ctx context.Context, conv *Conversation) (*Response, error
 	if conv == nil {
 		return nil, fmt.Errorf("llm: Send requires a non-nil conversation")
 	}
-	input := buildResponseInput(conv.Turns())
-	params := responses.ResponseNewParams{
-		Model: c.model,
-		Input: responses.ResponseNewParamsInputUnion{OfInputItemList: input},
-		Tools: buildToolParams(conv.Tools()),
-	}
-	if instr := conv.Instructions(); instr != "" {
-		params.Instructions = openai.String(instr)
-	}
-	c.applyReasoning(&params)
-	if c.replayReasoning {
-		params.Include = append(params.Include,
-			responses.ResponseIncludableReasoningEncryptedContent)
-	}
+	params := c.buildRequestParams(conv)
 
 	resp, err := c.raw.Responses.New(ctx, params)
 	if err != nil {
 		return nil, err
 	}
+	return c.applyResponseOutput(ctx, conv, resp), nil
+}
 
+// applyResponseOutput appends the model's output items from resp to
+// conv and records token usage, returning a [Response] view suitable
+// for callers of [Client.Send]. It is shared with the streaming
+// commit path so the post-request conversation state is identical
+// regardless of how the response was delivered.
+func (c *Client) applyResponseOutput(ctx context.Context, conv *Conversation, resp *responses.Response) *Response {
 	out := &Response{
 		Usage: usageFromResponse(resp.Usage),
 		Raw:   resp,
@@ -242,7 +237,28 @@ func (c *Client) Send(ctx context.Context, conv *Conversation) (*Response, error
 	// recordUsage has already fallen back to Trim so the next Send still
 	// fits in context.
 	_ = conv.recordUsage(ctx, out.Usage)
-	return out, nil
+	return out
+}
+
+// buildRequestParams assembles the Responses API request body from
+// conv's current state and the client's configuration. It is shared
+// by the non-streaming and streaming request paths so both endpoints
+// see exactly the same prefix and include list.
+func (c *Client) buildRequestParams(conv *Conversation) responses.ResponseNewParams {
+	params := responses.ResponseNewParams{
+		Model: c.model,
+		Input: responses.ResponseNewParamsInputUnion{OfInputItemList: buildResponseInput(conv.Turns())},
+		Tools: buildToolParams(conv.Tools()),
+	}
+	if instr := conv.Instructions(); instr != "" {
+		params.Instructions = openai.String(instr)
+	}
+	c.applyReasoning(&params)
+	if c.replayReasoning {
+		params.Include = append(params.Include,
+			responses.ResponseIncludableReasoningEncryptedContent)
+	}
+	return params
 }
 
 // buildResponseInput translates recorded [Turn]s into the Responses API
