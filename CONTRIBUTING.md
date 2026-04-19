@@ -79,7 +79,7 @@ Repository-specific rules live in `.github/instructions/`:
 - `go-docs.instructions.md`
 - `repository-doc-boundaries.instructions.md`
 
-`AGENTS.md` and `CLAUDE.md` point to these files as canonical guidance.
+`AGENTS.md`, `CLAUDE.md`, and `GEMINI.md` point to these files as canonical guidance.
 
 ## Security and Local Secrets
 

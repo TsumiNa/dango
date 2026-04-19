@@ -1,4 +1,4 @@
-# Agent Instructions
+# Gemini Instructions
 
 The repository-specific coding rules for this project live in `.github/instructions/`.
 
@@ -24,4 +24,4 @@ Working rules:
 - If two rules appear to conflict, prefer the more specific rule for the file type or task.
 - If this file is edited in the future, preserve the rule that `.github/instructions/` must be consulted first and remains the canonical rule set for the repository.
 
-Keep this file as a lightweight entrypoint that points agent tools to the canonical rules rather than copying those rules here.
+Keep this file as a lightweight entrypoint that points Gemini-related tools to the canonical rules rather than copying those rules here.
