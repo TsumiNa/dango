@@ -20,7 +20,15 @@ func newTestClient(baseURL string) *llm.Client {
 		option.WithAPIKey("test-key"),
 		option.WithBaseURL(baseURL+"/"),
 	)
-	return llm.NewClient(llm.ProviderOpenAI, "test-model", raw)
+	c, err := llm.NewClient(llm.ClientConfig{
+		Provider: llm.ProviderOpenAI,
+		Model:    "test-model",
+		Raw:      raw,
+	})
+	if err != nil {
+		panic(err)
+	}
+	return c
 }
 
 func TestNewAgentRejectsNilClient(t *testing.T) {

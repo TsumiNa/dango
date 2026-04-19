@@ -196,7 +196,7 @@ func TestClient_Respond(t *testing.T) {
 // environment (including any .env file loaded via godotenv.Load).
 func clearProviderEnv(t *testing.T) {
 	t.Helper()
-	for _, k := range []string{"OPENAI_API_KEY", "OPENROUTER_API_KEY", "GEMINI_API_KEY", "ORCHESTRATION_MODEL"} {
+	for _, k := range []string{"OPENAI_API_KEY", "OPENROUTER_API_KEY", "GEMINI_API_KEY", "ORCHESTRATION_MODEL", "REASONING_EFFORT"} {
 		t.Setenv(k, "")
 	}
 }
@@ -354,5 +354,115 @@ func testClient(baseURL string) *Client {
 			option.WithAPIKey("test-key"),
 			option.WithBaseURL(baseURL+"/"),
 		),
+	}
+}
+
+func TestNewClient_Config(t *testing.T) {
+	raw := openai.NewClient(option.WithAPIKey("k"))
+	cases := []struct {
+		name    string
+		cfg     ClientConfig
+		wantErr bool
+	}{
+		{"missing provider", ClientConfig{Model: "m", Raw: raw}, true},
+		{"missing model", ClientConfig{Provider: ProviderOpenAI, Raw: raw}, true},
+		{"ok", ClientConfig{Provider: ProviderOpenAI, Model: "m", Raw: raw, ReasoningEffort: ReasoningEffortHigh}, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			c, err := NewClient(tc.cfg)
+			if tc.wantErr {
+				if err == nil {
+					t.Fatal("expected error")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if c.Provider() != tc.cfg.Provider || c.Model() != tc.cfg.Model {
+				t.Errorf("provider/model = %s/%s", c.Provider(), c.Model())
+			}
+			if c.ReasoningEffort() != tc.cfg.ReasoningEffort {
+				t.Errorf("ReasoningEffort() = %q, want %q", c.ReasoningEffort(), tc.cfg.ReasoningEffort)
+			}
+		})
+	}
+}
+
+// TestClient_ReasoningEffortInRequest verifies that a configured
+// ReasoningEffort is forwarded verbatim on the request body for both
+// Respond and Send, and that the empty value omits the field entirely
+// so non-reasoning models see an unchanged payload.
+func TestClient_ReasoningEffortInRequest(t *testing.T) {
+	var lastBody []byte
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		lastBody, _ = io.ReadAll(r.Body)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{
+			"id":"r","object":"response","created_at":0,"model":"test-model","status":"completed",
+			"output":[{"id":"m","type":"message","role":"assistant","status":"completed",
+			 "content":[{"type":"output_text","text":"ok","annotations":[]}]}],
+			"parallel_tool_calls":false,"tool_choice":"auto","tools":[]
+		}`))
+	}))
+	t.Cleanup(srv.Close)
+
+	mk := func(effort ReasoningEffort) *Client {
+		c, err := NewClient(ClientConfig{
+			Provider: ProviderOpenAI,
+			Model:    "test-model",
+			Raw: openai.NewClient(
+				option.WithAPIKey("test-key"),
+				option.WithBaseURL(srv.URL+"/"),
+			),
+			ReasoningEffort: effort,
+		})
+		if err != nil {
+			t.Fatalf("NewClient: %v", err)
+		}
+		return c
+	}
+
+	// Configured effort appears in the request.
+	c := mk(ReasoningEffortHigh)
+	if _, err := c.Respond(t.Context(), "hi"); err != nil {
+		t.Fatalf("Respond: %v", err)
+	}
+	if !strings.Contains(string(lastBody), `"reasoning":{"effort":"high"}`) {
+		t.Errorf("Respond body missing reasoning effort: %s", lastBody)
+	}
+
+	conv := c.NewConversation("sys", nil)
+	conv.AppendUser("hello")
+	if _, err := c.Send(t.Context(), conv); err != nil {
+		t.Fatalf("Send: %v", err)
+	}
+	if !strings.Contains(string(lastBody), `"reasoning":{"effort":"high"}`) {
+		t.Errorf("Send body missing reasoning effort: %s", lastBody)
+	}
+
+	// Empty effort is omitted from the payload.
+	c2 := mk("")
+	if _, err := c2.Respond(t.Context(), "hi"); err != nil {
+		t.Fatalf("Respond: %v", err)
+	}
+	if strings.Contains(string(lastBody), `"reasoning"`) {
+		t.Errorf("Respond body should omit reasoning when effort is empty: %s", lastBody)
+	}
+}
+
+func TestNewClientFromEnv_ReasoningEffort(t *testing.T) {
+	clearProviderEnv(t)
+	t.Setenv("OPENAI_API_KEY", "oai")
+	t.Setenv("ORCHESTRATION_MODEL", "m")
+	t.Setenv("REASONING_EFFORT", "low")
+
+	c, err := NewClientFromEnv()
+	if err != nil {
+		t.Fatalf("NewClientFromEnv: %v", err)
+	}
+	if c.ReasoningEffort() != ReasoningEffortLow {
+		t.Errorf("ReasoningEffort() = %q, want low", c.ReasoningEffort())
 	}
 }
