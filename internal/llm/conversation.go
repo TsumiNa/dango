@@ -2,6 +2,7 @@ package llm
 
 import (
 	"context"
+	"encoding/json"
 	"strconv"
 	"time"
 )
@@ -188,6 +189,48 @@ func (c *Conversation) SetAutoShrink(cfg AutoShrinkConfig) { c.autoShrink = cfg 
 // Passing nil disables summarisation; the auto-shrink pass then falls
 // back to dropping old turns via [Conversation.Trim].
 func (c *Conversation) SetSummarizer(s Summarizer) { c.summarizer = s }
+
+// conversationJSON is the wire format used by [Conversation.MarshalJSON]
+// and [Conversation.UnmarshalJSON]. Only the fields that form the
+// persistent state of a conversation are encoded; runtime-only fields
+// (summarizer, auto-shrink callbacks) are intentionally omitted.
+type conversationJSON struct {
+	Instructions string           `json:"instructions"`
+	Tools        []ToolSpec       `json:"tools,omitempty"`
+	Turns        []Turn           `json:"turns,omitempty"`
+	Usage        TokenUsage       `json:"usage"`
+	AutoShrink   AutoShrinkConfig `json:"auto_shrink"`
+}
+
+// MarshalJSON serialises the persistent state of the conversation. The
+// registered [Summarizer] is not persisted because it is typically backed
+// by an LLM client that should be rebuilt on restore.
+func (c *Conversation) MarshalJSON() ([]byte, error) {
+	return json.Marshal(conversationJSON{
+		Instructions: c.instructions,
+		Tools:        c.tools,
+		Turns:        c.turns,
+		Usage:        c.usage,
+		AutoShrink:   c.autoShrink,
+	})
+}
+
+// UnmarshalJSON restores a conversation previously produced by
+// [Conversation.MarshalJSON]. Defensive copies of slices are stored so
+// later caller mutations do not disturb the restored state.
+func (c *Conversation) UnmarshalJSON(data []byte) error {
+	var raw conversationJSON
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return err
+	}
+	c.instructions = raw.Instructions
+	c.tools = append([]ToolSpec(nil), raw.Tools...)
+	c.turns = append([]Turn(nil), raw.Turns...)
+	c.usage = raw.Usage
+	c.autoShrink = raw.AutoShrink
+	c.summarizer = nil
+	return nil
+}
 
 // AppendUser records a user message.
 func (c *Conversation) AppendUser(text string) {
