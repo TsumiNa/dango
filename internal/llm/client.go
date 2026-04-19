@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"reflect"
 
 	"github.com/joho/godotenv"
 	"github.com/openai/openai-go/v3"
@@ -301,6 +302,9 @@ func NewClient(cfg ClientConfig) (*Client, error) {
 	}
 	if cfg.Model == "" {
 		return nil, fmt.Errorf("llm: NewClient requires a model")
+	}
+	if reflect.DeepEqual(cfg.Raw, openai.Client{}) {
+		return nil, fmt.Errorf("llm: NewClient requires a configured Raw SDK client")
 	}
 	return &Client{
 		provider:        cfg.Provider,

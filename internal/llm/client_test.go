@@ -366,6 +366,7 @@ func TestNewClient_Config(t *testing.T) {
 	}{
 		{"missing provider", ClientConfig{Model: "m", Raw: raw}, true},
 		{"missing model", ClientConfig{Provider: ProviderOpenAI, Raw: raw}, true},
+		{"missing raw", ClientConfig{Provider: ProviderOpenAI, Model: "m"}, true},
 		{"ok", ClientConfig{Provider: ProviderOpenAI, Model: "m", Raw: raw, ReasoningEffort: ReasoningEffortHigh}, false},
 	}
 	for _, tc := range cases {
