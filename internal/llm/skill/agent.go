@@ -8,10 +8,10 @@ import (
 )
 
 // DefaultMaxSteps bounds the number of tool-call/response iterations an
-// [Agent] will perform before giving up. It protects against runaway loops
-// when the model keeps requesting tool calls without producing a final
-// message.
-const DefaultMaxSteps = 20
+// [Agent] will perform before giving up. It re-exports
+// [llm.DefaultMaxSteps] so skill callers do not need a direct
+// dependency on the llm package for the common case.
+const DefaultMaxSteps = llm.DefaultMaxSteps
 
 // Agent drives a tool-using conversation with an LLM.
 //
@@ -19,8 +19,9 @@ const DefaultMaxSteps = 20
 //
 //   - a skill prompt and user input (turned into a [llm.Conversation]),
 //   - a set of [Tool] implementations advertised to the model,
-//   - an execution loop that dispatches each requested tool call and feeds
-//     the result back into the next request.
+//   - the execution loop in [llm.Conversation.Run] that dispatches each
+//     requested tool call and feeds the result back into the next
+//     request.
 //
 // Agents are cheap to construct and safe for concurrent use as long as the
 // underlying [Tool] implementations are also safe for concurrent use. The
@@ -28,7 +29,6 @@ const DefaultMaxSteps = 20
 type Agent struct {
 	client     *llm.Client
 	tools      []llm.Tool
-	toolByName map[string]llm.Tool
 	maxSteps   int
 	autoShrink llm.AutoShrinkConfig
 	hasShrink  bool
@@ -93,7 +93,7 @@ func NewAgent(client *llm.Client, tools []llm.Tool, opts ...AgentOption) (*Agent
 	if client == nil {
 		return nil, fmt.Errorf("skill: agent requires a non-nil client")
 	}
-	byName := make(map[string]llm.Tool, len(tools))
+	seen := make(map[string]struct{}, len(tools))
 	for _, t := range tools {
 		if t == nil {
 			return nil, fmt.Errorf("skill: agent received nil tool")
@@ -102,16 +102,15 @@ func NewAgent(client *llm.Client, tools []llm.Tool, opts ...AgentOption) (*Agent
 		if name == "" {
 			return nil, fmt.Errorf("skill: tool has empty name")
 		}
-		if _, dup := byName[name]; dup {
+		if _, dup := seen[name]; dup {
 			return nil, fmt.Errorf("skill: duplicate tool name %q", name)
 		}
-		byName[name] = t
+		seen[name] = struct{}{}
 	}
 	a := &Agent{
-		client:     client,
-		tools:      tools,
-		toolByName: byName,
-		maxSteps:   DefaultMaxSteps,
+		client:   client,
+		tools:    tools,
+		maxSteps: DefaultMaxSteps,
 	}
 	for _, opt := range opts {
 		opt(a)
@@ -122,17 +121,14 @@ func NewAgent(client *llm.Client, tools []llm.Tool, opts ...AgentOption) (*Agent
 // Tools returns the tools advertised by this agent in registration order.
 func (a *Agent) Tools() []llm.Tool { return a.tools }
 
-// Run drives a single task to completion.
+// Run drives a single task to completion by delegating the
+// request/tool-call loop to [llm.Conversation.Run].
 //
-// instructions is inserted as the system-level instruction for every request
-// in the loop (commonly the skill's Instruction body). userInput is the
-// initial user message describing the task. Run builds a
-// [llm.Conversation] anchored on instructions and the advertised tool
-// schema, appends userInput as a user turn, then repeatedly calls
-// [llm.Conversation.Send] and dispatches any function tool calls the model emits
-// via the registered [Tool] instances until the model produces a final
-// text response or the step budget is exhausted. The returned string is
-// the concatenated output_text of the final response.
+// instructions is inserted as the system-level instruction for every
+// request in the loop (commonly the skill's Instruction body).
+// userInput is the initial user message describing the task. The
+// returned string is the concatenated output_text of the final
+// response.
 //
 // When [WithSession] is set, Run binds the conversation to the
 // configured session on the store and replays any existing event log;
@@ -144,27 +140,7 @@ func (a *Agent) Run(ctx context.Context, instructions, userInput string) (string
 	if err != nil {
 		return "", err
 	}
-	conv.AppendUser(userInput)
-
-	for step := 0; step < a.maxSteps; step++ {
-		resp, err := conv.Send(ctx)
-		if err != nil {
-			return "", fmt.Errorf("skill: agent request failed at step %d: %w", step, err)
-		}
-		if len(resp.ToolCalls) == 0 {
-			if lastErr := conv.LastError(); lastErr != nil {
-				return resp.Text, fmt.Errorf("skill: session persistence failed: %w", lastErr)
-			}
-			return resp.Text, nil
-		}
-		for _, call := range resp.ToolCalls {
-			output, execErr := a.dispatch(ctx, call)
-			conv.AppendToolOutput(call.CallID, output, execErr)
-			// execErr is surfaced to the model via output so the loop
-			// can recover on the next turn.
-		}
-	}
-	return "", fmt.Errorf("skill: agent exceeded max steps (%d) without final response", a.maxSteps)
+	return conv.Run(ctx, userInput)
 }
 
 // openConversation builds the [llm.Conversation] that Run will drive,
@@ -182,10 +158,11 @@ func (a *Agent) openConversation(ctx context.Context, instructions string) (*llm
 }
 
 // newConversation builds a fresh conversation anchored on instructions
-// and the agent's advertised tool schema, applying the agent's
-// auto-shrink and summariser options.
+// and the agent's registered tools, applying the agent's auto-shrink,
+// summariser, and max-steps options.
 func (a *Agent) newConversation(instructions string) *llm.Conversation {
-	conv := llm.NewConversation(a.client, instructions, a.toolSpecs())
+	conv := llm.NewConversation(a.client, instructions, a.tools)
+	conv.SetMaxSteps(a.maxSteps)
 	if a.hasShrink {
 		conv.SetAutoShrink(a.autoShrink)
 	}
@@ -193,34 +170,4 @@ func (a *Agent) newConversation(instructions string) *llm.Conversation {
 		conv.SetSummarizer(a.summarizer)
 	}
 	return conv
-}
-
-// dispatch executes a single function call against the registered tools.
-// On error the error text is returned as output so the model sees it.
-func (a *Agent) dispatch(ctx context.Context, call llm.ToolCall) (string, error) {
-	tool, ok := a.toolByName[call.Name]
-	if !ok {
-		msg := fmt.Sprintf("error: unknown tool %q", call.Name)
-		return msg, fmt.Errorf("skill: unknown tool %q", call.Name)
-	}
-	out, err := tool.Execute(ctx, call.Arguments)
-	if err != nil {
-		msg := fmt.Sprintf("error: %s\n%s", err.Error(), out)
-		return msg, err
-	}
-	return out, nil
-}
-
-// toolSpecs converts the registered [Tool] set into the provider-agnostic
-// [llm.ToolSpec] slice consumed by [llm.NewConversation].
-func (a *Agent) toolSpecs() []llm.ToolSpec {
-	out := make([]llm.ToolSpec, 0, len(a.tools))
-	for _, t := range a.tools {
-		out = append(out, llm.ToolSpec{
-			Name:        t.Name(),
-			Description: t.Description(),
-			Parameters:  t.Parameters(),
-		})
-	}
-	return out
 }

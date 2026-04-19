@@ -59,7 +59,7 @@ func TestClient_ReplayReasoning_CapturesRaw(t *testing.T) {
 	t.Cleanup(srv.Close)
 
 	c := testClientWithReplay(t, srv.URL)
-	conv := NewConversation(c, "sys", []ToolSpec{{Name: "echo", Parameters: map[string]any{"type": "object"}}})
+	conv := NewConversation(c, "sys", []Tool{NewFuncTool("echo", "", map[string]any{"type": "object"}, nil)})
 	conv.AppendUser("hi")
 	if _, err := conv.Send(t.Context()); err != nil {
 		t.Fatalf("Send: %v", err)
@@ -125,7 +125,7 @@ func TestClient_ReplayReasoning_IncludesAndReplays(t *testing.T) {
 	t.Cleanup(srv.Close)
 
 	c := testClientWithReplay(t, srv.URL)
-	conv := NewConversation(c, "sys", []ToolSpec{{Name: "echo", Parameters: map[string]any{"type": "object"}}})
+	conv := NewConversation(c, "sys", []Tool{NewFuncTool("echo", "", map[string]any{"type": "object"}, nil)})
 	conv.AppendUser("please echo")
 
 	resp, err := conv.Send(t.Context())
@@ -220,7 +220,7 @@ func TestClient_ReplayReasoning_DroppedAfterNewUserTurn(t *testing.T) {
 	t.Cleanup(srv.Close)
 
 	c := testClientWithReplay(t, srv.URL)
-	conv := NewConversation(c, "sys", []ToolSpec{{Name: "echo", Parameters: map[string]any{"type": "object"}}})
+	conv := NewConversation(c, "sys", []Tool{NewFuncTool("echo", "", map[string]any{"type": "object"}, nil)})
 	conv.AppendUser("hi")
 	if _, err := conv.Send(t.Context()); err != nil {
 		t.Fatalf("Send 1: %v", err)
@@ -261,7 +261,7 @@ func TestClient_ReplayReasoning_DisabledKeepsPhase1Behavior(t *testing.T) {
 	t.Cleanup(srv.Close)
 
 	c := testClient(srv.URL) // ReplayReasoning defaults to false.
-	conv := NewConversation(c, "sys", []ToolSpec{{Name: "echo", Parameters: map[string]any{"type": "object"}}})
+	conv := NewConversation(c, "sys", []Tool{NewFuncTool("echo", "", map[string]any{"type": "object"}, nil)})
 	conv.AppendUser("hi")
 	if _, err := conv.Send(t.Context()); err != nil {
 		t.Fatalf("Send 1: %v", err)

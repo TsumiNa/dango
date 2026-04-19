@@ -261,7 +261,7 @@ func TestClient_SendRecordsToolCalls(t *testing.T) {
 	t.Cleanup(srv.Close)
 
 	c := testClient(srv.URL)
-	conv := NewConversation(c, "", []ToolSpec{{Name: "echo", Parameters: map[string]any{"type": "object"}}})
+	conv := NewConversation(c, "", []Tool{NewFuncTool("echo", "", map[string]any{"type": "object"}, nil)})
 	conv.AppendUser("please echo")
 
 	resp, err := conv.Send(t.Context())
@@ -301,7 +301,7 @@ func TestClient_SendPrefixStable(t *testing.T) {
 	t.Cleanup(srv.Close)
 
 	c := testClient(srv.URL)
-	conv := NewConversation(c, "system prompt", []ToolSpec{{Name: "echo", Description: "e", Parameters: map[string]any{"type": "object"}}})
+	conv := NewConversation(c, "system prompt", []Tool{NewFuncTool("echo", "e", map[string]any{"type": "object"}, nil)})
 	conv.AppendUser("hello")
 
 	if _, err := conv.Send(t.Context()); err != nil {

@@ -96,7 +96,7 @@ func (ev *Event) apply(c *Conversation) error {
 	switch ev.Kind {
 	case EventInit:
 		c.instructions = ev.Instructions
-		c.tools = append([]ToolSpec(nil), ev.Tools...)
+		c.toolSpecs = append([]ToolSpec(nil), ev.Tools...)
 	case EventAppendUser, EventAppendAssistant,
 		EventAppendReasoning, EventAppendToolCall, EventAppendToolOutput:
 		if ev.Turn == nil {

@@ -264,7 +264,7 @@ func TestClient_Stream_CommitsToolCalls(t *testing.T) {
 	t.Cleanup(srv.Close)
 
 	c := testClient(srv.URL)
-	conv := NewConversation(c, "sys", []ToolSpec{{Name: "echo", Parameters: map[string]any{"type": "object"}}})
+	conv := NewConversation(c, "sys", []Tool{NewFuncTool("echo", "", map[string]any{"type": "object"}, nil)})
 	conv.AppendUser("please echo")
 
 	ch, err := conv.Stream(t.Context())

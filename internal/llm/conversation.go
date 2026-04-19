@@ -158,11 +158,26 @@ func (f SummarizerFunc) Summarize(ctx context.Context, turns []Turn) (string, er
 type Conversation struct {
 	client       *Client
 	instructions string
-	tools        []ToolSpec
-	turns        []Turn
-	usage        TokenUsage
-	autoShrink   AutoShrinkConfig
-	summarizer   Summarizer
+
+	// tools holds the executable [Tool] implementations registered at
+	// construction time. toolSpecs is the wire format derived from
+	// tools (and used directly when a conversation is restored from
+	// JSON or an event log, where no executables are available).
+	// toolByName indexes tools by Name for fast dispatch during
+	// [Conversation.Run].
+	tools      []Tool
+	toolSpecs  []ToolSpec
+	toolByName map[string]Tool
+
+	turns      []Turn
+	usage      TokenUsage
+	autoShrink AutoShrinkConfig
+	summarizer Summarizer
+
+	// maxSteps bounds the number of request/tool-call iterations
+	// [Conversation.Run] will perform before giving up. Zero is
+	// treated as [DefaultMaxSteps].
+	maxSteps int
 
 	// Persistence. store and sessionID are set by [Conversation.OpenSession];
 	// when store is nil all mutating methods are pure in-memory
@@ -175,22 +190,57 @@ type Conversation struct {
 	lastErr   error
 }
 
-// NewConversation creates an empty [Conversation] anchored on instructions
-// and tools and bound to client. client is the transport used by
-// [Conversation.Send] and [Conversation.Stream]; when nil the
+// DefaultMaxSteps bounds the number of request/tool-call iterations
+// [Conversation.Run] performs before giving up. It protects against
+// runaway loops where the model keeps requesting tool calls without
+// ever producing a final message.
+const DefaultMaxSteps = 20
+
+// NewConversation creates an empty [Conversation] anchored on
+// instructions and tools and bound to client. client is the transport
+// used by [Conversation.Send] and [Conversation.Stream]; when nil the
 // conversation is a pure-history object that supports local mutations
 // and JSON round-trips but will return [ErrNoClient] from any method
 // that issues an LLM request.
 //
-// Instructions and tools form the cache-stable prefix and are treated
-// as immutable for the life of the conversation. A defensive copy of
-// tools is made so later mutations by the caller do not disturb the
-// cache key.
-func NewConversation(client *Client, instructions string, tools []ToolSpec) *Conversation {
+// Each [Tool] in tools is advertised to the model via its Name,
+// Description, and Parameters, and is dispatched directly by
+// [Conversation.Run] when the model emits a matching function call.
+// Tool names must be unique; duplicates cause NewConversation to panic
+// because the ambiguity would silently shadow a tool at call time.
+//
+// Instructions and the derived tool schema form the cache-stable
+// prefix and are treated as immutable for the life of the
+// conversation. NewConversation builds a private copy of both so
+// later mutations by the caller do not disturb the cache key.
+func NewConversation(client *Client, instructions string, tools []Tool) *Conversation {
+	specs := make([]ToolSpec, len(tools))
+	byName := make(map[string]Tool, len(tools))
+	for i, t := range tools {
+		if t == nil {
+			panic("llm: NewConversation received a nil tool")
+		}
+		name := t.Name()
+		if name == "" {
+			panic("llm: NewConversation received a tool with empty name")
+		}
+		if _, dup := byName[name]; dup {
+			panic(fmt.Sprintf("llm: NewConversation received duplicate tool %q", name))
+		}
+		specs[i] = ToolSpec{
+			Name:        name,
+			Description: t.Description(),
+			Parameters:  t.Parameters(),
+		}
+		byName[name] = t
+	}
 	return &Conversation{
 		client:       client,
 		instructions: instructions,
-		tools:        append([]ToolSpec(nil), tools...),
+		tools:        append([]Tool(nil), tools...),
+		toolSpecs:    specs,
+		toolByName:   byName,
+		maxSteps:     DefaultMaxSteps,
 		autoShrink: AutoShrinkConfig{
 			Threshold:         0.85,
 			KeepToolExchanges: 2,
@@ -255,7 +305,7 @@ func (c *Conversation) OpenSession(ctx context.Context, store SessionStore, sess
 		init := &Event{
 			Kind:         EventInit,
 			Instructions: c.instructions,
-			Tools:        append([]ToolSpec(nil), c.tools...),
+			Tools:        append([]ToolSpec(nil), c.toolSpecs...),
 		}
 		if _, appendErr := store.Append(ctx, sessionID, init); appendErr != nil {
 			return fmt.Errorf("llm: seed session %q: %w", sessionID, appendErr)
@@ -294,7 +344,7 @@ func (c *Conversation) Truncate(ctx context.Context, toSeq int64) error {
 		return err
 	}
 	c.instructions = ""
-	c.tools = nil
+	c.toolSpecs = nil
 	c.turns = nil
 	c.usage = TokenUsage{}
 	c.replaying = true
@@ -327,7 +377,7 @@ func (c *Conversation) emit(ev *Event) {
 func (c *Conversation) Instructions() string { return c.instructions }
 
 // Tools returns a defensive copy of the advertised tool schema.
-func (c *Conversation) Tools() []ToolSpec { return append([]ToolSpec(nil), c.tools...) }
+func (c *Conversation) Tools() []ToolSpec { return append([]ToolSpec(nil), c.toolSpecs...) }
 
 // Turns returns a defensive copy of the recorded turns in insertion order.
 func (c *Conversation) Turns() []Turn {
@@ -370,7 +420,7 @@ type conversationJSON struct {
 func (c *Conversation) MarshalJSON() ([]byte, error) {
 	return json.Marshal(conversationJSON{
 		Instructions: c.instructions,
-		Tools:        c.tools,
+		Tools:        c.toolSpecs,
 		Turns:        c.turns,
 		Usage:        c.usage,
 		AutoShrink:   c.autoShrink,
@@ -378,15 +428,21 @@ func (c *Conversation) MarshalJSON() ([]byte, error) {
 }
 
 // UnmarshalJSON restores a conversation previously produced by
-// [Conversation.MarshalJSON]. Defensive copies of slices are stored so
-// later caller mutations do not disturb the restored state.
+// [Conversation.MarshalJSON]. The executable [Tool] set is not part of
+// the wire format; restored conversations therefore have no
+// [Conversation.Run] dispatch table until the caller passes the
+// original tools through a fresh [NewConversation] + [Conversation.OpenSession]
+// pair. Defensive copies of slices are stored so later caller
+// mutations do not disturb the restored state.
 func (c *Conversation) UnmarshalJSON(data []byte) error {
 	var raw conversationJSON
 	if err := json.Unmarshal(data, &raw); err != nil {
 		return err
 	}
 	c.instructions = raw.Instructions
-	c.tools = append([]ToolSpec(nil), raw.Tools...)
+	c.tools = nil
+	c.toolSpecs = append([]ToolSpec(nil), raw.Tools...)
+	c.toolByName = nil
 	c.turns = append([]Turn(nil), raw.Turns...)
 	c.usage = raw.Usage
 	c.autoShrink = raw.AutoShrink
@@ -676,7 +732,7 @@ func (c *Conversation) UsageByRole() RoleUsage {
 
 	instrBytes := len(c.instructions)
 	toolBytes := 0
-	for _, t := range c.tools {
+	for _, t := range c.toolSpecs {
 		toolBytes += len(t.Name) + len(t.Description)
 	}
 	var userBytes, assistantBytes, toolIOBytes int

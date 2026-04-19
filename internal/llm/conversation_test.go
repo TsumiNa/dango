@@ -9,7 +9,7 @@ import (
 )
 
 func TestConversationAppendRoles(t *testing.T) {
-	conv := NewConversation(nil, "sys", []ToolSpec{{Name: "echo"}})
+	conv := NewConversation(nil, "sys", []Tool{NewFuncTool("echo", "", nil, nil)})
 	conv.AppendUser("hi")
 	conv.AppendAssistantText("hello")
 	conv.AppendToolCall(ToolCall{CallID: "c1", Name: "echo", Arguments: `{"msg":"x"}`})
@@ -217,7 +217,7 @@ func TestConversationAppendToolOutputRecordsError(t *testing.T) {
 }
 
 func TestConversationUsageByRoleSumsToNonCached(t *testing.T) {
-	conv := NewConversation(nil, "instr", []ToolSpec{{Name: "echo", Description: "e"}})
+	conv := NewConversation(nil, "instr", []Tool{NewFuncTool("echo", "e", nil, nil)})
 	conv.AppendUser("hello world")
 	conv.AppendAssistantText("hi")
 	if err := conv.recordUsage(t.Context(), TokenUsage{Input: 120, Cached: 20}); err != nil {
@@ -424,11 +424,12 @@ func TestConversationAutoShrinkFallsBackOnSummarizerError(t *testing.T) {
 }
 
 func TestConversationJSONRoundTrip(t *testing.T) {
-	c := NewConversation(nil, "be brief", []ToolSpec{{
-		Name:        "echo",
-		Description: "repeat",
-		Parameters:  map[string]any{"type": "object"},
-	}})
+	c := NewConversation(nil, "be brief", []Tool{NewFuncTool(
+		"echo",
+		"repeat",
+		map[string]any{"type": "object"},
+		nil,
+	)})
 	c.SetAutoShrink(AutoShrinkConfig{ContextWindow: 8000, Threshold: 0.8, KeepToolExchanges: 3, KeepTurns: 5})
 	c.AppendUser("hi")
 	c.AppendToolCall(ToolCall{CallID: "c1", Name: "echo", Arguments: `{"x":1}`})
@@ -475,7 +476,7 @@ func TestOpenSessionSeedsInitEvent(t *testing.T) {
 	store := mustNewStore(t, t.TempDir())
 	ctx := context.Background()
 
-	conv := NewConversation(nil, "sys prompt", []ToolSpec{{Name: "echo", Description: "x"}})
+	conv := NewConversation(nil, "sys prompt", []Tool{NewFuncTool("echo", "x", nil, nil)})
 	if err := conv.OpenSession(ctx, store, "s1"); err != nil {
 		t.Fatalf("OpenSession: %v", err)
 	}
@@ -503,7 +504,7 @@ func TestOpenSessionReplaysExistingLog(t *testing.T) {
 	ctx := context.Background()
 
 	// Original session: seed + a few mutations.
-	orig := NewConversation(nil, "sys", []ToolSpec{{Name: "t"}})
+	orig := NewConversation(nil, "sys", []Tool{NewFuncTool("t", "", nil, nil)})
 	if err := orig.OpenSession(ctx, store, "s"); err != nil {
 		t.Fatalf("OpenSession: %v", err)
 	}

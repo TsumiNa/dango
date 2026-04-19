@@ -143,7 +143,7 @@ func (c *Conversation) buildRequestParams() responses.ResponseNewParams {
 	params := responses.ResponseNewParams{
 		Model: c.client.model,
 		Input: responses.ResponseNewParamsInputUnion{OfInputItemList: buildResponseInput(c.turns)},
-		Tools: buildToolParams(c.tools),
+		Tools: buildToolParams(c.toolSpecs),
 	}
 	if c.instructions != "" {
 		params.Instructions = openai.String(c.instructions)
