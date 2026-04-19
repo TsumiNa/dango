@@ -15,7 +15,8 @@ import (
 	"github.com/tsumina/dango/internal/llm"
 )
 
-func newTestClient(baseURL string) *llm.Client {
+func newTestClient(t *testing.T, baseURL string) *llm.Client {
+	t.Helper()
 	raw := openai.NewClient(
 		option.WithAPIKey("test-key"),
 		option.WithBaseURL(baseURL+"/"),
@@ -26,7 +27,7 @@ func newTestClient(baseURL string) *llm.Client {
 		Raw:      raw,
 	})
 	if err != nil {
-		panic(err)
+		t.Fatalf("NewClient: %v", err)
 	}
 	return c
 }
@@ -38,7 +39,7 @@ func TestNewAgentRejectsNilClient(t *testing.T) {
 }
 
 func TestNewAgentRejectsDuplicateToolNames(t *testing.T) {
-	c := newTestClient("http://unused")
+	c := newTestClient(t, "http://unused")
 	a := NewFuncTool("x", "", map[string]any{}, func(context.Context, string) (string, error) { return "", nil })
 	b := NewFuncTool("x", "", map[string]any{}, func(context.Context, string) (string, error) { return "", nil })
 	if _, err := NewAgent(c, []Tool{a, b}); err == nil {
@@ -94,7 +95,7 @@ func TestAgentRunToolLoop(t *testing.T) {
 		return a.Msg, nil
 	})
 
-	agent, err := NewAgent(newTestClient(srv.URL), []Tool{echo})
+	agent, err := NewAgent(newTestClient(t, srv.URL), []Tool{echo})
 	if err != nil {
 		t.Fatalf("NewAgent: %v", err)
 	}
@@ -141,7 +142,7 @@ func TestAgentRunUnknownToolReportsError(t *testing.T) {
 	}))
 	t.Cleanup(srv.Close)
 
-	agent, err := NewAgent(newTestClient(srv.URL), nil)
+	agent, err := NewAgent(newTestClient(t, srv.URL), nil)
 	if err != nil {
 		t.Fatalf("NewAgent: %v", err)
 	}
@@ -168,7 +169,7 @@ func TestAgentRunMaxStepsExceeded(t *testing.T) {
 	loop := NewFuncTool("loop", "", map[string]any{"type": "object"},
 		func(context.Context, string) (string, error) { return "", nil })
 
-	agent, err := NewAgent(newTestClient(srv.URL), []Tool{loop}, WithMaxSteps(2))
+	agent, err := NewAgent(newTestClient(t, srv.URL), []Tool{loop}, WithMaxSteps(2))
 	if err != nil {
 		t.Fatalf("NewAgent: %v", err)
 	}
@@ -220,7 +221,7 @@ func TestAgentWithSummarizerAndAutoTrim(t *testing.T) {
 		return "compact", nil
 	})
 
-	agent, err := NewAgent(newTestClient(srv.URL), []Tool{echo},
+	agent, err := NewAgent(newTestClient(t, srv.URL), []Tool{echo},
 		WithAutoTrim(llm.AutoShrinkConfig{
 			ContextWindow:     1000,
 			Threshold:         0.5,
@@ -264,7 +265,7 @@ func TestAgentWithSession(t *testing.T) {
 		t.Fatalf("NewJSONStore: %v", err)
 	}
 
-	agent, err := NewAgent(newTestClient(srv.URL), nil, WithSession(store, "job-1"))
+	agent, err := NewAgent(newTestClient(t, srv.URL), nil, WithSession(store, "job-1"))
 	if err != nil {
 		t.Fatalf("NewAgent: %v", err)
 	}
