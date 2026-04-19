@@ -146,7 +146,10 @@ func (c *Client) Send(ctx context.Context, conv *Conversation) (*Response, error
 			conv.AppendToolCall(tc)
 		}
 	}
-	conv.recordUsage(out.Usage)
+	// Auto-shrink is best-effort: when a registered Summarizer fails,
+	// recordUsage has already fallen back to Trim so the next Send still
+	// fits in context.
+	_ = conv.recordUsage(ctx, out.Usage)
 	return out, nil
 }
 
