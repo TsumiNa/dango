@@ -2,6 +2,7 @@ package llm
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 )
 
@@ -48,14 +49,27 @@ func NewFuncTool(name, description string, parameters map[string]any, handler fu
 	return &FuncTool{
 		name:        name,
 		description: description,
-		parameters:  parameters,
+		parameters:  cloneMap(parameters),
 		handler:     handler,
 	}
 }
 
+func cloneMap(m map[string]any) map[string]any {
+	if m == nil {
+		return nil
+	}
+	b, err := json.Marshal(m)
+	if err != nil {
+		return m
+	}
+	var out map[string]any
+	_ = json.Unmarshal(b, &out)
+	return out
+}
+
 func (t *FuncTool) Name() string               { return t.name }
 func (t *FuncTool) Description() string        { return t.description }
-func (t *FuncTool) Parameters() map[string]any { return t.parameters }
+func (t *FuncTool) Parameters() map[string]any { return cloneMap(t.parameters) }
 func (t *FuncTool) Execute(ctx context.Context, arguments string) (string, error) {
 	if t.handler == nil {
 		return "", fmt.Errorf("llm: tool %q has no handler", t.name)

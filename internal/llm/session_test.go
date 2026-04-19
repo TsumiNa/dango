@@ -266,3 +266,36 @@ func mustNewStore(t *testing.T, dir string) *JSONStore {
 	}
 	return s
 }
+
+func TestJSONStoreTruncateToZeroKeepsOnlyInit(t *testing.T) {
+	store := mustNewStore(t, t.TempDir())
+	ctx := context.Background()
+	const id = "tr_zero"
+	if _, err := store.Append(ctx, id, &Event{Kind: EventInit, Instructions: "sys"}); err != nil {
+		t.Fatalf("Append init: %v", err)
+	}
+	if _, err := store.Append(ctx, id, &Event{Kind: EventAppendUser, Turn: &Turn{Role: RoleUser, Text: "x"}}); err != nil {
+		t.Fatalf("Append turn: %v", err)
+	}
+	if err := store.Truncate(ctx, id, 0); err != nil {
+		t.Fatalf("Truncate(0): %v", err)
+	}
+	events, err := store.Load(ctx, id)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if len(events) != 1 {
+		t.Fatalf("events = %d, want 1 (only EventInit)", len(events))
+	}
+	if events[0].Kind != EventInit {
+		t.Errorf("Remaining event is %q, want EventInit", events[0].Kind)
+	}
+
+	seq, err := store.Append(ctx, id, &Event{Kind: EventAppendAssistant, Turn: &Turn{Role: RoleAssistant, Text: "y"}})
+	if err != nil {
+		t.Fatalf("Append after truncate to zero: %v", err)
+	}
+	if seq != 2 {
+		t.Errorf("Seq = %d, want 2", seq)
+	}
+}

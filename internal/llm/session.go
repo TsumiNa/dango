@@ -59,10 +59,10 @@ type SessionStore interface {
 	Load(ctx context.Context, sessionID string) ([]Event, error)
 
 	// Truncate removes every event with Seq > toSeq from
-	// sessionID's log. toSeq <= 0 truncates the entire log
-	// (equivalent to [SessionStore.Delete] except that the empty
-	// session shell is preserved). Truncating a missing session
-	// returns [ErrSessionNotFound].
+	// sessionID's log. toSeq <= 0 leaves only the initial
+	// [EventInit] anchor (preserving the session shell but clearing
+	// its turns). Truncating a missing session returns
+	// [ErrSessionNotFound].
 	Truncate(ctx context.Context, sessionID string, toSeq int64) error
 
 	// Delete removes sessionID's log entirely. Deleting a missing
@@ -85,11 +85,19 @@ type SessionStore interface {
 type JSONStore struct {
 	root string
 
-	// mu guards locks. Each session id gets its own sync.Mutex so
+	// mu guards states. Each session id gets its own sync.Mutex so
 	// independent sessions do not block each other on Append while
 	// writes within a single session stay ordered.
-	mu    sync.Mutex
-	locks map[string]*sync.Mutex
+	mu     sync.Mutex
+	states map[string]*sessionState
+}
+
+type sessionState struct {
+	sync.Mutex
+	lastSeq int64
+	hasInit bool
+	size    int64
+	cached  bool
 }
 
 // NewJSONStore returns a [JSONStore] rooted at dir. The directory is
@@ -101,7 +109,7 @@ func NewJSONStore(dir string) (*JSONStore, error) {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return nil, fmt.Errorf("llm: JSONStore mkdir %q: %w", dir, err)
 	}
-	return &JSONStore{root: dir, locks: make(map[string]*sync.Mutex)}, nil
+	return &JSONStore{root: dir, states: make(map[string]*sessionState)}, nil
 }
 
 // Root returns the directory backing the store.
@@ -132,16 +140,16 @@ func validateSessionID(id string) error {
 	return nil
 }
 
-// idLock returns the per-id mutex, lazily creating it.
-func (s *JSONStore) idLock(id string) *sync.Mutex {
+// getState returns the per-id state, lazily creating it.
+func (s *JSONStore) getState(id string) *sessionState {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if m, ok := s.locks[id]; ok {
-		return m
+	if st, ok := s.states[id]; ok {
+		return st
 	}
-	m := &sync.Mutex{}
-	s.locks[id] = m
-	return m
+	st := &sessionState{}
+	s.states[id] = st
+	return st
 }
 
 // Append implements [SessionStore]. It opens the session file with
@@ -157,7 +165,7 @@ func (s *JSONStore) Append(_ context.Context, id string, ev *Event) (int64, erro
 		return 0, err
 	}
 
-	m := s.idLock(id)
+	m := s.getState(id)
 	m.Lock()
 	defer m.Unlock()
 
@@ -171,9 +179,22 @@ func (s *JSONStore) Append(_ context.Context, id string, ev *Event) (int64, erro
 	}
 	defer syscall.Flock(int(f.Fd()), syscall.LOCK_UN)
 
-	lastSeq, hasInit, err := scanLastSeq(p)
+	info, err := f.Stat()
 	if err != nil {
-		return 0, err
+		return 0, fmt.Errorf("llm: JSONStore stat %q: %w", p, err)
+	}
+
+	var lastSeq int64
+	var hasInit bool
+
+	if m.cached && info.Size() == m.size {
+		lastSeq = m.lastSeq
+		hasInit = m.hasInit
+	} else {
+		lastSeq, hasInit, err = scanLastSeq(p)
+		if err != nil {
+			return 0, err
+		}
 	}
 
 	switch {
@@ -193,11 +214,24 @@ func (s *JSONStore) Append(_ context.Context, id string, ev *Event) (int64, erro
 	}
 	line = append(line, '\n')
 	if _, err := f.Write(line); err != nil {
+		m.cached = false
 		return 0, fmt.Errorf("llm: JSONStore write %q: %w", p, err)
 	}
 	if err := f.Sync(); err != nil {
+		m.cached = false
 		return 0, fmt.Errorf("llm: JSONStore sync %q: %w", p, err)
 	}
+
+	info, err = f.Stat()
+	if err == nil {
+		m.lastSeq = ev.Seq
+		m.hasInit = hasInit || (ev.Kind == EventInit)
+		m.size = info.Size()
+		m.cached = true
+	} else {
+		m.cached = false
+	}
+
 	return ev.Seq, nil
 }
 
@@ -208,7 +242,7 @@ func (s *JSONStore) Load(_ context.Context, id string) ([]Event, error) {
 		return nil, err
 	}
 
-	m := s.idLock(id)
+	m := s.getState(id)
 	m.Lock()
 	defer m.Unlock()
 
@@ -231,7 +265,7 @@ func (s *JSONStore) Truncate(_ context.Context, id string, toSeq int64) error {
 		return err
 	}
 
-	m := s.idLock(id)
+	m := s.getState(id)
 	m.Lock()
 	defer m.Unlock()
 
@@ -256,10 +290,16 @@ func (s *JSONStore) Truncate(_ context.Context, id string, toSeq int64) error {
 		return err
 	}
 
+	m.cached = false
+
 	var buf bytes.Buffer
 	for _, ev := range events {
-		if toSeq > 0 && ev.Seq > toSeq {
-			break
+		if toSeq <= 0 {
+			if ev.Kind != EventInit {
+				continue
+			}
+		} else if ev.Seq > toSeq {
+			continue
 		}
 		line, err := json.Marshal(ev)
 		if err != nil {
@@ -297,9 +337,11 @@ func (s *JSONStore) Delete(_ context.Context, id string) error {
 		return err
 	}
 
-	m := s.idLock(id)
+	m := s.getState(id)
 	m.Lock()
 	defer m.Unlock()
+
+	m.cached = false
 
 	if err := os.Remove(p); err != nil {
 		if errors.Is(err, os.ErrNotExist) {

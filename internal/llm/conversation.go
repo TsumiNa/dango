@@ -268,9 +268,11 @@ func (c *Conversation) SetClient(client *Client) { c.client = client }
 // loads can reconstruct the cache anchor.
 //
 // On an existing session every recorded event is applied to c in
-// order, replacing c's current instructions/tools/turns/usage with the
-// persisted values. The arguments passed to [NewConversation] are
-// therefore ignored when resuming an existing session; the persisted
+// order, replacing c's current instructions/tool schema/turns/usage with
+// the persisted values. The arguments passed to [NewConversation] are
+// therefore ignored when resuming an existing session, though any tool
+// name advertised by the persisted session must still be present in the
+// initial registered tool set so dispatch succeeds. The persisted
 // init event is authoritative.
 //
 // OpenSession must be called before any mutating method (AppendUser,
@@ -299,6 +301,14 @@ func (c *Conversation) OpenSession(ctx context.Context, store SessionStore, sess
 				return fmt.Errorf("llm: replay event seq=%d kind=%s: %w",
 					events[i].Seq, events[i].Kind, applyErr)
 			}
+			if events[i].Kind == EventInit {
+				for _, ts := range events[i].Tools {
+					if _, ok := c.toolByName[ts.Name]; !ok {
+						c.replaying = false
+						return fmt.Errorf("llm: session %q requires tool %q which is not registered", sessionID, ts.Name)
+					}
+				}
+			}
 		}
 		c.replaying = false
 	case errors.Is(err, ErrSessionNotFound):
@@ -323,9 +333,11 @@ func (c *Conversation) OpenSession(ctx context.Context, store SessionStore, sess
 // empty string when no session is bound.
 func (c *Conversation) SessionID() string { return c.sessionID }
 
-// LastError returns the most recent persistence error (if any). It is
-// reset to nil after a successful emit. Callers that require strict
-// persistence should check it after each batch of mutations.
+// LastError returns the first persistence error (if any) encountered
+// since the session was bound. A failed emit is latched because the event
+// log is already divergent; it is not reset on subsequent successful emits.
+// Callers that require strict persistence should check it after each
+// batch of mutations.
 func (c *Conversation) LastError() error { return c.lastErr }
 
 // Truncate rolls back the bound session's log to toSeq, discarding
@@ -360,17 +372,19 @@ func (c *Conversation) Truncate(ctx context.Context, toSeq int64) error {
 
 // emit records ev to the bound session store, if any. Errors are
 // retained on c so callers can observe them via [Conversation.LastError]
-// without requiring every mutating method to return an error. emit is
-// a no-op when no store is bound or when c is replaying a loaded log.
+// without requiring every mutating method to return an error. The first
+// emit failure is latched; it is not cleared by subsequent successful
+// emits because the event log is already divergent. emit is a no-op
+// when no store is bound or when c is replaying a loaded log.
 func (c *Conversation) emit(ev *Event) {
 	if c.store == nil || c.replaying {
 		return
 	}
 	if _, err := c.store.Append(context.Background(), c.sessionID, ev); err != nil {
-		c.lastErr = err
-		return
+		if c.lastErr == nil {
+			c.lastErr = err
+		}
 	}
-	c.lastErr = nil
 }
 
 // Instructions returns the system prompt bound at construction time.

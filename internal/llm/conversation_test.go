@@ -519,10 +519,10 @@ func TestOpenSessionReplaysExistingLog(t *testing.T) {
 		t.Fatalf("LastError on orig: %v", err)
 	}
 
-	// Replay into a fresh conversation. The provided instructions and
-	// tools should be ignored since the log's init event is
-	// authoritative.
-	restored := NewConversation(nil, "IGNORED", nil)
+	// Replay into a fresh conversation. The provided instructions are
+	// ignored since the log's init event is authoritative, but the
+	// tools must supply at least the ones required by the log.
+	restored := NewConversation(nil, "IGNORED", []Tool{NewFuncTool("t", "", nil, nil)})
 	if err := restored.OpenSession(ctx, store, "s"); err != nil {
 		t.Fatalf("OpenSession replay: %v", err)
 	}
