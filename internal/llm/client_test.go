@@ -221,10 +221,10 @@ func TestClient_SendAppendsAssistantAndUsage(t *testing.T) {
 	t.Cleanup(srv.Close)
 
 	c := testClient(srv.URL)
-	conv := c.NewConversation("sys", nil)
+	conv := NewConversation(c, "sys", nil)
 	conv.AppendUser("hi")
 
-	resp, err := c.Send(t.Context(), conv)
+	resp, err := conv.Send(t.Context())
 	if err != nil {
 		t.Fatalf("Send: %v", err)
 	}
@@ -261,10 +261,10 @@ func TestClient_SendRecordsToolCalls(t *testing.T) {
 	t.Cleanup(srv.Close)
 
 	c := testClient(srv.URL)
-	conv := c.NewConversation("", []ToolSpec{{Name: "echo", Parameters: map[string]any{"type": "object"}}})
+	conv := NewConversation(c, "", []ToolSpec{{Name: "echo", Parameters: map[string]any{"type": "object"}}})
 	conv.AppendUser("please echo")
 
-	resp, err := c.Send(t.Context(), conv)
+	resp, err := conv.Send(t.Context())
 	if err != nil {
 		t.Fatalf("Send: %v", err)
 	}
@@ -301,15 +301,15 @@ func TestClient_SendPrefixStable(t *testing.T) {
 	t.Cleanup(srv.Close)
 
 	c := testClient(srv.URL)
-	conv := c.NewConversation("system prompt", []ToolSpec{{Name: "echo", Description: "e", Parameters: map[string]any{"type": "object"}}})
+	conv := NewConversation(c, "system prompt", []ToolSpec{{Name: "echo", Description: "e", Parameters: map[string]any{"type": "object"}}})
 	conv.AppendUser("hello")
 
-	if _, err := c.Send(t.Context(), conv); err != nil {
+	if _, err := conv.Send(t.Context()); err != nil {
 		t.Fatalf("first Send: %v", err)
 	}
 	// Caller adds another user turn; the prior prefix must not shift.
 	conv.AppendUser("follow-up")
-	if _, err := c.Send(t.Context(), conv); err != nil {
+	if _, err := conv.Send(t.Context()); err != nil {
 		t.Fatalf("second Send: %v", err)
 	}
 
@@ -339,10 +339,11 @@ func TestClient_SendPrefixStable(t *testing.T) {
 	}
 }
 
-func TestClient_SendRejectsNilConversation(t *testing.T) {
-	c := testClient("http://unused")
-	if _, err := c.Send(t.Context(), nil); err == nil {
-		t.Error("expected error for nil conversation")
+func TestConversation_SendRejectsNilClient(t *testing.T) {
+	conv := NewConversation(nil, "", nil)
+	conv.AppendUser("hi")
+	if _, err := conv.Send(t.Context()); err != ErrNoClient {
+		t.Errorf("err = %v, want ErrNoClient", err)
 	}
 }
 
@@ -454,9 +455,9 @@ func TestClient_ReasoningEffortInRequest(t *testing.T) {
 	}
 	assertEffort("Respond(high)", "high")
 
-	conv := c.NewConversation("sys", nil)
+	conv := NewConversation(c, "sys", nil)
 	conv.AppendUser("hello")
-	if _, err := c.Send(t.Context(), conv); err != nil {
+	if _, err := conv.Send(t.Context()); err != nil {
 		t.Fatalf("Send: %v", err)
 	}
 	assertEffort("Send(high)", "high")
@@ -467,9 +468,9 @@ func TestClient_ReasoningEffortInRequest(t *testing.T) {
 		t.Fatalf("Respond: %v", err)
 	}
 	assertEffort("Respond(empty)", "")
-	conv2 := c2.NewConversation("sys", nil)
+	conv2 := NewConversation(c2, "sys", nil)
 	conv2.AppendUser("hello")
-	if _, err := c2.Send(t.Context(), conv2); err != nil {
+	if _, err := conv2.Send(t.Context()); err != nil {
 		t.Fatalf("Send: %v", err)
 	}
 	assertEffort("Send(empty)", "")
@@ -526,9 +527,9 @@ func TestClient_SendCapturesReasoning(t *testing.T) {
 	t.Cleanup(srv.Close)
 
 	c := testClient(srv.URL)
-	conv := c.NewConversation("sys", nil)
+	conv := NewConversation(c, "sys", nil)
 	conv.AppendUser("hi")
-	if _, err := c.Send(t.Context(), conv); err != nil {
+	if _, err := conv.Send(t.Context()); err != nil {
 		t.Fatalf("Send 1: %v", err)
 	}
 
@@ -573,7 +574,7 @@ func TestClient_SendCapturesReasoning(t *testing.T) {
 
 	// Second Send: reasoning must not appear in the outbound request body.
 	conv.AppendUser("follow-up")
-	if _, err := c.Send(t.Context(), conv); err != nil {
+	if _, err := conv.Send(t.Context()); err != nil {
 		t.Fatalf("Send 2: %v", err)
 	}
 	if strings.Contains(string(lastBody), "checked arithmetic") ||

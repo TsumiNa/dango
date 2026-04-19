@@ -103,10 +103,10 @@ func TestClient_Stream_ForwardsTextDeltas(t *testing.T) {
 	t.Cleanup(srv.Close)
 
 	c := testClient(srv.URL)
-	conv := c.NewConversation("sys", nil)
+	conv := NewConversation(c, "sys", nil)
 	conv.AppendUser("hi")
 
-	ch, err := c.Stream(t.Context(), conv)
+	ch, err := conv.Stream(t.Context())
 	if err != nil {
 		t.Fatalf("Stream: %v", err)
 	}
@@ -128,7 +128,7 @@ func TestClient_Stream_ForwardsTextDeltas(t *testing.T) {
 	}
 
 	// Final conversation state must include the full assistant text
-	// and a usage snapshot, matching Client.Send's semantics.
+	// and a usage snapshot, matching Conversation.Send's semantics.
 	var gotText string
 	for _, tr := range conv.Turns() {
 		if tr.Role == RoleAssistant {
@@ -161,10 +161,10 @@ func TestClient_Stream_ForwardsReasoningDeltas(t *testing.T) {
 	t.Cleanup(srv.Close)
 
 	c := testClient(srv.URL)
-	conv := c.NewConversation("sys", nil)
+	conv := NewConversation(c, "sys", nil)
 	conv.AppendUser("hi")
 
-	ch, err := c.Stream(t.Context(), conv)
+	ch, err := conv.Stream(t.Context())
 	if err != nil {
 		t.Fatalf("Stream: %v", err)
 	}
@@ -221,10 +221,10 @@ func TestClient_Stream_CategoryFilter(t *testing.T) {
 
 	c := testClient(srv.URL)
 	c.streamCategories = StreamText // explicit override; reasoning suppressed
-	conv := c.NewConversation("sys", nil)
+	conv := NewConversation(c, "sys", nil)
 	conv.AppendUser("hi")
 
-	ch, err := c.Stream(t.Context(), conv)
+	ch, err := conv.Stream(t.Context())
 	if err != nil {
 		t.Fatalf("Stream: %v", err)
 	}
@@ -264,10 +264,10 @@ func TestClient_Stream_CommitsToolCalls(t *testing.T) {
 	t.Cleanup(srv.Close)
 
 	c := testClient(srv.URL)
-	conv := c.NewConversation("sys", []ToolSpec{{Name: "echo", Parameters: map[string]any{"type": "object"}}})
+	conv := NewConversation(c, "sys", []ToolSpec{{Name: "echo", Parameters: map[string]any{"type": "object"}}})
 	conv.AppendUser("please echo")
 
-	ch, err := c.Stream(t.Context(), conv)
+	ch, err := conv.Stream(t.Context())
 	if err != nil {
 		t.Fatalf("Stream: %v", err)
 	}
@@ -288,14 +288,15 @@ func TestClient_Stream_CommitsToolCalls(t *testing.T) {
 	}
 }
 
-// TestClient_Stream_RejectsNilConversation verifies the pre-stream
+// TestConversation_Stream_RejectsNilClient verifies the pre-stream
 // precondition is enforced synchronously so callers do not have to
 // drain a nil-or-closed channel to discover a programming error.
-func TestClient_Stream_RejectsNilConversation(t *testing.T) {
-	c := testClient("http://unused")
-	ch, err := c.Stream(t.Context(), nil)
-	if err == nil {
-		t.Fatal("expected error for nil conversation")
+func TestConversation_Stream_RejectsNilClient(t *testing.T) {
+	conv := NewConversation(nil, "", nil)
+	conv.AppendUser("hi")
+	ch, err := conv.Stream(t.Context())
+	if err != ErrNoClient {
+		t.Fatalf("err = %v, want ErrNoClient", err)
 	}
 	if ch != nil {
 		t.Errorf("channel should be nil on pre-stream error, got %v", ch)
@@ -316,10 +317,10 @@ data: {"type":"response.failed","sequence_number":0,"response":{"id":"r1","objec
 	t.Cleanup(srv.Close)
 
 	c := testClient(srv.URL)
-	conv := c.NewConversation("sys", nil)
+	conv := NewConversation(c, "sys", nil)
 	conv.AppendUser("hi")
 
-	ch, err := c.Stream(t.Context(), conv)
+	ch, err := conv.Stream(t.Context())
 	if err != nil {
 		t.Fatalf("Stream: %v", err)
 	}
@@ -363,11 +364,11 @@ func TestClient_Stream_CtxCancel(t *testing.T) {
 	t.Cleanup(srv.Close)
 
 	c := testClient(srv.URL)
-	conv := c.NewConversation("sys", nil)
+	conv := NewConversation(c, "sys", nil)
 	conv.AppendUser("hi")
 
 	ctx, cancel := context.WithCancel(t.Context())
-	ch, err := c.Stream(ctx, conv)
+	ch, err := conv.Stream(ctx)
 	if err != nil {
 		t.Fatalf("Stream: %v", err)
 	}
@@ -407,10 +408,10 @@ func TestClient_Stream_SurfacesMissingCompleted(t *testing.T) {
 	t.Cleanup(srv.Close)
 
 	c := testClient(srv.URL)
-	conv := c.NewConversation("sys", nil)
+	conv := NewConversation(c, "sys", nil)
 	conv.AppendUser("hi")
 
-	ch, err := c.Stream(t.Context(), conv)
+	ch, err := conv.Stream(t.Context())
 	if err != nil {
 		t.Fatalf("Stream: %v", err)
 	}

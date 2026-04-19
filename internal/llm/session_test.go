@@ -12,7 +12,7 @@ import (
 )
 
 func TestConversationJSONRoundTrip(t *testing.T) {
-	c := NewConversation("be brief", []ToolSpec{{
+	c := NewConversation(nil, "be brief", []ToolSpec{{
 		Name:        "echo",
 		Description: "repeat",
 		Parameters:  map[string]any{"type": "object"},
@@ -67,7 +67,7 @@ func TestJSONStoreSaveLoadRoundTrip(t *testing.T) {
 	}
 	ctx := context.Background()
 
-	conv := NewConversation("sys", nil)
+	conv := NewConversation(nil, "sys", nil)
 	conv.AppendUser("hello")
 	conv.AppendAssistantText("hi")
 	sess := NewSession("alpha", conv)
@@ -139,7 +139,7 @@ func TestJSONStoreDelete(t *testing.T) {
 		t.Fatalf("NewJSONStore: %v", err)
 	}
 	ctx := context.Background()
-	sess := NewSession("gone", NewConversation("x", nil))
+	sess := NewSession("gone", NewConversation(nil, "x", nil))
 	if err := store.Save(ctx, sess); err != nil {
 		t.Fatalf("Save: %v", err)
 	}
@@ -164,7 +164,7 @@ func TestJSONStoreRejectsUnsafeIDs(t *testing.T) {
 		if _, err := store.Load(ctx, id); err == nil {
 			t.Errorf("Load(%q) accepted unsafe id", id)
 		}
-		sess := &Session{ID: id, Conv: NewConversation("x", nil)}
+		sess := &Session{ID: id, Conv: NewConversation(nil, "x", nil)}
 		if err := store.Save(ctx, sess); err == nil {
 			t.Errorf("Save(%q) accepted unsafe id", id)
 		}
@@ -179,7 +179,7 @@ func TestJSONStoreAtomicWriteLeavesNoTemp(t *testing.T) {
 	}
 	ctx := context.Background()
 	for i := 0; i < 3; i++ {
-		sess := NewSession("stress", NewConversation("x", nil))
+		sess := NewSession("stress", NewConversation(nil, "x", nil))
 		if err := store.Save(ctx, sess); err != nil {
 			t.Fatalf("Save: %v", err)
 		}

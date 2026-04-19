@@ -130,7 +130,7 @@ func (a *Agent) Tools() []llm.Tool { return a.tools }
 // initial user message describing the task. Run builds a
 // [llm.Conversation] anchored on instructions and the advertised tool
 // schema, appends userInput as a user turn, then repeatedly calls
-// [llm.Client.Send] and dispatches any function tool calls the model emits
+// [llm.Conversation.Send] and dispatches any function tool calls the model emits
 // via the registered [Tool] instances until the model produces a final
 // text response or the step budget is exhausted. The returned string is
 // the concatenated output_text of the final response.
@@ -155,7 +155,7 @@ func (a *Agent) Run(ctx context.Context, instructions, userInput string) (string
 	conv.AppendUser(userInput)
 
 	for step := 0; step < a.maxSteps; step++ {
-		resp, err := a.client.Send(ctx, conv)
+		resp, err := conv.Send(ctx)
 		if err != nil {
 			return "", fmt.Errorf("skill: agent request failed at step %d: %w", step, err)
 		}
@@ -194,6 +194,9 @@ func (a *Agent) loadOrCreateConversation(ctx context.Context, instructions strin
 		sess.Conv = conv
 		return sess, conv, nil
 	}
+	// JSON-restored conversations have no bound client; rebind before
+	// Run drives them.
+	sess.Conv.SetClient(a.client)
 	// Restore runtime-only knobs that the JSON encoding drops.
 	if a.hasShrink {
 		sess.Conv.SetAutoShrink(a.autoShrink)
@@ -208,7 +211,7 @@ func (a *Agent) loadOrCreateConversation(ctx context.Context, instructions strin
 // and the agent's advertised tool schema, applying the agent's
 // auto-shrink and summariser options.
 func (a *Agent) newConversation(instructions string) *llm.Conversation {
-	conv := a.client.NewConversation(instructions, a.toolSpecs())
+	conv := llm.NewConversation(a.client, instructions, a.toolSpecs())
 	if a.hasShrink {
 		conv.SetAutoShrink(a.autoShrink)
 	}
@@ -235,7 +238,7 @@ func (a *Agent) dispatch(ctx context.Context, call llm.ToolCall) (string, error)
 }
 
 // toolSpecs converts the registered [Tool] set into the provider-agnostic
-// [llm.ToolSpec] slice consumed by [llm.Client.NewConversation].
+// [llm.ToolSpec] slice consumed by [llm.NewConversation].
 func (a *Agent) toolSpecs() []llm.ToolSpec {
 	out := make([]llm.ToolSpec, 0, len(a.tools))
 	for _, t := range a.tools {

@@ -134,8 +134,8 @@ type AutoShrinkConfig struct {
 // summary string. Implementations are typically backed by an LLM call but
 // can also be deterministic (for example, joining titles for tests).
 //
-// Summarize must be safe to call from inside [Client.Send] - in
-// particular, it must not call [Client.Send] on the same conversation it
+// Summarize must be safe to call from inside [Conversation.Send] - in
+// particular, it must not call [Conversation.Send] on the same conversation it
 // is summarising, or it will recurse.
 type Summarizer interface {
 	Summarize(ctx context.Context, turns []Turn) (string, error)
@@ -154,6 +154,7 @@ func (f SummarizerFunc) Summarize(ctx context.Context, turns []Turn) (string, er
 // The zero value is not usable; construct one with [NewConversation].
 // Conversation is not safe for concurrent use.
 type Conversation struct {
+	client       *Client
 	instructions string
 	tools        []ToolSpec
 	turns        []Turn
@@ -163,11 +164,19 @@ type Conversation struct {
 }
 
 // NewConversation creates an empty [Conversation] anchored on instructions
-// and tools. Both values form the cache-stable prefix and are treated as
-// immutable for the life of the conversation. A defensive copy of tools is
-// made so later mutations by the caller do not disturb the cache key.
-func NewConversation(instructions string, tools []ToolSpec) *Conversation {
+// and tools and bound to client. client is the transport used by
+// [Conversation.Send] and [Conversation.Stream]; when nil the
+// conversation is a pure-history object that supports local mutations
+// and JSON round-trips but will return [ErrNoClient] from any method
+// that issues an LLM request.
+//
+// Instructions and tools form the cache-stable prefix and are treated
+// as immutable for the life of the conversation. A defensive copy of
+// tools is made so later mutations by the caller do not disturb the
+// cache key.
+func NewConversation(client *Client, instructions string, tools []ToolSpec) *Conversation {
 	return &Conversation{
+		client:       client,
 		instructions: instructions,
 		tools:        append([]ToolSpec(nil), tools...),
 		autoShrink: AutoShrinkConfig{
@@ -177,6 +186,16 @@ func NewConversation(instructions string, tools []ToolSpec) *Conversation {
 		},
 	}
 }
+
+// Client returns the [Client] bound at construction time, or nil when
+// the conversation was created without one.
+func (c *Conversation) Client() *Client { return c.client }
+
+// SetClient replaces the bound [Client]. It is primarily intended for
+// conversations restored from JSON, whose client field is dropped by
+// the persistence layer; callers must rebind a client before invoking
+// [Conversation.Send] or [Conversation.Stream].
+func (c *Conversation) SetClient(client *Client) { c.client = client }
 
 // Instructions returns the system prompt bound at construction time.
 func (c *Conversation) Instructions() string { return c.instructions }
@@ -273,7 +292,7 @@ func (c *Conversation) AppendAssistantText(text string) {
 // typically combines the provider-visible summary and any
 // reasoning_text content and is stored for observability. raw is an
 // optional provider-opaque payload (see [Turn.Raw]) that, when set,
-// lets [Client.Send] replay the captured reasoning item (including
+// lets [Conversation.Send] replay the captured reasoning item (including
 // its id and encrypted_content) on subsequent requests so
 // tool-calling continuity is preserved. An empty text with a nil raw
 // is ignored so providers that never emit reasoning items do not
@@ -402,7 +421,7 @@ func (c *Conversation) ReplaceRange(from, to int, replacement []Turn) {
 }
 
 // recordUsage stores the latest provider-reported usage and triggers an
-// auto-shrink pass if the policy says so. It is called by [Client.Send].
+// auto-shrink pass if the policy says so. It is called by [Conversation.Send].
 // The returned error is non-nil only when a registered [Summarizer]
 // failed; in that case the conversation has already been shrunk by
 // [Conversation.Trim] as a fallback so the next request still fits.

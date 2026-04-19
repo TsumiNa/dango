@@ -8,7 +8,7 @@ import (
 )
 
 func TestConversationAppendRoles(t *testing.T) {
-	conv := NewConversation("sys", []ToolSpec{{Name: "echo"}})
+	conv := NewConversation(nil, "sys", []ToolSpec{{Name: "echo"}})
 	conv.AppendUser("hi")
 	conv.AppendAssistantText("hello")
 	conv.AppendToolCall(ToolCall{CallID: "c1", Name: "echo", Arguments: `{"msg":"x"}`})
@@ -33,7 +33,7 @@ func TestConversationAppendRoles(t *testing.T) {
 }
 
 func TestConversationTurnsReturnsDefensiveCopy(t *testing.T) {
-	conv := NewConversation("", nil)
+	conv := NewConversation(nil, "", nil)
 	conv.AppendUser("hi")
 	turns := conv.Turns()
 	turns[0].Text = "mutated"
@@ -43,7 +43,7 @@ func TestConversationTurnsReturnsDefensiveCopy(t *testing.T) {
 }
 
 func TestConversationTrimKeepsPairs(t *testing.T) {
-	conv := NewConversation("", nil)
+	conv := NewConversation(nil, "", nil)
 	conv.AppendUser("u1")
 	conv.AppendAssistantText("a1")
 	conv.AppendToolCall(ToolCall{CallID: "c1", Name: "t"})
@@ -72,7 +72,7 @@ func TestConversationTrimKeepsPairs(t *testing.T) {
 // one response). Without rewinding past reasoning, Trim would stop on the
 // reasoning turn and strand the tool_output from its tool_call.
 func TestConversationTrimKeepsPairWithInterleavedReasoning(t *testing.T) {
-	conv := NewConversation("", nil)
+	conv := NewConversation(nil, "", nil)
 	conv.AppendUser("u1")
 	conv.AppendAssistantText("a1")
 	conv.AppendToolCall(ToolCall{CallID: "c1", Name: "t"})
@@ -106,7 +106,7 @@ func TestConversationTrimKeepsPairWithInterleavedReasoning(t *testing.T) {
 }
 
 func TestConversationTrimNoOpWhenWithinLimit(t *testing.T) {
-	conv := NewConversation("", nil)
+	conv := NewConversation(nil, "", nil)
 	conv.AppendUser("u1")
 	conv.AppendAssistantText("a1")
 	if dropped := conv.Trim(10); dropped != 0 {
@@ -118,7 +118,7 @@ func TestConversationTrimNoOpWhenWithinLimit(t *testing.T) {
 }
 
 func TestConversationDropToolDetailsTruncatesOldOutputs(t *testing.T) {
-	conv := NewConversation("", nil)
+	conv := NewConversation(nil, "", nil)
 	for i := 0; i < 3; i++ {
 		conv.AppendToolCall(ToolCall{CallID: "c", Name: "t"})
 		conv.AppendToolOutput("c", strings.Repeat("x", 100), nil)
@@ -145,7 +145,7 @@ func TestConversationDropToolDetailsTruncatesOldOutputs(t *testing.T) {
 }
 
 func TestConversationReplaceRange(t *testing.T) {
-	conv := NewConversation("", nil)
+	conv := NewConversation(nil, "", nil)
 	conv.AppendUser("u1")
 	conv.AppendAssistantText("a1")
 	conv.AppendUser("u2")
@@ -158,7 +158,7 @@ func TestConversationReplaceRange(t *testing.T) {
 }
 
 func TestConversationAutoShrinkTriggersTierOrder(t *testing.T) {
-	conv := NewConversation("sys", nil)
+	conv := NewConversation(nil, "sys", nil)
 	conv.SetAutoShrink(AutoShrinkConfig{
 		ContextWindow:     1000,
 		Threshold:         0.5,
@@ -194,7 +194,7 @@ func TestConversationAutoShrinkTriggersTierOrder(t *testing.T) {
 }
 
 func TestConversationAutoShrinkDisabledByDefault(t *testing.T) {
-	conv := NewConversation("", nil)
+	conv := NewConversation(nil, "", nil)
 	for i := 0; i < 20; i++ {
 		conv.AppendUser("msg")
 	}
@@ -207,7 +207,7 @@ func TestConversationAutoShrinkDisabledByDefault(t *testing.T) {
 }
 
 func TestConversationAppendToolOutputRecordsError(t *testing.T) {
-	conv := NewConversation("", nil)
+	conv := NewConversation(nil, "", nil)
 	conv.AppendToolOutput("c1", "partial", errors.New("boom"))
 	turn := conv.Turns()[0]
 	if turn.Tool.Error != "boom" || turn.Tool.Output != "partial" {
@@ -216,7 +216,7 @@ func TestConversationAppendToolOutputRecordsError(t *testing.T) {
 }
 
 func TestConversationUsageByRoleSumsToNonCached(t *testing.T) {
-	conv := NewConversation("instr", []ToolSpec{{Name: "echo", Description: "e"}})
+	conv := NewConversation(nil, "instr", []ToolSpec{{Name: "echo", Description: "e"}})
 	conv.AppendUser("hello world")
 	conv.AppendAssistantText("hi")
 	if err := conv.recordUsage(t.Context(), TokenUsage{Input: 120, Cached: 20}); err != nil {
@@ -235,7 +235,7 @@ func TestConversationUsageByRoleSumsToNonCached(t *testing.T) {
 }
 
 func TestConversationCompressReplacesPrefixWithSummary(t *testing.T) {
-	conv := NewConversation("", nil)
+	conv := NewConversation(nil, "", nil)
 	conv.AppendUser("u1")
 	conv.AppendAssistantText("a1")
 	conv.AppendUser("u2")
@@ -270,7 +270,7 @@ func TestConversationCompressReplacesPrefixWithSummary(t *testing.T) {
 }
 
 func TestConversationCompressRespectsToolPair(t *testing.T) {
-	conv := NewConversation("", nil)
+	conv := NewConversation(nil, "", nil)
 	conv.AppendUser("u1")
 	conv.AppendToolCall(ToolCall{CallID: "c", Name: "t"})
 	conv.AppendToolOutput("c", "out", nil)
@@ -305,7 +305,7 @@ func TestConversationCompressRespectsToolPair(t *testing.T) {
 // tool_output in the tail, and discard the tool_call - leaving the next
 // Send with a function_call_output that has no matching function_call.
 func TestConversationCompressRewindsPastReasoning(t *testing.T) {
-	conv := NewConversation("", nil)
+	conv := NewConversation(nil, "", nil)
 	conv.AppendUser("u1")
 	conv.AppendToolCall(ToolCall{CallID: "c", Name: "t"})
 	conv.AppendReasoning("midway thought", nil)
@@ -340,7 +340,7 @@ func TestConversationCompressRewindsPastReasoning(t *testing.T) {
 }
 
 func TestConversationCompressNoOpOnNilSummarizer(t *testing.T) {
-	conv := NewConversation("", nil)
+	conv := NewConversation(nil, "", nil)
 	conv.AppendUser("u1")
 	conv.AppendUser("u2")
 	replaced, err := conv.Compress(t.Context(), nil, 2)
@@ -353,7 +353,7 @@ func TestConversationCompressNoOpOnNilSummarizer(t *testing.T) {
 }
 
 func TestConversationCompressReturnsSummarizerError(t *testing.T) {
-	conv := NewConversation("", nil)
+	conv := NewConversation(nil, "", nil)
 	conv.AppendUser("u1")
 	conv.AppendUser("u2")
 	bad := SummarizerFunc(func(_ context.Context, _ []Turn) (string, error) {
@@ -368,7 +368,7 @@ func TestConversationCompressReturnsSummarizerError(t *testing.T) {
 }
 
 func TestConversationAutoShrinkUsesSummarizerWhenSet(t *testing.T) {
-	conv := NewConversation("sys", nil)
+	conv := NewConversation(nil, "sys", nil)
 	conv.SetAutoShrink(AutoShrinkConfig{
 		ContextWindow:     1000,
 		Threshold:         0.5,
@@ -400,7 +400,7 @@ func TestConversationAutoShrinkUsesSummarizerWhenSet(t *testing.T) {
 }
 
 func TestConversationAutoShrinkFallsBackOnSummarizerError(t *testing.T) {
-	conv := NewConversation("", nil)
+	conv := NewConversation(nil, "", nil)
 	conv.SetAutoShrink(AutoShrinkConfig{
 		ContextWindow:     1000,
 		Threshold:         0.5,
