@@ -66,6 +66,45 @@ func TestConversationTrimKeepsPairs(t *testing.T) {
 	}
 }
 
+// TestConversationTrimKeepsPairWithInterleavedReasoning covers the case
+// where a RoleReasoning turn lands between a tool_call and its tool_output
+// (for example because a model emitted [function_call, reasoning] inside
+// one response). Without rewinding past reasoning, Trim would stop on the
+// reasoning turn and strand the tool_output from its tool_call.
+func TestConversationTrimKeepsPairWithInterleavedReasoning(t *testing.T) {
+	conv := NewConversation("", nil)
+	conv.AppendUser("u1")
+	conv.AppendAssistantText("a1")
+	conv.AppendToolCall(ToolCall{CallID: "c1", Name: "t"})
+	conv.AppendReasoning("midway thought")
+	conv.AppendToolOutput("c1", "out1", nil)
+	conv.AppendUser("u2")
+	conv.AppendAssistantText("a2")
+
+	// keep=3 puts the cut on tool_output; backup must rewind past both
+	// the reasoning turn and the tool_call so the pair survives.
+	conv.Trim(3)
+
+	var calls, outputs int
+	for _, tr := range conv.Turns() {
+		switch tr.Role {
+		case RoleToolCall:
+			calls++
+		case RoleToolOutput:
+			outputs++
+		}
+	}
+	if outputs > calls {
+		t.Errorf("Trim orphaned tool_output: %d tool_call vs %d tool_output; turns=%+v",
+			calls, outputs, conv.Turns())
+	}
+
+	// The replay path must still produce a valid input sequence.
+	if in := buildResponseInput(conv.Turns()); len(in) == 0 {
+		t.Fatal("buildResponseInput returned empty input after Trim")
+	}
+}
+
 func TestConversationTrimNoOpWhenWithinLimit(t *testing.T) {
 	conv := NewConversation("", nil)
 	conv.AppendUser("u1")

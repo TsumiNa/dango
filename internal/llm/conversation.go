@@ -308,7 +308,9 @@ func (c *Conversation) AppendToolOutput(callID, output string, execErr error) {
 // Trim drops the oldest turns so that at most keepLastTurns remain. Tool
 // call/output pairs are kept together: if the cut point would strand a
 // tool_output without its preceding tool_call, the cut is nudged backward
-// so the pair survives. keepLastTurns values <= 0 are treated as 0.
+// so the pair survives. Reasoning turns between a tool_call and its
+// tool_output are also rewound past so the pair is not broken by an
+// intervening debug-only entry. keepLastTurns values <= 0 are treated as 0.
 // The number of dropped turns is returned.
 func (c *Conversation) Trim(keepLastTurns int) int {
 	if keepLastTurns < 0 {
@@ -319,7 +321,14 @@ func (c *Conversation) Trim(keepLastTurns int) int {
 	}
 	cut := len(c.turns) - keepLastTurns
 	// Back up past any orphaned tool_output so its tool_call is kept too.
-	for cut > 0 && cut < len(c.turns) && c.turns[cut].Role == RoleToolOutput {
+	// Reasoning turns are rewound past as well because they carry no
+	// structural meaning on their own and may sit between a tool_call
+	// and its tool_output.
+	for cut > 0 && cut < len(c.turns) {
+		r := c.turns[cut].Role
+		if r != RoleToolOutput && r != RoleReasoning {
+			break
+		}
 		cut--
 	}
 	dropped := cut
