@@ -425,40 +425,54 @@ func TestClient_ReasoningEffortInRequest(t *testing.T) {
 		return c
 	}
 
+	assertEffort := func(label string, want string) {
+		t.Helper()
+		var req map[string]any
+		if err := json.Unmarshal(lastBody, &req); err != nil {
+			t.Fatalf("%s: body not JSON: %v (%s)", label, err, lastBody)
+		}
+		reasoning, ok := req["reasoning"]
+		if want == "" {
+			if ok {
+				t.Errorf("%s: reasoning should be absent, got %v", label, reasoning)
+			}
+			return
+		}
+		m, isMap := reasoning.(map[string]any)
+		if !ok || !isMap {
+			t.Fatalf("%s: reasoning missing or not object: %v", label, reasoning)
+		}
+		if got := m["effort"]; got != want {
+			t.Errorf("%s: reasoning.effort = %v, want %q", label, got, want)
+		}
+	}
+
 	// Configured effort appears in the request.
 	c := mk(ReasoningEffortHigh)
 	if _, err := c.Respond(t.Context(), "hi"); err != nil {
 		t.Fatalf("Respond: %v", err)
 	}
-	if !strings.Contains(string(lastBody), `"reasoning":{"effort":"high"}`) {
-		t.Errorf("Respond body missing reasoning effort: %s", lastBody)
-	}
+	assertEffort("Respond(high)", "high")
 
 	conv := c.NewConversation("sys", nil)
 	conv.AppendUser("hello")
 	if _, err := c.Send(t.Context(), conv); err != nil {
 		t.Fatalf("Send: %v", err)
 	}
-	if !strings.Contains(string(lastBody), `"reasoning":{"effort":"high"}`) {
-		t.Errorf("Send body missing reasoning effort: %s", lastBody)
-	}
+	assertEffort("Send(high)", "high")
 
 	// Empty effort is omitted from the payload on both paths.
 	c2 := mk("")
 	if _, err := c2.Respond(t.Context(), "hi"); err != nil {
 		t.Fatalf("Respond: %v", err)
 	}
-	if strings.Contains(string(lastBody), `"reasoning"`) {
-		t.Errorf("Respond body should omit reasoning when effort is empty: %s", lastBody)
-	}
+	assertEffort("Respond(empty)", "")
 	conv2 := c2.NewConversation("sys", nil)
 	conv2.AppendUser("hello")
 	if _, err := c2.Send(t.Context(), conv2); err != nil {
 		t.Fatalf("Send: %v", err)
 	}
-	if strings.Contains(string(lastBody), `"reasoning"`) {
-		t.Errorf("Send body should omit reasoning when effort is empty: %s", lastBody)
-	}
+	assertEffort("Send(empty)", "")
 }
 
 func TestNewClientFromEnv_ReasoningEffort(t *testing.T) {
