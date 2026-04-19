@@ -2,6 +2,7 @@ package skill
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"github.com/tsumina/dango/internal/llm"
@@ -33,6 +34,8 @@ type Agent struct {
 	autoShrink llm.AutoShrinkConfig
 	hasShrink  bool
 	summarizer llm.Summarizer
+	sessStore  llm.SessionStore
+	sessID     string
 }
 
 // AgentOption customizes [NewAgent].
@@ -65,6 +68,21 @@ func WithAutoTrim(cfg llm.AutoShrinkConfig) AgentOption {
 // trimming.
 func WithSummarizer(s llm.Summarizer) AgentOption {
 	return func(a *Agent) { a.summarizer = s }
+}
+
+// WithSession binds the agent to a persistent session identified by id
+// in store. On the first call to [Agent.Run] the agent tries to load the
+// session; if it does not exist a new conversation is started using the
+// Run instructions and advertised tool schema as the anchor. On every
+// subsequent Run the saved conversation is reused verbatim, preserving
+// the provider's prompt cache across process restarts. The session is
+// written back to store at the end of each Run (both on success and on
+// error) so mid-conversation crashes still persist the work done so far.
+func WithSession(store llm.SessionStore, id string) AgentOption {
+	return func(a *Agent) {
+		a.sessStore = store
+		a.sessID = id
+	}
 }
 
 // NewAgent creates an [Agent] bound to client and the given tools.
@@ -116,13 +134,23 @@ func (a *Agent) Tools() []Tool { return a.tools }
 // via the registered [Tool] instances until the model produces a final
 // text response or the step budget is exhausted. The returned string is
 // the concatenated output_text of the final response.
+//
+// When [WithSession] is set, Run first tries to load the existing
+// session and reuse its saved conversation; the instructions argument is
+// ignored in that case so the cache anchor does not shift between runs.
+// The session is saved back to the store in a deferred call so partial
+// progress survives even when Run returns an error.
 func (a *Agent) Run(ctx context.Context, instructions, userInput string) (string, error) {
-	conv := a.client.NewConversation(instructions, a.toolSpecs())
-	if a.hasShrink {
-		conv.SetAutoShrink(a.autoShrink)
+	sess, conv, err := a.loadOrCreateConversation(ctx, instructions)
+	if err != nil {
+		return "", err
 	}
-	if a.summarizer != nil {
-		conv.SetSummarizer(a.summarizer)
+	if a.sessStore != nil {
+		defer func() {
+			// Best-effort persistence: a save failure should not mask
+			// the Run outcome, but we still try to capture it.
+			_ = a.sessStore.Save(ctx, sess)
+		}()
 	}
 	conv.AppendUser(userInput)
 
@@ -142,6 +170,52 @@ func (a *Agent) Run(ctx context.Context, instructions, userInput string) (string
 		}
 	}
 	return "", fmt.Errorf("skill: agent exceeded max steps (%d) without final response", a.maxSteps)
+}
+
+// loadOrCreateConversation returns the conversation that Run will drive,
+// plus the session wrapping it when [WithSession] is set. When no
+// session is configured it returns (nil, fresh conversation, nil).
+func (a *Agent) loadOrCreateConversation(ctx context.Context, instructions string) (*llm.Session, *llm.Conversation, error) {
+	if a.sessStore == nil {
+		conv := a.newConversation(instructions)
+		return nil, conv, nil
+	}
+	sess, err := a.sessStore.Load(ctx, a.sessID)
+	if err != nil {
+		if !errors.Is(err, llm.ErrSessionNotFound) {
+			return nil, nil, fmt.Errorf("skill: load session %q: %w", a.sessID, err)
+		}
+		conv := a.newConversation(instructions)
+		sess = llm.NewSession(a.sessID, conv)
+		return sess, conv, nil
+	}
+	if sess.Conv == nil {
+		conv := a.newConversation(instructions)
+		sess.Conv = conv
+		return sess, conv, nil
+	}
+	// Restore runtime-only knobs that the JSON encoding drops.
+	if a.hasShrink {
+		sess.Conv.SetAutoShrink(a.autoShrink)
+	}
+	if a.summarizer != nil {
+		sess.Conv.SetSummarizer(a.summarizer)
+	}
+	return sess, sess.Conv, nil
+}
+
+// newConversation builds a fresh conversation anchored on instructions
+// and the agent's advertised tool schema, applying the agent's
+// auto-shrink and summariser options.
+func (a *Agent) newConversation(instructions string) *llm.Conversation {
+	conv := a.client.NewConversation(instructions, a.toolSpecs())
+	if a.hasShrink {
+		conv.SetAutoShrink(a.autoShrink)
+	}
+	if a.summarizer != nil {
+		conv.SetSummarizer(a.summarizer)
+	}
+	return conv
 }
 
 // dispatch executes a single function call against the registered tools.

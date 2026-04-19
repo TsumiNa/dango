@@ -231,3 +231,65 @@ func TestAgentWithSummarizerAndAutoTrim(t *testing.T) {
 		t.Errorf("summarizer called %d times, want 1", called)
 	}
 }
+
+// TestAgentWithSession verifies that a persisted session is loaded on a
+// second Run so the saved conversation is reused and extended.
+func TestAgentWithSession(t *testing.T) {
+	var requests [][]byte
+	var responded int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		requests = append(requests, body)
+		w.Header().Set("Content-Type", "application/json")
+		responded++
+		_, _ = w.Write([]byte(`{
+			"id":"r","object":"response","created_at":0,"model":"test-model","status":"completed",
+			"output":[{"id":"m","type":"message","role":"assistant","status":"completed",
+			 "content":[{"type":"output_text","text":"reply","annotations":[]}]}],
+			"parallel_tool_calls":false,"tool_choice":"auto","tools":[]
+		}`))
+	}))
+	t.Cleanup(srv.Close)
+
+	store, err := llm.NewJSONStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewJSONStore: %v", err)
+	}
+
+	agent, err := NewAgent(newTestClient(srv.URL), nil, WithSession(store, "job-1"))
+	if err != nil {
+		t.Fatalf("NewAgent: %v", err)
+	}
+	if _, err := agent.Run(context.Background(), "sys", "first"); err != nil {
+		t.Fatalf("Run 1: %v", err)
+	}
+
+	sess, err := store.Load(context.Background(), "job-1")
+	if err != nil {
+		t.Fatalf("Load after run 1: %v", err)
+	}
+	if sess.Conv == nil || sess.Conv.Len() != 2 {
+		t.Fatalf("after run 1: conv len = %d, want 2", sess.Conv.Len())
+	}
+
+	// Second run with the same session should ship the prior turns in
+	// the request body alongside the new user input.
+	if _, err := agent.Run(context.Background(), "sys", "second"); err != nil {
+		t.Fatalf("Run 2: %v", err)
+	}
+	if len(requests) != 2 {
+		t.Fatalf("got %d requests, want 2", len(requests))
+	}
+	second := string(requests[1])
+	if !strings.Contains(second, `"first"`) || !strings.Contains(second, `"reply"`) || !strings.Contains(second, `"second"`) {
+		t.Errorf("second request missing resumed history: %s", second)
+	}
+
+	sess2, err := store.Load(context.Background(), "job-1")
+	if err != nil {
+		t.Fatalf("Load after run 2: %v", err)
+	}
+	if sess2.Conv.Len() != 4 {
+		t.Errorf("after run 2: conv len = %d, want 4", sess2.Conv.Len())
+	}
+}
