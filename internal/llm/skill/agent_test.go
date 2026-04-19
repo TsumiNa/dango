@@ -40,9 +40,9 @@ func TestNewAgentRejectsNilClient(t *testing.T) {
 
 func TestNewAgentRejectsDuplicateToolNames(t *testing.T) {
 	c := newTestClient(t, "http://unused")
-	a := NewFuncTool("x", "", map[string]any{}, func(context.Context, string) (string, error) { return "", nil })
-	b := NewFuncTool("x", "", map[string]any{}, func(context.Context, string) (string, error) { return "", nil })
-	if _, err := NewAgent(c, []Tool{a, b}); err == nil {
+	a := llm.NewFuncTool("x", "", map[string]any{}, func(context.Context, string) (string, error) { return "", nil })
+	b := llm.NewFuncTool("x", "", map[string]any{}, func(context.Context, string) (string, error) { return "", nil })
+	if _, err := NewAgent(c, []llm.Tool{a, b}); err == nil {
 		t.Fatal("expected error for duplicate tool names")
 	}
 }
@@ -80,7 +80,7 @@ func TestAgentRunToolLoop(t *testing.T) {
 	t.Cleanup(srv.Close)
 
 	var echoed string
-	echo := NewFuncTool("echo", "echo msg", map[string]any{
+	echo := llm.NewFuncTool("echo", "echo msg", map[string]any{
 		"type": "object",
 		"properties": map[string]any{
 			"msg": map[string]any{"type": "string"},
@@ -95,7 +95,7 @@ func TestAgentRunToolLoop(t *testing.T) {
 		return a.Msg, nil
 	})
 
-	agent, err := NewAgent(newTestClient(t, srv.URL), []Tool{echo})
+	agent, err := NewAgent(newTestClient(t, srv.URL), []llm.Tool{echo})
 	if err != nil {
 		t.Fatalf("NewAgent: %v", err)
 	}
@@ -166,10 +166,10 @@ func TestAgentRunMaxStepsExceeded(t *testing.T) {
 	}))
 	t.Cleanup(srv.Close)
 
-	loop := NewFuncTool("loop", "", map[string]any{"type": "object"},
+	loop := llm.NewFuncTool("loop", "", map[string]any{"type": "object"},
 		func(context.Context, string) (string, error) { return "", nil })
 
-	agent, err := NewAgent(newTestClient(t, srv.URL), []Tool{loop}, WithMaxSteps(2))
+	agent, err := NewAgent(newTestClient(t, srv.URL), []llm.Tool{loop}, WithMaxSteps(2))
 	if err != nil {
 		t.Fatalf("NewAgent: %v", err)
 	}
@@ -212,7 +212,7 @@ func TestAgentWithSummarizerAndAutoTrim(t *testing.T) {
 	}))
 	t.Cleanup(srv.Close)
 
-	echo := NewFuncTool("echo", "", map[string]any{"type": "object"},
+	echo := llm.NewFuncTool("echo", "", map[string]any{"type": "object"},
 		func(context.Context, string) (string, error) { return "out", nil })
 
 	called := 0
@@ -221,7 +221,7 @@ func TestAgentWithSummarizerAndAutoTrim(t *testing.T) {
 		return "compact", nil
 	})
 
-	agent, err := NewAgent(newTestClient(t, srv.URL), []Tool{echo},
+	agent, err := NewAgent(newTestClient(t, srv.URL), []llm.Tool{echo},
 		WithAutoTrim(llm.AutoShrinkConfig{
 			ContextWindow:     1000,
 			Threshold:         0.5,

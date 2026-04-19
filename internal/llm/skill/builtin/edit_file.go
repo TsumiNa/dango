@@ -7,6 +7,7 @@ import (
 	"os"
 	"strings"
 
+	"github.com/tsumina/dango/internal/llm"
 	"github.com/tsumina/dango/internal/llm/skill"
 )
 
@@ -17,8 +18,8 @@ import (
 // should include enough surrounding context to make the match unique. This
 // lets the model amend large files without having to rewrite them via
 // [NewWriteFile], saving tokens and avoiding accidental deletions.
-func NewEditFile(root string) skill.Tool {
-	return skill.NewFuncTool(
+func NewEditFile(root string) llm.Tool {
+	return llm.NewFuncTool(
 		"edit_file",
 		"Replace a unique occurrence of old_string with new_string inside an existing file. old_string must match exactly once; include enough surrounding context to disambiguate.",
 		map[string]any{

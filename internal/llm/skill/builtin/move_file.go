@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/tsumina/dango/internal/llm"
 	"github.com/tsumina/dango/internal/llm/skill"
 )
 
@@ -17,8 +18,8 @@ import (
 // moves are rejected. The destination's parent directory is created if it
 // does not exist. This tool fills the gap left by omitting mv from the
 // default bash allowlist.
-func NewMoveFile(root string) skill.Tool {
-	return skill.NewFuncTool(
+func NewMoveFile(root string) llm.Tool {
+	return llm.NewFuncTool(
 		"move_file",
 		"Rename or move a file or directory within the skill workspace. Both src and dst must stay inside the workspace root; the destination's parent directory is created if needed.",
 		map[string]any{

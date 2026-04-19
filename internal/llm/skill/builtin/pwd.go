@@ -5,13 +5,13 @@ import (
 	"fmt"
 	"path/filepath"
 
-	"github.com/tsumina/dango/internal/llm/skill"
+	"github.com/tsumina/dango/internal/llm"
 )
 
 // NewPwd returns a Tool that reports the absolute path of the skill
 // workspace root.
-func NewPwd(root string) skill.Tool {
-	return skill.NewFuncTool(
+func NewPwd(root string) llm.Tool {
+	return llm.NewFuncTool(
 		"pwd",
 		"Return the absolute path of the skill workspace root.",
 		map[string]any{

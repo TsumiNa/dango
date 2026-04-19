@@ -28,8 +28,8 @@ const DefaultMaxSteps = 20
 // zero value is not usable; construct one with [NewAgent].
 type Agent struct {
 	client     *llm.Client
-	tools      []Tool
-	toolByName map[string]Tool
+	tools      []llm.Tool
+	toolByName map[string]llm.Tool
 	maxSteps   int
 	autoShrink llm.AutoShrinkConfig
 	hasShrink  bool
@@ -90,11 +90,11 @@ func WithSession(store llm.SessionStore, id string) AgentOption {
 // client must be non-nil. Tool names must be unique; duplicates cause
 // NewAgent to return an error so misconfigured tool sets fail fast rather
 // than silently shadowing each other at call time.
-func NewAgent(client *llm.Client, tools []Tool, opts ...AgentOption) (*Agent, error) {
+func NewAgent(client *llm.Client, tools []llm.Tool, opts ...AgentOption) (*Agent, error) {
 	if client == nil {
 		return nil, fmt.Errorf("skill: agent requires a non-nil client")
 	}
-	byName := make(map[string]Tool, len(tools))
+	byName := make(map[string]llm.Tool, len(tools))
 	for _, t := range tools {
 		if t == nil {
 			return nil, fmt.Errorf("skill: agent received nil tool")
@@ -121,7 +121,7 @@ func NewAgent(client *llm.Client, tools []Tool, opts ...AgentOption) (*Agent, er
 }
 
 // Tools returns the tools advertised by this agent in registration order.
-func (a *Agent) Tools() []Tool { return a.tools }
+func (a *Agent) Tools() []llm.Tool { return a.tools }
 
 // Run drives a single task to completion.
 //

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 
+	"github.com/tsumina/dango/internal/llm"
 	"github.com/tsumina/dango/internal/llm/skill"
 )
 
@@ -16,8 +17,8 @@ import (
 // the tool cannot touch files outside the workspace. Directory removal is
 // opt-in via the recursive flag and still confined to root. This tool fills
 // the gap left by omitting rm from the default bash allowlist.
-func NewDeleteFile(root string) skill.Tool {
-	return skill.NewFuncTool(
+func NewDeleteFile(root string) llm.Tool {
+	return llm.NewFuncTool(
 		"delete_file",
 		"Delete a file or directory within the skill workspace. Set recursive=true to remove a non-empty directory. Paths escaping the workspace root are rejected.",
 		map[string]any{

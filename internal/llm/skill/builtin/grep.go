@@ -8,6 +8,7 @@ import (
 	"regexp"
 	"strings"
 
+	"github.com/tsumina/dango/internal/llm"
 	"github.com/tsumina/dango/internal/llm/skill"
 )
 
@@ -26,8 +27,8 @@ const grepDefaultMaxMatches = 50
 // and max_matches caps the number of hits to keep responses small. This
 // tool is the preferred way to locate sections of long manuals, READMEs, or
 // logs before issuing a targeted [NewReadFile] call.
-func NewGrep(root string) skill.Tool {
-	return skill.NewFuncTool(
+func NewGrep(root string) llm.Tool {
+	return llm.NewFuncTool(
 		"grep",
 		"Search for a pattern in a file or an inline text string and return matching lines with 1-indexed line numbers. Supply exactly one of path or text. Use this before read_file to locate sections in long documents.",
 		map[string]any{

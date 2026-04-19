@@ -1,16 +1,8 @@
 package skill
 
 import (
-	"context"
 	"testing"
 )
-
-func TestFuncToolMissingHandler(t *testing.T) {
-	tool := NewFuncTool("x", "", nil, nil)
-	if _, err := tool.Execute(context.Background(), "{}"); err == nil {
-		t.Fatal("expected error when handler is nil")
-	}
-}
 
 func TestResolveWorkspacePathRejectsEscape(t *testing.T) {
 	root := t.TempDir()
