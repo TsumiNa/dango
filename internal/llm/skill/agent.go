@@ -4,9 +4,6 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/openai/openai-go/v3"
-	"github.com/openai/openai-go/v3/responses"
-
 	"github.com/tsumina/dango/internal/llm"
 )
 
@@ -20,7 +17,7 @@ const DefaultMaxSteps = 20
 //
 // The Agent wires together:
 //
-//   - a skill prompt and user input (turned into Responses API input),
+//   - a skill prompt and user input (turned into a [llm.Conversation]),
 //   - a set of [Tool] implementations advertised to the model,
 //   - an execution loop that dispatches each requested tool call and feeds
 //     the result back into the next request.
@@ -90,51 +87,38 @@ func (a *Agent) Tools() []Tool { return a.tools }
 //
 // instructions is inserted as the system-level instruction for every request
 // in the loop (commonly the skill's Instruction body). userInput is the
-// initial user message describing the task. Run issues a request, executes
-// any function tool calls the model emits via the registered [Tool]
-// instances, and feeds the results back until the model produces a final
-// text response or the step budget is exhausted. The returned string is the
-// concatenated output_text of the final response.
+// initial user message describing the task. Run builds a
+// [llm.Conversation] anchored on instructions and the advertised tool
+// schema, appends userInput as a user turn, then repeatedly calls
+// [llm.Client.Send] and dispatches any function tool calls the model emits
+// via the registered [Tool] instances until the model produces a final
+// text response or the step budget is exhausted. The returned string is
+// the concatenated output_text of the final response.
 func (a *Agent) Run(ctx context.Context, instructions, userInput string) (string, error) {
-	toolParams := a.toolParams()
-	input := responses.ResponseInputParam{
-		responses.ResponseInputItemParamOfMessage(userInput, responses.EasyInputMessageRoleUser),
-	}
+	conv := a.client.NewConversation(instructions, a.toolSpecs())
+	conv.AppendUser(userInput)
 
 	for step := 0; step < a.maxSteps; step++ {
-		params := responses.ResponseNewParams{
-			Model: a.client.Model(),
-			Input: responses.ResponseNewParamsInputUnion{OfInputItemList: input},
-			Tools: toolParams,
-		}
-		if instructions != "" {
-			params.Instructions = openai.String(instructions)
-		}
-		resp, err := a.client.Raw().Responses.New(ctx, params)
+		resp, err := a.client.Send(ctx, conv)
 		if err != nil {
 			return "", fmt.Errorf("skill: agent request failed at step %d: %w", step, err)
 		}
-
-		calls := functionCalls(resp.Output)
-		if len(calls) == 0 {
-			return resp.OutputText(), nil
+		if len(resp.ToolCalls) == 0 {
+			return resp.Text, nil
 		}
-
-		for _, call := range calls {
-			callParam := call.ToParam()
-			input = append(input, responses.ResponseInputItemUnionParam{OfFunctionCall: &callParam})
+		for _, call := range resp.ToolCalls {
 			output, execErr := a.dispatch(ctx, call)
-			input = append(input, responses.ResponseInputItemParamOfFunctionCallOutput(call.CallID, output))
-			_ = execErr // surfaced to the model via output; loop continues so it can recover
+			conv.AppendToolOutput(call.CallID, output, execErr)
+			// execErr is surfaced to the model via output so the loop
+			// can recover on the next turn.
 		}
 	}
-
 	return "", fmt.Errorf("skill: agent exceeded max steps (%d) without final response", a.maxSteps)
 }
 
 // dispatch executes a single function call against the registered tools.
 // On error the error text is returned as output so the model sees it.
-func (a *Agent) dispatch(ctx context.Context, call responses.ResponseFunctionToolCall) (string, error) {
+func (a *Agent) dispatch(ctx context.Context, call llm.ToolCall) (string, error) {
 	tool, ok := a.toolByName[call.Name]
 	if !ok {
 		msg := fmt.Sprintf("error: unknown tool %q", call.Name)
@@ -148,29 +132,16 @@ func (a *Agent) dispatch(ctx context.Context, call responses.ResponseFunctionToo
 	return out, nil
 }
 
-// toolParams converts the registered Tools into the Responses API tool union.
-func (a *Agent) toolParams() []responses.ToolUnionParam {
-	out := make([]responses.ToolUnionParam, 0, len(a.tools))
+// toolSpecs converts the registered [Tool] set into the provider-agnostic
+// [llm.ToolSpec] slice consumed by [llm.Client.NewConversation].
+func (a *Agent) toolSpecs() []llm.ToolSpec {
+	out := make([]llm.ToolSpec, 0, len(a.tools))
 	for _, t := range a.tools {
-		ft := &responses.FunctionToolParam{
-			Name:       t.Name(),
-			Parameters: t.Parameters(),
-		}
-		if d := t.Description(); d != "" {
-			ft.Description = openai.String(d)
-		}
-		out = append(out, responses.ToolUnionParam{OfFunction: ft})
+		out = append(out, llm.ToolSpec{
+			Name:        t.Name(),
+			Description: t.Description(),
+			Parameters:  t.Parameters(),
+		})
 	}
 	return out
-}
-
-// functionCalls extracts the function_call items from a response's output.
-func functionCalls(items []responses.ResponseOutputItemUnion) []responses.ResponseFunctionToolCall {
-	var calls []responses.ResponseFunctionToolCall
-	for _, item := range items {
-		if item.Type == "function_call" {
-			calls = append(calls, item.AsFunctionCall())
-		}
-	}
-	return calls
 }

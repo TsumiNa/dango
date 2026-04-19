@@ -200,3 +200,159 @@ func clearProviderEnv(t *testing.T) {
 		t.Setenv(k, "")
 	}
 }
+
+func TestClient_SendAppendsAssistantAndUsage(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{
+			"id":"r","object":"response","created_at":0,"model":"m","status":"completed",
+			"output":[
+				{"id":"m1","type":"message","role":"assistant","status":"completed",
+				 "content":[{"type":"output_text","text":"ok","annotations":[]}]}
+			],
+			"parallel_tool_calls":false,"tool_choice":"auto","tools":[],
+			"usage":{
+				"input_tokens":50,"input_tokens_details":{"cached_tokens":10},
+				"output_tokens":5,"output_tokens_details":{"reasoning_tokens":2},
+				"total_tokens":55
+			}
+		}`))
+	}))
+	t.Cleanup(srv.Close)
+
+	c := testClient(srv.URL)
+	conv := c.NewConversation("sys", nil)
+	conv.AppendUser("hi")
+
+	resp, err := c.Send(t.Context(), conv)
+	if err != nil {
+		t.Fatalf("Send: %v", err)
+	}
+	if resp.Text != "ok" {
+		t.Errorf("Response.Text = %q, want %q", resp.Text, "ok")
+	}
+	if len(resp.ToolCalls) != 0 {
+		t.Errorf("unexpected tool calls: %+v", resp.ToolCalls)
+	}
+	if resp.Usage.Input != 50 || resp.Usage.Cached != 10 || resp.Usage.Output != 5 || resp.Usage.Reasoning != 2 || resp.Usage.Total != 55 {
+		t.Errorf("Usage = %+v", resp.Usage)
+	}
+	if conv.Usage() != resp.Usage {
+		t.Errorf("conversation.Usage() not updated: %+v", conv.Usage())
+	}
+	turns := conv.Turns()
+	if len(turns) != 2 || turns[1].Role != RoleAssistant || turns[1].Text != "ok" {
+		t.Errorf("assistant turn not appended: %+v", turns)
+	}
+}
+
+func TestClient_SendRecordsToolCalls(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{
+			"id":"r","object":"response","created_at":0,"model":"m","status":"completed",
+			"output":[
+				{"id":"fc1","type":"function_call","status":"completed",
+				 "call_id":"call_1","name":"echo","arguments":"{\"msg\":\"hi\"}"}
+			],
+			"parallel_tool_calls":false,"tool_choice":"auto","tools":[]
+		}`))
+	}))
+	t.Cleanup(srv.Close)
+
+	c := testClient(srv.URL)
+	conv := c.NewConversation("", []ToolSpec{{Name: "echo", Parameters: map[string]any{"type": "object"}}})
+	conv.AppendUser("please echo")
+
+	resp, err := c.Send(t.Context(), conv)
+	if err != nil {
+		t.Fatalf("Send: %v", err)
+	}
+	if len(resp.ToolCalls) != 1 || resp.ToolCalls[0].CallID != "call_1" || resp.ToolCalls[0].Name != "echo" {
+		t.Fatalf("unexpected ToolCalls: %+v", resp.ToolCalls)
+	}
+	turns := conv.Turns()
+	if len(turns) != 2 || turns[1].Role != RoleToolCall {
+		t.Errorf("tool_call turn not appended: %+v", turns)
+	}
+	if turns[1].Tool == nil || turns[1].Tool.CallID != "call_1" {
+		t.Errorf("tool_call CallID not preserved: %+v", turns[1].Tool)
+	}
+}
+
+// TestClient_SendPrefixStable verifies that the cache-critical request
+// prefix (instructions, tools, plus all previously recorded turns) is
+// byte-for-byte identical between two consecutive Send calls.
+func TestClient_SendPrefixStable(t *testing.T) {
+	var requests []map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		var m map[string]any
+		_ = json.Unmarshal(body, &m)
+		requests = append(requests, m)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{
+			"id":"r","object":"response","created_at":0,"model":"m","status":"completed",
+			"output":[{"id":"m1","type":"message","role":"assistant","status":"completed",
+			 "content":[{"type":"output_text","text":"ok","annotations":[]}]}],
+			"parallel_tool_calls":false,"tool_choice":"auto","tools":[]
+		}`))
+	}))
+	t.Cleanup(srv.Close)
+
+	c := testClient(srv.URL)
+	conv := c.NewConversation("system prompt", []ToolSpec{{Name: "echo", Description: "e", Parameters: map[string]any{"type": "object"}}})
+	conv.AppendUser("hello")
+
+	if _, err := c.Send(t.Context(), conv); err != nil {
+		t.Fatalf("first Send: %v", err)
+	}
+	// Caller adds another user turn; the prior prefix must not shift.
+	conv.AppendUser("follow-up")
+	if _, err := c.Send(t.Context(), conv); err != nil {
+		t.Fatalf("second Send: %v", err)
+	}
+
+	if len(requests) != 2 {
+		t.Fatalf("got %d requests, want 2", len(requests))
+	}
+	// instructions and tools must match exactly.
+	if requests[0]["instructions"] != requests[1]["instructions"] {
+		t.Errorf("instructions changed: %v vs %v", requests[0]["instructions"], requests[1]["instructions"])
+	}
+	toolsA, _ := json.Marshal(requests[0]["tools"])
+	toolsB, _ := json.Marshal(requests[1]["tools"])
+	if string(toolsA) != string(toolsB) {
+		t.Errorf("tools schema changed: %s vs %s", toolsA, toolsB)
+	}
+	inputA, _ := requests[0]["input"].([]any)
+	inputB, _ := requests[1]["input"].([]any)
+	if len(inputB) <= len(inputA) {
+		t.Fatalf("second input length %d not > first %d", len(inputB), len(inputA))
+	}
+	for i := 0; i < len(inputA); i++ {
+		a, _ := json.Marshal(inputA[i])
+		b, _ := json.Marshal(inputB[i])
+		if string(a) != string(b) {
+			t.Errorf("prefix diverged at input[%d]:\n first:  %s\n second: %s", i, a, b)
+		}
+	}
+}
+
+func TestClient_SendRejectsNilConversation(t *testing.T) {
+	c := testClient("http://unused")
+	if _, err := c.Send(t.Context(), nil); err == nil {
+		t.Error("expected error for nil conversation")
+	}
+}
+
+func testClient(baseURL string) *Client {
+	return &Client{
+		provider: ProviderOpenAI,
+		model:    "test-model",
+		raw: openai.NewClient(
+			option.WithAPIKey("test-key"),
+			option.WithBaseURL(baseURL+"/"),
+		),
+	}
+}
