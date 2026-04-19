@@ -101,6 +101,24 @@ const streamBuffer = 16
 // stream should cancel ctx; the internal worker exits within a
 // bounded time and will close the channel on its way out.
 //
+// Concurrency: Stream takes exclusive ownership of conv for the
+// duration of the stream. [Conversation] is not safe for concurrent
+// use, and the worker goroutine appends the assistant reply to conv
+// on clean completion, so the caller must not read or mutate conv
+// from any other goroutine until the returned channel is closed
+// (i.e., until the consuming range loop exits). After the channel
+// closes, conv is safe to use again from the caller's goroutine.
+//
+// Terminal guarantee: when the channel closes, exactly one of the
+// following has happened: (a) the server emitted response.completed
+// and conv has been updated with the full reply; (b) a
+// [StreamEvent] with Err was emitted and conv is unchanged; or
+// (c) ctx was cancelled, in which case no Err event is required and
+// ctx.Err() is the authoritative reason. No other "silent close"
+// case exists: a stream that ends without either response.completed
+// or a transport error surfaces a synthetic Err so consumers never
+// mistake an interrupted stream for success.
+//
 // The iteration pattern mirrors the openai-go responses-streaming
 // example: the value returned by Responses.NewStreaming is driven
 // with Next / Current / Err without naming its concrete type.
@@ -170,6 +188,20 @@ func (c *Client) Stream(ctx context.Context, conv *Conversation) (<-chan StreamE
 			return
 		}
 		if completed == nil {
+			// The transport ended cleanly but we never saw a
+			// response.completed event, so we have no usage,
+			// no final message, and nothing to commit to conv.
+			// Distinguish caller-initiated cancellation (ctx) from
+			// a server-side truncation: ctx cancellation is an
+			// expected outcome the caller already knows about, but
+			// any other cause must surface as an Err so consumers
+			// do not mistake an interrupted stream for success.
+			if ctx.Err() == nil {
+				select {
+				case out <- StreamEvent{Err: fmt.Errorf("llm: stream ended without response.completed")}:
+				case <-ctx.Done():
+				}
+			}
 			return
 		}
 		c.applyResponseOutput(ctx, conv, completed)

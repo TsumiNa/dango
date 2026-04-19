@@ -388,3 +388,44 @@ func TestClient_Stream_CtxCancel(t *testing.T) {
 		t.Fatal("channel did not close after ctx cancel")
 	}
 }
+
+// TestClient_Stream_SurfacesMissingCompleted verifies that a stream
+// which ends without response.completed and without a transport
+// error still surfaces a terminal Err event, so consumers do not
+// mistake a truncated stream for a clean completion. This covers
+// the case where the server closes the connection mid-stream but
+// the SSE framing itself is well-formed (no stream.Err).
+func TestClient_Stream_SurfacesMissingCompleted(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Emit a couple of deltas, then close the response without
+		// ever sending response.completed.
+		sseResponse(w,
+			textDeltaEvent("partial"),
+			textDeltaEvent(" answer"),
+		)
+	}))
+	t.Cleanup(srv.Close)
+
+	c := testClient(srv.URL)
+	conv := c.NewConversation("sys", nil)
+	conv.AppendUser("hi")
+
+	ch, err := c.Stream(t.Context(), conv)
+	if err != nil {
+		t.Fatalf("Stream: %v", err)
+	}
+	events := collect(t, ch, 5*time.Second)
+
+	if len(events) == 0 {
+		t.Fatalf("no events received")
+	}
+	last := events[len(events)-1]
+	if last.Err == nil {
+		t.Errorf("want terminal Err event for missing response.completed, got %+v", last)
+	}
+	for _, tr := range conv.Turns() {
+		if tr.Role == RoleAssistant {
+			t.Errorf("assistant turn appended despite missing response.completed: %q", tr.Text)
+		}
+	}
+}
