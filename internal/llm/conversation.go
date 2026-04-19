@@ -76,12 +76,19 @@ type ToolCallPayload struct {
 
 // Turn is one entry in a [Conversation]. Exactly one of Text or Tool is
 // populated, selected by Role.
+//
+// Raw is an optional provider-opaque payload attached to a reasoning
+// turn. It carries the JSON of a [responses.ResponseReasoningItem]
+// captured when [ClientConfig.ReplayReasoning] is enabled so the turn
+// can be replayed verbatim to preserve tool-calling continuity on
+// reasoning models. Upper layers must not parse or mutate it.
 type Turn struct {
 	Role      Role
 	Text      string
 	Tool      *ToolCallPayload
 	Tier      Tier
 	CreatedAt time.Time
+	Raw       json.RawMessage `json:"raw,omitempty"`
 }
 
 // TokenUsage is the most recent token cost reported by the provider for a
@@ -257,14 +264,16 @@ func (c *Conversation) AppendAssistantText(text string) {
 	})
 }
 
-// AppendReasoning records a reasoning trace emitted by the model. The
-// text typically combines the provider-visible summary and any
-// reasoning_text content; it is stored for observability and is not
-// forwarded back to the provider on subsequent requests. Empty text is
-// ignored so providers that never emit reasoning items do not pollute
-// the turn log.
-func (c *Conversation) AppendReasoning(text string) {
-	if text == "" {
+// AppendReasoning records a reasoning trace emitted by the model. text
+// typically combines the provider-visible summary and any
+// reasoning_text content and is stored for observability. raw is an
+// optional provider-opaque payload (see [Turn.Raw]) that, when set,
+// lets [Client.Send] replay the reasoning item verbatim on subsequent
+// requests so tool-calling continuity is preserved. An empty text with
+// a nil raw is ignored so providers that never emit reasoning items do
+// not pollute the turn log.
+func (c *Conversation) AppendReasoning(text string, raw json.RawMessage) {
+	if text == "" && len(raw) == 0 {
 		return
 	}
 	c.turns = append(c.turns, Turn{
@@ -272,6 +281,7 @@ func (c *Conversation) AppendReasoning(text string) {
 		Text:      text,
 		Tier:      TierToolIO,
 		CreatedAt: time.Now(),
+		Raw:       raw,
 	})
 }
 
