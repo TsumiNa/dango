@@ -33,7 +33,7 @@ func newTestClient(t *testing.T, baseURL string) *llm.Client {
 }
 
 func TestNewAgentRejectsNilClient(t *testing.T) {
-	if _, err := NewAgent(nil, nil); err == nil {
+	if _, err := NewAgent(nil, "", nil); err == nil {
 		t.Fatal("expected error for nil client")
 	}
 }
@@ -42,7 +42,7 @@ func TestNewAgentRejectsDuplicateToolNames(t *testing.T) {
 	c := newTestClient(t, "http://unused")
 	a := llm.NewFuncTool("x", "", map[string]any{}, func(context.Context, string) (string, error) { return "", nil })
 	b := llm.NewFuncTool("x", "", map[string]any{}, func(context.Context, string) (string, error) { return "", nil })
-	if _, err := NewAgent(c, []llm.Tool{a, b}); err == nil {
+	if _, err := NewAgent(c, "", []llm.Tool{a, b}); err == nil {
 		t.Fatal("expected error for duplicate tool names")
 	}
 }
@@ -95,11 +95,11 @@ func TestAgentRunToolLoop(t *testing.T) {
 		return a.Msg, nil
 	})
 
-	agent, err := NewAgent(newTestClient(t, srv.URL), []llm.Tool{echo})
+	agent, err := NewAgent(newTestClient(t, srv.URL), "system", []llm.Tool{echo})
 	if err != nil {
 		t.Fatalf("NewAgent: %v", err)
 	}
-	out, err := agent.Run(context.Background(), "system", "please echo hello")
+	out, err := agent.Run(context.Background(), "please echo hello")
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -142,11 +142,11 @@ func TestAgentRunUnknownToolReportsError(t *testing.T) {
 	}))
 	t.Cleanup(srv.Close)
 
-	agent, err := NewAgent(newTestClient(t, srv.URL), nil)
+	agent, err := NewAgent(newTestClient(t, srv.URL), "", nil)
 	if err != nil {
 		t.Fatalf("NewAgent: %v", err)
 	}
-	out, err := agent.Run(context.Background(), "", "go")
+	out, err := agent.Run(context.Background(), "go")
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -169,11 +169,11 @@ func TestAgentRunMaxStepsExceeded(t *testing.T) {
 	loop := llm.NewFuncTool("loop", "", map[string]any{"type": "object"},
 		func(context.Context, string) (string, error) { return "", nil })
 
-	agent, err := NewAgent(newTestClient(t, srv.URL), []llm.Tool{loop}, WithMaxSteps(2))
+	agent, err := NewAgent(newTestClient(t, srv.URL), "", []llm.Tool{loop}, WithMaxSteps(2))
 	if err != nil {
 		t.Fatalf("NewAgent: %v", err)
 	}
-	if _, err := agent.Run(context.Background(), "", "go"); err == nil {
+	if _, err := agent.Run(context.Background(), "go"); err == nil {
 		t.Fatal("expected error when max steps exceeded")
 	}
 }
@@ -221,7 +221,7 @@ func TestAgentWithSummarizerAndAutoTrim(t *testing.T) {
 		return "compact", nil
 	})
 
-	agent, err := NewAgent(newTestClient(t, srv.URL), []llm.Tool{echo},
+	agent, err := NewAgent(newTestClient(t, srv.URL), "", []llm.Tool{echo},
 		WithAutoTrim(llm.AutoShrinkConfig{
 			ContextWindow:     1000,
 			Threshold:         0.5,
@@ -233,7 +233,7 @@ func TestAgentWithSummarizerAndAutoTrim(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewAgent: %v", err)
 	}
-	if _, err := agent.Run(context.Background(), "", "go"); err != nil {
+	if _, err := agent.Run(context.Background(), "go"); err != nil {
 		t.Fatalf("Run: %v", err)
 	}
 	if called != 1 {
@@ -265,11 +265,11 @@ func TestAgentWithSession(t *testing.T) {
 		t.Fatalf("NewJSONStore: %v", err)
 	}
 
-	agent, err := NewAgent(newTestClient(t, srv.URL), nil, WithSession(store, "job-1"))
+	agent, err := NewAgent(newTestClient(t, srv.URL), "sys", nil, WithSession(store, "job-1"))
 	if err != nil {
 		t.Fatalf("NewAgent: %v", err)
 	}
-	if _, err := agent.Run(context.Background(), "sys", "first"); err != nil {
+	if _, err := agent.Run(context.Background(), "first"); err != nil {
 		t.Fatalf("Run 1: %v", err)
 	}
 
@@ -283,7 +283,7 @@ func TestAgentWithSession(t *testing.T) {
 
 	// Second run with the same session should ship the prior turns in
 	// the request body alongside the new user input.
-	if _, err := agent.Run(context.Background(), "sys", "second"); err != nil {
+	if _, err := agent.Run(context.Background(), "second"); err != nil {
 		t.Fatalf("Run 2: %v", err)
 	}
 	if len(requests) != 2 {
