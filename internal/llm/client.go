@@ -66,6 +66,152 @@ func (c *Client) Respond(ctx context.Context, input string) (string, error) {
 	return resp.OutputText(), nil
 }
 
+// Response holds the parsed result of a [Client.Send] call.
+type Response struct {
+	// Text is the concatenated output_text produced by the model. Empty
+	// when the model only emitted tool calls.
+	Text string
+	// ToolCalls lists the function_call items the model emitted in this
+	// turn, preserving their original order.
+	ToolCalls []ToolCall
+	// Usage is the token usage reported by the provider for this request.
+	Usage TokenUsage
+	// Raw is the underlying SDK response, exposed for provider-specific
+	// fields that do not have a typed accessor on [Response].
+	Raw *responses.Response
+}
+
+// NewConversation is a convenience wrapper that constructs a
+// [Conversation] anchored on instructions and tools. It is equivalent to
+// [NewConversation] and is provided on [Client] so callers can discover
+// the paired API.
+func (c *Client) NewConversation(instructions string, tools []ToolSpec) *Conversation {
+	return NewConversation(instructions, tools)
+}
+
+// Send issues one turn against the Responses API using conv's current
+// state. The request's prefix (instructions, tool schema, and already
+// recorded turns) is serialized in a stable order so the provider's prompt
+// cache can hit across iterations. On success the model's reply is
+// appended to conv - assistant text via [Conversation.AppendAssistantText]
+// and each function call via [Conversation.AppendToolCall] - token usage
+// is recorded, and the parsed [Response] is returned. Tool execution is
+// the caller's responsibility; supply the outputs via
+// [Conversation.AppendToolOutput] before the next Send.
+func (c *Client) Send(ctx context.Context, conv *Conversation) (*Response, error) {
+	if conv == nil {
+		return nil, fmt.Errorf("llm: Send requires a non-nil conversation")
+	}
+	input := buildResponseInput(conv.Turns())
+	params := responses.ResponseNewParams{
+		Model: c.model,
+		Input: responses.ResponseNewParamsInputUnion{OfInputItemList: input},
+		Tools: buildToolParams(conv.Tools()),
+	}
+	if instr := conv.Instructions(); instr != "" {
+		params.Instructions = openai.String(instr)
+	}
+
+	resp, err := c.raw.Responses.New(ctx, params)
+	if err != nil {
+		return nil, err
+	}
+
+	out := &Response{
+		Usage: usageFromResponse(resp.Usage),
+		Raw:   resp,
+	}
+	for _, item := range resp.Output {
+		switch item.Type {
+		case "message":
+			msg := item.AsMessage()
+			var text string
+			for _, part := range msg.Content {
+				if part.Type == "output_text" {
+					text += part.Text
+				}
+			}
+			if text != "" {
+				out.Text += text
+				conv.AppendAssistantText(text)
+			}
+		case "function_call":
+			call := item.AsFunctionCall()
+			tc := ToolCall{
+				CallID:    call.CallID,
+				Name:      call.Name,
+				Arguments: call.Arguments,
+			}
+			out.ToolCalls = append(out.ToolCalls, tc)
+			conv.AppendToolCall(tc)
+		}
+	}
+	conv.recordUsage(out.Usage)
+	return out, nil
+}
+
+// buildResponseInput translates recorded [Turn]s into the Responses API
+// input item list. Ordering is preserved verbatim so prompt-cache-sensitive
+// prefixes stay stable across consecutive Send calls.
+func buildResponseInput(turns []Turn) responses.ResponseInputParam {
+	input := make(responses.ResponseInputParam, 0, len(turns))
+	for _, t := range turns {
+		switch t.Role {
+		case RoleUser:
+			input = append(input, responses.ResponseInputItemParamOfMessage(
+				t.Text, responses.EasyInputMessageRoleUser))
+		case RoleAssistant:
+			input = append(input, responses.ResponseInputItemParamOfMessage(
+				t.Text, responses.EasyInputMessageRoleAssistant))
+		case RoleToolCall:
+			if t.Tool == nil {
+				continue
+			}
+			callParam := responses.ResponseFunctionToolCallParam{
+				CallID:    t.Tool.CallID,
+				Name:      t.Tool.Name,
+				Arguments: t.Tool.Arguments,
+			}
+			input = append(input, responses.ResponseInputItemUnionParam{OfFunctionCall: &callParam})
+		case RoleToolOutput:
+			if t.Tool == nil {
+				continue
+			}
+			input = append(input, responses.ResponseInputItemParamOfFunctionCallOutput(
+				t.Tool.CallID, t.Tool.Output))
+		}
+	}
+	return input
+}
+
+// buildToolParams translates [ToolSpec]s into the Responses API tool union.
+func buildToolParams(tools []ToolSpec) []responses.ToolUnionParam {
+	out := make([]responses.ToolUnionParam, 0, len(tools))
+	for _, t := range tools {
+		ft := &responses.FunctionToolParam{
+			Name:       t.Name,
+			Parameters: t.Parameters,
+		}
+		if t.Description != "" {
+			ft.Description = openai.String(t.Description)
+		}
+		out = append(out, responses.ToolUnionParam{OfFunction: ft})
+	}
+	return out
+}
+
+// usageFromResponse copies the SDK's ResponseUsage into the local
+// [TokenUsage] type.
+func usageFromResponse(u responses.ResponseUsage) TokenUsage {
+	return TokenUsage{
+		Input:     int(u.InputTokens),
+		Cached:    int(u.InputTokensDetails.CachedTokens),
+		Output:    int(u.OutputTokens),
+		Reasoning: int(u.OutputTokensDetails.ReasoningTokens),
+		Total:     int(u.TotalTokens),
+	}
+}
+
 // String returns a human-readable description of the client.
 func (c *Client) String() string {
 	return fmt.Sprintf("llm.Client{provider=%s, model=%s}", c.provider, c.model)
