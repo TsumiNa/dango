@@ -7,13 +7,51 @@ import (
 	"github.com/openai/openai-go/v3/responses"
 )
 
+// StreamCategory is a bitmask selecting which kinds of incremental
+// fragments [Client.Stream] forwards to its consumer. Categories
+// compose with bitwise OR.
+type StreamCategory uint
+
+const (
+	// StreamText forwards assistant output_text deltas.
+	StreamText StreamCategory = 1 << iota
+	// StreamReasoning forwards reasoning_text and
+	// reasoning_summary_text deltas so UIs can show the model
+	// thinking before the answer starts streaming.
+	StreamReasoning
+)
+
+// DefaultStreamCategories is the category set used when
+// [ClientConfig.StreamCategories] is left at its zero value.
+const DefaultStreamCategories = StreamText | StreamReasoning
+
+// Has reports whether s contains all of the bits in flag.
+func (s StreamCategory) Has(flag StreamCategory) bool {
+	return s&flag == flag
+}
+
+// resolveStreamCategories returns the effective category set for a
+// freshly constructed [Client]. The zero value is treated as
+// [DefaultStreamCategories]; any non-zero value is honored verbatim
+// (including unrelated future bits, which are simply ignored by the
+// stream worker).
+func resolveStreamCategories(s StreamCategory) StreamCategory {
+	if s == 0 {
+		return DefaultStreamCategories
+	}
+	return s
+}
+
 // StreamEvent is a single notification emitted by [Client.Stream].
 //
 // Two kinds of progress deltas are surfaced to consumers: assistant
 // output_text fragments (via [StreamEvent.TextDelta]) and reasoning
 // fragments (via [StreamEvent.ReasoningDelta]). Reasoning deltas are
 // exposed so UIs can show the model "thinking" during the long gap
-// that often precedes the first visible answer token.
+// that often precedes the first visible answer token. The set of
+// categories actually forwarded is configured by
+// [ClientConfig.StreamCategories]; categories that are not selected
+// are silently dropped from the channel.
 //
 // Exactly one of TextDelta / ReasoningDelta / Err is set on any
 // given event. All other model output (message aggregation, tool
@@ -73,6 +111,10 @@ func (c *Client) Stream(ctx context.Context, conv *Conversation) (<-chan StreamE
 	params := c.buildRequestParams(conv)
 	stream := c.raw.Responses.NewStreaming(ctx, params)
 	out := make(chan StreamEvent, streamBuffer)
+	// Resolve at call time too so a Client constructed with a
+	// zero-value streamCategories field (for example via direct
+	// struct literal in tests) still gets the default set.
+	categories := resolveStreamCategories(c.streamCategories)
 
 	go func() {
 		defer close(out)
@@ -82,7 +124,7 @@ func (c *Client) Stream(ctx context.Context, conv *Conversation) (<-chan StreamE
 			evt := stream.Current()
 			switch evt.Type {
 			case "response.output_text.delta":
-				if evt.Delta == "" {
+				if evt.Delta == "" || !categories.Has(StreamText) {
 					continue
 				}
 				select {
@@ -98,7 +140,7 @@ func (c *Client) Stream(ctx context.Context, conv *Conversation) (<-chan StreamE
 				// conv in full (with Raw round-trip when
 				// ReplayReasoning is enabled) via
 				// applyResponseOutput on response.completed.
-				if evt.Delta == "" {
+				if evt.Delta == "" || !categories.Has(StreamReasoning) {
 					continue
 				}
 				select {

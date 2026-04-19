@@ -204,6 +204,52 @@ func TestClient_Stream_ForwardsReasoningDeltas(t *testing.T) {
 	}
 }
 
+// TestClient_Stream_CategoryFilter verifies that
+// ClientConfig.StreamCategories restricts which kinds of fragments
+// reach the channel without disturbing the final committed
+// conversation state. Only the explicitly selected category should
+// arrive; the other category's fragments should be silently dropped.
+func TestClient_Stream_CategoryFilter(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		sseResponse(w,
+			reasoningDeltaEvent("response.reasoning_text.delta", "thinking"),
+			textDeltaEvent("answer"),
+			completedEvent("answer", "", ""),
+		)
+	}))
+	t.Cleanup(srv.Close)
+
+	c := testClient(srv.URL)
+	c.streamCategories = StreamText // explicit override; reasoning suppressed
+	conv := c.NewConversation("sys", nil)
+	conv.AppendUser("hi")
+
+	ch, err := c.Stream(t.Context(), conv)
+	if err != nil {
+		t.Fatalf("Stream: %v", err)
+	}
+	events := collect(t, ch, 5*time.Second)
+
+	if len(events) != 1 {
+		t.Fatalf("got %d events, want 1: %+v", len(events), events)
+	}
+	if events[0].TextDelta != "answer" || events[0].ReasoningDelta != "" {
+		t.Errorf("event = %+v, want TextDelta=answer only", events[0])
+	}
+
+	// Final conversation state must still include the assistant text
+	// regardless of which categories were streamed.
+	var gotText string
+	for _, tr := range conv.Turns() {
+		if tr.Role == RoleAssistant {
+			gotText += tr.Text
+		}
+	}
+	if gotText != "answer" {
+		t.Errorf("assistant turn text = %q, want %q", gotText, "answer")
+	}
+}
+
 // TestClient_Stream_CommitsToolCalls verifies that function_call
 // items emitted by the model are recorded on conv even though they
 // are not forwarded as StreamEvents, so the next Send can feed tool

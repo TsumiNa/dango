@@ -62,11 +62,12 @@ func (p Provider) baseURL() string {
 // [NewClientFromEnv]. Client is safe for concurrent use by multiple
 // goroutines.
 type Client struct {
-	provider        Provider
-	model           string
-	raw             openai.Client
-	reasoningEffort ReasoningEffort
-	replayReasoning bool
+	provider         Provider
+	model            string
+	raw              openai.Client
+	reasoningEffort  ReasoningEffort
+	replayReasoning  bool
+	streamCategories StreamCategory
 }
 
 // Provider returns the provider this client is bound to.
@@ -87,6 +88,11 @@ func (c *Client) ReasoningEffort() ReasoningEffort { return c.reasoningEffort }
 // reasoning items to preserve tool-calling continuity on reasoning
 // models. See [ClientConfig.ReplayReasoning] for details.
 func (c *Client) ReplayReasoning() bool { return c.replayReasoning }
+
+// StreamCategories reports which kinds of incremental fragments
+// [Client.Stream] forwards to its consumer. See
+// [ClientConfig.StreamCategories] for details.
+func (c *Client) StreamCategories() StreamCategory { return c.streamCategories }
 
 // Respond issues a single-turn request against the Responses API using the
 // configured model and returns the concatenated output text.
@@ -387,6 +393,14 @@ type ClientConfig struct {
 	// and debug-only setups keep the Phase 1 observability-only
 	// behavior.
 	ReplayReasoning bool
+	// StreamCategories selects which kinds of incremental fragments
+	// [Client.Stream] forwards to its consumer. The zero value means
+	// "use the default set" ([DefaultStreamCategories], currently
+	// text + reasoning). To stream only one kind, set this to that
+	// flag explicitly (for example [StreamText] alone). Filtering
+	// affects only what crosses the channel; the final committed
+	// conversation state is unaffected.
+	StreamCategories StreamCategory
 }
 
 // NewClient wraps an already-constructed openai SDK client using cfg.
@@ -406,11 +420,12 @@ func NewClient(cfg ClientConfig) (*Client, error) {
 		return nil, fmt.Errorf("llm: NewClient requires a configured Raw SDK client")
 	}
 	return &Client{
-		provider:        cfg.Provider,
-		model:           cfg.Model,
-		raw:             cfg.Raw,
-		reasoningEffort: cfg.ReasoningEffort,
-		replayReasoning: cfg.ReplayReasoning,
+		provider:         cfg.Provider,
+		model:            cfg.Model,
+		raw:              cfg.Raw,
+		reasoningEffort:  cfg.ReasoningEffort,
+		replayReasoning:  cfg.ReplayReasoning,
+		streamCategories: resolveStreamCategories(cfg.StreamCategories),
 	}, nil
 }
 
@@ -444,11 +459,12 @@ func NewClientFromEnv() (*Client, error) {
 	}
 
 	return &Client{
-		provider:        provider,
-		model:           model,
-		raw:             openai.NewClient(opts...),
-		reasoningEffort: ReasoningEffort(os.Getenv("REASONING_EFFORT")),
-		replayReasoning: parseBoolEnv(os.Getenv("REASONING_REPLAY")),
+		provider:         provider,
+		model:            model,
+		raw:              openai.NewClient(opts...),
+		reasoningEffort:  ReasoningEffort(os.Getenv("REASONING_EFFORT")),
+		replayReasoning:  parseBoolEnv(os.Getenv("REASONING_REPLAY")),
+		streamCategories: resolveStreamCategories(0),
 	}, nil
 }
 
