@@ -66,9 +66,10 @@ func TestClient_ReplayReasoning_CapturesRaw(t *testing.T) {
 	}
 
 	var reasoning *Turn
-	for i, tr := range conv.Turns() {
-		if tr.Role == RoleReasoning {
-			reasoning = &conv.Turns()[i]
+	turns := conv.Turns()
+	for i := range turns {
+		if turns[i].Role == RoleReasoning {
+			reasoning = &turns[i]
 			break
 		}
 	}
