@@ -37,6 +37,17 @@ func textDeltaEvent(delta string) string {
 	)
 }
 
+// reasoningDeltaEvent renders a reasoning delta SSE frame. The
+// eventType argument lets tests cover both response.reasoning_text.delta
+// and response.reasoning_summary_text.delta, which the Stream worker
+// aggregates under the same ReasoningDelta field.
+func reasoningDeltaEvent(eventType, delta string) string {
+	return fmt.Sprintf(
+		"event: %s\ndata: {\"type\":%q,\"delta\":%q,\"item_id\":\"r1\",\"output_index\":0,\"content_index\":0,\"sequence_number\":0}",
+		eventType, eventType, delta,
+	)
+}
+
 // completedEvent renders a response.completed SSE frame with the
 // given assistant text and optional function_call.
 func completedEvent(text, callName, callArgs string) string {
@@ -129,6 +140,67 @@ func TestClient_Stream_ForwardsTextDeltas(t *testing.T) {
 	}
 	if conv.Usage().Total == 0 {
 		t.Errorf("usage not recorded after streaming completion")
+	}
+}
+
+// TestClient_Stream_ForwardsReasoningDeltas verifies that reasoning
+// deltas are surfaced in order on ReasoningDelta and interleave with
+// TextDelta events preserving provider-side arrival order, so UIs
+// can show the model "thinking" before the answer starts streaming.
+// Both response.reasoning_text.delta and
+// response.reasoning_summary_text.delta feed the same field.
+func TestClient_Stream_ForwardsReasoningDeltas(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		sseResponse(w,
+			reasoningDeltaEvent("response.reasoning_text.delta", "think-1 "),
+			reasoningDeltaEvent("response.reasoning_summary_text.delta", "summary-1"),
+			textDeltaEvent("answer"),
+			completedEvent("answer", "", ""),
+		)
+	}))
+	t.Cleanup(srv.Close)
+
+	c := testClient(srv.URL)
+	conv := c.NewConversation("sys", nil)
+	conv.AppendUser("hi")
+
+	ch, err := c.Stream(t.Context(), conv)
+	if err != nil {
+		t.Fatalf("Stream: %v", err)
+	}
+	events := collect(t, ch, 5*time.Second)
+
+	type kind int
+	const (
+		kindReasoning kind = iota
+		kindText
+	)
+	type item struct {
+		k kind
+		s string
+	}
+	want := []item{
+		{kindReasoning, "think-1 "},
+		{kindReasoning, "summary-1"},
+		{kindText, "answer"},
+	}
+	if len(events) != len(want) {
+		t.Fatalf("got %d events, want %d: %+v", len(events), len(want), events)
+	}
+	for i, ev := range events {
+		if ev.Err != nil {
+			t.Fatalf("unexpected Err on event %d: %v", i, ev.Err)
+		}
+		switch want[i].k {
+		case kindReasoning:
+			if ev.ReasoningDelta != want[i].s || ev.TextDelta != "" {
+				t.Errorf("event %d = %+v, want ReasoningDelta=%q only", i, ev, want[i].s)
+			}
+		case kindText:
+			if ev.TextDelta != want[i].s || ev.ReasoningDelta != "" {
+				t.Errorf("event %d = %+v, want TextDelta=%q only", i, ev, want[i].s)
+			}
+		}
 	}
 }
 

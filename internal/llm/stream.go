@@ -9,17 +9,29 @@ import (
 
 // StreamEvent is a single notification emitted by [Client.Stream].
 //
-// Only assistant output_text deltas are surfaced to consumers. All
-// other model output (assistant message text, tool calls, reasoning
-// items, token usage) is accumulated internally and committed to the
-// bound [Conversation] when the stream terminates cleanly, matching
-// the semantics of [Client.Send]. When the stream fails mid-flight,
-// a single terminal event with Err set is emitted before the channel
-// is closed and conv is left unchanged.
+// Two kinds of progress deltas are surfaced to consumers: assistant
+// output_text fragments (via [StreamEvent.TextDelta]) and reasoning
+// fragments (via [StreamEvent.ReasoningDelta]). Reasoning deltas are
+// exposed so UIs can show the model "thinking" during the long gap
+// that often precedes the first visible answer token.
+//
+// Exactly one of TextDelta / ReasoningDelta / Err is set on any
+// given event. All other model output (message aggregation, tool
+// calls, stored reasoning items, token usage) is accumulated
+// internally and committed to the bound [Conversation] when the
+// stream terminates cleanly, matching the semantics of [Client.Send].
+// When the stream fails mid-flight, a single terminal event with
+// Err set is emitted before the channel is closed and conv is left
+// unchanged.
 type StreamEvent struct {
-	// TextDelta is a fragment of assistant output_text. It is empty
-	// on a terminal error event.
+	// TextDelta is a fragment of assistant output_text.
 	TextDelta string
+	// ReasoningDelta is a fragment of the model's reasoning stream.
+	// It aggregates both reasoning_text.delta and
+	// reasoning_summary_text.delta provider events; consumers that
+	// only care about one or the other should not rely on the
+	// distinction being preserved here.
+	ReasoningDelta string
 	// Err, when non-nil, marks the final event on the channel and
 	// reports the reason the stream did not complete successfully.
 	// No further events will be sent after an Err event; the channel
@@ -75,6 +87,22 @@ func (c *Client) Stream(ctx context.Context, conv *Conversation) (<-chan StreamE
 				}
 				select {
 				case out <- StreamEvent{TextDelta: evt.Delta}:
+				case <-ctx.Done():
+					return
+				}
+			case "response.reasoning_text.delta",
+				"response.reasoning_summary_text.delta":
+				// Forward reasoning progress so UIs can show the
+				// model thinking during the long first-token wait.
+				// The final reasoning item is still committed to
+				// conv in full (with Raw round-trip when
+				// ReplayReasoning is enabled) via
+				// applyResponseOutput on response.completed.
+				if evt.Delta == "" {
+					continue
+				}
+				select {
+				case out <- StreamEvent{ReasoningDelta: evt.Delta}:
 				case <-ctx.Done():
 					return
 				}
