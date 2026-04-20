@@ -81,6 +81,9 @@ func New(opts ...Option) *Runner {
 	for _, opt := range opts {
 		opt(r)
 	}
+	if r.plan != nil && r.plan.RunnerID == "" {
+		r.plan.RunnerID = r.id
+	}
 	r.snapshot = buildInitialRunnerSnapshot(r.initialNodes)
 	return r
 }
@@ -116,9 +119,20 @@ func (r *Runner) Done() <-chan struct{} { return r.done }
 
 // Wait blocks until the runner settles or ctx is canceled, returning the
 // final engine error (if any) or ctx.Err on timeout.
+//
+// If the runner is already settled when Wait is called (or settles while
+// ctx is simultaneously canceled), Wait returns the engine error rather
+// than ctx.Err.
 func (r *Runner) Wait(ctx context.Context) error {
 	if ctx == nil {
 		ctx = context.Background()
+	}
+	select {
+	case <-r.done:
+		r.engineErrMu.RLock()
+		defer r.engineErrMu.RUnlock()
+		return r.engineErr
+	default:
 	}
 	select {
 	case <-r.done:
@@ -235,6 +249,13 @@ func (r *Runner) GetSnapshot(ctx context.Context) (RunnerSnapshot, error) {
 func (r *Runner) Start(ctx context.Context) error {
 	if ctx == nil {
 		ctx = context.Background()
+	}
+
+	r.stateMu.RLock()
+	status := r.state.Status
+	r.stateMu.RUnlock()
+	if status != RunnerStatusPending {
+		return ErrRunnerAlreadyStarted
 	}
 
 	started := false

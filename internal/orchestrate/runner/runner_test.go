@@ -217,3 +217,66 @@ func TestRunner_SubscriberAndExternalAppend(t *testing.T) {
 		}
 	}
 }
+
+func TestRunner_WithPlanSeedsInitialNodes(t *testing.T) {
+	nodeA := &Node{
+		Id: "A",
+		Executor: &testExecutor{
+			run: func(ctx context.Context, parentOutputs map[string]any) (any, []*Node, error) {
+				return "from-A", nil, nil
+			},
+		},
+	}
+	plan := &CoarsePlan{
+		Request: "seed test",
+		Nodes:   []CoarsePlanNode{{ID: "A", SkillName: "noop", TaskDescription: "only"}},
+	}
+	r := New(
+		WithLogger(testLogger),
+		WithPlan(plan, map[string]*Node{"A": nodeA}),
+	)
+
+	if got := r.Plan(); got == nil || got.RunnerID != r.ID() {
+		t.Fatalf("Plan().RunnerID = %v, want %q", got, r.ID())
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	sub := r.Subscribe(16)
+	if err := r.Start(ctx); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	waitForRunnerEvent(t, sub, EventNodeCompleted, "A")
+
+	view := r.View()
+	if view.Plan == nil || view.Plan.Request != "seed test" {
+		t.Fatalf("view.Plan = %+v, want request=seed test", view.Plan)
+	}
+	if view.Plan.RunnerID != r.ID() {
+		t.Fatalf("view.Plan.RunnerID = %q, want %q", view.Plan.RunnerID, r.ID())
+	}
+	if view.Phase != PhaseExecuting && view.Phase != PhaseSettled {
+		t.Fatalf("view.Phase = %q, want executing or settled", view.Phase)
+	}
+}
+
+func TestRunner_DoneClosesOnAbort(t *testing.T) {
+	r := New(WithLogger(testLogger))
+	r.Abort(context.Canceled)
+
+	select {
+	case <-r.Done():
+	case <-time.After(time.Second):
+		t.Fatal("Done channel not closed after Abort")
+	}
+	if got := r.State().Status; got != RunnerStatusCanceled {
+		t.Fatalf("state = %q, want canceled", got)
+	}
+	if got := r.Phase(); got != PhaseSettled {
+		t.Fatalf("phase = %q, want settled", got)
+	}
+	if err := r.Start(context.Background()); err != ErrRunnerAlreadyStarted {
+		t.Fatalf("Start after Abort err = %v, want ErrRunnerAlreadyStarted", err)
+	}
+}

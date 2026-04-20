@@ -318,19 +318,20 @@ func (o *Orchestrator) StartRunner(ctx context.Context, id string) error {
 // engine first drains (goes idle) or the runner fully settles, whichever
 // comes first.
 func (o *Orchestrator) watchRunnerDone(runner *runnerpkg.Runner) {
-	events := runner.Subscribe(16)
+	updates, unsubscribe := runner.SubscribeUpdates(16)
+	defer unsubscribe()
 	done := runner.Done()
 	for {
 		select {
 		case <-done:
 			o.releaseRunnerExecutionSlot(runner.ID())
 			return
-		case ev, ok := <-events:
+		case update, ok := <-updates:
 			if !ok {
 				o.releaseRunnerExecutionSlot(runner.ID())
 				return
 			}
-			if ev.Type == runnerpkg.EventEngineIdle {
+			if update.Event != nil && update.Event.Type == runnerpkg.EventEngineIdle {
 				o.releaseRunnerExecutionSlot(runner.ID())
 				return
 			}

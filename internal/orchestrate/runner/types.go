@@ -106,8 +106,11 @@ const (
 	// PhaseExecuting is entered while the runner is driving the DAG
 	// through its event loop.
 	PhaseExecuting RunnerPhase = "executing"
-	// PhaseSettled is the terminal phase, reached when the engine reports
-	// idle with no further work expected or a terminal failure/cancellation.
+	// PhaseSettled is the terminal phase. The current engine reaches
+	// PhaseSettled only when its context is canceled or a node fails;
+	// reaching idle does not by itself settle the runner because the
+	// engine continues to accept dynamically added nodes. Future phases
+	// (polish/review) will introduce a cooperative settle path.
 	PhaseSettled RunnerPhase = "settled"
 )
 
