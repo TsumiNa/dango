@@ -5,6 +5,7 @@ import (
 	"errors"
 	"log/slog"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/lithammer/shortuuid/v4"
@@ -36,11 +37,17 @@ type Runner struct {
 	// Lifecycle control.
 	startOnce    sync.Once
 	startErr     error
+	settleOnce   sync.Once
 	done         chan struct{}
 	doneOnce     sync.Once
 	engineErr    error
 	engineErrMu  sync.RWMutex
 	cancelEngine context.CancelFunc
+
+	// completedCleanly is flipped to true by [Runner.Complete] to signal
+	// that a subsequent engine cancel should be treated as graceful
+	// completion (success path, triggers [PhaseReport]).
+	completedCleanly atomic.Bool
 
 	// Engine event-loop channels.
 	addNodeCh chan []*Node
@@ -57,6 +64,16 @@ type Runner struct {
 	stoppedEventSeen  bool
 	nextSubscriberID  uint64
 	updateSubscribers map[uint64]chan RunnerUpdate
+
+	// Phased-lifecycle bookkeeping: results gathered by the polish and
+	// report stages, and the rejection reason captured when a polished
+	// plan is rejected.
+	lifecycleMu     sync.RWMutex
+	polishFragments map[string]any
+	polishErr       error
+	reportSummaries map[string]any
+	reportErr       error
+	replanReason    string
 }
 
 // New constructs a Runner configured by the provided options.
@@ -241,12 +258,32 @@ func (r *Runner) GetSnapshot(ctx context.Context) (RunnerSnapshot, error) {
 
 // Start launches the runner's execution engine in the background.
 //
-// Start returns immediately. When [WithPlan] supplied initial nodes they are
-// added before the engine event loop begins. The returned error is non-nil
-// only if the runner has already been started or if queueing initial nodes
-// fails; the engine's ultimate error is retrieved via [Runner.Wait] after
-// the runner settles.
+// Start is the bare entry point: it transitions directly from [PhaseCreated]
+// into [PhaseExecuting], skipping [PhasePolishing] and [PhaseAwaitingReview].
+// Callers wiring the full phased lifecycle should use [Runner.StartPolish]
+// followed by [Runner.AcceptPolishedPlan]. When [WithPlan] supplied initial
+// nodes they are added before the engine event loop begins. The returned
+// error is non-nil only if the runner is not in [PhaseCreated], if it has
+// already been started, or if queueing initial nodes fails; the engine's
+// ultimate error is retrieved via [Runner.Wait] after the runner settles.
 func (r *Runner) Start(ctx context.Context) error {
+	r.stateMu.RLock()
+	status := r.state.Status
+	phase := r.phase
+	r.stateMu.RUnlock()
+	if status != RunnerStatusPending {
+		return ErrRunnerAlreadyStarted
+	}
+	if phase != PhaseCreated {
+		return ErrInvalidPhase
+	}
+	return r.launchEngine(ctx)
+}
+
+// launchEngine spawns the engine goroutine once. It is called by [Start]
+// and by [AcceptPolishedPlan]; both callers are responsible for validating
+// the current [RunnerPhase] before invoking.
+func (r *Runner) launchEngine(ctx context.Context) error {
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -271,11 +308,7 @@ func (r *Runner) Start(ctx context.Context) error {
 		go r.forwardEngineEvents(events)
 		go func() {
 			err := r.runEngine(runCtx)
-			r.captureEngineErr(err)
-			r.publishUpdate(nil)
-			r.transitionPhase(PhaseSettled)
-			r.closeUpdateSubscribers()
-			r.markDone()
+			r.settle(err)
 		}()
 
 		if len(r.initialNodes) > 0 {
@@ -331,6 +364,36 @@ func (r *Runner) transitionPhase(phase RunnerPhase) {
 	r.stateMu.Lock()
 	r.phase = phase
 	r.stateMu.Unlock()
+}
+
+// settle is the single terminal path for the engine goroutine. It runs the
+// [PhaseReport] stage when the engine stopped as a result of
+// [Runner.Complete] and otherwise propagates the engine error. It is
+// idempotent via [sync.Once].
+func (r *Runner) settle(engineErr error) {
+	r.settleOnce.Do(func() {
+		clean := r.completedCleanly.Load()
+		runErr := engineErr
+		if clean && errors.Is(runErr, context.Canceled) {
+			runErr = nil
+			now := time.Now()
+			r.stateMu.Lock()
+			r.state = RunnerState{
+				Status:     RunnerStatusIdle,
+				UpdatedAt:  now,
+				FinishedAt: now,
+			}
+			r.stateMu.Unlock()
+		}
+		r.captureEngineErr(runErr)
+		r.publishUpdate(nil)
+		if runErr == nil && r.plan != nil {
+			r.runReportStage(context.Background())
+		}
+		r.transitionPhase(PhaseSettled)
+		r.closeUpdateSubscribers()
+		r.markDone()
+	})
 }
 
 func (r *Runner) markDone() {
@@ -468,6 +531,18 @@ func (r *Runner) runEngine(ctx context.Context) error {
 	}
 
 	finish := func(status RunnerStatus, runErr error) error {
+		// Snapshot the engine's completed outputs onto the runner so the
+		// settle path (Report stage) can see them even after the event
+		// loop has exited.
+		r.updateMu.Lock()
+		if r.snapshot.CompletedNodes == nil {
+			r.snapshot.CompletedNodes = make(map[string]any, len(outputs))
+		}
+		for k, v := range outputs {
+			r.snapshot.CompletedNodes[k] = v
+		}
+		r.updateMu.Unlock()
+
 		statusErr := r.recordState(store, status, runErr, true)
 		stopErr := emitEvent(RunnerEvent{Type: EventEngineStopped})
 		return errors.Join(runErr, statusErr, stopErr)

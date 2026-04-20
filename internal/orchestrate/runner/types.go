@@ -6,9 +6,20 @@ import (
 	"time"
 )
 
-// Executor is the minimal execution contract a Node needs.
+// Executor is the execution contract a Node needs across the runner's
+// phased lifecycle.
+//
+// Execute runs the node's main unit of work. Polish is invoked once during
+// [PhasePolishing] to collect a preview/plan fragment the orchestrator uses
+// for review. Report is invoked once during [PhaseReport] after a
+// successful execution and is expected to summarize the node's output.
+//
+// Implementations should treat ctx cancellation in each method as the
+// signal to abort promptly and return ctx.Err.
 type Executor interface {
 	Execute(ctx context.Context, parentOutputs map[string]any) (output any, newNodes []*Node, err error)
+	Polish(ctx context.Context) (fragment any, err error)
+	Report(ctx context.Context, output any) (summary any, err error)
 }
 
 // EventType defines the lifecycle events published by the runner.
@@ -106,11 +117,14 @@ const (
 	// PhaseExecuting is entered while the runner is driving the DAG
 	// through its event loop.
 	PhaseExecuting RunnerPhase = "executing"
-	// PhaseSettled is the terminal phase. The current engine reaches
-	// PhaseSettled only when its context is canceled or a node fails;
-	// reaching idle does not by itself settle the runner because the
-	// engine continues to accept dynamically added nodes. Future phases
-	// (polish/review) will introduce a cooperative settle path.
+	// PhaseReport is entered after the DAG settles successfully. The
+	// runner fans [Executor.Report] across every completed node to
+	// collect per-node summaries before transitioning to [PhaseSettled].
+	PhaseReport RunnerPhase = "report"
+	// PhaseSettled is the terminal phase. A runner reaches PhaseSettled
+	// when the engine's context is canceled, a node fails, or the
+	// optional report stage completes. Future phases (polish/review)
+	// will introduce a cooperative settle path.
 	PhaseSettled RunnerPhase = "settled"
 )
 
@@ -136,3 +150,11 @@ type executionResult struct {
 // ErrRunnerAlreadyStarted is returned when callers attempt to start or
 // configure persistence on a Runner that has already started.
 var ErrRunnerAlreadyStarted = errors.New("orchestrate: runner already started")
+
+// ErrInvalidPhase is returned when a phased-lifecycle transition is
+// invoked from the wrong [RunnerPhase].
+var ErrInvalidPhase = errors.New("orchestrate: runner in wrong phase for this transition")
+
+// ErrPlanRequired is returned when a phased-lifecycle transition is
+// invoked on a runner that was not constructed with [WithPlan].
+var ErrPlanRequired = errors.New("orchestrate: runner has no plan attached")
