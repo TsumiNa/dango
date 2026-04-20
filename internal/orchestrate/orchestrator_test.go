@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/tsumina/dango/internal/llm/skill"
+	runnerpkg "github.com/tsumina/dango/internal/orchestrate/runner"
 )
 
 func resetDefaultOrchestrator(t *testing.T) {
@@ -34,7 +35,7 @@ func writeTestSkill(t *testing.T, name, description string) string {
 	return dir
 }
 
-func mustPlanSingleNodeRunner(t *testing.T, o *Orchestrator) (*CoarsePlan, *ManagedRunner) {
+func mustPlanSingleNodeRunner(t *testing.T, o *Orchestrator) (*CoarsePlan, *runnerpkg.Runner) {
 	t.Helper()
 	if err := o.RegisterSkill(writeTestSkill(t, "single", "Single-step runner.")); err != nil {
 		t.Fatalf("RegisterSkill(single): %v", err)
@@ -375,15 +376,15 @@ func TestPlanFromRequest_BuildsRunnerFromPlan(t *testing.T) {
 	if managedRunner == nil {
 		t.Fatalf("expected runner %q to be stored", plan.RunnerID)
 	}
-	if managedRunner.Runner.ID() != plan.RunnerID {
-		t.Errorf("Runner.ID() = %q, want %q", managedRunner.Runner.ID(), plan.RunnerID)
+	if managedRunner.ID() != plan.RunnerID {
+		t.Errorf("Runner.ID() = %q, want %q", managedRunner.ID(), plan.RunnerID)
 	}
-	if len(managedRunner.Nodes) != 2 {
-		t.Fatalf("len(Nodes) = %d, want 2", len(managedRunner.Nodes))
+	if len(managedRunner.Nodes()) != 2 {
+		t.Fatalf("len(Nodes) = %d, want 2", len(managedRunner.Nodes()))
 	}
 
-	draft := managedRunner.Nodes["draft"]
-	run := managedRunner.Nodes["run"]
+	draft := managedRunner.Nodes()["draft"]
+	run := managedRunner.Nodes()["run"]
 	if draft == nil || run == nil {
 		t.Fatalf("expected draft and run nodes to exist, got draft=%v run=%v", draft, run)
 	}
@@ -442,7 +443,7 @@ func TestStartRunner_ForwardsStreamAndQueryState(t *testing.T) {
 
 	started := make(chan struct{})
 	release := make(chan struct{})
-	mustNodeExecutor(t, managedRunner.Nodes["only"]).RunE = func(ctx context.Context, parentOutputs map[string]any) (any, []*Node, error) {
+	mustNodeExecutor(t, managedRunner.Nodes()["only"]).RunE = func(ctx context.Context, parentOutputs map[string]any) (any, []*Node, error) {
 		close(started)
 		<-release
 		return "done", nil, nil
@@ -607,7 +608,7 @@ func TestStartRequest_QueuesByPriorityWhenLimitReached(t *testing.T) {
 	firstPlan, firstRunner := mustPlanSingleNodeRunner(t, o)
 	firstStarted := make(chan struct{})
 	firstRelease := make(chan struct{})
-	mustNodeExecutor(t, firstRunner.Nodes["only"]).RunE = func(ctx context.Context, parentOutputs map[string]any) (any, []*Node, error) {
+	mustNodeExecutor(t, firstRunner.Nodes()["only"]).RunE = func(ctx context.Context, parentOutputs map[string]any) (any, []*Node, error) {
 		close(firstStarted)
 		<-firstRelease
 		return "first", nil, nil
@@ -649,13 +650,13 @@ func TestStartRequest_QueuesByPriorityWhenLimitReached(t *testing.T) {
 	}
 
 	lowRelease := make(chan struct{})
-	mustNodeExecutor(t, lowRunner.Nodes["only"]).RunE = func(ctx context.Context, parentOutputs map[string]any) (any, []*Node, error) {
+	mustNodeExecutor(t, lowRunner.Nodes()["only"]).RunE = func(ctx context.Context, parentOutputs map[string]any) (any, []*Node, error) {
 		<-lowRelease
 		return "low", nil, nil
 	}
 	highStarted := make(chan struct{})
 	highRelease := make(chan struct{})
-	mustNodeExecutor(t, highRunner.Nodes["only"]).RunE = func(ctx context.Context, parentOutputs map[string]any) (any, []*Node, error) {
+	mustNodeExecutor(t, highRunner.Nodes()["only"]).RunE = func(ctx context.Context, parentOutputs map[string]any) (any, []*Node, error) {
 		close(highStarted)
 		<-highRelease
 		return "high", nil, nil
@@ -722,7 +723,7 @@ func TestStartRequest_CanceledWhileQueuedTransitionsRunner(t *testing.T) {
 	firstPlan, firstRunner := mustPlanSingleNodeRunner(t, o)
 	firstStarted := make(chan struct{})
 	firstRelease := make(chan struct{})
-	mustNodeExecutor(t, firstRunner.Nodes["only"]).RunE = func(ctx context.Context, parentOutputs map[string]any) (any, []*Node, error) {
+	mustNodeExecutor(t, firstRunner.Nodes()["only"]).RunE = func(ctx context.Context, parentOutputs map[string]any) (any, []*Node, error) {
 		close(firstStarted)
 		<-firstRelease
 		return "first", nil, nil
@@ -747,7 +748,7 @@ func TestStartRequest_CanceledWhileQueuedTransitionsRunner(t *testing.T) {
 		t.Fatalf("Runner(queued): %v", err)
 	}
 	queuedStarted := make(chan struct{})
-	mustNodeExecutor(t, queuedRunner.Nodes["only"]).RunE = func(ctx context.Context, parentOutputs map[string]any) (any, []*Node, error) {
+	mustNodeExecutor(t, queuedRunner.Nodes()["only"]).RunE = func(ctx context.Context, parentOutputs map[string]any) (any, []*Node, error) {
 		close(queuedStarted)
 		return "queued", nil, nil
 	}
@@ -795,11 +796,12 @@ func TestLoadRunnerRecords_LoadsPersistedLog(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
-	sub := managedRunner.Runner.Subscribe(16)
+	sub := managedRunner.Subscribe(16)
 	go func() {
-		done <- managedRunner.Runner.Start(ctx)
+		if err := managedRunner.Start(ctx); err != nil { done <- err; return }
+		done <- managedRunner.Wait(context.Background())
 	}()
-	if err := managedRunner.Runner.AddNodes(ctx, managedRunner.Nodes["only"]); err != nil {
+	if err := managedRunner.AddNodes(ctx, managedRunner.Nodes()["only"]); err != nil {
 		t.Fatalf("AddNodes: %v", err)
 	}
 	waitForRunnerEvent(t, sub, EventNodeCompleted, "only")
@@ -830,7 +832,7 @@ func TestRemoveRunner_RejectsActiveRunner(t *testing.T) {
 
 	started := make(chan struct{})
 	release := make(chan struct{})
-	mustNodeExecutor(t, managedRunner.Nodes["only"]).RunE = func(ctx context.Context, parentOutputs map[string]any) (any, []*Node, error) {
+	mustNodeExecutor(t, managedRunner.Nodes()["only"]).RunE = func(ctx context.Context, parentOutputs map[string]any) (any, []*Node, error) {
 		close(started)
 		<-release
 		return nil, nil, nil
@@ -839,9 +841,10 @@ func TestRemoveRunner_RejectsActiveRunner(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
 	go func() {
-		done <- managedRunner.Runner.Start(ctx)
+		if err := managedRunner.Start(ctx); err != nil { done <- err; return }
+		done <- managedRunner.Wait(context.Background())
 	}()
-	if err := managedRunner.Runner.AddNodes(ctx, managedRunner.Nodes["only"]); err != nil {
+	if err := managedRunner.AddNodes(ctx, managedRunner.Nodes()["only"]); err != nil {
 		t.Fatalf("AddNodes: %v", err)
 	}
 	<-started
@@ -863,7 +866,7 @@ func TestRemoveRunner_DeletesTerminalRunnerAndLog(t *testing.T) {
 		t.Fatalf("SetRunnerStore: %v", err)
 	}
 	plan, managedRunner := mustPlanSingleNodeRunner(t, o)
-	mustNodeExecutor(t, managedRunner.Nodes["only"]).RunE = func(ctx context.Context, parentOutputs map[string]any) (any, []*Node, error) {
+	mustNodeExecutor(t, managedRunner.Nodes()["only"]).RunE = func(ctx context.Context, parentOutputs map[string]any) (any, []*Node, error) {
 		return nil, nil, errors.New("boom")
 	}
 
@@ -871,9 +874,10 @@ func TestRemoveRunner_DeletesTerminalRunnerAndLog(t *testing.T) {
 	defer cancel()
 	done := make(chan error, 1)
 	go func() {
-		done <- managedRunner.Runner.Start(ctx)
+		if err := managedRunner.Start(ctx); err != nil { done <- err; return }
+		done <- managedRunner.Wait(context.Background())
 	}()
-	if err := managedRunner.Runner.AddNodes(ctx, managedRunner.Nodes["only"]); err != nil {
+	if err := managedRunner.AddNodes(ctx, managedRunner.Nodes()["only"]); err != nil {
 		t.Fatalf("AddNodes: %v", err)
 	}
 	if err := <-done; err == nil {

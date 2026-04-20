@@ -15,6 +15,9 @@ type Node = runnerpkg.Node
 type EventType = runnerpkg.EventType
 type RunnerEvent = runnerpkg.RunnerEvent
 type RunnerRecord = runnerpkg.RunnerRecord
+type RunnerView = runnerpkg.RunnerView
+type RunnerUpdate = runnerpkg.RunnerUpdate
+type RunnerPhase = runnerpkg.RunnerPhase
 
 const (
 	EventNodeAdded       = runnerpkg.EventNodeAdded
