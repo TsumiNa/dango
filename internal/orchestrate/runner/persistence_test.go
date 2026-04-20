@@ -5,47 +5,17 @@ import (
 	"errors"
 	"strings"
 	"testing"
-	"time"
 )
-
-func TestRunnerSetStoreRejectsAfterStart(t *testing.T) {
-	r := NewRunner(testLogger)
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	done := make(chan error, 1)
-	go func() {
-		done <- r.Start(ctx)
-	}()
-
-	deadline := time.Now().Add(2 * time.Second)
-	for time.Now().Before(deadline) {
-		if r.State().Status == RunnerStatusRunning {
-			break
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
-
-	if err := r.SetStore(mustNewRunnerStore(t, t.TempDir())); !errors.Is(err, ErrRunnerAlreadyStarted) {
-		t.Fatalf("SetStore err = %v, want ErrRunnerAlreadyStarted", err)
-	}
-
-	cancel()
-	assertCanceledStart(t, <-done)
-}
 
 func TestRunnerPersistsEventsAndCancellation(t *testing.T) {
 	store := mustNewRunnerStore(t, t.TempDir())
-	r := NewRunner(testLogger)
-	if err := r.SetStore(store); err != nil {
-		t.Fatalf("SetStore: %v", err)
-	}
+	r := New(WithLogger(testLogger), WithStore(store))
 
 	ctx, cancel := context.WithCancel(context.Background())
-	done := make(chan error, 1)
 	sub := r.Subscribe(16)
-	go func() {
-		done <- r.Start(ctx)
-	}()
+	if err := r.Start(ctx); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
 
 	node := &Node{
 		Id: "persisted",
@@ -61,7 +31,7 @@ func TestRunnerPersistsEventsAndCancellation(t *testing.T) {
 
 	waitForRunnerEvent(t, sub, EventNodeCompleted, "persisted")
 	cancel()
-	assertCanceledStart(t, <-done)
+	assertCanceledStart(t, r.Wait(context.Background()))
 
 	records, err := store.Load(context.Background(), r.ID())
 	if err != nil {
@@ -96,17 +66,13 @@ func TestRunnerPersistsEventsAndCancellation(t *testing.T) {
 
 func TestRunnerPersistsFailure(t *testing.T) {
 	store := mustNewRunnerStore(t, t.TempDir())
-	r := NewRunner(testLogger)
-	if err := r.SetStore(store); err != nil {
-		t.Fatalf("SetStore: %v", err)
-	}
+	r := New(WithLogger(testLogger), WithStore(store))
 
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	done := make(chan error, 1)
-	go func() {
-		done <- r.Start(ctx)
-	}()
+	if err := r.Start(ctx); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
 
 	node := &Node{
 		Id: "boom",
@@ -120,7 +86,7 @@ func TestRunnerPersistsFailure(t *testing.T) {
 		t.Fatalf("AddNodes: %v", err)
 	}
 
-	startErr := <-done
+	startErr := r.Wait(context.Background())
 	assertFailureContains(t, startErr, "simulated failure")
 
 	records, loadErr := store.Load(context.Background(), r.ID())

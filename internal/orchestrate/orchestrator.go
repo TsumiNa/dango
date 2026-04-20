@@ -30,7 +30,7 @@ type Orchestrator struct {
 	runnerStore       runnerpkg.RunnerStore
 	maxRunningRunners int
 	skills            map[string]*skill.Skill
-	runners           map[string]*ManagedRunner
+	runners           map[string]*runnerpkg.Runner
 	runningRunnerIDs  map[string]struct{}
 	queuedRunnerByID  map[string]*queuedRunner
 	queuedRunners     runnerStartQueue
@@ -56,7 +56,7 @@ func newOrchestrator(logger *slog.Logger) *Orchestrator {
 	return &Orchestrator{
 		logger:           logger,
 		skills:           make(map[string]*skill.Skill),
-		runners:          make(map[string]*ManagedRunner),
+		runners:          make(map[string]*runnerpkg.Runner),
 		runningRunnerIDs: make(map[string]struct{}),
 		queuedRunnerByID: make(map[string]*queuedRunner),
 		planFn:           rejectUnconfiguredPlan,
@@ -185,18 +185,18 @@ func (o *Orchestrator) Skills() map[string]*skill.Skill {
 
 // Runners returns a snapshot of the runner records the Orchestrator has
 // assembled so far.
-func (o *Orchestrator) Runners() map[string]*ManagedRunner {
+func (o *Orchestrator) Runners() map[string]*runnerpkg.Runner {
 	o.mu.RLock()
 	defer o.mu.RUnlock()
-	copyMap := make(map[string]*ManagedRunner, len(o.runners))
+	copyMap := make(map[string]*runnerpkg.Runner, len(o.runners))
 	for id, runner := range o.runners {
 		copyMap[id] = runner
 	}
 	return copyMap
 }
 
-// Runner returns the managed runner identified by id.
-func (o *Orchestrator) Runner(id string) (*ManagedRunner, error) {
+// Runner returns the runner identified by id.
+func (o *Orchestrator) Runner(id string) (*runnerpkg.Runner, error) {
 	if id == "" {
 		return nil, fmt.Errorf("orchestrate: runner id must not be empty")
 	}
@@ -210,29 +210,28 @@ func (o *Orchestrator) Runner(id string) (*ManagedRunner, error) {
 	return runner, nil
 }
 
-// QueryRunner returns the outer-facing view of the managed runner identified
-// by id.
-func (o *Orchestrator) QueryRunner(id string) (*RunnerView, error) {
+// QueryRunner returns the outer-facing view of the runner identified by id.
+func (o *Orchestrator) QueryRunner(id string) (*runnerpkg.RunnerView, error) {
 	runner, err := o.Runner(id)
 	if err != nil {
 		return nil, err
 	}
-	return runner.view(), nil
+	return runner.View(), nil
 }
 
 // SubscribeRunner returns a stream of runner updates plus an unsubscribe
 // function that stops further delivery.
-func (o *Orchestrator) SubscribeRunner(id string, bufferSize int) (<-chan RunnerUpdate, func(), error) {
+func (o *Orchestrator) SubscribeRunner(id string, bufferSize int) (<-chan runnerpkg.RunnerUpdate, func(), error) {
 	runner, err := o.Runner(id)
 	if err != nil {
 		return nil, nil, err
 	}
-	ch, unsubscribe := runner.subscribe(bufferSize)
+	ch, unsubscribe := runner.SubscribeUpdates(bufferSize)
 	return ch, unsubscribe, nil
 }
 
 // LoadRunnerRecords loads the persisted append-only record stream for the
-// managed runner identified by id.
+// runner identified by id.
 func (o *Orchestrator) LoadRunnerRecords(ctx context.Context, id string) ([]runnerpkg.RunnerRecord, error) {
 	if ctx == nil {
 		ctx = context.Background()
@@ -254,7 +253,7 @@ func (o *Orchestrator) LoadRunnerRecords(ctx context.Context, id string) ([]runn
 	return store.Load(ctx, id)
 }
 
-// RemoveRunner removes a managed runner from the Orchestrator and deletes its
+// RemoveRunner removes a runner from the Orchestrator and deletes its
 // persisted log when one exists.
 //
 // Only pending, failed, or canceled runners may be removed. Running or idle
@@ -274,7 +273,7 @@ func (o *Orchestrator) RemoveRunner(ctx context.Context, id string) error {
 	if runner == nil {
 		return ErrRunnerNotFound
 	}
-	if !runnerRemovable(runner.Runner.State()) {
+	if !runnerpkg.IsRemovable(runner.State()) {
 		return ErrRunnerActive
 	}
 	if store != nil {
@@ -289,7 +288,7 @@ func (o *Orchestrator) RemoveRunner(ctx context.Context, id string) error {
 		o.mu.Unlock()
 		return ErrRunnerNotFound
 	}
-	if !runnerRemovable(current.Runner.State()) {
+	if !runnerpkg.IsRemovable(current.State()) {
 		o.mu.Unlock()
 		return ErrRunnerActive
 	}
@@ -305,7 +304,7 @@ func (o *Orchestrator) RemoveRunner(ctx context.Context, id string) error {
 	return nil
 }
 
-// StartRunner starts the managed runner identified by id and begins forwarding
+// StartRunner starts the runner identified by id and begins forwarding
 // its status to query and stream consumers.
 func (o *Orchestrator) StartRunner(ctx context.Context, id string) error {
 	runner, err := o.Runner(id)
@@ -313,4 +312,28 @@ func (o *Orchestrator) StartRunner(ctx context.Context, id string) error {
 		return err
 	}
 	return o.startManagedRunner(ctx, runner)
+}
+
+// watchRunnerDone releases the runner's execution slot when the runner's
+// engine first drains (goes idle) or the runner fully settles, whichever
+// comes first.
+func (o *Orchestrator) watchRunnerDone(runner *runnerpkg.Runner) {
+	events := runner.Subscribe(16)
+	done := runner.Done()
+	for {
+		select {
+		case <-done:
+			o.releaseRunnerExecutionSlot(runner.ID())
+			return
+		case ev, ok := <-events:
+			if !ok {
+				o.releaseRunnerExecutionSlot(runner.ID())
+				return
+			}
+			if ev.Type == runnerpkg.EventEngineIdle {
+				o.releaseRunnerExecutionSlot(runner.ID())
+				return
+			}
+		}
+	}
 }

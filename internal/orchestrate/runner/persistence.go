@@ -2,7 +2,6 @@ package runner
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"time"
 )
@@ -50,25 +49,4 @@ func (r *Runner) recordState(store RunnerStore, status RunnerStatus, runErr erro
 		return nil
 	}
 	return r.appendRecord(store, &RunnerRecord{Kind: RunnerRecordStatus, Status: state.Status, Error: state.Error})
-}
-
-// FinishBeforeStart marks the runner terminal without starting the event loop.
-func (r *Runner) FinishBeforeStart(runErr error) {
-	status := RunnerStatusFailed
-	if errors.Is(runErr, context.Canceled) || errors.Is(runErr, context.DeadlineExceeded) {
-		status = RunnerStatusCanceled
-	}
-	errText := ""
-	if runErr != nil {
-		errText = runErr.Error()
-	}
-	now := time.Now()
-	r.stateMu.Lock()
-	r.state = RunnerState{
-		Status:     status,
-		UpdatedAt:  now,
-		FinishedAt: now,
-		Error:      errText,
-	}
-	r.stateMu.Unlock()
 }

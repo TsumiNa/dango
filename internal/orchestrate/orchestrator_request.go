@@ -70,23 +70,22 @@ func (o *Orchestrator) planFromRequest(req *Request) (coarsePlan *CoarsePlan, re
 		return nil, nil, fmt.Errorf("orchestrate: planner returned neither a plan nor a reject reason")
 	}
 
-	managedRunner, err := buildManagedRunner(logger, runnerStore, req, plan, skills)
+	runner, err := buildRunner(logger, runnerStore, req, plan, skills)
 	if err != nil {
 		return nil, nil, err
 	}
-	managedRunner.onExecutionDrained = func() {
-		o.releaseRunnerExecutionSlot(managedRunner.Runner.ID())
-	}
-	plan.RunnerID = managedRunner.Runner.ID()
+	plan.RunnerID = runner.ID()
 
 	o.mu.Lock()
-	o.runners[plan.RunnerID] = managedRunner
+	o.runners[plan.RunnerID] = runner
 	o.mu.Unlock()
+
+	go o.watchRunnerDone(runner)
 
 	return plan, nil, nil
 }
 
-func buildManagedRunner(logger *slog.Logger, store runnerpkg.RunnerStore, req *Request, plan *CoarsePlan, skills map[string]*skill.Skill) (*ManagedRunner, error) {
+func buildRunner(logger *slog.Logger, store runnerpkg.RunnerStore, req *Request, plan *CoarsePlan, skills map[string]*skill.Skill) (*runnerpkg.Runner, error) {
 	if len(plan.Nodes) == 0 {
 		return nil, fmt.Errorf("orchestrate: coarse plan must contain at least one node")
 	}
@@ -133,11 +132,11 @@ func buildManagedRunner(logger *slog.Logger, store runnerpkg.RunnerStore, req *R
 		}
 	}
 
-	runner := runnerpkg.NewRunner(logger)
-	if err := runner.SetStore(store); err != nil {
-		return nil, fmt.Errorf("orchestrate: configure runner store: %w", err)
-	}
-	return newManagedRunner(runner, plan, nodes), nil
+	return runnerpkg.New(
+		runnerpkg.WithLogger(logger),
+		runnerpkg.WithStore(store),
+		runnerpkg.WithPlan(plan, nodes),
+	), nil
 }
 
 func cloneSkillMap(skills map[string]*skill.Skill) map[string]*skill.Skill {

@@ -10,68 +10,129 @@ import (
 	"github.com/lithammer/shortuuid/v4"
 )
 
-// Runner acts as an execution engine that schedules and runs Nodes based on dependencies.
-// It manages state strictly inside a single event loop to safely support concurrency.
+// Runner is the execution engine that drives a [CoarsePlan] through its
+// phased lifecycle and exposes both engine-level and managed observation
+// surfaces.
+//
+// Runner absorbs the historical ManagedRunner role: it owns the plan, the
+// materialized node graph, a subscriber set for high-level updates, a Done
+// signal for settle-detection, and the engine event loop that dispatches
+// nodes by dependency readiness. Callers construct a Runner with [New] and
+// any number of [Option]s.
 type Runner struct {
 	id     string
 	logger *slog.Logger
 
+	// Startup configuration set once via Options.
+	store        RunnerStore
+	plan         *CoarsePlan
+	initialNodes map[string]*Node
+
+	// Engine-level lifecycle state.
 	stateMu sync.RWMutex
 	state   RunnerState
-	store   RunnerStore
+	phase   RunnerPhase
 
-	// Core channels for the event loop.
+	// Lifecycle control.
+	startOnce    sync.Once
+	startErr     error
+	done         chan struct{}
+	doneOnce     sync.Once
+	engineErr    error
+	engineErrMu  sync.RWMutex
+	cancelEngine context.CancelFunc
+
+	// Engine event-loop channels.
 	addNodeCh chan []*Node
 	resultCh  chan executionResult
 	queryCh   chan chan<- RunnerSnapshot
 
-	// Subscription mechanisms.
-	subscribers []chan<- RunnerEvent
+	// Low-level event subscribers (RunnerEvent stream).
 	subMutex    sync.RWMutex
+	subscribers []chan<- RunnerEvent
+
+	// High-level managed update subscribers (RunnerUpdate stream).
+	updateMu          sync.Mutex
+	snapshot          RunnerSnapshot
+	stoppedEventSeen  bool
+	nextSubscriberID  uint64
+	updateSubscribers map[uint64]chan RunnerUpdate
+}
+
+// New constructs a Runner configured by the provided options.
+//
+// Options configure logger, persistence store, and an optional [CoarsePlan]
+// with its materialized node graph. Without [WithPlan], the Runner operates
+// as a bare execution engine: callers drive it by invoking [Runner.AddNodes]
+// after [Runner.Start].
+func New(opts ...Option) *Runner {
+	r := &Runner{
+		id:                shortuuid.New(),
+		logger:            slog.Default(),
+		state:             RunnerState{Status: RunnerStatusPending},
+		phase:             PhaseCreated,
+		done:              make(chan struct{}),
+		addNodeCh:         make(chan []*Node, 1),
+		resultCh:          make(chan executionResult),
+		queryCh:           make(chan chan<- RunnerSnapshot),
+		subscribers:       make([]chan<- RunnerEvent, 0),
+		updateSubscribers: make(map[uint64]chan RunnerUpdate),
+	}
+	for _, opt := range opts {
+		opt(r)
+	}
+	r.snapshot = buildInitialRunnerSnapshot(r.initialNodes)
+	return r
 }
 
 // ID returns the stable identifier assigned to this Runner at creation time.
 func (r *Runner) ID() string { return r.id }
 
-// State returns the current lifecycle snapshot of the Runner.
+// State returns the current engine-level lifecycle snapshot.
 func (r *Runner) State() RunnerState {
 	r.stateMu.RLock()
 	defer r.stateMu.RUnlock()
 	return r.state
 }
 
-// SetStore configures an append-only persistence store for the Runner.
-//
-// It may only be called before [Runner.Start]. Passing nil clears any
-// previously configured store.
-func (r *Runner) SetStore(store RunnerStore) error {
-	r.stateMu.Lock()
-	defer r.stateMu.Unlock()
-	if r.state.Status != RunnerStatusPending {
-		return ErrRunnerAlreadyStarted
-	}
-	r.store = store
-	return nil
+// Phase returns the current high-level plan phase.
+func (r *Runner) Phase() RunnerPhase {
+	r.stateMu.RLock()
+	defer r.stateMu.RUnlock()
+	return r.phase
 }
 
-// NewRunner initializes a new Runner instance.
-func NewRunner(logger *slog.Logger) *Runner {
-	if logger == nil {
-		logger = slog.Default()
+// Plan returns the [CoarsePlan] the runner was constructed with via
+// [WithPlan], or nil in bare mode.
+func (r *Runner) Plan() *CoarsePlan { return r.plan }
+
+// Nodes returns the initial node graph supplied via [WithPlan], keyed by
+// node ID, or nil in bare mode.
+func (r *Runner) Nodes() map[string]*Node { return r.initialNodes }
+
+// Done returns a channel that closes when the runner has settled into a
+// terminal phase ([PhaseSettled]).
+func (r *Runner) Done() <-chan struct{} { return r.done }
+
+// Wait blocks until the runner settles or ctx is canceled, returning the
+// final engine error (if any) or ctx.Err on timeout.
+func (r *Runner) Wait(ctx context.Context) error {
+	if ctx == nil {
+		ctx = context.Background()
 	}
-	return &Runner{
-		id:          shortuuid.New(),
-		logger:      logger,
-		state:       RunnerState{Status: RunnerStatusPending},
-		addNodeCh:   make(chan []*Node, 1),
-		resultCh:    make(chan executionResult),
-		queryCh:     make(chan chan<- RunnerSnapshot),
-		subscribers: make([]chan<- RunnerEvent, 0),
+	select {
+	case <-r.done:
+		r.engineErrMu.RLock()
+		defer r.engineErrMu.RUnlock()
+		return r.engineErr
+	case <-ctx.Done():
+		return ctx.Err()
 	}
 }
 
-// Subscribe returns a channel to receive runner lifecycle events dynamically.
-// It acts as a publish-subscribe mechanism for upper layers.
+// Subscribe returns a channel that receives low-level [RunnerEvent]s from
+// the engine event loop. The returned channel remains open for the lifetime
+// of the runner; callers are responsible for draining or discarding.
 func (r *Runner) Subscribe(bufferSize int) <-chan RunnerEvent {
 	ch := make(chan RunnerEvent, bufferSize)
 	r.subMutex.Lock()
@@ -80,8 +141,80 @@ func (r *Runner) Subscribe(bufferSize int) <-chan RunnerEvent {
 	return ch
 }
 
+// SubscribeUpdates returns a channel that receives high-level
+// [RunnerUpdate]s and an unsubscribe function.
+//
+// The first delivery is the current snapshot. If the runner is already in a
+// terminal phase at subscription time, the snapshot is delivered and the
+// channel is closed immediately.
+func (r *Runner) SubscribeUpdates(bufferSize int) (<-chan RunnerUpdate, func()) {
+	if bufferSize < 1 {
+		bufferSize = 1
+	}
+	ch := make(chan RunnerUpdate, bufferSize)
+
+	r.updateMu.Lock()
+	state := r.State()
+	phase := r.Phase()
+	update := RunnerUpdate{
+		RunnerID: r.id,
+		State:    state,
+		Phase:    phase,
+		Snapshot: cloneRunnerSnapshot(r.snapshot),
+	}
+	if IsTerminal(state) {
+		ch <- update
+		close(ch)
+		r.updateMu.Unlock()
+		return ch, func() {}
+	}
+	id := r.nextSubscriberID
+	r.nextSubscriberID++
+	r.updateSubscribers[id] = ch
+	ch <- update
+	r.updateMu.Unlock()
+
+	unsubscribe := func() {
+		r.updateMu.Lock()
+		defer r.updateMu.Unlock()
+		if sub := r.updateSubscribers[id]; sub != nil {
+			delete(r.updateSubscribers, id)
+			close(sub)
+		}
+	}
+	return ch, unsubscribe
+}
+
+// View returns a point-in-time snapshot of the runner suitable for query
+// APIs.
+func (r *Runner) View() *RunnerView {
+	r.updateMu.Lock()
+	snapshot := cloneRunnerSnapshot(r.snapshot)
+	r.updateMu.Unlock()
+	return &RunnerView{
+		RunnerID: r.id,
+		Plan:     CloneCoarsePlan(r.plan),
+		State:    r.State(),
+		Phase:    r.Phase(),
+		Snapshot: snapshot,
+	}
+}
+
+// AddNodes queues new nodes to be added to the execution graph. It blocks
+// until the event loop accepts the nodes or ctx is canceled.
+func (r *Runner) AddNodes(ctx context.Context, nodes ...*Node) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	select {
+	case r.addNodeCh <- nodes:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
 // GetSnapshot safely queries the current graph and execution state.
-// It blocks until the event loop replies or the given context cancels.
 func (r *Runner) GetSnapshot(ctx context.Context) (RunnerSnapshot, error) {
 	replyCh := make(chan RunnerSnapshot, 1)
 	select {
@@ -92,26 +225,173 @@ func (r *Runner) GetSnapshot(ctx context.Context) (RunnerSnapshot, error) {
 	}
 }
 
-// AddNodes queues new nodes to be added to the execution graph.
-// It blocks until the event loop accepts the nodes or the context cancels,
-// making it completely safe to call dynamically while the engine is running.
-func (r *Runner) AddNodes(ctx context.Context, nodes ...*Node) error {
-	select {
-	case r.addNodeCh <- nodes:
-		return nil
-	case <-ctx.Done():
-		return ctx.Err()
-	}
-}
-
-// Start runs the execution engine's main event loop.
-// It processes queues, state snapshots, and dispatches readiness logic asynchronously.
-// Start blocks until the context is canceled or a node returns an error ending the graph.
+// Start launches the runner's execution engine in the background.
+//
+// Start returns immediately. When [WithPlan] supplied initial nodes they are
+// added before the engine event loop begins. The returned error is non-nil
+// only if the runner has already been started or if queueing initial nodes
+// fails; the engine's ultimate error is retrieved via [Runner.Wait] after
+// the runner settles.
 func (r *Runner) Start(ctx context.Context) error {
 	if ctx == nil {
 		ctx = context.Background()
 	}
 
+	started := false
+	r.startOnce.Do(func() {
+		started = true
+		r.transitionPhase(PhaseExecuting)
+
+		runCtx, cancel := context.WithCancel(ctx)
+		r.cancelEngine = cancel
+
+		events := r.Subscribe(64)
+
+		go r.forwardEngineEvents(events)
+		go func() {
+			err := r.runEngine(runCtx)
+			r.captureEngineErr(err)
+			r.publishUpdate(nil)
+			r.transitionPhase(PhaseSettled)
+			r.closeUpdateSubscribers()
+			r.markDone()
+		}()
+
+		if len(r.initialNodes) > 0 {
+			nodes := make([]*Node, 0, len(r.initialNodes))
+			for _, n := range r.initialNodes {
+				nodes = append(nodes, n)
+			}
+			if err := r.AddNodes(runCtx, nodes...); err != nil {
+				r.startErr = err
+				cancel()
+				return
+			}
+		}
+	})
+
+	if !started {
+		return ErrRunnerAlreadyStarted
+	}
+	return r.startErr
+}
+
+// Abort marks the runner terminal without running the engine, publishing a
+// final update and closing managed subscribers. It replaces the historical
+// FinishBeforeStart entry point.
+func (r *Runner) Abort(runErr error) {
+	status := RunnerStatusFailed
+	if errors.Is(runErr, context.Canceled) || errors.Is(runErr, context.DeadlineExceeded) {
+		status = RunnerStatusCanceled
+	}
+	errText := ""
+	if runErr != nil {
+		errText = runErr.Error()
+	}
+	now := time.Now()
+
+	r.stateMu.Lock()
+	r.state = RunnerState{
+		Status:     status,
+		UpdatedAt:  now,
+		FinishedAt: now,
+		Error:      errText,
+	}
+	r.phase = PhaseSettled
+	r.stateMu.Unlock()
+
+	r.captureEngineErr(runErr)
+	r.publishUpdate(nil)
+	r.closeUpdateSubscribers()
+	r.markDone()
+}
+
+func (r *Runner) transitionPhase(phase RunnerPhase) {
+	r.stateMu.Lock()
+	r.phase = phase
+	r.stateMu.Unlock()
+}
+
+func (r *Runner) markDone() {
+	r.doneOnce.Do(func() { close(r.done) })
+}
+
+func (r *Runner) captureEngineErr(err error) {
+	if err == nil {
+		return
+	}
+	r.engineErrMu.Lock()
+	if r.engineErr == nil {
+		r.engineErr = err
+	}
+	r.engineErrMu.Unlock()
+}
+
+func (r *Runner) forwardEngineEvents(events <-chan RunnerEvent) {
+	for ev := range events {
+		event := ev
+		r.publishUpdate(&event)
+		if event.Type == EventEngineStopped {
+			return
+		}
+	}
+}
+
+func (r *Runner) publishUpdate(event *RunnerEvent) {
+	state := r.State()
+	phase := r.Phase()
+	snapshot := r.currentSnapshot(event)
+	update := RunnerUpdate{
+		RunnerID: r.id,
+		State:    state,
+		Phase:    phase,
+		Snapshot: snapshot,
+		Event:    event,
+	}
+
+	r.updateMu.Lock()
+	r.snapshot = cloneRunnerSnapshot(snapshot)
+	if event != nil && event.Type == EventEngineStopped {
+		r.stoppedEventSeen = true
+	}
+	for _, ch := range r.updateSubscribers {
+		select {
+		case ch <- update:
+		default:
+		}
+	}
+	r.updateMu.Unlock()
+}
+
+func (r *Runner) currentSnapshot(event *RunnerEvent) RunnerSnapshot {
+	if event == nil || event.Type == EventEngineStopped {
+		r.updateMu.Lock()
+		defer r.updateMu.Unlock()
+		return cloneRunnerSnapshot(r.snapshot)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	defer cancel()
+	snapshot, err := r.GetSnapshot(ctx)
+	if err != nil {
+		r.updateMu.Lock()
+		defer r.updateMu.Unlock()
+		return cloneRunnerSnapshot(r.snapshot)
+	}
+	return snapshot
+}
+
+func (r *Runner) closeUpdateSubscribers() {
+	r.updateMu.Lock()
+	defer r.updateMu.Unlock()
+	for id, ch := range r.updateSubscribers {
+		close(ch)
+		delete(r.updateSubscribers, id)
+	}
+}
+
+// runEngine is the blocking event loop that drives node execution. It is
+// invoked once by [Runner.Start] in a background goroutine.
+func (r *Runner) runEngine(ctx context.Context) error {
 	r.stateMu.Lock()
 	if r.state.Status != RunnerStatusPending {
 		r.stateMu.Unlock()

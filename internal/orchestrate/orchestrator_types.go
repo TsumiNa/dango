@@ -4,6 +4,7 @@ import (
 	"errors"
 
 	"github.com/tsumina/dango/internal/llm/skill"
+	runnerpkg "github.com/tsumina/dango/internal/orchestrate/runner"
 )
 
 // ErrRunnerNotFound is returned when an Orchestrator runner lookup misses.
@@ -16,6 +17,14 @@ var ErrRunnerActive = errors.New("orchestrate: runner is still active")
 // ErrRunnerStoreNotConfigured is returned when persisted runner records are
 // requested without a configured runner store.
 var ErrRunnerStoreNotConfigured = errors.New("orchestrate: runner store not configured")
+
+// CoarsePlan is the orchestrator's high-level task graph before execution
+// starts. It is defined in the runner package and re-exported here so
+// [PlanningFunc] stays ergonomic for orchestrator callers.
+type CoarsePlan = runnerpkg.CoarsePlan
+
+// CoarsePlanNode describes one executor-sized unit in a [CoarsePlan].
+type CoarsePlanNode = runnerpkg.CoarsePlanNode
 
 // PlanningFunc analyzes req against the registered skills and returns either a
 // coarse plan or a structured reason the task cannot proceed.
@@ -42,22 +51,6 @@ func (p RequestPriority) valid() bool {
 type Request struct {
 	Input    string          `json:"input" yaml:"input"`
 	Priority RequestPriority `json:"priority,omitempty" yaml:"priority,omitempty"`
-}
-
-// CoarsePlan is the Orchestrator's high-level task graph before execution
-// starts.
-type CoarsePlan struct {
-	Request  string           `json:"request" yaml:"request"`
-	RunnerID string           `json:"runner_id,omitempty" yaml:"runner_id,omitempty"`
-	Nodes    []CoarsePlanNode `json:"nodes" yaml:"nodes"`
-}
-
-// CoarsePlanNode describes one executor-sized unit in a coarse plan.
-type CoarsePlanNode struct {
-	ID              string   `json:"id" yaml:"id"`
-	SkillName       string   `json:"skill_name" yaml:"skill_name"`
-	TaskDescription string   `json:"task_description" yaml:"task_description"`
-	DependsOn       []string `json:"depends_on,omitempty" yaml:"depends_on,omitempty"`
 }
 
 // RejectReason explains why a request cannot currently be turned into a plan.

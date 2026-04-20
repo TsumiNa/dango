@@ -8,16 +8,16 @@ import (
 	runnerpkg "github.com/tsumina/dango/internal/orchestrate/runner"
 )
 
-func (o *Orchestrator) submitManagedRunner(ctx context.Context, runner *ManagedRunner, priority RequestPriority) error {
+func (o *Orchestrator) submitManagedRunner(ctx context.Context, runner *runnerpkg.Runner, priority RequestPriority) error {
 	if ctx == nil {
 		ctx = context.Background()
 	}
 	if err := ctx.Err(); err != nil {
-		runner.finishBeforeStart(err)
+		runner.Abort(err)
 		return err
 	}
 
-	id := runner.Runner.ID()
+	id := runner.ID()
 	o.mu.Lock()
 	if o.maxRunningRunners == 0 || len(o.runningRunnerIDs) < o.maxRunningRunners {
 		o.runningRunnerIDs[id] = struct{}{}
@@ -51,12 +51,12 @@ func (o *Orchestrator) watchQueuedRunner(entry *queuedRunner) {
 
 func (o *Orchestrator) cancelQueuedRunner(entry *queuedRunner, runErr error) {
 	toStart, toCancel := o.removeQueuedRunner(entry, true)
-	entry.runner.finishBeforeStart(runErr)
+	entry.runner.Abort(runErr)
 	o.finishQueuedDispatch(toStart, toCancel)
 }
 
 func (o *Orchestrator) removeQueuedRunner(entry *queuedRunner, canceled bool) ([]*queuedRunner, []*queuedRunner) {
-	id := entry.runner.Runner.ID()
+	id := entry.runner.ID()
 	o.mu.Lock()
 	current := o.queuedRunnerByID[id]
 	if current != entry {
@@ -73,8 +73,8 @@ func (o *Orchestrator) removeQueuedRunner(entry *queuedRunner, canceled bool) ([
 	return toStart, toCancel
 }
 
-func (o *Orchestrator) startManagedRunner(ctx context.Context, runner *ManagedRunner) error {
-	id := runner.Runner.ID()
+func (o *Orchestrator) startManagedRunner(ctx context.Context, runner *runnerpkg.Runner) error {
+	id := runner.ID()
 	o.mu.Lock()
 	if entry := o.queuedRunnerByID[id]; entry != nil {
 		entry.canceled = true
@@ -88,22 +88,22 @@ func (o *Orchestrator) startManagedRunner(ctx context.Context, runner *ManagedRu
 	return o.startManagedRunnerWithReservedSlot(ctx, runner)
 }
 
-func (o *Orchestrator) startManagedRunnerWithReservedSlot(ctx context.Context, runner *ManagedRunner) error {
-	if err := runner.start(ctx); err != nil {
+func (o *Orchestrator) startManagedRunnerWithReservedSlot(ctx context.Context, runner *runnerpkg.Runner) error {
+	if err := runner.Start(ctx); err != nil {
 		o.handleManagedRunnerStartError(runner, err)
 		return err
 	}
 	return nil
 }
 
-func (o *Orchestrator) handleManagedRunnerStartError(runner *ManagedRunner, runErr error) {
-	id := runner.Runner.ID()
+func (o *Orchestrator) handleManagedRunnerStartError(runner *runnerpkg.Runner, runErr error) {
+	id := runner.ID()
 	o.mu.Lock()
 	delete(o.runningRunnerIDs, id)
 	toStart, toCancel := o.collectQueuedStartsLocked()
 	o.mu.Unlock()
-	if runner.Runner.State().Status == runnerpkg.RunnerStatusPending {
-		runner.finishBeforeStart(runErr)
+	if runner.State().Status == runnerpkg.RunnerStatusPending {
+		runner.Abort(runErr)
 	}
 	o.finishQueuedDispatch(toStart, toCancel)
 }
@@ -124,7 +124,7 @@ func (o *Orchestrator) collectQueuedStartsLocked() ([]*queuedRunner, []*queuedRu
 		if entry == nil {
 			break
 		}
-		delete(o.queuedRunnerByID, entry.runner.Runner.ID())
+		delete(o.queuedRunnerByID, entry.runner.ID())
 		entry.deactivate()
 		if entry.canceled {
 			continue
@@ -134,7 +134,7 @@ func (o *Orchestrator) collectQueuedStartsLocked() ([]*queuedRunner, []*queuedRu
 			toCancel = append(toCancel, entry)
 			continue
 		}
-		o.runningRunnerIDs[entry.runner.Runner.ID()] = struct{}{}
+		o.runningRunnerIDs[entry.runner.ID()] = struct{}{}
 		toStart = append(toStart, entry)
 	}
 	return toStart, toCancel
@@ -153,7 +153,7 @@ func (o *Orchestrator) popQueuedRunnerLocked() *queuedRunner {
 
 func (o *Orchestrator) finishQueuedDispatch(toStart []*queuedRunner, toCancel []*queuedRunner) {
 	for _, entry := range toCancel {
-		entry.runner.finishBeforeStart(entry.ctx.Err())
+		entry.runner.Abort(entry.ctx.Err())
 	}
 	for _, entry := range toStart {
 		_ = o.startManagedRunnerWithReservedSlot(entry.ctx, entry.runner)
@@ -161,7 +161,7 @@ func (o *Orchestrator) finishQueuedDispatch(toStart []*queuedRunner, toCancel []
 }
 
 type queuedRunner struct {
-	runner   *ManagedRunner
+	runner   *runnerpkg.Runner
 	ctx      context.Context
 	priority RequestPriority
 	order    uint64

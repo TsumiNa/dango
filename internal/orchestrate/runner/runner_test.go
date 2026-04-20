@@ -3,14 +3,13 @@ package runner
 import (
 	"context"
 	"fmt"
-	"sync"
 	"testing"
 	"time"
 )
 
 func TestNewRunner_AssignsUniqueID(t *testing.T) {
-	first := NewRunner(testLogger)
-	second := NewRunner(testLogger)
+	first := New(WithLogger(testLogger))
+	second := New(WithLogger(testLogger))
 	if first.ID() == "" {
 		t.Fatal("expected first runner to have a non-empty ID")
 	}
@@ -23,7 +22,7 @@ func TestNewRunner_AssignsUniqueID(t *testing.T) {
 }
 
 func TestRunner_StaticGraphExecution(t *testing.T) {
-	r := NewRunner(testLogger)
+	r := New(WithLogger(testLogger))
 
 	nodeA := &Node{
 		Id: "A",
@@ -48,9 +47,9 @@ func TestRunner_StaticGraphExecution(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 
-	go func() {
-		_ = r.Start(ctx)
-	}()
+	if err := r.Start(ctx); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
 
 	if err := r.AddNodes(ctx, nodeA, nodeB); err != nil {
 		t.Fatalf("failed to add nodes: %v", err)
@@ -72,7 +71,7 @@ func TestRunner_StaticGraphExecution(t *testing.T) {
 }
 
 func TestRunner_DynamicNodeAppend(t *testing.T) {
-	r := NewRunner(testLogger)
+	r := New(WithLogger(testLogger))
 
 	var nodeD *Node
 	nodeC := &Node{
@@ -95,9 +94,9 @@ func TestRunner_DynamicNodeAppend(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 
-	go func() {
-		_ = r.Start(ctx)
-	}()
+	if err := r.Start(ctx); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
 
 	_ = r.AddNodes(ctx, nodeC)
 
@@ -117,7 +116,7 @@ func TestRunner_DynamicNodeAppend(t *testing.T) {
 }
 
 func TestRunner_ErrorTermination(t *testing.T) {
-	r := NewRunner(testLogger)
+	r := New(WithLogger(testLogger))
 
 	nodeErr := &Node{
 		Id: "Err",
@@ -141,37 +140,29 @@ func TestRunner_ErrorTermination(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 
-	var wg sync.WaitGroup
-	wg.Add(1)
-
-	var startErr error
-	go func() {
-		defer wg.Done()
-		err := r.Start(ctx)
-		if startErr == nil {
-			startErr = err
-		}
-	}()
+	if err := r.Start(ctx); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
 
 	_ = r.AddNodes(ctx, nodeErr, nodeNever)
-	wg.Wait()
 
+	startErr := r.Wait(ctx)
 	if startErr == nil || startErr.Error() != "simulated failure" {
 		t.Errorf("expected simulated failure, got %v", startErr)
 	}
 }
 
 func TestRunner_SubscriberAndExternalAppend(t *testing.T) {
-	r := NewRunner(testLogger)
+	r := New(WithLogger(testLogger))
 
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 
 	subCh := r.Subscribe(10)
 
-	go func() {
-		_ = r.Start(ctx)
-	}()
+	if err := r.Start(ctx); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
 
 	nodeFirst := &Node{
 		Id: "First",
