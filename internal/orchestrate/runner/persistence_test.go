@@ -5,6 +5,7 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestRunnerPersistsEventsAndCancellation(t *testing.T) {
@@ -31,7 +32,9 @@ func TestRunnerPersistsEventsAndCancellation(t *testing.T) {
 
 	waitForRunnerEvent(t, sub, EventNodeCompleted, "persisted")
 	cancel()
-	assertCanceledStart(t, r.Wait(context.Background()))
+	waitCtx, waitCancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer waitCancel()
+	assertCanceledStart(t, r.Wait(waitCtx))
 
 	records, err := store.Load(context.Background(), r.ID())
 	if err != nil {
@@ -86,7 +89,9 @@ func TestRunnerPersistsFailure(t *testing.T) {
 		t.Fatalf("AddNodes: %v", err)
 	}
 
-	startErr := r.Wait(context.Background())
+	waitCtx, waitCancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer waitCancel()
+	startErr := r.Wait(waitCtx)
 	assertFailureContains(t, startErr, "simulated failure")
 
 	records, loadErr := store.Load(context.Background(), r.ID())
