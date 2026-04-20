@@ -34,9 +34,9 @@ func writeTestSkill(t *testing.T, name, description string) string {
 	return dir
 }
 
-func mustPlanSingleNodeRuntime(t *testing.T, o *Orchestrator) (*CoarsePlan, *ManagedRuntime) {
+func mustPlanSingleNodeRunner(t *testing.T, o *Orchestrator) (*CoarsePlan, *ManagedRunner) {
 	t.Helper()
-	if err := o.RegisterSkill(writeTestSkill(t, "single", "Single-step runtime.")); err != nil {
+	if err := o.RegisterSkill(writeTestSkill(t, "single", "Single-step runner.")); err != nil {
 		t.Fatalf("RegisterSkill(single): %v", err)
 	}
 	if err := o.SetPlanningFunc(func(req *Request, skills map[string]*skill.Skill) (*CoarsePlan, *RejectReason, error) {
@@ -58,24 +58,24 @@ func mustPlanSingleNodeRuntime(t *testing.T, o *Orchestrator) (*CoarsePlan, *Man
 	if reject != nil {
 		t.Fatalf("reject = %+v, want nil", reject)
 	}
-	managedRuntime, ok := o.Runtimes()[plan.RuntimeID]
-	if !ok || managedRuntime == nil {
-		t.Fatalf("expected runtime %q to be stored", plan.RuntimeID)
+	managedRunner, ok := o.Runners()[plan.RunnerID]
+	if !ok || managedRunner == nil {
+		t.Fatalf("expected runner %q to be stored", plan.RunnerID)
 	}
-	return plan, managedRuntime
+	return plan, managedRunner
 }
 
-func waitForRuntimeUpdate(t *testing.T, ch <-chan RuntimeUpdate, predicate func(RuntimeUpdate) bool, label string) RuntimeUpdate {
+func waitForRunnerUpdate(t *testing.T, ch <-chan RunnerUpdate, predicate func(RunnerUpdate) bool, label string) RunnerUpdate {
 	t.Helper()
 	timer := time.NewTimer(2 * time.Second)
 	defer timer.Stop()
 	for {
 		select {
 		case <-timer.C:
-			t.Fatalf("timed out waiting for runtime update: %s", label)
+			t.Fatalf("timed out waiting for runner update: %s", label)
 		case update, ok := <-ch:
 			if !ok {
-				t.Fatalf("runtime update stream closed while waiting for %s", label)
+				t.Fatalf("runner update stream closed while waiting for %s", label)
 			}
 			if predicate(update) {
 				return update
@@ -84,17 +84,17 @@ func waitForRuntimeUpdate(t *testing.T, ch <-chan RuntimeUpdate, predicate func(
 	}
 }
 
-func waitForRuntimeUpdateClosed(t *testing.T, ch <-chan RuntimeUpdate, label string) {
+func waitForRunnerUpdateClosed(t *testing.T, ch <-chan RunnerUpdate, label string) {
 	t.Helper()
 	timer := time.NewTimer(2 * time.Second)
 	defer timer.Stop()
 	select {
 	case _, ok := <-ch:
 		if ok {
-			t.Fatalf("runtime update stream still open while waiting for %s", label)
+			t.Fatalf("runner update stream still open while waiting for %s", label)
 		}
 	case <-timer.C:
-		t.Fatalf("timed out waiting for runtime update stream to close: %s", label)
+		t.Fatalf("timed out waiting for runner update stream to close: %s", label)
 	}
 }
 
@@ -157,61 +157,61 @@ func TestSetLogger_RejectsChangesAfterStartup(t *testing.T) {
 	}
 }
 
-func TestSetRuntimeStore_RejectsChangesAfterStartup(t *testing.T) {
+func TestSetRunnerStore_RejectsChangesAfterStartup(t *testing.T) {
 	o := newOrchestrator(testLogger)
 	if _, _, err := o.planFromRequest(&Request{Input: "summarize this repository"}); err != nil {
 		t.Fatalf("planFromRequest: %v", err)
 	}
-	if err := o.SetRuntimeStore(mustNewRuntimeStore(t, t.TempDir())); err == nil {
-		t.Fatal("expected SetRuntimeStore to fail after startup")
+	if err := o.SetRunnerStore(mustNewRunnerStore(t, t.TempDir())); err == nil {
+		t.Fatal("expected SetRunnerStore to fail after startup")
 	}
 }
 
-func TestSetMaxRunningRuntimes_RejectsChangesAfterStartup(t *testing.T) {
+func TestSetMaxRunningRunners_RejectsChangesAfterStartup(t *testing.T) {
 	o := newOrchestrator(testLogger)
 	if _, _, err := o.planFromRequest(&Request{Input: "summarize this repository"}); err != nil {
 		t.Fatalf("planFromRequest: %v", err)
 	}
-	if err := o.SetMaxRunningRuntimes(1); err == nil {
-		t.Fatal("expected SetMaxRunningRuntimes to fail after startup")
+	if err := o.SetMaxRunningRunners(1); err == nil {
+		t.Fatal("expected SetMaxRunningRunners to fail after startup")
 	}
 }
 
-func TestRuntime_ReturnsManagedRuntimeByID(t *testing.T) {
+func TestRunner_ReturnsManagedRunnerByID(t *testing.T) {
 	o := newOrchestrator(testLogger)
-	plan, managedRuntime := mustPlanSingleNodeRuntime(t, o)
+	plan, managedRunner := mustPlanSingleNodeRunner(t, o)
 
-	got, err := o.Runtime(plan.RuntimeID)
+	got, err := o.Runner(plan.RunnerID)
 	if err != nil {
-		t.Fatalf("Runtime: %v", err)
+		t.Fatalf("Runner: %v", err)
 	}
-	if got != managedRuntime {
-		t.Fatalf("Runtime() = %p, want %p", got, managedRuntime)
-	}
-}
-
-func TestRuntime_RejectsUnknownID(t *testing.T) {
-	o := newOrchestrator(testLogger)
-	if _, err := o.Runtime("missing"); !errors.Is(err, ErrRuntimeNotFound) {
-		t.Fatalf("Runtime err = %v, want ErrRuntimeNotFound", err)
+	if got != managedRunner {
+		t.Fatalf("Runner() = %p, want %p", got, managedRunner)
 	}
 }
 
-func TestQueryRuntime_ReturnsRuntimeView(t *testing.T) {
+func TestRunner_RejectsUnknownID(t *testing.T) {
 	o := newOrchestrator(testLogger)
-	plan, _ := mustPlanSingleNodeRuntime(t, o)
+	if _, err := o.Runner("missing"); !errors.Is(err, ErrRunnerNotFound) {
+		t.Fatalf("Runner err = %v, want ErrRunnerNotFound", err)
+	}
+}
 
-	view, err := o.QueryRuntime(plan.RuntimeID)
+func TestQueryRunner_ReturnsRunnerView(t *testing.T) {
+	o := newOrchestrator(testLogger)
+	plan, _ := mustPlanSingleNodeRunner(t, o)
+
+	view, err := o.QueryRunner(plan.RunnerID)
 	if err != nil {
-		t.Fatalf("QueryRuntime: %v", err)
+		t.Fatalf("QueryRunner: %v", err)
 	}
-	if view.RuntimeID != plan.RuntimeID {
-		t.Fatalf("RuntimeID = %q, want %q", view.RuntimeID, plan.RuntimeID)
+	if view.RunnerID != plan.RunnerID {
+		t.Fatalf("RunnerID = %q, want %q", view.RunnerID, plan.RunnerID)
 	}
 	if view.Plan == nil || view.Plan.Request != plan.Request {
 		t.Fatalf("Plan = %+v, want request %q", view.Plan, plan.Request)
 	}
-	if view.State.Status != RuntimeStatusPending {
+	if view.State.Status != RunnerStatusPending {
 		t.Fatalf("state = %q, want pending", view.State.Status)
 	}
 	if _, ok := view.Snapshot.NodesData["only"]; !ok {
@@ -219,10 +219,10 @@ func TestQueryRuntime_ReturnsRuntimeView(t *testing.T) {
 	}
 }
 
-func TestSubscribeRuntime_RejectsUnknownID(t *testing.T) {
+func TestSubscribeRunner_RejectsUnknownID(t *testing.T) {
 	o := newOrchestrator(testLogger)
-	if _, _, err := o.SubscribeRuntime("missing", 4); !errors.Is(err, ErrRuntimeNotFound) {
-		t.Fatalf("SubscribeRuntime err = %v, want ErrRuntimeNotFound", err)
+	if _, _, err := o.SubscribeRunner("missing", 4); !errors.Is(err, ErrRunnerNotFound) {
+		t.Fatalf("SubscribeRunner err = %v, want ErrRunnerNotFound", err)
 	}
 }
 
@@ -321,16 +321,16 @@ func TestPlanFromRequest_ReturnsRejectWithoutPlanner(t *testing.T) {
 	if reject.Summary == "" || reject.Analysis == "" {
 		t.Errorf("reject = %+v, want populated summary and analysis", reject)
 	}
-	if len(o.Runtimes()) != 0 {
-		t.Fatalf("expected no runtimes to be created on rejection")
+	if len(o.Runners()) != 0 {
+		t.Fatalf("expected no runners to be created on rejection")
 	}
 }
 
-func TestPlanFromRequest_BuildsRuntimeFromPlan(t *testing.T) {
+func TestPlanFromRequest_BuildsRunnerFromPlan(t *testing.T) {
 	o := newOrchestrator(testLogger)
-	store := mustNewRuntimeStore(t, t.TempDir())
-	if err := o.SetRuntimeStore(store); err != nil {
-		t.Fatalf("SetRuntimeStore: %v", err)
+	store := mustNewRunnerStore(t, t.TempDir())
+	if err := o.SetRunnerStore(store); err != nil {
+		t.Fatalf("SetRunnerStore: %v", err)
 	}
 	if err := o.RegisterSkill(writeTestSkill(t, "plan", "Draft a plan.")); err != nil {
 		t.Fatalf("RegisterSkill(plan): %v", err)
@@ -367,39 +367,38 @@ func TestPlanFromRequest_BuildsRuntimeFromPlan(t *testing.T) {
 	if plan == nil {
 		t.Fatal("expected a coarse plan")
 	}
-	if plan.RuntimeID == "" {
-		t.Fatal("expected coarse plan to be annotated with a runtime ID")
+	if plan.RunnerID == "" {
+		t.Fatal("expected coarse plan to be annotated with a runner ID")
 	}
 
-	managedRuntime := o.Runtimes()[plan.RuntimeID]
-	if managedRuntime == nil {
-		t.Fatalf("expected runtime %q to be stored", plan.RuntimeID)
+	managedRunner := o.Runners()[plan.RunnerID]
+	if managedRunner == nil {
+		t.Fatalf("expected runner %q to be stored", plan.RunnerID)
 	}
-	if managedRuntime.Runtime.ID() != plan.RuntimeID {
-		t.Errorf("Runtime.ID() = %q, want %q", managedRuntime.Runtime.ID(), plan.RuntimeID)
+	if managedRunner.Runner.ID() != plan.RunnerID {
+		t.Errorf("Runner.ID() = %q, want %q", managedRunner.Runner.ID(), plan.RunnerID)
 	}
-	if managedRuntime.Runtime.store != store {
-		t.Fatalf("runtime store = %p, want %p", managedRuntime.Runtime.store, store)
-	}
-	if len(managedRuntime.Nodes) != 2 {
-		t.Fatalf("len(Nodes) = %d, want 2", len(managedRuntime.Nodes))
+	if len(managedRunner.Nodes) != 2 {
+		t.Fatalf("len(Nodes) = %d, want 2", len(managedRunner.Nodes))
 	}
 
-	draft := managedRuntime.Nodes["draft"]
-	run := managedRuntime.Nodes["run"]
+	draft := managedRunner.Nodes["draft"]
+	run := managedRunner.Nodes["run"]
 	if draft == nil || run == nil {
 		t.Fatalf("expected draft and run nodes to exist, got draft=%v run=%v", draft, run)
 	}
-	if draft.Executor == nil || draft.Executor.Skill().Name != "plan" {
-		t.Fatalf("draft executor skill = %v, want plan", draft.Executor)
+	draftExecutor := mustNodeExecutor(t, draft)
+	if draftExecutor.Skill().Name != "plan" {
+		t.Fatalf("draft executor skill = %v, want plan", draftExecutor)
 	}
-	if run.Executor == nil || run.Executor.Skill().Name != "execute" {
-		t.Fatalf("run executor skill = %v, want execute", run.Executor)
+	runExecutor := mustNodeExecutor(t, run)
+	if runExecutor.Skill().Name != "execute" {
+		t.Fatalf("run executor skill = %v, want execute", runExecutor)
 	}
 	if len(run.Parents) != 1 || run.Parents[0].Id != "draft" {
 		t.Fatalf("run parents = %+v, want [draft]", run.Parents)
 	}
-	if got := run.Executor.Planner().TaskDescription; got != "Execute the approved outline." {
+	if got := runExecutor.Planner().TaskDescription; got != "Execute the approved outline." {
 		t.Errorf("run task description = %q, want %q", got, "Execute the approved outline.")
 	}
 }
@@ -422,101 +421,101 @@ func TestPlanFromRequest_ErrorsWhenPlanUsesUnknownSkill(t *testing.T) {
 	if plan != nil || reject != nil {
 		t.Fatalf("expected nil plan and reject on internal plan error, got plan=%v reject=%v", plan, reject)
 	}
-	if len(o.Runtimes()) != 0 {
-		t.Fatalf("expected no runtimes to be stored when plan assembly fails")
+	if len(o.Runners()) != 0 {
+		t.Fatalf("expected no runners to be stored when plan assembly fails")
 	}
 }
 
-func TestLoadRuntimeRecords_RequiresConfiguredStore(t *testing.T) {
+func TestLoadRunnerRecords_RequiresConfiguredStore(t *testing.T) {
 	o := newOrchestrator(testLogger)
-	plan, _ := mustPlanSingleNodeRuntime(t, o)
+	plan, _ := mustPlanSingleNodeRunner(t, o)
 
-	_, err := o.LoadRuntimeRecords(context.Background(), plan.RuntimeID)
-	if !errors.Is(err, ErrRuntimeStoreNotConfigured) {
-		t.Fatalf("LoadRuntimeRecords err = %v, want ErrRuntimeStoreNotConfigured", err)
+	_, err := o.LoadRunnerRecords(context.Background(), plan.RunnerID)
+	if !errors.Is(err, ErrRunnerStoreNotConfigured) {
+		t.Fatalf("LoadRunnerRecords err = %v, want ErrRunnerStoreNotConfigured", err)
 	}
 }
 
-func TestStartRuntime_ForwardsStreamAndQueryState(t *testing.T) {
+func TestStartRunner_ForwardsStreamAndQueryState(t *testing.T) {
 	o := newOrchestrator(testLogger)
-	plan, managedRuntime := mustPlanSingleNodeRuntime(t, o)
+	plan, managedRunner := mustPlanSingleNodeRunner(t, o)
 
 	started := make(chan struct{})
 	release := make(chan struct{})
-	managedRuntime.Nodes["only"].Executor.RunE = func(ctx context.Context, parentOutputs map[string]any) (any, []*Node, error) {
+	mustNodeExecutor(t, managedRunner.Nodes["only"]).RunE = func(ctx context.Context, parentOutputs map[string]any) (any, []*Node, error) {
 		close(started)
 		<-release
 		return "done", nil, nil
 	}
 
-	updates, unsubscribe, err := o.SubscribeRuntime(plan.RuntimeID, 8)
+	updates, unsubscribe, err := o.SubscribeRunner(plan.RunnerID, 8)
 	if err != nil {
-		t.Fatalf("SubscribeRuntime: %v", err)
+		t.Fatalf("SubscribeRunner: %v", err)
 	}
 	defer unsubscribe()
 
-	initial := waitForRuntimeUpdate(t, updates, func(update RuntimeUpdate) bool {
+	initial := waitForRunnerUpdate(t, updates, func(update RunnerUpdate) bool {
 		return update.Event == nil
 	}, "initial update")
-	if initial.State.Status != RuntimeStatusPending {
+	if initial.State.Status != RunnerStatusPending {
 		t.Fatalf("initial state = %q, want pending", initial.State.Status)
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
-	if err := o.StartRuntime(ctx, plan.RuntimeID); err != nil {
-		t.Fatalf("StartRuntime: %v", err)
+	if err := o.StartRunner(ctx, plan.RunnerID); err != nil {
+		t.Fatalf("StartRunner: %v", err)
 	}
 	<-started
 
-	startedUpdate := waitForRuntimeUpdate(t, updates, func(update RuntimeUpdate) bool {
+	startedUpdate := waitForRunnerUpdate(t, updates, func(update RunnerUpdate) bool {
 		return update.Event != nil && update.Event.Type == EventNodeStarted
 	}, "node started")
-	if startedUpdate.State.Status != RuntimeStatusRunning {
+	if startedUpdate.State.Status != RunnerStatusRunning {
 		t.Fatalf("state after node started = %q, want running", startedUpdate.State.Status)
 	}
 
-	view, err := o.QueryRuntime(plan.RuntimeID)
+	view, err := o.QueryRunner(plan.RunnerID)
 	if err != nil {
-		t.Fatalf("QueryRuntime: %v", err)
+		t.Fatalf("QueryRunner: %v", err)
 	}
-	if view.State.Status != RuntimeStatusRunning {
+	if view.State.Status != RunnerStatusRunning {
 		t.Fatalf("queried state = %q, want running", view.State.Status)
 	}
 
 	close(release)
-	completedUpdate := waitForRuntimeUpdate(t, updates, func(update RuntimeUpdate) bool {
+	completedUpdate := waitForRunnerUpdate(t, updates, func(update RunnerUpdate) bool {
 		return update.Event != nil && update.Event.Type == EventNodeCompleted
 	}, "node completed")
 	if completedUpdate.Event.NodeID != "only" {
 		t.Fatalf("completed node = %q, want only", completedUpdate.Event.NodeID)
 	}
-	idleUpdate := waitForRuntimeUpdate(t, updates, func(update RuntimeUpdate) bool {
+	idleUpdate := waitForRunnerUpdate(t, updates, func(update RunnerUpdate) bool {
 		return update.Event != nil && update.Event.Type == EventEngineIdle
 	}, "engine idle")
-	if idleUpdate.State.Status != RuntimeStatusIdle {
+	if idleUpdate.State.Status != RunnerStatusIdle {
 		t.Fatalf("idle state = %q, want idle", idleUpdate.State.Status)
 	}
 
 	cancel()
-	terminalUpdate := waitForRuntimeUpdate(t, updates, func(update RuntimeUpdate) bool {
-		return update.State.Status == RuntimeStatusCanceled
+	terminalUpdate := waitForRunnerUpdate(t, updates, func(update RunnerUpdate) bool {
+		return update.State.Status == RunnerStatusCanceled
 	}, "canceled terminal update")
-	if terminalUpdate.State.Status != RuntimeStatusCanceled {
+	if terminalUpdate.State.Status != RunnerStatusCanceled {
 		t.Fatalf("terminal state = %q, want canceled", terminalUpdate.State.Status)
 	}
-	waitForRuntimeUpdateClosed(t, updates, "canceled terminal update")
-	finalView, err := o.QueryRuntime(plan.RuntimeID)
+	waitForRunnerUpdateClosed(t, updates, "canceled terminal update")
+	finalView, err := o.QueryRunner(plan.RunnerID)
 	if err != nil {
-		t.Fatalf("QueryRuntime(final): %v", err)
+		t.Fatalf("QueryRunner(final): %v", err)
 	}
-	if finalView.State.Status != RuntimeStatusCanceled {
+	if finalView.State.Status != RunnerStatusCanceled {
 		t.Fatalf("final queried state = %q, want canceled", finalView.State.Status)
 	}
 }
 
-func TestStartRequest_StartsRuntimeImmediately(t *testing.T) {
+func TestStartRequest_StartsRunnerImmediately(t *testing.T) {
 	o := newOrchestrator(testLogger)
-	if err := o.RegisterSkill(writeTestSkill(t, "single", "Single-step runtime.")); err != nil {
+	if err := o.RegisterSkill(writeTestSkill(t, "single", "Single-step runner.")); err != nil {
 		t.Fatalf("RegisterSkill(single): %v", err)
 	}
 	if err := o.SetPlanningFunc(func(req *Request, skills map[string]*skill.Skill) (*CoarsePlan, *RejectReason, error) {
@@ -542,34 +541,34 @@ func TestStartRequest_StartsRuntimeImmediately(t *testing.T) {
 	}
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
-		view, queryErr := o.QueryRuntime(plan.RuntimeID)
+		view, queryErr := o.QueryRunner(plan.RunnerID)
 		if queryErr != nil {
-			t.Fatalf("QueryRuntime: %v", queryErr)
+			t.Fatalf("QueryRunner: %v", queryErr)
 		}
-		if view.State.Status == RuntimeStatusRunning || view.State.Status == RuntimeStatusIdle {
+		if view.State.Status == RunnerStatusRunning || view.State.Status == RunnerStatusIdle {
 			cancel()
 			finalDeadline := time.Now().Add(2 * time.Second)
 			for time.Now().Before(finalDeadline) {
-				finalView, finalErr := o.QueryRuntime(plan.RuntimeID)
+				finalView, finalErr := o.QueryRunner(plan.RunnerID)
 				if finalErr != nil {
-					t.Fatalf("QueryRuntime(final): %v", finalErr)
+					t.Fatalf("QueryRunner(final): %v", finalErr)
 				}
-				if finalView.State.Status == RuntimeStatusCanceled {
+				if finalView.State.Status == RunnerStatusCanceled {
 					return
 				}
 				time.Sleep(10 * time.Millisecond)
 			}
-			t.Fatal("runtime did not reach canceled after StartRequest context cancellation")
+			t.Fatal("runner did not reach canceled after StartRequest context cancellation")
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
 	cancel()
-	t.Fatal("runtime did not start after StartRequest")
+	t.Fatal("runner did not start after StartRequest")
 }
 
 func TestStartRequest_RejectsPriorityOutsideRange(t *testing.T) {
 	o := newOrchestrator(testLogger)
-	if err := o.RegisterSkill(writeTestSkill(t, "single", "Single-step runtime.")); err != nil {
+	if err := o.RegisterSkill(writeTestSkill(t, "single", "Single-step runner.")); err != nil {
 		t.Fatalf("RegisterSkill(single): %v", err)
 	}
 	if err := o.SetPlanningFunc(func(req *Request, skills map[string]*skill.Skill) (*CoarsePlan, *RejectReason, error) {
@@ -593,30 +592,30 @@ func TestStartRequest_RejectsPriorityOutsideRange(t *testing.T) {
 		if plan != nil || reject != nil {
 			t.Fatalf("expected nil plan and reject for invalid priority %d, got plan=%v reject=%v", priority, plan, reject)
 		}
-		if len(o.Runtimes()) != 0 {
-			t.Fatalf("expected no runtimes to be created for invalid priority %d", priority)
+		if len(o.Runners()) != 0 {
+			t.Fatalf("expected no runners to be created for invalid priority %d", priority)
 		}
 	}
 }
 
 func TestStartRequest_QueuesByPriorityWhenLimitReached(t *testing.T) {
 	o := newOrchestrator(testLogger)
-	if err := o.SetMaxRunningRuntimes(1); err != nil {
-		t.Fatalf("SetMaxRunningRuntimes: %v", err)
+	if err := o.SetMaxRunningRunners(1); err != nil {
+		t.Fatalf("SetMaxRunningRunners: %v", err)
 	}
 
-	firstPlan, firstRuntime := mustPlanSingleNodeRuntime(t, o)
+	firstPlan, firstRunner := mustPlanSingleNodeRunner(t, o)
 	firstStarted := make(chan struct{})
 	firstRelease := make(chan struct{})
-	firstRuntime.Nodes["only"].Executor.RunE = func(ctx context.Context, parentOutputs map[string]any) (any, []*Node, error) {
+	mustNodeExecutor(t, firstRunner.Nodes["only"]).RunE = func(ctx context.Context, parentOutputs map[string]any) (any, []*Node, error) {
 		close(firstStarted)
 		<-firstRelease
 		return "first", nil, nil
 	}
 	firstCtx, cancelFirst := context.WithCancel(context.Background())
 	defer cancelFirst()
-	if err := o.StartRuntime(firstCtx, firstPlan.RuntimeID); err != nil {
-		t.Fatalf("StartRuntime(first): %v", err)
+	if err := o.StartRunner(firstCtx, firstPlan.RunnerID); err != nil {
+		t.Fatalf("StartRunner(first): %v", err)
 	}
 	<-firstStarted
 
@@ -640,40 +639,40 @@ func TestStartRequest_QueuesByPriorityWhenLimitReached(t *testing.T) {
 		t.Fatalf("reject(high) = %+v, want nil", reject)
 	}
 
-	lowRuntime, err := o.Runtime(lowPlan.RuntimeID)
+	lowRunner, err := o.Runner(lowPlan.RunnerID)
 	if err != nil {
-		t.Fatalf("Runtime(low): %v", err)
+		t.Fatalf("Runner(low): %v", err)
 	}
-	highRuntime, err := o.Runtime(highPlan.RuntimeID)
+	highRunner, err := o.Runner(highPlan.RunnerID)
 	if err != nil {
-		t.Fatalf("Runtime(high): %v", err)
+		t.Fatalf("Runner(high): %v", err)
 	}
 
 	lowRelease := make(chan struct{})
-	lowRuntime.Nodes["only"].Executor.RunE = func(ctx context.Context, parentOutputs map[string]any) (any, []*Node, error) {
+	mustNodeExecutor(t, lowRunner.Nodes["only"]).RunE = func(ctx context.Context, parentOutputs map[string]any) (any, []*Node, error) {
 		<-lowRelease
 		return "low", nil, nil
 	}
 	highStarted := make(chan struct{})
 	highRelease := make(chan struct{})
-	highRuntime.Nodes["only"].Executor.RunE = func(ctx context.Context, parentOutputs map[string]any) (any, []*Node, error) {
+	mustNodeExecutor(t, highRunner.Nodes["only"]).RunE = func(ctx context.Context, parentOutputs map[string]any) (any, []*Node, error) {
 		close(highStarted)
 		<-highRelease
 		return "high", nil, nil
 	}
 
-	lowView, err := o.QueryRuntime(lowPlan.RuntimeID)
+	lowView, err := o.QueryRunner(lowPlan.RunnerID)
 	if err != nil {
-		t.Fatalf("QueryRuntime(low): %v", err)
+		t.Fatalf("QueryRunner(low): %v", err)
 	}
-	if lowView.State.Status != RuntimeStatusPending {
+	if lowView.State.Status != RunnerStatusPending {
 		t.Fatalf("low state = %q, want pending", lowView.State.Status)
 	}
-	highView, err := o.QueryRuntime(highPlan.RuntimeID)
+	highView, err := o.QueryRunner(highPlan.RunnerID)
 	if err != nil {
-		t.Fatalf("QueryRuntime(high): %v", err)
+		t.Fatalf("QueryRunner(high): %v", err)
 	}
-	if highView.State.Status != RuntimeStatusPending {
+	if highView.State.Status != RunnerStatusPending {
 		t.Fatalf("high state = %q, want pending", highView.State.Status)
 	}
 
@@ -681,30 +680,30 @@ func TestStartRequest_QueuesByPriorityWhenLimitReached(t *testing.T) {
 	select {
 	case <-highStarted:
 	case <-time.After(2 * time.Second):
-		t.Fatal("timed out waiting for high priority runtime to start")
+		t.Fatal("timed out waiting for high priority runner to start")
 	}
 	time.Sleep(150 * time.Millisecond)
-	lowView, err = o.QueryRuntime(lowPlan.RuntimeID)
+	lowView, err = o.QueryRunner(lowPlan.RunnerID)
 	if err != nil {
-		t.Fatalf("QueryRuntime(low after high start): %v", err)
+		t.Fatalf("QueryRunner(low after high start): %v", err)
 	}
-	if lowView.State.Status != RuntimeStatusPending {
+	if lowView.State.Status != RunnerStatusPending {
 		t.Fatalf("low state after high start = %q, want pending", lowView.State.Status)
 	}
 
 	close(highRelease)
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
-		lowView, err = o.QueryRuntime(lowPlan.RuntimeID)
+		lowView, err = o.QueryRunner(lowPlan.RunnerID)
 		if err != nil {
-			t.Fatalf("QueryRuntime(low after high drain): %v", err)
+			t.Fatalf("QueryRunner(low after high drain): %v", err)
 		}
-		if lowView.State.Status == RuntimeStatusRunning || lowView.State.Status == RuntimeStatusIdle {
+		if lowView.State.Status == RunnerStatusRunning || lowView.State.Status == RunnerStatusIdle {
 			break
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
-	if lowView.State.Status != RuntimeStatusRunning && lowView.State.Status != RuntimeStatusIdle {
+	if lowView.State.Status != RunnerStatusRunning && lowView.State.Status != RunnerStatusIdle {
 		t.Fatalf("low state after high drain = %q, want running or idle", lowView.State.Status)
 	}
 
@@ -714,24 +713,24 @@ func TestStartRequest_QueuesByPriorityWhenLimitReached(t *testing.T) {
 	cancelLow()
 }
 
-func TestStartRequest_CanceledWhileQueuedTransitionsRuntime(t *testing.T) {
+func TestStartRequest_CanceledWhileQueuedTransitionsRunner(t *testing.T) {
 	o := newOrchestrator(testLogger)
-	if err := o.SetMaxRunningRuntimes(1); err != nil {
-		t.Fatalf("SetMaxRunningRuntimes: %v", err)
+	if err := o.SetMaxRunningRunners(1); err != nil {
+		t.Fatalf("SetMaxRunningRunners: %v", err)
 	}
 
-	firstPlan, firstRuntime := mustPlanSingleNodeRuntime(t, o)
+	firstPlan, firstRunner := mustPlanSingleNodeRunner(t, o)
 	firstStarted := make(chan struct{})
 	firstRelease := make(chan struct{})
-	firstRuntime.Nodes["only"].Executor.RunE = func(ctx context.Context, parentOutputs map[string]any) (any, []*Node, error) {
+	mustNodeExecutor(t, firstRunner.Nodes["only"]).RunE = func(ctx context.Context, parentOutputs map[string]any) (any, []*Node, error) {
 		close(firstStarted)
 		<-firstRelease
 		return "first", nil, nil
 	}
 	firstCtx, cancelFirst := context.WithCancel(context.Background())
 	defer cancelFirst()
-	if err := o.StartRuntime(firstCtx, firstPlan.RuntimeID); err != nil {
-		t.Fatalf("StartRuntime(first): %v", err)
+	if err := o.StartRunner(firstCtx, firstPlan.RunnerID); err != nil {
+		t.Fatalf("StartRunner(first): %v", err)
 	}
 	<-firstStarted
 
@@ -743,77 +742,77 @@ func TestStartRequest_CanceledWhileQueuedTransitionsRuntime(t *testing.T) {
 	if reject != nil {
 		t.Fatalf("reject(queued) = %+v, want nil", reject)
 	}
-	queuedRuntime, err := o.Runtime(queuedPlan.RuntimeID)
+	queuedRunner, err := o.Runner(queuedPlan.RunnerID)
 	if err != nil {
-		t.Fatalf("Runtime(queued): %v", err)
+		t.Fatalf("Runner(queued): %v", err)
 	}
 	queuedStarted := make(chan struct{})
-	queuedRuntime.Nodes["only"].Executor.RunE = func(ctx context.Context, parentOutputs map[string]any) (any, []*Node, error) {
+	mustNodeExecutor(t, queuedRunner.Nodes["only"]).RunE = func(ctx context.Context, parentOutputs map[string]any) (any, []*Node, error) {
 		close(queuedStarted)
 		return "queued", nil, nil
 	}
-	updates, unsubscribe, err := o.SubscribeRuntime(queuedPlan.RuntimeID, 4)
+	updates, unsubscribe, err := o.SubscribeRunner(queuedPlan.RunnerID, 4)
 	if err != nil {
-		t.Fatalf("SubscribeRuntime: %v", err)
+		t.Fatalf("SubscribeRunner: %v", err)
 	}
 	defer unsubscribe()
-	waitForRuntimeUpdate(t, updates, func(update RuntimeUpdate) bool {
-		return update.Event == nil && update.State.Status == RuntimeStatusPending
+	waitForRunnerUpdate(t, updates, func(update RunnerUpdate) bool {
+		return update.Event == nil && update.State.Status == RunnerStatusPending
 	}, "queued initial pending update")
 
 	cancelQueued()
-	terminalUpdate := waitForRuntimeUpdate(t, updates, func(update RuntimeUpdate) bool {
-		return update.State.Status == RuntimeStatusCanceled
+	terminalUpdate := waitForRunnerUpdate(t, updates, func(update RunnerUpdate) bool {
+		return update.State.Status == RunnerStatusCanceled
 	}, "queued canceled update")
-	if terminalUpdate.State.Status != RuntimeStatusCanceled {
+	if terminalUpdate.State.Status != RunnerStatusCanceled {
 		t.Fatalf("queued state = %q, want canceled", terminalUpdate.State.Status)
 	}
-	waitForRuntimeUpdateClosed(t, updates, "queued canceled update")
+	waitForRunnerUpdateClosed(t, updates, "queued canceled update")
 
 	close(firstRelease)
 	select {
 	case <-queuedStarted:
-		t.Fatal("queued runtime started after its submission context was canceled")
+		t.Fatal("queued runner started after its submission context was canceled")
 	case <-time.After(200 * time.Millisecond):
 	}
-	view, err := o.QueryRuntime(queuedPlan.RuntimeID)
+	view, err := o.QueryRunner(queuedPlan.RunnerID)
 	if err != nil {
-		t.Fatalf("QueryRuntime(queued): %v", err)
+		t.Fatalf("QueryRunner(queued): %v", err)
 	}
-	if view.State.Status != RuntimeStatusCanceled {
+	if view.State.Status != RunnerStatusCanceled {
 		t.Fatalf("queued final state = %q, want canceled", view.State.Status)
 	}
 	cancelFirst()
 }
 
-func TestLoadRuntimeRecords_LoadsPersistedLog(t *testing.T) {
+func TestLoadRunnerRecords_LoadsPersistedLog(t *testing.T) {
 	o := newOrchestrator(testLogger)
-	store := mustNewRuntimeStore(t, t.TempDir())
-	if err := o.SetRuntimeStore(store); err != nil {
-		t.Fatalf("SetRuntimeStore: %v", err)
+	store := mustNewRunnerStore(t, t.TempDir())
+	if err := o.SetRunnerStore(store); err != nil {
+		t.Fatalf("SetRunnerStore: %v", err)
 	}
-	plan, managedRuntime := mustPlanSingleNodeRuntime(t, o)
+	plan, managedRunner := mustPlanSingleNodeRunner(t, o)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
-	sub := managedRuntime.Runtime.Subscribe(16)
+	sub := managedRunner.Runner.Subscribe(16)
 	go func() {
-		done <- managedRuntime.Runtime.Start(ctx)
+		done <- managedRunner.Runner.Start(ctx)
 	}()
-	if err := managedRuntime.Runtime.AddNodes(ctx, managedRuntime.Nodes["only"]); err != nil {
+	if err := managedRunner.Runner.AddNodes(ctx, managedRunner.Nodes["only"]); err != nil {
 		t.Fatalf("AddNodes: %v", err)
 	}
-	waitForRuntimeEvent(t, sub, EventNodeCompleted, "only")
+	waitForRunnerEvent(t, sub, EventNodeCompleted, "only")
 	cancel()
 	if err := <-done; !errors.Is(err, context.Canceled) {
 		t.Fatalf("Start err = %v, want context.Canceled", err)
 	}
 
-	records, err := o.LoadRuntimeRecords(context.Background(), plan.RuntimeID)
+	records, err := o.LoadRunnerRecords(context.Background(), plan.RunnerID)
 	if err != nil {
-		t.Fatalf("LoadRuntimeRecords: %v", err)
+		t.Fatalf("LoadRunnerRecords: %v", err)
 	}
-	if len(records) == 0 || records[0].Kind != RuntimeRecordInit {
+	if len(records) == 0 || records[0].Kind != RunnerRecordInit {
 		t.Fatalf("records = %+v, want init-prefixed log", records)
 	}
 	if !hasStoredEvent(records, EventNodeCompleted.String(), "only") {
@@ -821,17 +820,17 @@ func TestLoadRuntimeRecords_LoadsPersistedLog(t *testing.T) {
 	}
 }
 
-func TestRemoveRuntime_RejectsActiveRuntime(t *testing.T) {
+func TestRemoveRunner_RejectsActiveRunner(t *testing.T) {
 	o := newOrchestrator(testLogger)
-	store := mustNewRuntimeStore(t, t.TempDir())
-	if err := o.SetRuntimeStore(store); err != nil {
-		t.Fatalf("SetRuntimeStore: %v", err)
+	store := mustNewRunnerStore(t, t.TempDir())
+	if err := o.SetRunnerStore(store); err != nil {
+		t.Fatalf("SetRunnerStore: %v", err)
 	}
-	plan, managedRuntime := mustPlanSingleNodeRuntime(t, o)
+	plan, managedRunner := mustPlanSingleNodeRunner(t, o)
 
 	started := make(chan struct{})
 	release := make(chan struct{})
-	managedRuntime.Nodes["only"].Executor.RunE = func(ctx context.Context, parentOutputs map[string]any) (any, []*Node, error) {
+	mustNodeExecutor(t, managedRunner.Nodes["only"]).RunE = func(ctx context.Context, parentOutputs map[string]any) (any, []*Node, error) {
 		close(started)
 		<-release
 		return nil, nil, nil
@@ -840,15 +839,15 @@ func TestRemoveRuntime_RejectsActiveRuntime(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
 	go func() {
-		done <- managedRuntime.Runtime.Start(ctx)
+		done <- managedRunner.Runner.Start(ctx)
 	}()
-	if err := managedRuntime.Runtime.AddNodes(ctx, managedRuntime.Nodes["only"]); err != nil {
+	if err := managedRunner.Runner.AddNodes(ctx, managedRunner.Nodes["only"]); err != nil {
 		t.Fatalf("AddNodes: %v", err)
 	}
 	<-started
 
-	if err := o.RemoveRuntime(context.Background(), plan.RuntimeID); !errors.Is(err, ErrRuntimeActive) {
-		t.Fatalf("RemoveRuntime err = %v, want ErrRuntimeActive", err)
+	if err := o.RemoveRunner(context.Background(), plan.RunnerID); !errors.Is(err, ErrRunnerActive) {
+		t.Fatalf("RemoveRunner err = %v, want ErrRunnerActive", err)
 	}
 	close(release)
 	cancel()
@@ -857,14 +856,14 @@ func TestRemoveRuntime_RejectsActiveRuntime(t *testing.T) {
 	}
 }
 
-func TestRemoveRuntime_DeletesTerminalRuntimeAndLog(t *testing.T) {
+func TestRemoveRunner_DeletesTerminalRunnerAndLog(t *testing.T) {
 	o := newOrchestrator(testLogger)
-	store := mustNewRuntimeStore(t, t.TempDir())
-	if err := o.SetRuntimeStore(store); err != nil {
-		t.Fatalf("SetRuntimeStore: %v", err)
+	store := mustNewRunnerStore(t, t.TempDir())
+	if err := o.SetRunnerStore(store); err != nil {
+		t.Fatalf("SetRunnerStore: %v", err)
 	}
-	plan, managedRuntime := mustPlanSingleNodeRuntime(t, o)
-	managedRuntime.Nodes["only"].Executor.RunE = func(ctx context.Context, parentOutputs map[string]any) (any, []*Node, error) {
+	plan, managedRunner := mustPlanSingleNodeRunner(t, o)
+	mustNodeExecutor(t, managedRunner.Nodes["only"]).RunE = func(ctx context.Context, parentOutputs map[string]any) (any, []*Node, error) {
 		return nil, nil, errors.New("boom")
 	}
 
@@ -872,23 +871,23 @@ func TestRemoveRuntime_DeletesTerminalRuntimeAndLog(t *testing.T) {
 	defer cancel()
 	done := make(chan error, 1)
 	go func() {
-		done <- managedRuntime.Runtime.Start(ctx)
+		done <- managedRunner.Runner.Start(ctx)
 	}()
-	if err := managedRuntime.Runtime.AddNodes(ctx, managedRuntime.Nodes["only"]); err != nil {
+	if err := managedRunner.Runner.AddNodes(ctx, managedRunner.Nodes["only"]); err != nil {
 		t.Fatalf("AddNodes: %v", err)
 	}
 	if err := <-done; err == nil {
-		t.Fatal("expected runtime failure")
+		t.Fatal("expected runner failure")
 	}
 
-	if err := o.RemoveRuntime(context.Background(), plan.RuntimeID); err != nil {
-		t.Fatalf("RemoveRuntime: %v", err)
+	if err := o.RemoveRunner(context.Background(), plan.RunnerID); err != nil {
+		t.Fatalf("RemoveRunner: %v", err)
 	}
-	if _, err := o.Runtime(plan.RuntimeID); !errors.Is(err, ErrRuntimeNotFound) {
-		t.Fatalf("Runtime err = %v, want ErrRuntimeNotFound", err)
+	if _, err := o.Runner(plan.RunnerID); !errors.Is(err, ErrRunnerNotFound) {
+		t.Fatalf("Runner err = %v, want ErrRunnerNotFound", err)
 	}
-	if _, err := store.Load(context.Background(), plan.RuntimeID); !errors.Is(err, ErrRuntimeLogNotFound) {
-		t.Fatalf("store.Load err = %v, want ErrRuntimeLogNotFound", err)
+	if _, err := store.Load(context.Background(), plan.RunnerID); !errors.Is(err, ErrRunnerLogNotFound) {
+		t.Fatalf("store.Load err = %v, want ErrRunnerLogNotFound", err)
 	}
 }
 

@@ -1,4 +1,4 @@
-package orchestrate
+package runner
 
 import (
 	"context"
@@ -9,21 +9,12 @@ import (
 	"testing"
 )
 
-func mustNewRuntimeStore(t *testing.T, dir string) *JSONRuntimeStore {
-	t.Helper()
-	store, err := NewJSONRuntimeStore(dir)
-	if err != nil {
-		t.Fatalf("NewJSONRuntimeStore: %v", err)
-	}
-	return store
-}
-
-func TestJSONRuntimeStoreAppendAssignsMonotonicSeq(t *testing.T) {
-	store := mustNewRuntimeStore(t, t.TempDir())
+func TestJSONRunnerStoreAppendAssignsMonotonicSeq(t *testing.T) {
+	store := mustNewRunnerStore(t, t.TempDir())
 	ctx := context.Background()
 	const id = "alpha"
 
-	seq, err := store.Append(ctx, id, &RuntimeRecord{Kind: RuntimeRecordInit})
+	seq, err := store.Append(ctx, id, &RunnerRecord{Kind: RunnerRecordInit})
 	if err != nil {
 		t.Fatalf("Append init: %v", err)
 	}
@@ -31,7 +22,7 @@ func TestJSONRuntimeStoreAppendAssignsMonotonicSeq(t *testing.T) {
 		t.Fatalf("init seq = %d, want 1", seq)
 	}
 
-	seq2, err := store.Append(ctx, id, &RuntimeRecord{Kind: RuntimeRecordStatus, Status: RuntimeStatusRunning})
+	seq2, err := store.Append(ctx, id, &RunnerRecord{Kind: RunnerRecordStatus, Status: RunnerStatusRunning})
 	if err != nil {
 		t.Fatalf("Append status: %v", err)
 	}
@@ -39,7 +30,7 @@ func TestJSONRuntimeStoreAppendAssignsMonotonicSeq(t *testing.T) {
 		t.Fatalf("status seq = %d, want 2", seq2)
 	}
 
-	seq3, err := store.Append(ctx, id, &RuntimeRecord{Kind: RuntimeRecordEvent, Event: newStoredRuntimeEvent(RuntimeEvent{Type: EventNodeCompleted, NodeID: "n1", Data: 10})})
+	seq3, err := store.Append(ctx, id, &RunnerRecord{Kind: RunnerRecordEvent, Event: newStoredRunnerEvent(RunnerEvent{Type: EventNodeCompleted, NodeID: "n1", Data: 10})})
 	if err != nil {
 		t.Fatalf("Append event: %v", err)
 	}
@@ -54,7 +45,7 @@ func TestJSONRuntimeStoreAppendAssignsMonotonicSeq(t *testing.T) {
 	if len(records) != 3 {
 		t.Fatalf("records = %d, want 3", len(records))
 	}
-	if records[0].Kind != RuntimeRecordInit || records[0].Seq != 1 {
+	if records[0].Kind != RunnerRecordInit || records[0].Seq != 1 {
 		t.Fatalf("records[0] = %+v", records[0])
 	}
 	if records[0].Timestamp.IsZero() {
@@ -68,39 +59,39 @@ func TestJSONRuntimeStoreAppendAssignsMonotonicSeq(t *testing.T) {
 	}
 }
 
-func TestJSONRuntimeStoreFirstAppendMustBeInit(t *testing.T) {
-	store := mustNewRuntimeStore(t, t.TempDir())
-	_, err := store.Append(context.Background(), "a", &RuntimeRecord{Kind: RuntimeRecordStatus, Status: RuntimeStatusRunning})
-	if !errors.Is(err, ErrRuntimeLogNotInitialised) {
-		t.Fatalf("err = %v, want ErrRuntimeLogNotInitialised", err)
+func TestJSONRunnerStoreFirstAppendMustBeInit(t *testing.T) {
+	store := mustNewRunnerStore(t, t.TempDir())
+	_, err := store.Append(context.Background(), "a", &RunnerRecord{Kind: RunnerRecordStatus, Status: RunnerStatusRunning})
+	if !errors.Is(err, ErrRunnerLogNotInitialised) {
+		t.Fatalf("err = %v, want ErrRunnerLogNotInitialised", err)
 	}
 }
 
-func TestJSONRuntimeStoreRejectsDoubleInit(t *testing.T) {
-	store := mustNewRuntimeStore(t, t.TempDir())
+func TestJSONRunnerStoreRejectsDoubleInit(t *testing.T) {
+	store := mustNewRunnerStore(t, t.TempDir())
 	ctx := context.Background()
-	if _, err := store.Append(ctx, "a", &RuntimeRecord{Kind: RuntimeRecordInit}); err != nil {
+	if _, err := store.Append(ctx, "a", &RunnerRecord{Kind: RunnerRecordInit}); err != nil {
 		t.Fatalf("Append init: %v", err)
 	}
-	_, err := store.Append(ctx, "a", &RuntimeRecord{Kind: RuntimeRecordInit})
-	if !errors.Is(err, ErrRuntimeLogAlreadyInitialised) {
-		t.Fatalf("err = %v, want ErrRuntimeLogAlreadyInitialised", err)
+	_, err := store.Append(ctx, "a", &RunnerRecord{Kind: RunnerRecordInit})
+	if !errors.Is(err, ErrRunnerLogAlreadyInitialised) {
+		t.Fatalf("err = %v, want ErrRunnerLogAlreadyInitialised", err)
 	}
 }
 
-func TestJSONRuntimeStoreLoadMissing(t *testing.T) {
-	store := mustNewRuntimeStore(t, t.TempDir())
+func TestJSONRunnerStoreLoadMissing(t *testing.T) {
+	store := mustNewRunnerStore(t, t.TempDir())
 	_, err := store.Load(context.Background(), "missing")
-	if !errors.Is(err, ErrRuntimeLogNotFound) {
-		t.Fatalf("err = %v, want ErrRuntimeLogNotFound", err)
+	if !errors.Is(err, ErrRunnerLogNotFound) {
+		t.Fatalf("err = %v, want ErrRunnerLogNotFound", err)
 	}
 }
 
-func TestJSONRuntimeStoreLoadToleratesPartialTrailingLine(t *testing.T) {
+func TestJSONRunnerStoreLoadToleratesPartialTrailingLine(t *testing.T) {
 	dir := t.TempDir()
-	store := mustNewRuntimeStore(t, dir)
+	store := mustNewRunnerStore(t, dir)
 	ctx := context.Background()
-	if _, err := store.Append(ctx, "a", &RuntimeRecord{Kind: RuntimeRecordInit}); err != nil {
+	if _, err := store.Append(ctx, "a", &RunnerRecord{Kind: RunnerRecordInit}); err != nil {
 		t.Fatalf("Append init: %v", err)
 	}
 
@@ -119,16 +110,16 @@ func TestJSONRuntimeStoreLoadToleratesPartialTrailingLine(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
-	if len(records) != 1 || records[0].Kind != RuntimeRecordInit {
+	if len(records) != 1 || records[0].Kind != RunnerRecordInit {
 		t.Fatalf("records = %+v, want only init", records)
 	}
 }
 
-func TestJSONRuntimeStoreAppendAfterPartialLineContinuesSeq(t *testing.T) {
+func TestJSONRunnerStoreAppendAfterPartialLineContinuesSeq(t *testing.T) {
 	dir := t.TempDir()
-	store := mustNewRuntimeStore(t, dir)
+	store := mustNewRunnerStore(t, dir)
 	ctx := context.Background()
-	if _, err := store.Append(ctx, "a", &RuntimeRecord{Kind: RuntimeRecordInit}); err != nil {
+	if _, err := store.Append(ctx, "a", &RunnerRecord{Kind: RunnerRecordInit}); err != nil {
 		t.Fatalf("Append init: %v", err)
 	}
 
@@ -143,7 +134,7 @@ func TestJSONRuntimeStoreAppendAfterPartialLineContinuesSeq(t *testing.T) {
 		t.Fatalf("close partial file: %v", err)
 	}
 
-	seq, err := store.Append(ctx, "a", &RuntimeRecord{Kind: RuntimeRecordStatus, Status: RuntimeStatusRunning})
+	seq, err := store.Append(ctx, "a", &RunnerRecord{Kind: RunnerRecordStatus, Status: RunnerStatusRunning})
 	if err != nil {
 		t.Fatalf("Append after partial: %v", err)
 	}
@@ -152,25 +143,25 @@ func TestJSONRuntimeStoreAppendAfterPartialLineContinuesSeq(t *testing.T) {
 	}
 }
 
-func TestJSONRuntimeStoreDelete(t *testing.T) {
-	store := mustNewRuntimeStore(t, t.TempDir())
+func TestJSONRunnerStoreDelete(t *testing.T) {
+	store := mustNewRunnerStore(t, t.TempDir())
 	ctx := context.Background()
-	if _, err := store.Append(ctx, "a", &RuntimeRecord{Kind: RuntimeRecordInit}); err != nil {
+	if _, err := store.Append(ctx, "a", &RunnerRecord{Kind: RunnerRecordInit}); err != nil {
 		t.Fatalf("Append init: %v", err)
 	}
 	if err := store.Delete(ctx, "a"); err != nil {
 		t.Fatalf("Delete: %v", err)
 	}
-	if err := store.Delete(ctx, "a"); !errors.Is(err, ErrRuntimeLogNotFound) {
-		t.Fatalf("Delete missing err = %v, want ErrRuntimeLogNotFound", err)
+	if err := store.Delete(ctx, "a"); !errors.Is(err, ErrRunnerLogNotFound) {
+		t.Fatalf("Delete missing err = %v, want ErrRunnerLogNotFound", err)
 	}
 }
 
-func TestJSONRuntimeStoreConcurrentAppendSerialises(t *testing.T) {
-	store := mustNewRuntimeStore(t, t.TempDir())
+func TestJSONRunnerStoreConcurrentAppendSerialises(t *testing.T) {
+	store := mustNewRunnerStore(t, t.TempDir())
 	ctx := context.Background()
 	const id = "parallel"
-	if _, err := store.Append(ctx, id, &RuntimeRecord{Kind: RuntimeRecordInit}); err != nil {
+	if _, err := store.Append(ctx, id, &RunnerRecord{Kind: RunnerRecordInit}); err != nil {
 		t.Fatalf("Append init: %v", err)
 	}
 
@@ -182,7 +173,7 @@ func TestJSONRuntimeStoreConcurrentAppendSerialises(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			for j := 0; j < perWriter; j++ {
-				if _, err := store.Append(ctx, id, &RuntimeRecord{Kind: RuntimeRecordStatus, Status: RuntimeStatusRunning}); err != nil {
+				if _, err := store.Append(ctx, id, &RunnerRecord{Kind: RunnerRecordStatus, Status: RunnerStatusRunning}); err != nil {
 					t.Errorf("Append: %v", err)
 					return
 				}

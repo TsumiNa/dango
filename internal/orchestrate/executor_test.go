@@ -9,6 +9,7 @@ import (
 
 	"github.com/tsumina/dango/internal/llm"
 	"github.com/tsumina/dango/internal/llm/skill"
+	runnerpkg "github.com/tsumina/dango/internal/orchestrate/runner"
 )
 
 func loadTestSkill(t *testing.T) *skill.Skill {
@@ -75,7 +76,7 @@ func TestExecute_UsesRunEWhenSet(t *testing.T) {
 		t.Fatalf("NewExecutor: %v", err)
 	}
 	called := false
-	exec.RunE = func(ctx context.Context, parentOutputs map[string]any) (any, []*Node, error) {
+	exec.RunE = func(ctx context.Context, parentOutputs map[string]any) (any, []*runnerpkg.Node, error) {
 		called = true
 		return "ok", nil, nil
 	}

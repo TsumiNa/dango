@@ -6,6 +6,7 @@ import (
 	"log/slog"
 
 	"github.com/tsumina/dango/internal/llm/skill"
+	runnerpkg "github.com/tsumina/dango/internal/orchestrate/runner"
 )
 
 // Status reports the lifecycle state of an [Executor].
@@ -62,9 +63,9 @@ type Executor struct {
 	Status Status
 
 	// RunE optionally overrides the default execution path. It is the
-	// hook the runtime tests use to inject behavior into an Executor
+	// hook the runner tests use to inject behavior into an Executor
 	// without depending on a real skill or LLM client.
-	RunE func(ctx context.Context, parentOutputs map[string]any) (output any, newNodes []*Node, err error)
+	RunE func(ctx context.Context, parentOutputs map[string]any) (output any, newNodes []*runnerpkg.Node, err error)
 }
 
 // NewExecutor constructs an [Executor] bound to sk and planner.
@@ -120,7 +121,7 @@ func (e *Executor) planTask() error {
 // Execute runs the task. When [Executor.RunE] is set it is invoked
 // directly; otherwise Execute is currently a no-op placeholder until the
 // real skill-driven execution path is implemented.
-func (e *Executor) Execute(ctx context.Context, parentOutputs map[string]any) (any, []*Node, error) {
+func (e *Executor) Execute(ctx context.Context, parentOutputs map[string]any) (any, []*runnerpkg.Node, error) {
 	e.logf("Executing tasks...")
 
 	if e.RunE != nil {
