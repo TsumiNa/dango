@@ -1,0 +1,204 @@
+package orchestrate
+
+import (
+	"container/heap"
+	"context"
+	"sync"
+
+	runnerpkg "github.com/tsumina/dango/internal/orchestrate/runner"
+)
+
+func (o *Orchestrator) submitManagedRunner(ctx context.Context, runner *ManagedRunner, priority RequestPriority) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		runner.finishBeforeStart(err)
+		return err
+	}
+
+	id := runner.Runner.ID()
+	o.mu.Lock()
+	if o.maxRunningRunners == 0 || len(o.runningRunnerIDs) < o.maxRunningRunners {
+		o.runningRunnerIDs[id] = struct{}{}
+		o.mu.Unlock()
+		return o.startManagedRunnerWithReservedSlot(ctx, runner)
+	}
+	entry := &queuedRunner{
+		runner:   runner,
+		ctx:      ctx,
+		priority: priority,
+		order:    o.nextQueueOrder,
+		done:     make(chan struct{}),
+	}
+	o.nextQueueOrder++
+	heap.Push(&o.queuedRunners, entry)
+	o.queuedRunnerByID[id] = entry
+	o.mu.Unlock()
+
+	go o.watchQueuedRunner(entry)
+	return nil
+}
+
+func (o *Orchestrator) watchQueuedRunner(entry *queuedRunner) {
+	select {
+	case <-entry.done:
+		return
+	case <-entry.ctx.Done():
+		o.cancelQueuedRunner(entry, entry.ctx.Err())
+	}
+}
+
+func (o *Orchestrator) cancelQueuedRunner(entry *queuedRunner, runErr error) {
+	toStart, toCancel := o.removeQueuedRunner(entry, true)
+	entry.runner.finishBeforeStart(runErr)
+	o.finishQueuedDispatch(toStart, toCancel)
+}
+
+func (o *Orchestrator) removeQueuedRunner(entry *queuedRunner, canceled bool) ([]*queuedRunner, []*queuedRunner) {
+	id := entry.runner.Runner.ID()
+	o.mu.Lock()
+	current := o.queuedRunnerByID[id]
+	if current != entry {
+		o.mu.Unlock()
+		return nil, nil
+	}
+	if canceled {
+		entry.canceled = true
+	}
+	delete(o.queuedRunnerByID, id)
+	entry.deactivate()
+	toStart, toCancel := o.collectQueuedStartsLocked()
+	o.mu.Unlock()
+	return toStart, toCancel
+}
+
+func (o *Orchestrator) startManagedRunner(ctx context.Context, runner *ManagedRunner) error {
+	id := runner.Runner.ID()
+	o.mu.Lock()
+	if entry := o.queuedRunnerByID[id]; entry != nil {
+		entry.canceled = true
+		delete(o.queuedRunnerByID, id)
+		entry.deactivate()
+	}
+	if _, ok := o.runningRunnerIDs[id]; !ok {
+		o.runningRunnerIDs[id] = struct{}{}
+	}
+	o.mu.Unlock()
+	return o.startManagedRunnerWithReservedSlot(ctx, runner)
+}
+
+func (o *Orchestrator) startManagedRunnerWithReservedSlot(ctx context.Context, runner *ManagedRunner) error {
+	if err := runner.start(ctx); err != nil {
+		o.handleManagedRunnerStartError(runner, err)
+		return err
+	}
+	return nil
+}
+
+func (o *Orchestrator) handleManagedRunnerStartError(runner *ManagedRunner, runErr error) {
+	id := runner.Runner.ID()
+	o.mu.Lock()
+	delete(o.runningRunnerIDs, id)
+	toStart, toCancel := o.collectQueuedStartsLocked()
+	o.mu.Unlock()
+	if runner.Runner.State().Status == runnerpkg.RunnerStatusPending {
+		runner.finishBeforeStart(runErr)
+	}
+	o.finishQueuedDispatch(toStart, toCancel)
+}
+
+func (o *Orchestrator) releaseRunnerExecutionSlot(id string) {
+	o.mu.Lock()
+	delete(o.runningRunnerIDs, id)
+	toStart, toCancel := o.collectQueuedStartsLocked()
+	o.mu.Unlock()
+	o.finishQueuedDispatch(toStart, toCancel)
+}
+
+func (o *Orchestrator) collectQueuedStartsLocked() ([]*queuedRunner, []*queuedRunner) {
+	var toStart []*queuedRunner
+	var toCancel []*queuedRunner
+	for o.maxRunningRunners == 0 || len(o.runningRunnerIDs) < o.maxRunningRunners {
+		entry := o.popQueuedRunnerLocked()
+		if entry == nil {
+			break
+		}
+		delete(o.queuedRunnerByID, entry.runner.Runner.ID())
+		entry.deactivate()
+		if entry.canceled {
+			continue
+		}
+		if err := entry.ctx.Err(); err != nil {
+			entry.canceled = true
+			toCancel = append(toCancel, entry)
+			continue
+		}
+		o.runningRunnerIDs[entry.runner.Runner.ID()] = struct{}{}
+		toStart = append(toStart, entry)
+	}
+	return toStart, toCancel
+}
+
+func (o *Orchestrator) popQueuedRunnerLocked() *queuedRunner {
+	for len(o.queuedRunners) > 0 {
+		entry := heap.Pop(&o.queuedRunners).(*queuedRunner)
+		if entry.canceled {
+			continue
+		}
+		return entry
+	}
+	return nil
+}
+
+func (o *Orchestrator) finishQueuedDispatch(toStart []*queuedRunner, toCancel []*queuedRunner) {
+	for _, entry := range toCancel {
+		entry.runner.finishBeforeStart(entry.ctx.Err())
+	}
+	for _, entry := range toStart {
+		_ = o.startManagedRunnerWithReservedSlot(entry.ctx, entry.runner)
+	}
+}
+
+type queuedRunner struct {
+	runner   *ManagedRunner
+	ctx      context.Context
+	priority RequestPriority
+	order    uint64
+	canceled bool
+	done     chan struct{}
+	doneOnce sync.Once
+}
+
+func (q *queuedRunner) deactivate() {
+	q.doneOnce.Do(func() {
+		close(q.done)
+	})
+}
+
+type runnerStartQueue []*queuedRunner
+
+func (q runnerStartQueue) Len() int { return len(q) }
+
+func (q runnerStartQueue) Less(i, j int) bool {
+	if q[i].priority == q[j].priority {
+		return q[i].order < q[j].order
+	}
+	return q[i].priority > q[j].priority
+}
+
+func (q runnerStartQueue) Swap(i, j int) {
+	q[i], q[j] = q[j], q[i]
+}
+
+func (q *runnerStartQueue) Push(x any) {
+	*q = append(*q, x.(*queuedRunner))
+}
+
+func (q *runnerStartQueue) Pop() any {
+	old := *q
+	n := len(old)
+	entry := old[n-1]
+	*q = old[:n-1]
+	return entry
+}

@@ -1,24 +1,34 @@
-package orchestrate
+package runner
 
 import (
 	"context"
 	"fmt"
-	"log/slog"
-	"os"
 	"sync"
 	"testing"
 	"time"
 )
 
-var testLogger = slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelError}))
+func TestNewRunner_AssignsUniqueID(t *testing.T) {
+	first := NewRunner(testLogger)
+	second := NewRunner(testLogger)
+	if first.ID() == "" {
+		t.Fatal("expected first runner to have a non-empty ID")
+	}
+	if second.ID() == "" {
+		t.Fatal("expected second runner to have a non-empty ID")
+	}
+	if first.ID() == second.ID() {
+		t.Fatalf("runner IDs should be unique, got %q", first.ID())
+	}
+}
 
-func TestRuntime_StaticGraphExecution(t *testing.T) {
-	r := NewRuntime(testLogger)
+func TestRunner_StaticGraphExecution(t *testing.T) {
+	r := NewRunner(testLogger)
 
 	nodeA := &Node{
 		Id: "A",
-		Executor: &Executor{
-			RunE: func(ctx context.Context, parentOutputs map[string]any) (any, []*Node, error) {
+		Executor: &testExecutor{
+			run: func(ctx context.Context, parentOutputs map[string]any) (any, []*Node, error) {
 				return 10, nil, nil
 			},
 		},
@@ -27,29 +37,25 @@ func TestRuntime_StaticGraphExecution(t *testing.T) {
 	nodeB := &Node{
 		Id:      "B",
 		Parents: []*Node{nodeA},
-		Executor: &Executor{
-			RunE: func(ctx context.Context, parentOutputs map[string]any) (any, []*Node, error) {
+		Executor: &testExecutor{
+			run: func(ctx context.Context, parentOutputs map[string]any) (any, []*Node, error) {
 				val := parentOutputs["A"].(int)
 				return val * 2, nil, nil
 			},
 		},
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second*2)
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 
-	// Start runtime
 	go func() {
 		_ = r.Start(ctx)
 	}()
 
-	// Add nodes to runtime
-	err := r.AddNodes(ctx, nodeA, nodeB)
-	if err != nil {
+	if err := r.AddNodes(ctx, nodeA, nodeB); err != nil {
 		t.Fatalf("failed to add nodes: %v", err)
 	}
 
-	// Give it a moment to process
 	time.Sleep(100 * time.Millisecond)
 
 	snap, err := r.GetSnapshot(ctx)
@@ -65,20 +71,18 @@ func TestRuntime_StaticGraphExecution(t *testing.T) {
 	}
 }
 
-func TestRuntime_DynamicNodeAppend(t *testing.T) {
-	r := NewRuntime(testLogger)
+func TestRunner_DynamicNodeAppend(t *testing.T) {
+	r := NewRunner(testLogger)
 
-	// Node C will dynamically spawn Node D
 	var nodeD *Node
 	nodeC := &Node{
 		Id: "C",
-		Executor: &Executor{
-			RunE: func(ctx context.Context, parentOutputs map[string]any) (any, []*Node, error) {
+		Executor: &testExecutor{
+			run: func(ctx context.Context, parentOutputs map[string]any) (any, []*Node, error) {
 				nodeD = &Node{
-					Id:      "D",
-					Parents: nil,
-					Executor: &Executor{
-						RunE: func(ctx context.Context, pOuts map[string]any) (any, []*Node, error) {
+					Id: "D",
+					Executor: &testExecutor{
+						run: func(ctx context.Context, pOuts map[string]any) (any, []*Node, error) {
 							return "dynamic-result", nil, nil
 						},
 					},
@@ -88,7 +92,7 @@ func TestRuntime_DynamicNodeAppend(t *testing.T) {
 		},
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second*2)
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 
 	go func() {
@@ -112,13 +116,13 @@ func TestRuntime_DynamicNodeAppend(t *testing.T) {
 	}
 }
 
-func TestRuntime_ErrorTermination(t *testing.T) {
-	r := NewRuntime(testLogger)
+func TestRunner_ErrorTermination(t *testing.T) {
+	r := NewRunner(testLogger)
 
 	nodeErr := &Node{
 		Id: "Err",
-		Executor: &Executor{
-			RunE: func(ctx context.Context, parentOutputs map[string]any) (any, []*Node, error) {
+		Executor: &testExecutor{
+			run: func(ctx context.Context, parentOutputs map[string]any) (any, []*Node, error) {
 				return nil, nil, fmt.Errorf("simulated failure")
 			},
 		},
@@ -127,14 +131,14 @@ func TestRuntime_ErrorTermination(t *testing.T) {
 	nodeNever := &Node{
 		Id:      "Never",
 		Parents: []*Node{nodeErr},
-		Executor: &Executor{
-			RunE: func(ctx context.Context, parentOutputs map[string]any) (any, []*Node, error) {
+		Executor: &testExecutor{
+			run: func(ctx context.Context, parentOutputs map[string]any) (any, []*Node, error) {
 				return "should-not-run", nil, nil
 			},
 		},
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second*2)
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 
 	var wg sync.WaitGroup
@@ -157,10 +161,10 @@ func TestRuntime_ErrorTermination(t *testing.T) {
 	}
 }
 
-func TestRuntime_SubscriberAndExternalAppend(t *testing.T) {
-	r := NewRuntime(testLogger)
+func TestRunner_SubscriberAndExternalAppend(t *testing.T) {
+	r := NewRunner(testLogger)
 
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second*2)
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 
 	subCh := r.Subscribe(10)
@@ -171,8 +175,8 @@ func TestRuntime_SubscriberAndExternalAppend(t *testing.T) {
 
 	nodeFirst := &Node{
 		Id: "First",
-		Executor: &Executor{
-			RunE: func(ctx context.Context, pOuts map[string]any) (any, []*Node, error) {
+		Executor: &testExecutor{
+			run: func(ctx context.Context, pOuts map[string]any) (any, []*Node, error) {
 				return 1, nil, nil
 			},
 		},
@@ -180,7 +184,6 @@ func TestRuntime_SubscriberAndExternalAppend(t *testing.T) {
 
 	_ = r.AddNodes(ctx, nodeFirst)
 
-	// Wait for First to complete via events
 	completedFirst := false
 	for e := range subCh {
 		if e.Type == EventNodeCompleted && e.NodeID == "First" {
@@ -192,12 +195,11 @@ func TestRuntime_SubscriberAndExternalAppend(t *testing.T) {
 		t.Fatal("never received completed event for First")
 	}
 
-	// While it's running, dynamically add a completely new node externally
 	nodeExtDynamic := &Node{
 		Id:      "ExtDynamic",
 		Parents: []*Node{nodeFirst},
-		Executor: &Executor{
-			RunE: func(ctx context.Context, pOuts map[string]any) (any, []*Node, error) {
+		Executor: &testExecutor{
+			run: func(ctx context.Context, pOuts map[string]any) (any, []*Node, error) {
 				val, _ := pOuts["First"].(int)
 				return val * 10, nil, nil
 			},

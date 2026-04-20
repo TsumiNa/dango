@@ -3,9 +3,10 @@ package orchestrate
 import (
 	"context"
 	"fmt"
-	"log"
+	"log/slog"
 
 	"github.com/tsumina/dango/internal/llm/skill"
+	runnerpkg "github.com/tsumina/dango/internal/orchestrate/runner"
 )
 
 // Status reports the lifecycle state of an [Executor].
@@ -52,7 +53,7 @@ type SharedData struct {
 // task. The zero value is not usable; construct instances with
 // [NewExecutor].
 type Executor struct {
-	logger  *log.Logger
+	logger  *slog.Logger
 	skill   *skill.Skill
 	planner *ExecutionPlanner
 
@@ -62,9 +63,9 @@ type Executor struct {
 	Status Status
 
 	// RunE optionally overrides the default execution path. It is the
-	// hook the runtime tests use to inject behavior into an Executor
+	// hook the runner tests use to inject behavior into an Executor
 	// without depending on a real skill or LLM client.
-	RunE func(ctx context.Context, parentOutputs map[string]any) (output any, newNodes []*Node, err error)
+	RunE func(ctx context.Context, parentOutputs map[string]any) (output any, newNodes []*runnerpkg.Node, err error)
 }
 
 // NewExecutor constructs an [Executor] bound to sk and planner.
@@ -72,7 +73,7 @@ type Executor struct {
 // logger receives lifecycle log messages and may be nil to silence them.
 // sk and planner must be non-nil; sk supplies the workspace directory,
 // metadata, instruction prompt, and LLM client used during execution.
-func NewExecutor(logger *log.Logger, sk *skill.Skill, planner *ExecutionPlanner) (*Executor, error) {
+func NewExecutor(logger *slog.Logger, sk *skill.Skill, planner *ExecutionPlanner) (*Executor, error) {
 	if sk == nil {
 		return nil, fmt.Errorf("orchestrate: executor requires a non-nil skill")
 	}
@@ -80,7 +81,7 @@ func NewExecutor(logger *log.Logger, sk *skill.Skill, planner *ExecutionPlanner)
 		return nil, fmt.Errorf("orchestrate: executor requires a non-nil planner")
 	}
 	if logger != nil {
-		logger.Println("Creating a new Executor...")
+		logger.Info("Creating a new Executor")
 	}
 	return &Executor{
 		logger:  logger,
@@ -120,7 +121,7 @@ func (e *Executor) planTask() error {
 // Execute runs the task. When [Executor.RunE] is set it is invoked
 // directly; otherwise Execute is currently a no-op placeholder until the
 // real skill-driven execution path is implemented.
-func (e *Executor) Execute(ctx context.Context, parentOutputs map[string]any) (any, []*Node, error) {
+func (e *Executor) Execute(ctx context.Context, parentOutputs map[string]any) (any, []*runnerpkg.Node, error) {
 	e.logf("Executing tasks...")
 
 	if e.RunE != nil {
@@ -133,5 +134,5 @@ func (e *Executor) logf(format string, args ...any) {
 	if e.logger == nil {
 		return
 	}
-	e.logger.Printf(format, args...)
+	e.logger.Debug(fmt.Sprintf(format, args...))
 }
