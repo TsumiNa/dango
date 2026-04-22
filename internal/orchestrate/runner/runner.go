@@ -124,11 +124,41 @@ func (r *Runner) Phase() RunnerPhase {
 
 // Plan returns the [CoarsePlan] the runner was constructed with via
 // [WithPlan], or nil in bare mode.
-func (r *Runner) Plan() *CoarsePlan { return r.plan }
+func (r *Runner) Plan() *CoarsePlan {
+	r.stateMu.RLock()
+	defer r.stateMu.RUnlock()
+	return CloneCoarsePlan(r.plan)
+}
 
 // Nodes returns the initial node graph supplied via [WithPlan], keyed by
 // node ID, or nil in bare mode.
-func (r *Runner) Nodes() map[string]*Node { return r.initialNodes }
+func (r *Runner) Nodes() map[string]*Node {
+	r.stateMu.RLock()
+	defer r.stateMu.RUnlock()
+	return cloneNodeMap(r.initialNodes)
+}
+
+func cloneNodeMap(nodes map[string]*Node) map[string]*Node {
+	if nodes == nil {
+		return nil
+	}
+	copyNodes := make(map[string]*Node, len(nodes))
+	for id, node := range nodes {
+		copyNodes[id] = node
+	}
+	return copyNodes
+}
+
+func nodeMapSlice(nodes map[string]*Node) []*Node {
+	if len(nodes) == 0 {
+		return nil
+	}
+	list := make([]*Node, 0, len(nodes))
+	for _, node := range nodes {
+		list = append(list, node)
+	}
+	return list
+}
 
 // Done returns a channel that closes when the runner has settled into a
 // terminal phase ([PhaseSettled]).
@@ -183,10 +213,10 @@ func (r *Runner) SubscribeUpdates(bufferSize int) (<-chan RunnerUpdate, func()) 
 		bufferSize = 1
 	}
 	ch := make(chan RunnerUpdate, bufferSize)
-
-	r.updateMu.Lock()
 	state := r.State()
 	phase := r.Phase()
+
+	r.updateMu.Lock()
 	update := RunnerUpdate{
 		RunnerID: r.id,
 		State:    state,
@@ -224,7 +254,7 @@ func (r *Runner) View() *RunnerView {
 	r.updateMu.Unlock()
 	return &RunnerView{
 		RunnerID: r.id,
-		Plan:     CloneCoarsePlan(r.plan),
+		Plan:     r.Plan(),
 		State:    r.State(),
 		Phase:    r.Phase(),
 		Snapshot: snapshot,
@@ -267,38 +297,39 @@ func (r *Runner) GetSnapshot(ctx context.Context) (RunnerSnapshot, error) {
 // already been started, or if queueing initial nodes fails; the engine's
 // ultimate error is retrieved via [Runner.Wait] after the runner settles.
 func (r *Runner) Start(ctx context.Context) error {
-	r.stateMu.RLock()
-	status := r.state.Status
-	phase := r.phase
-	r.stateMu.RUnlock()
-	if status != RunnerStatusPending {
-		return ErrRunnerAlreadyStarted
+	initialNodes, err := r.prepareEngineLaunch(PhaseCreated, nil)
+	if err != nil {
+		return err
 	}
-	if phase != PhaseCreated {
-		return ErrInvalidPhase
-	}
-	return r.launchEngine(ctx)
+	return r.launchEngine(ctx, initialNodes)
 }
 
-// launchEngine spawns the engine goroutine once. It is called by [Start]
-// and by [AcceptPolishedPlan]; both callers are responsible for validating
-// the current [RunnerPhase] before invoking.
-func (r *Runner) launchEngine(ctx context.Context) error {
+func (r *Runner) prepareEngineLaunch(from RunnerPhase, mutate func()) ([]*Node, error) {
+	r.stateMu.Lock()
+	defer r.stateMu.Unlock()
+	if r.state.Status != RunnerStatusPending {
+		return nil, ErrRunnerAlreadyStarted
+	}
+	if r.phase != from {
+		return nil, ErrInvalidPhase
+	}
+	if mutate != nil {
+		mutate()
+	}
+	r.phase = PhaseExecuting
+	return nodeMapSlice(r.initialNodes), nil
+}
+
+// launchEngine spawns the engine goroutine once after the caller has
+// already reserved the transition into [PhaseExecuting].
+func (r *Runner) launchEngine(ctx context.Context, initialNodes []*Node) error {
 	if ctx == nil {
 		ctx = context.Background()
-	}
-
-	r.stateMu.RLock()
-	status := r.state.Status
-	r.stateMu.RUnlock()
-	if status != RunnerStatusPending {
-		return ErrRunnerAlreadyStarted
 	}
 
 	started := false
 	r.startOnce.Do(func() {
 		started = true
-		r.transitionPhase(PhaseExecuting)
 
 		runCtx, cancel := context.WithCancel(ctx)
 		r.cancelEngine = cancel
@@ -311,12 +342,8 @@ func (r *Runner) launchEngine(ctx context.Context) error {
 			r.settle(err)
 		}()
 
-		if len(r.initialNodes) > 0 {
-			nodes := make([]*Node, 0, len(r.initialNodes))
-			for _, n := range r.initialNodes {
-				nodes = append(nodes, n)
-			}
-			if err := r.AddNodes(runCtx, nodes...); err != nil {
+		if len(initialNodes) > 0 {
+			if err := r.AddNodes(runCtx, initialNodes...); err != nil {
 				r.startErr = err
 				cancel()
 				return
@@ -385,7 +412,8 @@ func (r *Runner) settle(engineErr error) {
 			r.stateMu.Unlock()
 		}
 		r.captureEngineErr(runErr)
-		if runErr == nil && r.plan != nil {
+		hasPlan := r.Plan() != nil
+		if runErr == nil && hasPlan {
 			r.runReportStage(context.Background())
 		}
 		r.transitionPhase(PhaseSettled)
@@ -556,17 +584,40 @@ func (r *Runner) runEngine(ctx context.Context) error {
 		return nil
 	}
 
+	buildRuntimeSnapshot := func() RunnerSnapshot {
+		snapshot := RunnerSnapshot{
+			CompletedNodes: make(map[string]any, len(outputs)),
+			PendingNodes:   make(map[string]int, len(pendingParents)),
+			GraphEdges:     make(map[string][]string, len(children)),
+			NodesData:      make(map[string]*Node, len(nodes)),
+			ActiveCount:    activeCount,
+		}
+		for id, output := range outputs {
+			snapshot.CompletedNodes[id] = output
+		}
+		for id, node := range nodes {
+			snapshot.NodesData[id] = node
+		}
+		for id, pending := range pendingParents {
+			snapshot.PendingNodes[id] = pending
+		}
+		for parentID, childNodes := range children {
+			childIDs := make([]string, 0, len(childNodes))
+			for _, child := range childNodes {
+				childIDs = append(childIDs, child.Id)
+			}
+			snapshot.GraphEdges[parentID] = childIDs
+		}
+		return snapshot
+	}
+
 	finish := func(status RunnerStatus, runErr error) error {
-		// Snapshot the engine's completed outputs onto the runner so the
-		// settle path (Report stage) can see them even after the event
-		// loop has exited.
+		// Snapshot the final engine state onto the runner so the settle path
+		// (including the Report stage) can see dynamic nodes and outputs
+		// after the event loop has exited.
+		snapshot := buildRuntimeSnapshot()
 		r.updateMu.Lock()
-		if r.snapshot.CompletedNodes == nil {
-			r.snapshot.CompletedNodes = make(map[string]any, len(outputs))
-		}
-		for k, v := range outputs {
-			r.snapshot.CompletedNodes[k] = v
-		}
+		r.snapshot = snapshot
 		r.updateMu.Unlock()
 
 		statusErr := r.recordState(store, status, runErr, true)
@@ -688,30 +739,7 @@ func (r *Runner) runEngine(ctx context.Context) error {
 			}
 
 		case replyCh := <-r.queryCh:
-			snap := RunnerSnapshot{
-				CompletedNodes: make(map[string]any),
-				PendingNodes:   make(map[string]int),
-				GraphEdges:     make(map[string][]string),
-				NodesData:      make(map[string]*Node),
-				ActiveCount:    activeCount,
-			}
-			for k, v := range outputs {
-				snap.CompletedNodes[k] = v
-			}
-			for k, v := range nodes {
-				snap.NodesData[k] = v
-			}
-			for k, v := range pendingParents {
-				snap.PendingNodes[k] = v
-			}
-			for p, cList := range children {
-				var childIDs []string
-				for _, c := range cList {
-					childIDs = append(childIDs, c.Id)
-				}
-				snap.GraphEdges[p] = childIDs
-			}
-			replyCh <- snap
+			replyCh <- buildRuntimeSnapshot()
 		}
 	}
 }

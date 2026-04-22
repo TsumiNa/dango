@@ -214,8 +214,137 @@ func TestRunner_ReplanWithRestartsPolish(t *testing.T) {
 	if frags["B"] != "frag-B2" {
 		t.Fatalf("fragment B = %v, want frag-B2", frags["B"])
 	}
-	if r.Plan() != plan2 {
-		t.Fatalf("plan not swapped")
+	plan2.Request = "mutated-after-replan"
+	if got := r.Plan(); got == nil || got.Request != "v2" || got == plan2 {
+		t.Fatalf("Plan() = %#v, want cloned plan with request v2", got)
+	}
+	nodesView := r.Nodes()
+	delete(nodesView, "B")
+	if got := r.Nodes()["B"]; got == nil {
+		t.Fatalf("Nodes() should return a cloned map")
+	}
+}
+
+func TestRunner_AcceptRejectConcurrentSingleWinner(t *testing.T) {
+	plan := &CoarsePlan{Request: "demo"}
+	release := make(chan struct{})
+	nodes := map[string]*Node{
+		"A": {
+			Id: "A",
+			Executor: &testExecutor{
+				run: func(ctx context.Context, parentOutputs map[string]any) (any, []*Node, error) {
+					<-release
+					return "exec-A", nil, nil
+				},
+				polish: func(ctx context.Context) (any, error) { return "frag-A", nil },
+				report: func(ctx context.Context, output any) (any, error) { return output, nil },
+			},
+		},
+	}
+	r := New(WithLogger(testLogger), WithPlan(plan, nodes))
+	if err := r.StartPolish(context.Background()); err != nil {
+		t.Fatalf("StartPolish: %v", err)
+	}
+	deadline := time.Now().Add(2 * time.Second)
+	for r.Phase() != PhaseAwaitingReview {
+		if time.Now().After(deadline) {
+			t.Fatalf("phase never reached AwaitingReview, got %q", r.Phase())
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	start := make(chan struct{})
+	errCh := make(chan error, 2)
+	go func() {
+		<-start
+		errCh <- r.AcceptPolishedPlan(context.Background(), &CoarsePlan{Request: "accepted"})
+	}()
+	go func() {
+		<-start
+		errCh <- r.RejectPolishedPlan("rejected")
+	}()
+	close(start)
+
+	err1 := <-errCh
+	err2 := <-errCh
+	successes := 0
+	for _, err := range []error{err1, err2} {
+		if err == nil {
+			successes++
+			continue
+		}
+		if !errors.Is(err, ErrInvalidPhase) {
+			t.Fatalf("concurrent transition err = %v, want nil or ErrInvalidPhase", err)
+		}
+	}
+	if successes != 1 {
+		t.Fatalf("successful transitions = %d, want 1", successes)
+	}
+	if r.Phase() == PhaseAwaitingReplan {
+		close(release)
+		return
+	}
+	events := r.Subscribe(16)
+	close(release)
+	waitForRunnerEvent(t, events, EventEngineIdle, "")
+	if err := r.Complete(context.Background()); err != nil {
+		t.Fatalf("Complete: %v", err)
+	}
+}
+
+func TestRunner_ReportIncludesDynamicNodes(t *testing.T) {
+	plan := &CoarsePlan{Request: "demo"}
+	dynamic := &Node{
+		Id: "B",
+		Executor: &testExecutor{
+			run: func(ctx context.Context, parentOutputs map[string]any) (any, []*Node, error) {
+				return "exec-B", nil, nil
+			},
+			polish: func(ctx context.Context) (any, error) { return "frag-B", nil },
+			report: func(ctx context.Context, output any) (any, error) {
+				return "sum-" + output.(string), nil
+			},
+		},
+	}
+	nodes := map[string]*Node{
+		"A": {
+			Id: "A",
+			Executor: &testExecutor{
+				run: func(ctx context.Context, parentOutputs map[string]any) (any, []*Node, error) {
+					return "exec-A", []*Node{dynamic}, nil
+				},
+				polish: func(ctx context.Context) (any, error) { return "frag-A", nil },
+				report: func(ctx context.Context, output any) (any, error) {
+					return "sum-" + output.(string), nil
+				},
+			},
+		},
+	}
+	r := New(WithLogger(testLogger), WithPlan(plan, nodes))
+	if err := r.StartPolish(context.Background()); err != nil {
+		t.Fatalf("StartPolish: %v", err)
+	}
+	deadline := time.Now().Add(2 * time.Second)
+	for r.Phase() != PhaseAwaitingReview {
+		if time.Now().After(deadline) {
+			t.Fatalf("phase never reached AwaitingReview, got %q", r.Phase())
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	events := r.Subscribe(16)
+	if err := r.AcceptPolishedPlan(context.Background(), &CoarsePlan{Request: "accepted"}); err != nil {
+		t.Fatalf("AcceptPolishedPlan: %v", err)
+	}
+	waitForRunnerEvent(t, events, EventEngineIdle, "")
+	if err := r.Complete(context.Background()); err != nil {
+		t.Fatalf("Complete: %v", err)
+	}
+	summaries := r.ReportSummaries()
+	if summaries["A"] != "sum-exec-A" {
+		t.Fatalf("summary A = %v, want sum-exec-A", summaries["A"])
+	}
+	if summaries["B"] != "sum-exec-B" {
+		t.Fatalf("summary B = %v, want sum-exec-B", summaries["B"])
 	}
 }
 

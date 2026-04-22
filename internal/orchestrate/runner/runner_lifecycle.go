@@ -45,20 +45,21 @@ func (r *Runner) StartPolish(ctx context.Context) error {
 	if ctx == nil {
 		ctx = context.Background()
 	}
+	r.stateMu.Lock()
 	if r.plan == nil {
+		r.stateMu.Unlock()
 		return ErrPlanRequired
 	}
-
-	r.stateMu.Lock()
 	if r.phase != PhaseCreated && r.phase != PhaseAwaitingReplan {
 		r.stateMu.Unlock()
 		return ErrInvalidPhase
 	}
+	nodes := cloneNodeMap(r.initialNodes)
 	r.phase = PhasePolishing
 	r.stateMu.Unlock()
 
 	r.publishUpdate(nil)
-	go r.runPolishStage(ctx)
+	go r.runPolishStage(ctx, nodes)
 	return nil
 }
 
@@ -70,20 +71,20 @@ func (r *Runner) StartPolish(ctx context.Context) error {
 // begins. Returns [ErrInvalidPhase] if the runner is not in
 // [PhaseAwaitingReview].
 func (r *Runner) AcceptPolishedPlan(ctx context.Context, plan *CoarsePlan) error {
-	r.stateMu.RLock()
-	phase := r.phase
-	r.stateMu.RUnlock()
-	if phase != PhaseAwaitingReview {
-		return ErrInvalidPhase
-	}
 	if plan == nil {
 		return ErrPlanRequired
 	}
-	r.plan = CloneCoarsePlan(plan)
-	if r.plan.RunnerID == "" {
-		r.plan.RunnerID = r.id
+	clonedPlan := CloneCoarsePlan(plan)
+	if clonedPlan.RunnerID == "" {
+		clonedPlan.RunnerID = r.id
 	}
-	return r.launchEngine(ctx)
+	initialNodes, err := r.prepareEngineLaunch(PhaseAwaitingReview, func() {
+		r.plan = clonedPlan
+	})
+	if err != nil {
+		return err
+	}
+	return r.launchEngine(ctx, initialNodes)
 }
 
 // RejectPolishedPlan resolves [PhaseAwaitingReview] by recording a
@@ -116,81 +117,46 @@ func (r *Runner) RejectPolishedPlan(reason string) error {
 // drive it after observing a [RejectPolishedPlan] transition and producing
 // a revised plan.
 func (r *Runner) ReplanWith(ctx context.Context, plan *CoarsePlan, nodes map[string]*Node) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	if plan == nil {
 		return ErrPlanRequired
 	}
+	clonedPlan := CloneCoarsePlan(plan)
+	if clonedPlan.RunnerID == "" {
+		clonedPlan.RunnerID = r.id
+	}
+	clonedNodes := cloneNodeMap(nodes)
 
-	r.stateMu.RLock()
-	phase := r.phase
-	r.stateMu.RUnlock()
-	if phase != PhaseAwaitingReplan {
+	r.stateMu.Lock()
+	if r.phase != PhaseAwaitingReplan {
+		r.stateMu.Unlock()
 		return ErrInvalidPhase
 	}
-
-	r.plan = plan
-	if r.plan.RunnerID == "" {
-		r.plan.RunnerID = r.id
-	}
-	r.initialNodes = nodes
-
+	r.plan = clonedPlan
+	r.initialNodes = clonedNodes
+	r.phase = PhasePolishing
 	r.updateMu.Lock()
-	r.snapshot = buildInitialRunnerSnapshot(r.initialNodes)
+	r.snapshot = buildInitialRunnerSnapshot(clonedNodes)
 	r.updateMu.Unlock()
+	r.stateMu.Unlock()
 
 	r.lifecycleMu.Lock()
 	r.polishFragments = nil
 	r.polishErr = nil
+	r.reportSummaries = nil
+	r.reportErr = nil
+	r.replanReason = ""
 	r.lifecycleMu.Unlock()
 
-	return r.StartPolish(ctx)
+	r.publishUpdate(nil)
+	go r.runPolishStage(ctx, cloneNodeMap(clonedNodes))
+	return nil
 }
 
-// PolishFragments returns the per-node fragments produced during
-// [PhasePolishing].
-//
-// The returned map is a shallow copy safe for the caller to retain. Nodes
-// whose Polish call returned a nil fragment are still present as nil.
-func (r *Runner) PolishFragments() map[string]any {
-	r.lifecycleMu.RLock()
-	defer r.lifecycleMu.RUnlock()
-	if r.polishFragments == nil {
-		return nil
-	}
-	out := make(map[string]any, len(r.polishFragments))
-	for k, v := range r.polishFragments {
-		out[k] = v
-	}
-	return out
-}
-
-// ReportSummaries returns the per-node summaries produced during
-// [PhaseReport].
-//
-// The returned map is a shallow copy safe for the caller to retain.
-func (r *Runner) ReportSummaries() map[string]any {
-	r.lifecycleMu.RLock()
-	defer r.lifecycleMu.RUnlock()
-	if r.reportSummaries == nil {
-		return nil
-	}
-	out := make(map[string]any, len(r.reportSummaries))
-	for k, v := range r.reportSummaries {
-		out[k] = v
-	}
-	return out
-}
-
-// ReplanReason returns the rejection reason recorded by
-// [Runner.RejectPolishedPlan], or the empty string if no rejection has
-// occurred.
-func (r *Runner) ReplanReason() string {
-	r.lifecycleMu.RLock()
-	defer r.lifecycleMu.RUnlock()
-	return r.replanReason
-}
-
-func (r *Runner) runPolishStage(ctx context.Context) {
-	fragments, err := fanOutPolish(ctx, r.initialNodes)
+func (r *Runner) runPolishStage(ctx context.Context, nodes map[string]*Node) {
+	fragments, err := fanOutPolish(ctx, nodes)
 
 	r.lifecycleMu.Lock()
 	r.polishFragments = fragments
@@ -214,7 +180,7 @@ func (r *Runner) runReportStage(ctx context.Context) {
 	snapshot := cloneRunnerSnapshot(r.snapshot)
 	r.updateMu.Unlock()
 
-	summaries, err := fanOutReport(ctx, r.initialNodes, snapshot.CompletedNodes)
+	summaries, err := fanOutReport(ctx, snapshot.NodesData, snapshot.CompletedNodes)
 
 	r.lifecycleMu.Lock()
 	r.reportSummaries = summaries
@@ -275,6 +241,9 @@ func fanOutReport(ctx context.Context, nodes map[string]*Node, outputs map[strin
 	for id, output := range outputs {
 		node := nodes[id]
 		if node == nil || node.Executor == nil {
+			if firstErr == nil {
+				firstErr = fmt.Errorf("report %s: missing executor", id)
+			}
 			continue
 		}
 		wg.Add(1)
@@ -297,4 +266,48 @@ func fanOutReport(ctx context.Context, nodes map[string]*Node, outputs map[strin
 		return summaries, firstErr
 	}
 	return summaries, nil
+}
+
+// PolishFragments returns the per-node fragments produced during
+// [PhasePolishing].
+//
+// The returned map is a shallow copy safe for the caller to retain. Nodes
+// whose Polish call returned a nil fragment are still present as nil.
+func (r *Runner) PolishFragments() map[string]any {
+	r.lifecycleMu.RLock()
+	defer r.lifecycleMu.RUnlock()
+	if r.polishFragments == nil {
+		return nil
+	}
+	out := make(map[string]any, len(r.polishFragments))
+	for k, v := range r.polishFragments {
+		out[k] = v
+	}
+	return out
+}
+
+// ReportSummaries returns the per-node summaries produced during
+// [PhaseReport].
+//
+// The returned map is a shallow copy safe for the caller to retain.
+func (r *Runner) ReportSummaries() map[string]any {
+	r.lifecycleMu.RLock()
+	defer r.lifecycleMu.RUnlock()
+	if r.reportSummaries == nil {
+		return nil
+	}
+	out := make(map[string]any, len(r.reportSummaries))
+	for k, v := range r.reportSummaries {
+		out[k] = v
+	}
+	return out
+}
+
+// ReplanReason returns the rejection reason recorded by
+// [Runner.RejectPolishedPlan], or the empty string if no rejection has
+// occurred.
+func (r *Runner) ReplanReason() string {
+	r.lifecycleMu.RLock()
+	defer r.lifecycleMu.RUnlock()
+	return r.replanReason
 }
