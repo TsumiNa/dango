@@ -120,9 +120,9 @@ const (
 	// collect per-node summaries before transitioning to [PhaseSettled].
 	PhaseReport RunnerPhase = "report"
 	// PhaseSettled is the terminal phase. A runner reaches PhaseSettled
-	// when the engine's context is canceled, a node fails, or the
-	// optional report stage completes. Future phases (polish/review)
-	// will introduce a cooperative settle path.
+	// after [Runner.Abort], after a node failure, or after a cooperative
+	// completion path in which [Runner.Complete] drives the runner from
+	// [PhaseExecuting] through [PhaseReport] into the terminal state.
 	PhaseSettled RunnerPhase = "settled"
 )
 
