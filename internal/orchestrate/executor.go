@@ -130,6 +130,37 @@ func (e *Executor) Execute(ctx context.Context, parentOutputs map[string]any) (a
 	return nil, nil, nil
 }
 
+// Polish satisfies the runner's polish contract. The default implementation
+// refreshes the planner via [Executor.PolishPlan] and returns a snapshot of
+// the planner as the fragment.
+func (e *Executor) Polish(ctx context.Context) (any, error) {
+	if ctx != nil {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+	}
+	if err := e.PolishPlan(); err != nil {
+		return nil, err
+	}
+	if ctx != nil {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+	}
+	return *e.planner, nil
+}
+
+// Report satisfies the runner's report contract. The default implementation
+// passes the execution output through unchanged as the summary.
+func (e *Executor) Report(ctx context.Context, output any) (any, error) {
+	if ctx != nil {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+	}
+	return output, nil
+}
+
 func (e *Executor) logf(format string, args ...any) {
 	if e.logger == nil {
 		return

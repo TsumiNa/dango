@@ -37,6 +37,6 @@ func WithStore(store RunnerStore) Option {
 func WithPlan(plan *CoarsePlan, nodes map[string]*Node) Option {
 	return func(r *Runner) {
 		r.plan = CloneCoarsePlan(plan)
-		r.initialNodes = nodes
+		r.initialNodes = cloneNodeMap(nodes)
 	}
 }

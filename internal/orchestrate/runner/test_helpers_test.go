@@ -13,7 +13,9 @@ import (
 var testLogger = slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelError}))
 
 type testExecutor struct {
-	run func(ctx context.Context, parentOutputs map[string]any) (any, []*Node, error)
+	run    func(ctx context.Context, parentOutputs map[string]any) (any, []*Node, error)
+	polish func(ctx context.Context) (any, error)
+	report func(ctx context.Context, output any) (any, error)
 }
 
 func (e *testExecutor) Execute(ctx context.Context, parentOutputs map[string]any) (any, []*Node, error) {
@@ -21,6 +23,20 @@ func (e *testExecutor) Execute(ctx context.Context, parentOutputs map[string]any
 		return nil, nil, nil
 	}
 	return e.run(ctx, parentOutputs)
+}
+
+func (e *testExecutor) Polish(ctx context.Context) (any, error) {
+	if e.polish == nil {
+		return nil, nil
+	}
+	return e.polish(ctx)
+}
+
+func (e *testExecutor) Report(ctx context.Context, output any) (any, error) {
+	if e.report == nil {
+		return nil, nil
+	}
+	return e.report(ctx, output)
 }
 
 func mustNewRunnerStore(t *testing.T, dir string) *JSONRunnerStore {
