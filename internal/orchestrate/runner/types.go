@@ -96,10 +96,8 @@ type RunnerState struct {
 // running/idle/terminal state, while Phase describes the plan pipeline stage
 // (polish → review → execute → settled).
 //
-// The polishing, awaiting-review, and awaiting-replan phases are declared now
-// as part of the interface surface; the current runner only transitions
-// Created → Executing → Settled. Future work fills in the polish/review
-// path without changing this enum.
+// The runner may transition through polishing, review, replan, execute,
+// and report before settling, depending on which entry points callers use.
 type RunnerPhase string
 
 const (

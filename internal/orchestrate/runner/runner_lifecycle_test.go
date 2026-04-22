@@ -119,7 +119,8 @@ func TestRunner_AcceptPolishedPlanRunsEngineAndReports(t *testing.T) {
 	}
 
 	events := r.Subscribe(16)
-	if err := r.AcceptPolishedPlan(context.Background()); err != nil {
+	acceptedPlan := &CoarsePlan{Request: "reviewed-plan"}
+	if err := r.AcceptPolishedPlan(context.Background(), acceptedPlan); err != nil {
 		t.Fatalf("AcceptPolishedPlan: %v", err)
 	}
 
@@ -131,6 +132,12 @@ func TestRunner_AcceptPolishedPlanRunsEngineAndReports(t *testing.T) {
 	}
 	if got := reportCalls.Load(); got != 1 {
 		t.Fatalf("report calls = %d, want 1", got)
+	}
+	if got := r.Plan().Request; got != acceptedPlan.Request {
+		t.Fatalf("accepted plan request = %q, want %q", got, acceptedPlan.Request)
+	}
+	if got := r.Plan().RunnerID; got != r.ID() {
+		t.Fatalf("accepted plan runner id = %q, want %q", got, r.ID())
 	}
 	if sum := r.ReportSummaries()["A"]; sum != "sum-exec-A" {
 		t.Fatalf("summary A = %v, want sum-exec-A", sum)
@@ -221,7 +228,7 @@ func TestRunner_CompleteRejectedFromWrongPhase(t *testing.T) {
 
 func TestRunner_AcceptRejectFromWrongPhase(t *testing.T) {
 	r := New(WithLogger(testLogger))
-	if err := r.AcceptPolishedPlan(context.Background()); !errors.Is(err, ErrInvalidPhase) {
+	if err := r.AcceptPolishedPlan(context.Background(), &CoarsePlan{}); !errors.Is(err, ErrInvalidPhase) {
 		t.Fatalf("Accept from PhaseCreated err = %v, want ErrInvalidPhase", err)
 	}
 	if err := r.RejectPolishedPlan("x"); !errors.Is(err, ErrInvalidPhase) {

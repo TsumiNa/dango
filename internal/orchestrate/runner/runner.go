@@ -355,8 +355,7 @@ func (r *Runner) Abort(runErr error) {
 	r.stateMu.Unlock()
 
 	r.captureEngineErr(runErr)
-	r.publishUpdate(nil)
-	r.closeUpdateSubscribers()
+	r.publishTerminalUpdate(nil)
 	r.markDone()
 }
 
@@ -386,12 +385,11 @@ func (r *Runner) settle(engineErr error) {
 			r.stateMu.Unlock()
 		}
 		r.captureEngineErr(runErr)
-		r.publishUpdate(nil)
 		if runErr == nil && r.plan != nil {
 			r.runReportStage(context.Background())
 		}
 		r.transitionPhase(PhaseSettled)
-		r.closeUpdateSubscribers()
+		r.publishTerminalUpdate(nil)
 		r.markDone()
 	})
 }
@@ -443,6 +441,34 @@ func (r *Runner) publishUpdate(event *RunnerEvent) {
 		case ch <- update:
 		default:
 		}
+	}
+	r.updateMu.Unlock()
+}
+
+func (r *Runner) publishTerminalUpdate(event *RunnerEvent) {
+	state := r.State()
+	phase := r.Phase()
+	snapshot := r.currentSnapshot(event)
+	update := RunnerUpdate{
+		RunnerID: r.id,
+		State:    state,
+		Phase:    phase,
+		Snapshot: snapshot,
+		Event:    event,
+	}
+
+	r.updateMu.Lock()
+	r.snapshot = cloneRunnerSnapshot(snapshot)
+	if event != nil && event.Type == EventEngineStopped {
+		r.stoppedEventSeen = true
+	}
+	for id, ch := range r.updateSubscribers {
+		select {
+		case ch <- update:
+		default:
+		}
+		close(ch)
+		delete(r.updateSubscribers, id)
 	}
 	r.updateMu.Unlock()
 }

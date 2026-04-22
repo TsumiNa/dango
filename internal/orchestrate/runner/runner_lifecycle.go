@@ -14,7 +14,7 @@ import (
 // error is treated as benign, report summaries are gathered, and
 // [Runner.Wait] returns nil (or the first report error). Complete is
 // valid only while the runner is in [PhaseExecuting]; calls from other
-// phases return [ErrInvalidPhase]. Subsequent calls are no-ops.
+// phases return [ErrInvalidPhase].
 func (r *Runner) Complete(ctx context.Context) error {
 	r.stateMu.RLock()
 	phase := r.phase
@@ -62,17 +62,26 @@ func (r *Runner) StartPolish(ctx context.Context) error {
 	return nil
 }
 
-// AcceptPolishedPlan resolves [PhaseAwaitingReview] by promoting the
-// polished plan and launching the execution engine.
+// AcceptPolishedPlan resolves [PhaseAwaitingReview] by adopting the
+// reviewed plan and launching the execution engine.
 //
 // It is the orchestrator's acceptance gate following [Runner.StartPolish].
-// Returns [ErrInvalidPhase] if the runner is not in [PhaseAwaitingReview].
-func (r *Runner) AcceptPolishedPlan(ctx context.Context) error {
+// The supplied plan replaces the runner's current plan before execution
+// begins. Returns [ErrInvalidPhase] if the runner is not in
+// [PhaseAwaitingReview].
+func (r *Runner) AcceptPolishedPlan(ctx context.Context, plan *CoarsePlan) error {
 	r.stateMu.RLock()
 	phase := r.phase
 	r.stateMu.RUnlock()
 	if phase != PhaseAwaitingReview {
 		return ErrInvalidPhase
+	}
+	if plan == nil {
+		return ErrPlanRequired
+	}
+	r.plan = CloneCoarsePlan(plan)
+	if r.plan.RunnerID == "" {
+		r.plan.RunnerID = r.id
 	}
 	return r.launchEngine(ctx)
 }
