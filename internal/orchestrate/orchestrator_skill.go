@@ -7,7 +7,7 @@ import (
 	"github.com/tsumina/dango/internal/llm/skill"
 )
 
-//go:embed builtin/SKILL.md
+//go:embed builtin
 var embeddedOrchestratorSkillFS embed.FS
 
 func defaultOrchestratorSkill() *skill.Skill {
