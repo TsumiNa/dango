@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"github.com/tsumina/dango/internal/llm"
-	"github.com/tsumina/dango/internal/llm/skill"
 )
 
 func TestDefault_ReturnsSingleton(t *testing.T) {
@@ -91,28 +90,70 @@ func TestSetMaxRunningRunners_RejectsChangesAfterStartup(t *testing.T) {
 	}
 }
 
-func TestSetPlanningFunc_RejectsChangesAfterStartup(t *testing.T) {
+func TestSetOrchestratorSkill_RejectsChangesAfterStartup(t *testing.T) {
 	o := newOrchestrator(testLogger)
 	if _, _, err := o.planFromRequest(&Request{Input: "summarize this repository"}); err != nil {
 		t.Fatalf("planFromRequest: %v", err)
 	}
-	if err := o.SetPlanningFunc(func(req *Request, skills map[string]*skill.Skill) (*CoarsePlan, *RejectReason, error) {
-		return nil, nil, nil
-	}); err == nil {
-		t.Fatal("expected SetPlanningFunc to fail after startup")
-	}
-	if o.planFn == nil {
-		t.Fatal("planner should remain configured after startup rejection")
+	if err := o.SetOrchestratorSkill(defaultOrchestratorSkill()); err == nil {
+		t.Fatal("expected SetOrchestratorSkill to fail after startup")
 	}
 }
 
-func TestSetLLMClient_RejectsChangesAfterStartup(t *testing.T) {
+func TestSetOrchestratorSkill_UsesProvidedSkillBeforeStartup(t *testing.T) {
+	o := newOrchestrator(testLogger)
+	sk := defaultOrchestratorSkill()
+	sk.Name = "custom"
+	if err := o.SetOrchestratorSkill(sk); err != nil {
+		t.Fatalf("SetOrchestratorSkill: %v", err)
+	}
+	if got := o.OrchestratorSkill(); got != sk {
+		t.Fatalf("OrchestratorSkill() = %p, want %p", got, sk)
+	}
+}
+
+func TestSetOrchestratorSkillDir_UsesLoadedSkillBeforeStartup(t *testing.T) {
+	o := newOrchestrator(testLogger)
+	dir := writeTestSkill(t, "custom-orchestrator", "A custom orchestrator skill.")
+	if err := o.SetOrchestratorSkillDir(dir); err != nil {
+		t.Fatalf("SetOrchestratorSkillDir: %v", err)
+	}
+	sk := o.OrchestratorSkill()
+	if sk == nil {
+		t.Fatal("expected orchestrator skill to be configured")
+	}
+	if sk.Name != "custom-orchestrator" {
+		t.Fatalf("Name = %q, want %q", sk.Name, "custom-orchestrator")
+	}
+	if sk.Dir() != dir {
+		t.Fatalf("Dir() = %q, want %q", sk.Dir(), dir)
+	}
+}
+
+func TestSetOrchestratorSkillDir_RejectsChangesAfterStartup(t *testing.T) {
 	o := newOrchestrator(testLogger)
 	if _, _, err := o.planFromRequest(&Request{Input: "summarize this repository"}); err != nil {
 		t.Fatalf("planFromRequest: %v", err)
 	}
-	if err := o.SetLLMClient(&llm.Client{}); err == nil {
-		t.Fatal("expected SetLLMClient to fail after startup")
+	if err := o.SetOrchestratorSkillDir(writeTestSkill(t, "late-orchestrator", "late")); err == nil {
+		t.Fatal("expected SetOrchestratorSkillDir to fail after startup")
+	}
+}
+
+func TestOrchestratorSkill_DefaultsToEmbeddedSkill(t *testing.T) {
+	o := newOrchestrator(testLogger)
+	sk := o.OrchestratorSkill()
+	if sk == nil {
+		t.Fatal("expected embedded orchestrator skill")
+	}
+	if sk.Name != "orchestrator" {
+		t.Fatalf("Name = %q, want %q", sk.Name, "orchestrator")
+	}
+	if sk.Dir() != "" {
+		t.Fatalf("Dir() = %q, want empty for embedded skill", sk.Dir())
+	}
+	if sk.Instruction == "" {
+		t.Fatal("expected embedded orchestrator instruction to be populated")
 	}
 }
 

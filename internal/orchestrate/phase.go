@@ -8,6 +8,22 @@ import (
 	runnerpkg "github.com/tsumina/dango/internal/orchestrate/runner"
 )
 
+// ReviewRunnerPlan asks the orchestrator-owned skill to review the runner's
+// current polished plan and return an approval decision.
+func (o *Orchestrator) ReviewRunnerPlan(ctx context.Context, id string) (*PlanReview, error) {
+	runner, err := o.Runner(id)
+	if err != nil {
+		return nil, err
+	}
+	if runner.Phase() != runnerpkg.PhaseAwaitingReview {
+		return nil, ErrRunnerPlanNotAwaitingReview
+	}
+	o.mu.RLock()
+	orchestratorSkill := o.orchestratorSkill
+	o.mu.RUnlock()
+	return reviewWithOrchestratorSkill(ctx, runner.Plan(), runner.PolishFragments(), orchestratorSkill)
+}
+
 // AcceptRunnerPlan adopts the reviewed plan for the identified runner and
 // starts execution.
 func (o *Orchestrator) AcceptRunnerPlan(ctx context.Context, id string, plan *CoarsePlan) error {
@@ -17,6 +33,9 @@ func (o *Orchestrator) AcceptRunnerPlan(ctx context.Context, id string, plan *Co
 	}
 	if runner.Phase() != runnerpkg.PhaseAwaitingReview {
 		return ErrRunnerPlanNotAwaitingReview
+	}
+	if plan == nil {
+		plan = runner.Plan()
 	}
 	o.mu.Lock()
 	if o.maxRunningRunners > 0 {
@@ -46,6 +65,19 @@ func (o *Orchestrator) RejectRunnerPlan(id string, reason string) error {
 	if err != nil {
 		return err
 	}
+	if reason == "" {
+		review, err := o.ReviewRunnerPlan(context.Background(), id)
+		if err != nil {
+			return err
+		}
+		if review.Approved {
+			return fmt.Errorf("orchestrate: auto review approved the plan; provide an explicit rejection reason")
+		}
+		reason = review.Reason
+		if reason == "" {
+			reason = "orchestrator review requested replanning"
+		}
+	}
 	if err := runner.RejectPolishedPlan(reason); err != nil {
 		if errors.Is(err, runnerpkg.ErrInvalidPhase) {
 			return ErrRunnerPlanNotAwaitingReview
@@ -61,6 +93,19 @@ func (o *Orchestrator) ReplanRunner(ctx context.Context, id string, plan *Coarse
 	runner, err := o.Runner(id)
 	if err != nil {
 		return err
+	}
+	if runner.Phase() != runnerpkg.PhaseAwaitingReplan {
+		return ErrRunnerPlanNotAwaitingReplan
+	}
+	if plan == nil {
+		o.mu.RLock()
+		skills := cloneSkillMap(o.skills)
+		orchestratorSkill := o.orchestratorSkill
+		o.mu.RUnlock()
+		plan, err = replanWithOrchestratorSkill(ctx, runner.Plan().Request, runner.Plan(), runner.ReplanReason(), runner.PolishFragments(), skills, orchestratorSkill)
+		if err != nil {
+			return err
+		}
 	}
 	nodes, err := buildPlanNodes(o, plan)
 	if err != nil {
@@ -97,14 +142,14 @@ func buildPlanNodes(o *Orchestrator, plan *CoarsePlan) (map[string]*runnerpkg.No
 	}
 	o.mu.RLock()
 	logger := o.logger
-	llmClient := o.llmClient
+	orchestratorSkill := o.orchestratorSkill
 	store := o.runnerStore
 	skills := cloneSkillMap(o.skills)
 	skillClients := cloneSkillClientFactories(o.skillClientByName)
 	o.mu.RUnlock()
 
 	request := &Request{Input: plan.Request}
-	runner, err := buildRunner(logger, llmClient, store, request, plan, skills, skillClients)
+	runner, err := buildRunner(logger, orchestratorSkill.Client(), store, request, plan, skills, skillClients)
 	if err != nil {
 		return nil, err
 	}

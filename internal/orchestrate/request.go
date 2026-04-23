@@ -36,7 +36,7 @@ func (o *Orchestrator) StartRequest(ctx context.Context, req *Request) (coarsePl
 	return plan, nil, nil
 }
 
-// planFromRequest asks the configured planner to analyze req against the
+// planFromRequest asks the orchestrator-owned skill to analyze req against the
 // registered skills.
 //
 // When the planner rejects the request, planFromRequest returns the rejection
@@ -52,14 +52,13 @@ func (o *Orchestrator) planFromRequest(req *Request) (coarsePlan *CoarsePlan, re
 	o.mu.Lock()
 	o.configLocked = true
 	logger := o.logger
-	llmClient := o.llmClient
-	planFn := o.planFn
+	orchestratorSkill := o.orchestratorSkill
 	runnerStore := o.runnerStore
 	skills := cloneSkillMap(o.skills)
 	skillClients := cloneSkillClientFactories(o.skillClientByName)
 	o.mu.Unlock()
 
-	plan, reject, err := planFn(req, skills)
+	plan, reject, err := planWithOrchestratorSkill(context.Background(), req, skills, orchestratorSkill)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -73,7 +72,7 @@ func (o *Orchestrator) planFromRequest(req *Request) (coarsePlan *CoarsePlan, re
 		return nil, nil, fmt.Errorf("orchestrate: planner returned neither a plan nor a reject reason")
 	}
 
-	runner, err := buildRunner(logger, llmClient, runnerStore, req, plan, skills, skillClients)
+	runner, err := buildRunner(logger, orchestratorSkill.Client(), runnerStore, req, plan, skills, skillClients)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -87,7 +86,6 @@ func (o *Orchestrator) planFromRequest(req *Request) (coarsePlan *CoarsePlan, re
 
 	return plan, nil, nil
 }
-
 func buildRunner(logger *slog.Logger, client *llm.Client, store runnerpkg.RunnerStore, req *Request, plan *CoarsePlan, skills map[string]*skill.Skill, skillClients map[string]SkillClientFactory) (*runnerpkg.Runner, error) {
 	if len(plan.Nodes) == 0 {
 		return nil, fmt.Errorf("orchestrate: coarse plan must contain at least one node")
@@ -158,9 +156,9 @@ func cloneSkillClientFactories(factories map[string]SkillClientFactory) map[stri
 	return copyMap
 }
 
-func rejectUnconfiguredPlan(req *Request, skills map[string]*skill.Skill) (*CoarsePlan, *RejectReason, error) {
+func rejectUnconfiguredPlan(req *Request, skills map[string]*skill.Skill, orchestratorSkill *skill.Skill) (*CoarsePlan, *RejectReason, error) {
 	return nil, &RejectReason{
 		Summary:  "task cannot proceed",
-		Analysis: "no planning function is configured to map the request onto the registered skill set",
+		Analysis: "the orchestrator skill is not bound to an llm client, so the request cannot be planned yet",
 	}, nil
 }

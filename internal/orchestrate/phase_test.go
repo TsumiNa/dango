@@ -52,6 +52,45 @@ func TestAcceptRunnerPlan_RejectsWrongPhase(t *testing.T) {
 	}
 }
 
+func TestReviewRunnerPlan_ReturnsAutomaticDecision(t *testing.T) {
+	o := newOrchestrator(testLogger)
+	plan, _ := mustPlanSingleNodeRunnerWithOutputs(t, o,
+		mustPlanJSON(t, &CoarsePlan{
+			Request: "run a single node",
+			Nodes: []CoarsePlanNode{{
+				ID:              "only",
+				SkillName:       "single",
+				TaskDescription: "Run the only node.",
+			}},
+		}),
+		mustReviewJSON(t, false, "needs a clearer task breakdown"),
+	)
+	if err := o.StartRunner(context.Background(), plan.RunnerID); err != nil {
+		t.Fatalf("StartRunner: %v", err)
+	}
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		view, err := o.QueryRunner(plan.RunnerID)
+		if err != nil {
+			t.Fatalf("QueryRunner: %v", err)
+		}
+		if view.Phase == PhaseAwaitingReview {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	review, err := o.ReviewRunnerPlan(context.Background(), plan.RunnerID)
+	if err != nil {
+		t.Fatalf("ReviewRunnerPlan: %v", err)
+	}
+	if review.Approved {
+		t.Fatal("ReviewRunnerPlan approved plan, want rejection")
+	}
+	if review.Reason != "needs a clearer task breakdown" {
+		t.Fatalf("ReviewRunnerPlan reason = %q, want %q", review.Reason, "needs a clearer task breakdown")
+	}
+}
+
 func TestRejectAndReplanRunner_TransitionsBackToAwaitingReview(t *testing.T) {
 	o := newOrchestrator(testLogger)
 	plan, _ := mustPlanSingleNodeRunner(t, o)
@@ -102,6 +141,103 @@ func TestRejectAndReplanRunner_TransitionsBackToAwaitingReview(t *testing.T) {
 		time.Sleep(10 * time.Millisecond)
 	}
 	t.Fatal("runner did not return to awaiting review after replanning")
+}
+
+func TestRejectRunnerPlan_UsesAutomaticReviewWhenReasonEmpty(t *testing.T) {
+	o := newOrchestrator(testLogger)
+	plan, _ := mustPlanSingleNodeRunnerWithOutputs(t, o,
+		mustPlanJSON(t, &CoarsePlan{
+			Request: "run a single node",
+			Nodes: []CoarsePlanNode{{
+				ID:              "only",
+				SkillName:       "single",
+				TaskDescription: "Run the only node.",
+			}},
+		}),
+		mustReviewJSON(t, false, "add more structure before execution"),
+	)
+	if err := o.StartRunner(context.Background(), plan.RunnerID); err != nil {
+		t.Fatalf("StartRunner: %v", err)
+	}
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		view, err := o.QueryRunner(plan.RunnerID)
+		if err != nil {
+			t.Fatalf("QueryRunner: %v", err)
+		}
+		if view.Phase == PhaseAwaitingReview {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if err := o.RejectRunnerPlan(plan.RunnerID, ""); err != nil {
+		t.Fatalf("RejectRunnerPlan(auto): %v", err)
+	}
+	runner, err := o.Runner(plan.RunnerID)
+	if err != nil {
+		t.Fatalf("Runner: %v", err)
+	}
+	if got := runner.ReplanReason(); got != "add more structure before execution" {
+		t.Fatalf("ReplanReason() = %q, want %q", got, "add more structure before execution")
+	}
+}
+
+func TestReplanRunner_GeneratesPlanWhenNilPlan(t *testing.T) {
+	o := newOrchestrator(testLogger)
+	plan, _ := mustPlanSingleNodeRunnerWithOutputs(t, o,
+		mustPlanJSON(t, &CoarsePlan{
+			Request: "run a single node",
+			Nodes: []CoarsePlanNode{{
+				ID:              "only",
+				SkillName:       "single",
+				TaskDescription: "Run the only node.",
+			}},
+		}),
+		mustReviewJSON(t, false, "make the task description more explicit"),
+		mustPlanJSON(t, &CoarsePlan{
+			Request: "run a single node",
+			Nodes: []CoarsePlanNode{{
+				ID:              "only",
+				SkillName:       "single",
+				TaskDescription: "Run the only node with the clarified task description.",
+			}},
+		}),
+	)
+	if err := o.StartRunner(context.Background(), plan.RunnerID); err != nil {
+		t.Fatalf("StartRunner: %v", err)
+	}
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		view, err := o.QueryRunner(plan.RunnerID)
+		if err != nil {
+			t.Fatalf("QueryRunner: %v", err)
+		}
+		if view.Phase == PhaseAwaitingReview {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if err := o.RejectRunnerPlan(plan.RunnerID, ""); err != nil {
+		t.Fatalf("RejectRunnerPlan(auto): %v", err)
+	}
+	if err := o.ReplanRunner(context.Background(), plan.RunnerID, nil); err != nil {
+		t.Fatalf("ReplanRunner(auto): %v", err)
+	}
+	deadline = time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		view, err := o.QueryRunner(plan.RunnerID)
+		if err != nil {
+			t.Fatalf("QueryRunner(after auto replan): %v", err)
+		}
+		if view.Phase == PhaseAwaitingReview {
+			if got := view.Plan.Nodes[0].TaskDescription; got != "Run the only node with the clarified task description." {
+				t.Fatalf("task description after auto replan = %q, want updated description", got)
+			}
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatal("runner did not return to awaiting review after auto replanning")
 }
 
 func TestRejectRunnerPlan_RejectsWrongPhase(t *testing.T) {

@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"testing/fstest"
 
 	"github.com/tsumina/dango/internal/llm"
 )
@@ -195,6 +196,34 @@ func TestLoad_ParsesMetadataWithoutClient(t *testing.T) {
 	}
 	if skill.Conversation() != nil {
 		t.Errorf("Conversation() should be nil after Load()")
+	}
+}
+
+func TestLoadFS_ParsesMetadataWithoutHostDir(t *testing.T) {
+	fsys := fstest.MapFS{
+		"builtin/SKILL.md": &fstest.MapFile{Data: []byte("---\nname: embedded\ndescription: Embedded skill.\n---\nembedded body\n")},
+	}
+	skill, err := LoadFS(fsys, "builtin")
+	if err != nil {
+		t.Fatalf("LoadFS: %v", err)
+	}
+	if skill.Name != "embedded" {
+		t.Fatalf("Name = %q, want %q", skill.Name, "embedded")
+	}
+	if skill.Description != "Embedded skill." {
+		t.Fatalf("Description = %q, want %q", skill.Description, "Embedded skill.")
+	}
+	if skill.Instruction != "embedded body\n" {
+		t.Fatalf("Instruction = %q, want %q", skill.Instruction, "embedded body\n")
+	}
+	if skill.Dir() != "" {
+		t.Fatalf("Dir() = %q, want empty for embedded skill", skill.Dir())
+	}
+	if skill.Client() != nil {
+		t.Fatalf("Client() = %p, want nil", skill.Client())
+	}
+	if skill.Conversation() != nil {
+		t.Fatal("Conversation() should be nil after LoadFS()")
 	}
 }
 

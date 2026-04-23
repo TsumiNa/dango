@@ -24,8 +24,8 @@ var (
 // planner to convert a request into a coarse execution plan, and materializes a
 // fresh runner plus its Executor graph for each accepted plan.
 type Orchestrator struct {
-	logger    *slog.Logger
-	llmClient *llm.Client
+	logger            *slog.Logger
+	orchestratorSkill *skill.Skill
 
 	mu                sync.RWMutex
 	configLocked      bool
@@ -38,7 +38,6 @@ type Orchestrator struct {
 	queuedRunnerByID  map[string]*queuedRunner
 	queuedRunners     runnerStartQueue
 	nextQueueOrder    uint64
-	planFn            PlanningFunc
 }
 
 // Default returns the process-wide Orchestrator singleton.
@@ -58,12 +57,12 @@ func newOrchestrator(logger *slog.Logger) *Orchestrator {
 	}
 	return &Orchestrator{
 		logger:            logger,
+		orchestratorSkill: defaultOrchestratorSkill(),
 		skills:            make(map[string]*skill.Skill),
 		skillClientByName: make(map[string]SkillClientFactory),
 		runners:           make(map[string]*runnerpkg.Runner),
 		runningRunnerIDs:  make(map[string]struct{}),
 		queuedRunnerByID:  make(map[string]*queuedRunner),
-		planFn:            rejectUnconfiguredPlan,
 	}
 }
 
@@ -108,38 +107,44 @@ func (o *Orchestrator) SetLogger(logger *slog.Logger) error {
 	return nil
 }
 
-// SetPlanningFunc replaces the planning function used by the Orchestrator's
-// internal planning step.
-// Passing nil restores the default planner, which rejects the request with a
-// structured explanation until a real planner is wired in. It can only be
-// called before the first planning call.
-func (o *Orchestrator) SetPlanningFunc(planFn PlanningFunc) error {
+// SetOrchestratorSkill replaces the current orchestrator-owned skill.
+//
+// Callers may provide either a lightweight skill or one that is already bound
+// to an LLM client. Passing nil restores the embedded default skill. Like the
+// other startup-only orchestrator settings, it must be called before the first
+// planning call.
+func (o *Orchestrator) SetOrchestratorSkill(sk *skill.Skill) error {
 	o.mu.Lock()
 	defer o.mu.Unlock()
 	if o.configLocked {
-		return fmt.Errorf("orchestrate: SetPlanningFunc can only be called during startup")
+		return fmt.Errorf("orchestrate: SetOrchestratorSkill can only be called during startup")
 	}
-	if planFn == nil {
-		o.planFn = rejectUnconfiguredPlan
+	if sk == nil {
+		o.orchestratorSkill = defaultOrchestratorSkill()
 		return nil
 	}
-	o.planFn = planFn
+	if sk.Name == "" {
+		return fmt.Errorf("orchestrate: orchestrator skill requires a non-empty name")
+	}
+	o.orchestratorSkill = sk
 	return nil
 }
 
-// SetLLMClient configures the default client new executors should inherit when
-// their bound skill is lightweight and does not already carry its own client.
+// SetOrchestratorSkillDir replaces the built-in orchestrator skill with the
+// lightweight skill loaded from dir.
 //
-// Passing nil clears the default. Like the other startup-only orchestrator
-// settings, it must be called before the first planning call.
-func (o *Orchestrator) SetLLMClient(client *llm.Client) error {
-	o.mu.Lock()
-	defer o.mu.Unlock()
-	if o.configLocked {
-		return fmt.Errorf("orchestrate: SetLLMClient can only be called during startup")
+// Passing an empty dir restores the embedded default skill. Like the other
+// startup-only orchestrator settings, it must be called before the first
+// planning call.
+func (o *Orchestrator) SetOrchestratorSkillDir(dir string) error {
+	if dir == "" {
+		return o.SetOrchestratorSkill(nil)
 	}
-	o.llmClient = client
-	return nil
+	sk, err := skill.Load(dir)
+	if err != nil {
+		return err
+	}
+	return o.SetOrchestratorSkill(sk)
 }
 
 // SetRunnerStore configures the persistence store that newly assembled
@@ -233,6 +238,14 @@ func (o *Orchestrator) Skills() map[string]*skill.Skill {
 	o.mu.RLock()
 	defer o.mu.RUnlock()
 	return cloneSkillMap(o.skills)
+}
+
+// OrchestratorSkill returns the lightweight skill reserved for orchestrator
+// planning and review-style stages.
+func (o *Orchestrator) OrchestratorSkill() *skill.Skill {
+	o.mu.RLock()
+	defer o.mu.RUnlock()
+	return o.orchestratorSkill
 }
 
 // Runners returns a snapshot of the runner records the Orchestrator has
