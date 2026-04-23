@@ -20,9 +20,8 @@ func (o *Orchestrator) submitManagedRunner(ctx context.Context, runner *runnerpk
 	id := runner.ID()
 	o.mu.Lock()
 	if o.maxRunningRunners == 0 || len(o.runningRunnerIDs) < o.maxRunningRunners {
-		o.runningRunnerIDs[id] = struct{}{}
 		o.mu.Unlock()
-		return o.startManagedRunnerWithReservedSlot(ctx, runner)
+		return o.startManagedRunnerWithoutReservedSlot(ctx, runner, nil)
 	}
 	entry := &queuedRunner{
 		runner:   runner,
@@ -73,7 +72,7 @@ func (o *Orchestrator) removeQueuedRunner(entry *queuedRunner, canceled bool) ([
 	return toStart, toCancel
 }
 
-func (o *Orchestrator) startManagedRunner(ctx context.Context, runner *runnerpkg.Runner) error {
+func (o *Orchestrator) startManagedRunner(ctx context.Context, runner *runnerpkg.Runner, plan *CoarsePlan) error {
 	id := runner.ID()
 	o.mu.Lock()
 	if entry := o.queuedRunnerByID[id]; entry != nil {
@@ -85,11 +84,33 @@ func (o *Orchestrator) startManagedRunner(ctx context.Context, runner *runnerpkg
 		o.runningRunnerIDs[id] = struct{}{}
 	}
 	o.mu.Unlock()
-	return o.startManagedRunnerWithReservedSlot(ctx, runner)
+	return o.startManagedRunnerWithReservedSlot(ctx, runner, plan)
 }
 
-func (o *Orchestrator) startManagedRunnerWithReservedSlot(ctx context.Context, runner *runnerpkg.Runner) error {
-	if err := runner.Start(ctx); err != nil {
+func (o *Orchestrator) startManagedRunnerWithoutReservedSlot(ctx context.Context, runner *runnerpkg.Runner, plan *CoarsePlan) error {
+	var err error
+	if plan != nil {
+		err = runner.AcceptPolishedPlan(ctx, plan)
+	} else {
+		err = runner.StartPolish(ctx)
+	}
+	if err != nil {
+		if runner.State().Status == runnerpkg.RunnerStatusPending {
+			runner.Abort(err)
+		}
+		return err
+	}
+	return nil
+}
+
+func (o *Orchestrator) startManagedRunnerWithReservedSlot(ctx context.Context, runner *runnerpkg.Runner, plan *CoarsePlan) error {
+	var err error
+	if plan != nil {
+		err = runner.AcceptPolishedPlan(ctx, plan)
+	} else {
+		err = runner.StartPolish(ctx)
+	}
+	if err != nil {
 		o.handleManagedRunnerStartError(runner, err)
 		return err
 	}
@@ -156,7 +177,7 @@ func (o *Orchestrator) finishQueuedDispatch(toStart []*queuedRunner, toCancel []
 		entry.runner.Abort(entry.ctx.Err())
 	}
 	for _, entry := range toStart {
-		_ = o.startManagedRunnerWithReservedSlot(entry.ctx, entry.runner)
+		_ = o.startManagedRunnerWithoutReservedSlot(entry.ctx, entry.runner, nil)
 	}
 }
 

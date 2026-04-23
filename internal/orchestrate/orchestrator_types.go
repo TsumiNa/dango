@@ -18,6 +18,22 @@ var ErrRunnerActive = errors.New("orchestrate: runner is still active")
 // requested without a configured runner store.
 var ErrRunnerStoreNotConfigured = errors.New("orchestrate: runner store not configured")
 
+// ErrRunnerPlanNotAwaitingReview is returned when callers try to accept or
+// reject a plan while the runner is not waiting for review.
+var ErrRunnerPlanNotAwaitingReview = errors.New("orchestrate: runner plan is not awaiting review")
+
+// ErrRunnerPlanNotAwaitingReplan is returned when callers try to provide a
+// replacement plan while the runner is not waiting for replan.
+var ErrRunnerPlanNotAwaitingReplan = errors.New("orchestrate: runner plan is not awaiting replan")
+
+// ErrRunnerNotExecuting is returned when callers try to complete a runner
+// that is not currently executing.
+var ErrRunnerNotExecuting = errors.New("orchestrate: runner is not executing")
+
+// ErrRunnerExecutionSlotsFull is returned when a reviewed runner is ready to
+// execute but no execution slot is currently available.
+var ErrRunnerExecutionSlotsFull = errors.New("orchestrate: no execution slots available")
+
 // CoarsePlan is the orchestrator's high-level task graph before execution
 // starts. It is defined in the runner package and re-exported here so
 // [PlanningFunc] stays ergonomic for orchestrator callers.
