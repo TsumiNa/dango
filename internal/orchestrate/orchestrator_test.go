@@ -99,6 +99,33 @@ func waitForRunnerUpdateClosed(t *testing.T, ch <-chan RunnerUpdate, label strin
 	}
 }
 
+type stubRunnerExecutor struct {
+	polish  func(ctx context.Context) (any, error)
+	execute func(ctx context.Context, parentOutputs map[string]any) (any, []*runnerpkg.Node, error)
+	report  func(ctx context.Context, output any) (any, error)
+}
+
+func (e *stubRunnerExecutor) Polish(ctx context.Context) (any, error) {
+	if e.polish == nil {
+		return nil, nil
+	}
+	return e.polish(ctx)
+}
+
+func (e *stubRunnerExecutor) Execute(ctx context.Context, parentOutputs map[string]any) (any, []*runnerpkg.Node, error) {
+	if e.execute == nil {
+		return nil, nil, nil
+	}
+	return e.execute(ctx, parentOutputs)
+}
+
+func (e *stubRunnerExecutor) Report(ctx context.Context, output any) (any, error) {
+	if e.report == nil {
+		return output, nil
+	}
+	return e.report(ctx, output)
+}
+
 func TestDefault_ReturnsSingleton(t *testing.T) {
 	resetDefaultOrchestrator(t)
 	o1 := Default()
@@ -768,6 +795,179 @@ func TestQueuedRunnerCanReachAwaitingReviewWithoutConsumingExecutionSlot(t *test
 	t.Fatal("second runner did not reach awaiting review while no runner was executing")
 }
 
+func TestQueuedRunnerPolishFailureDoesNotLeakExecutionSlot(t *testing.T) {
+	o := newOrchestrator(testLogger)
+	if err := o.SetMaxRunningRunners(1); err != nil {
+		t.Fatalf("SetMaxRunningRunners: %v", err)
+	}
+
+	firstPlan, firstRunner := mustPlanSingleNodeRunner(t, o)
+	firstStarted := make(chan struct{})
+	firstRelease := make(chan struct{})
+	mustNodeExecutor(t, firstRunner.Nodes()["only"]).RunE = func(ctx context.Context, parentOutputs map[string]any) (any, []*Node, error) {
+		close(firstStarted)
+		<-firstRelease
+		return "first", nil, nil
+	}
+	if err := o.StartRunner(context.Background(), firstPlan.RunnerID); err != nil {
+		t.Fatalf("StartRunner(first): %v", err)
+	}
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		view, err := o.QueryRunner(firstPlan.RunnerID)
+		if err != nil {
+			t.Fatalf("QueryRunner(first awaiting review): %v", err)
+		}
+		if view.Phase == runnerpkg.PhaseAwaitingReview {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if err := o.AcceptRunnerPlan(context.Background(), firstPlan.RunnerID, firstPlan); err != nil {
+		t.Fatalf("AcceptRunnerPlan(first): %v", err)
+	}
+	select {
+	case <-firstStarted:
+	case <-time.After(2 * time.Second):
+		t.Fatal("first runner did not start executing")
+	}
+
+	secondPlan, _, err := o.planFromRequest(&Request{Input: "run second node"})
+	if err != nil {
+		t.Fatalf("planFromRequest(second): %v", err)
+	}
+	secondRunner, err := o.Runner(secondPlan.RunnerID)
+	if err != nil {
+		t.Fatalf("Runner(second): %v", err)
+	}
+	secondRunner.Nodes()["only"].Executor = &stubRunnerExecutor{
+		polish: func(ctx context.Context) (any, error) {
+			return nil, errors.New("polish failed")
+		},
+	}
+	if err := o.StartRunner(context.Background(), secondPlan.RunnerID); err != nil {
+		t.Fatalf("StartRunner(second): %v", err)
+	}
+
+	close(firstRelease)
+	deadline = time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		view, err := o.QueryRunner(secondPlan.RunnerID)
+		if err != nil {
+			t.Fatalf("QueryRunner(second failed): %v", err)
+		}
+		if view.State.Status == RunnerStatusFailed {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if got := len(o.runningRunnerIDs); got != 0 {
+		t.Fatalf("runningRunnerIDs size after queued polish failure = %d, want 0", got)
+	}
+
+	thirdPlan, _, err := o.planFromRequest(&Request{Input: "run third node"})
+	if err != nil {
+		t.Fatalf("planFromRequest(third): %v", err)
+	}
+	if err := o.StartRunner(context.Background(), thirdPlan.RunnerID); err != nil {
+		t.Fatalf("StartRunner(third): %v", err)
+	}
+	deadline = time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		view, err := o.QueryRunner(thirdPlan.RunnerID)
+		if err != nil {
+			t.Fatalf("QueryRunner(third awaiting review): %v", err)
+		}
+		if view.Phase == runnerpkg.PhaseAwaitingReview {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatal("third runner did not reach awaiting review after queued polish failure")
+}
+
+func TestQueuedDispatchToAwaitingReviewDoesNotConsumeExecutionSlot(t *testing.T) {
+	o := newOrchestrator(testLogger)
+	if err := o.SetMaxRunningRunners(1); err != nil {
+		t.Fatalf("SetMaxRunningRunners: %v", err)
+	}
+
+	firstPlan, firstRunner := mustPlanSingleNodeRunner(t, o)
+	firstStarted := make(chan struct{})
+	firstRelease := make(chan struct{})
+	mustNodeExecutor(t, firstRunner.Nodes()["only"]).RunE = func(ctx context.Context, parentOutputs map[string]any) (any, []*Node, error) {
+		close(firstStarted)
+		<-firstRelease
+		return "first", nil, nil
+	}
+	if err := o.StartRunner(context.Background(), firstPlan.RunnerID); err != nil {
+		t.Fatalf("StartRunner(first): %v", err)
+	}
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		view, err := o.QueryRunner(firstPlan.RunnerID)
+		if err != nil {
+			t.Fatalf("QueryRunner(first awaiting review): %v", err)
+		}
+		if view.Phase == runnerpkg.PhaseAwaitingReview {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if err := o.AcceptRunnerPlan(context.Background(), firstPlan.RunnerID, firstPlan); err != nil {
+		t.Fatalf("AcceptRunnerPlan(first): %v", err)
+	}
+	select {
+	case <-firstStarted:
+	case <-time.After(2 * time.Second):
+		t.Fatal("first runner did not start executing")
+	}
+
+	secondPlan, reject, err := o.StartRequest(context.Background(), &Request{Input: "run second node"})
+	if err != nil {
+		t.Fatalf("StartRequest(second): %v", err)
+	}
+	if reject != nil {
+		t.Fatalf("reject(second) = %+v, want nil", reject)
+	}
+
+	close(firstRelease)
+	deadline = time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		view, err := o.QueryRunner(secondPlan.RunnerID)
+		if err != nil {
+			t.Fatalf("QueryRunner(second awaiting review): %v", err)
+		}
+		if view.Phase == runnerpkg.PhaseAwaitingReview {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if got := len(o.runningRunnerIDs); got != 0 {
+		t.Fatalf("runningRunnerIDs size after queued runner reached awaiting review = %d, want 0", got)
+	}
+
+	thirdPlan, reject, err := o.StartRequest(context.Background(), &Request{Input: "run third node"})
+	if err != nil {
+		t.Fatalf("StartRequest(third): %v", err)
+	}
+	if reject != nil {
+		t.Fatalf("reject(third) = %+v, want nil", reject)
+	}
+	deadline = time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		view, err := o.QueryRunner(thirdPlan.RunnerID)
+		if err != nil {
+			t.Fatalf("QueryRunner(third awaiting review): %v", err)
+		}
+		if view.Phase == runnerpkg.PhaseAwaitingReview {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatal("third runner did not reach awaiting review after queued dispatch")
+}
+
 func TestAcceptRunnerPlan_RespectsExecutionSlotLimit(t *testing.T) {
 	o := newOrchestrator(testLogger)
 	if err := o.SetMaxRunningRunners(1); err != nil {
@@ -892,6 +1092,80 @@ func TestCompleteRunner_SettlesExecutingRunner(t *testing.T) {
 	}
 	if view.Phase != runnerpkg.PhaseSettled {
 		t.Fatalf("final phase = %q, want settled", view.Phase)
+	}
+}
+
+func TestCompleteRunner_ReleasesExecutionSlot(t *testing.T) {
+	o := newOrchestrator(testLogger)
+	if err := o.SetMaxRunningRunners(1); err != nil {
+		t.Fatalf("SetMaxRunningRunners: %v", err)
+	}
+	firstPlan, firstRunner := mustPlanSingleNodeRunner(t, o)
+	firstStarted := make(chan struct{})
+	firstRelease := make(chan struct{})
+	mustNodeExecutor(t, firstRunner.Nodes()["only"]).RunE = func(ctx context.Context, parentOutputs map[string]any) (any, []*Node, error) {
+		close(firstStarted)
+		<-firstRelease
+		return "first", nil, nil
+	}
+	if err := o.StartRunner(context.Background(), firstPlan.RunnerID); err != nil {
+		t.Fatalf("StartRunner(first): %v", err)
+	}
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		view, err := o.QueryRunner(firstPlan.RunnerID)
+		if err != nil {
+			t.Fatalf("QueryRunner(first awaiting review): %v", err)
+		}
+		if view.Phase == runnerpkg.PhaseAwaitingReview {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if err := o.AcceptRunnerPlan(context.Background(), firstPlan.RunnerID, firstPlan); err != nil {
+		t.Fatalf("AcceptRunnerPlan(first): %v", err)
+	}
+	select {
+	case <-firstStarted:
+	case <-time.After(2 * time.Second):
+		t.Fatal("first runner did not start")
+	}
+	close(firstRelease)
+	deadline = time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		view, err := o.QueryRunner(firstPlan.RunnerID)
+		if err != nil {
+			t.Fatalf("QueryRunner(first idle): %v", err)
+		}
+		if view.State.Status == RunnerStatusIdle {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if err := o.CompleteRunner(context.Background(), firstPlan.RunnerID); err != nil {
+		t.Fatalf("CompleteRunner(first): %v", err)
+	}
+
+	secondPlan, _, err := o.planFromRequest(&Request{Input: "run second node"})
+	if err != nil {
+		t.Fatalf("planFromRequest(second): %v", err)
+	}
+	if err := o.StartRunner(context.Background(), secondPlan.RunnerID); err != nil {
+		t.Fatalf("StartRunner(second): %v", err)
+	}
+	deadline = time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		view, err := o.QueryRunner(secondPlan.RunnerID)
+		if err != nil {
+			t.Fatalf("QueryRunner(second awaiting review): %v", err)
+		}
+		if view.Phase == runnerpkg.PhaseAwaitingReview {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if err := o.AcceptRunnerPlan(context.Background(), secondPlan.RunnerID, secondPlan); err != nil {
+		t.Fatalf("AcceptRunnerPlan(second): %v", err)
 	}
 }
 
@@ -1065,11 +1339,15 @@ func TestStartRequest_QueuesByPriorityWhenLimitReached(t *testing.T) {
 	close(highRelease)
 	deadline = time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
+		highView, err = o.QueryRunner(highPlan.RunnerID)
+		if err != nil {
+			t.Fatalf("QueryRunner(high after release): %v", err)
+		}
 		lowView, err = o.QueryRunner(lowPlan.RunnerID)
 		if err != nil {
 			t.Fatalf("QueryRunner(low after high drain): %v", err)
 		}
-		if lowView.Phase == runnerpkg.PhaseAwaitingReview {
+		if highView.State.Status == RunnerStatusIdle && lowView.Phase == runnerpkg.PhaseAwaitingReview {
 			if err := o.AcceptRunnerPlan(lowCtx, lowPlan.RunnerID, lowPlan); err != nil {
 				t.Fatalf("AcceptRunnerPlan(low): %v", err)
 			}

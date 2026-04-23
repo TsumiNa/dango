@@ -159,7 +159,6 @@ func (o *Orchestrator) collectQueuedStartsLocked() ([]*queuedRunner, []*queuedRu
 			toCancel = append(toCancel, entry)
 			continue
 		}
-		o.runningRunnerIDs[entry.runner.ID()] = struct{}{}
 		toStart = append(toStart, entry)
 	}
 	return toStart, toCancel
