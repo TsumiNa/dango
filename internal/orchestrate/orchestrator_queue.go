@@ -3,6 +3,7 @@ package orchestrate
 import (
 	"container/heap"
 	"context"
+	"errors"
 	"sync"
 
 	runnerpkg "github.com/tsumina/dango/internal/orchestrate/runner"
@@ -80,11 +81,11 @@ func (o *Orchestrator) startManagedRunner(ctx context.Context, runner *runnerpkg
 		delete(o.queuedRunnerByID, id)
 		entry.deactivate()
 	}
-	if _, ok := o.runningRunnerIDs[id]; !ok {
-		o.runningRunnerIDs[id] = struct{}{}
-	}
 	o.mu.Unlock()
-	return o.startManagedRunnerWithReservedSlot(ctx, runner, plan)
+	if plan != nil {
+		return o.startManagedRunnerWithReservedSlot(ctx, runner, plan)
+	}
+	return o.startManagedRunnerWithoutReservedSlot(ctx, runner, nil)
 }
 
 func (o *Orchestrator) startManagedRunnerWithoutReservedSlot(ctx context.Context, runner *runnerpkg.Runner, plan *CoarsePlan) error {
@@ -111,6 +112,9 @@ func (o *Orchestrator) startManagedRunnerWithReservedSlot(ctx context.Context, r
 		err = runner.StartPolish(ctx)
 	}
 	if err != nil {
+		if errors.Is(err, runnerpkg.ErrInvalidPhase) {
+			return err
+		}
 		o.handleManagedRunnerStartError(runner, err)
 		return err
 	}

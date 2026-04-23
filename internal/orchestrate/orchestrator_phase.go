@@ -15,6 +15,9 @@ func (o *Orchestrator) AcceptRunnerPlan(ctx context.Context, id string, plan *Co
 	if err != nil {
 		return err
 	}
+	if runner.Phase() != runnerpkg.PhaseAwaitingReview {
+		return ErrRunnerPlanNotAwaitingReview
+	}
 	o.mu.Lock()
 	if o.maxRunningRunners > 0 {
 		if _, ok := o.runningRunnerIDs[id]; !ok && len(o.runningRunnerIDs) >= o.maxRunningRunners {
@@ -49,7 +52,6 @@ func (o *Orchestrator) RejectRunnerPlan(id string, reason string) error {
 		}
 		return err
 	}
-	o.releaseRunnerExecutionSlot(runner.ID())
 	return nil
 }
 

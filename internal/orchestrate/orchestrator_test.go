@@ -770,6 +770,9 @@ func TestQueuedRunnerCanReachAwaitingReviewWithoutConsumingExecutionSlot(t *test
 
 func TestAcceptRunnerPlan_RespectsExecutionSlotLimit(t *testing.T) {
 	o := newOrchestrator(testLogger)
+	if err := o.SetMaxRunningRunners(1); err != nil {
+		t.Fatalf("SetMaxRunningRunners: %v", err)
+	}
 	firstPlan, firstRunner := mustPlanSingleNodeRunner(t, o)
 	firstStarted := make(chan struct{})
 	firstRelease := make(chan struct{})
@@ -802,6 +805,28 @@ func TestAcceptRunnerPlan_RespectsExecutionSlotLimit(t *testing.T) {
 	}
 	if len(o.runningRunnerIDs) != 1 {
 		t.Fatalf("runningRunnerIDs size = %d, want 1 while first runner is executing", len(o.runningRunnerIDs))
+	}
+
+	secondPlan, _, err := o.planFromRequest(&Request{Input: "run second node"})
+	if err != nil {
+		t.Fatalf("planFromRequest(second): %v", err)
+	}
+	if err := o.StartRunner(context.Background(), secondPlan.RunnerID); err != nil {
+		t.Fatalf("StartRunner(second): %v", err)
+	}
+	deadline = time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		view, err := o.QueryRunner(secondPlan.RunnerID)
+		if err != nil {
+			t.Fatalf("QueryRunner(second): %v", err)
+		}
+		if view.Phase == runnerpkg.PhaseAwaitingReview {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if err := o.AcceptRunnerPlan(context.Background(), secondPlan.RunnerID, secondPlan); !errors.Is(err, ErrRunnerExecutionSlotsFull) {
+		t.Fatalf("AcceptRunnerPlan(second) err = %v, want ErrRunnerExecutionSlotsFull", err)
 	}
 	close(firstRelease)
 }
