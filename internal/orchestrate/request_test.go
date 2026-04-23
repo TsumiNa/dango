@@ -5,12 +5,12 @@ import (
 	"testing"
 	"time"
 
-	"github.com/tsumina/dango/internal/llm/skill"
+	"github.com/tsumina/dango/internal/llm"
 )
 
 func TestPlanFromRequest_ReturnsRejectWithoutPlanner(t *testing.T) {
 	o := newOrchestrator(testLogger)
-	plan, reject, err := o.planFromRequest(&Request{Input: "summarize this repository"})
+	plan, reject, err := o.planFromRequest(context.Background(), &Request{Input: "summarize this repository"})
 	if err != nil {
 		t.Fatalf("planFromRequest: %v", err)
 	}
@@ -29,37 +29,33 @@ func TestPlanFromRequest_ReturnsRejectWithoutPlanner(t *testing.T) {
 }
 
 func TestPlanFromRequest_BuildsRunnerFromPlan(t *testing.T) {
+	clearLLMEnv(t)
 	o := newOrchestrator(testLogger)
+	perSkillClient := &llm.Client{}
 	store := mustNewRunnerStore(t, t.TempDir())
 	if err := o.SetRunnerStore(store); err != nil {
 		t.Fatalf("SetRunnerStore: %v", err)
 	}
-	if err := o.RegisterSkill(writeTestSkill(t, "plan", "Draft a plan.")); err != nil {
+	if err := o.RegisterSkill(writeTestSkill(t, "plan", "Draft a plan."), WithSkillClientFactory(func() (*llm.Client, error) {
+		return perSkillClient, nil
+	})); err != nil {
 		t.Fatalf("RegisterSkill(plan): %v", err)
 	}
 	if err := o.RegisterSkill(writeTestSkill(t, "execute", "Execute a plan.")); err != nil {
 		t.Fatalf("RegisterSkill(execute): %v", err)
 	}
-
-	if err := o.SetPlanningFunc(func(req *Request, skills map[string]*skill.Skill) (*CoarsePlan, *RejectReason, error) {
-		if req.Input != "build a report" {
-			t.Fatalf("unexpected request input %q", req.Input)
-		}
-		if len(skills) != 2 {
-			t.Fatalf("len(skills) = %d, want 2", len(skills))
-		}
-		return &CoarsePlan{
-			Request: req.Input,
-			Nodes: []CoarsePlanNode{
-				{ID: "draft", SkillName: "plan", TaskDescription: "Draft the execution outline."},
-				{ID: "run", SkillName: "execute", TaskDescription: "Execute the approved outline.", DependsOn: []string{"draft"}},
-			},
-		}, nil, nil
-	}); err != nil {
-		t.Fatalf("SetPlanningFunc: %v", err)
+	orchestratorSkill := bindTestOrchestratorSkill(t, mustPlanJSON(t, &CoarsePlan{
+		Request: "build a report",
+		Nodes: []CoarsePlanNode{
+			{ID: "draft", SkillName: "plan", TaskDescription: "Draft the execution outline."},
+			{ID: "run", SkillName: "execute", TaskDescription: "Execute the approved outline.", DependsOn: []string{"draft"}},
+		},
+	}))
+	if err := o.SetOrchestratorSkill(orchestratorSkill); err != nil {
+		t.Fatalf("SetOrchestratorSkill(test planner): %v", err)
 	}
 
-	plan, reject, err := o.planFromRequest(&Request{Input: "build a report"})
+	plan, reject, err := o.planFromRequest(context.Background(), &Request{Input: "build a report"})
 	if err != nil {
 		t.Fatalf("planFromRequest: %v", err)
 	}
@@ -93,9 +89,15 @@ func TestPlanFromRequest_BuildsRunnerFromPlan(t *testing.T) {
 	if draftExecutor.Skill().Name != "plan" {
 		t.Fatalf("draft executor skill = %v, want plan", draftExecutor)
 	}
+	if got := draftExecutor.LLMClient(); got != perSkillClient {
+		t.Fatalf("draft executor LLMClient() = %p, want %p", got, perSkillClient)
+	}
 	runExecutor := mustNodeExecutor(t, run)
 	if runExecutor.Skill().Name != "execute" {
 		t.Fatalf("run executor skill = %v, want execute", runExecutor)
+	}
+	if got := runExecutor.LLMClient(); got != orchestratorSkill.Client() {
+		t.Fatalf("run executor LLMClient() = %p, want %p", got, orchestratorSkill.Client())
 	}
 	if len(run.Parents) != 1 || run.Parents[0].Id != "draft" {
 		t.Fatalf("run parents = %+v, want [draft]", run.Parents)
@@ -107,16 +109,14 @@ func TestPlanFromRequest_BuildsRunnerFromPlan(t *testing.T) {
 
 func TestPlanFromRequest_ErrorsWhenPlanUsesUnknownSkill(t *testing.T) {
 	o := newOrchestrator(testLogger)
-	if err := o.SetPlanningFunc(func(req *Request, skills map[string]*skill.Skill) (*CoarsePlan, *RejectReason, error) {
-		return &CoarsePlan{
-			Request: req.Input,
-			Nodes:   []CoarsePlanNode{{ID: "only", SkillName: "missing", TaskDescription: req.Input}},
-		}, nil, nil
-	}); err != nil {
-		t.Fatalf("SetPlanningFunc: %v", err)
+	if err := o.SetOrchestratorSkill(bindTestOrchestratorSkill(t, mustPlanJSON(t, &CoarsePlan{
+		Request: "process images",
+		Nodes:   []CoarsePlanNode{{ID: "only", SkillName: "missing", TaskDescription: "process images"}},
+	}))); err != nil {
+		t.Fatalf("SetOrchestratorSkill(test planner): %v", err)
 	}
 
-	plan, reject, err := o.planFromRequest(&Request{Input: "process images"})
+	plan, reject, err := o.planFromRequest(context.Background(), &Request{Input: "process images"})
 	if err == nil {
 		t.Fatal("expected error when the plan references an unknown skill")
 	}
@@ -133,17 +133,15 @@ func TestStartRequest_StartsRunnerImmediately(t *testing.T) {
 	if err := o.RegisterSkill(writeTestSkill(t, "single", "Single-step runner.")); err != nil {
 		t.Fatalf("RegisterSkill(single): %v", err)
 	}
-	if err := o.SetPlanningFunc(func(req *Request, skills map[string]*skill.Skill) (*CoarsePlan, *RejectReason, error) {
-		return &CoarsePlan{
-			Request: req.Input,
-			Nodes: []CoarsePlanNode{{
-				ID:              "only",
-				SkillName:       "single",
-				TaskDescription: "Run the only node.",
-			}},
-		}, nil, nil
-	}); err != nil {
-		t.Fatalf("SetPlanningFunc: %v", err)
+	if err := o.SetOrchestratorSkill(bindTestOrchestratorSkill(t, mustPlanJSON(t, &CoarsePlan{
+		Request: "run now",
+		Nodes: []CoarsePlanNode{{
+			ID:              "only",
+			SkillName:       "single",
+			TaskDescription: "Run the only node.",
+		}},
+	}))); err != nil {
+		t.Fatalf("SetOrchestratorSkill(test planner): %v", err)
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -211,17 +209,15 @@ func TestStartRequest_RejectsPriorityOutsideRange(t *testing.T) {
 	if err := o.RegisterSkill(writeTestSkill(t, "single", "Single-step runner.")); err != nil {
 		t.Fatalf("RegisterSkill(single): %v", err)
 	}
-	if err := o.SetPlanningFunc(func(req *Request, skills map[string]*skill.Skill) (*CoarsePlan, *RejectReason, error) {
-		return &CoarsePlan{
-			Request: req.Input,
-			Nodes: []CoarsePlanNode{{
-				ID:              "only",
-				SkillName:       "single",
-				TaskDescription: "Run the only node.",
-			}},
-		}, nil, nil
-	}); err != nil {
-		t.Fatalf("SetPlanningFunc: %v", err)
+	if err := o.SetOrchestratorSkill(bindTestOrchestratorSkill(t, mustPlanJSON(t, &CoarsePlan{
+		Request: "run now",
+		Nodes: []CoarsePlanNode{{
+			ID:              "only",
+			SkillName:       "single",
+			TaskDescription: "Run the only node.",
+		}},
+	}))); err != nil {
+		t.Fatalf("SetOrchestratorSkill(test planner): %v", err)
 	}
 
 	for _, priority := range []RequestPriority{-1, RequestPriorityHighest + 1} {

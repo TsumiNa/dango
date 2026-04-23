@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"testing/fstest"
 
 	"github.com/tsumina/dango/internal/llm"
 )
@@ -195,6 +196,75 @@ func TestLoad_ParsesMetadataWithoutClient(t *testing.T) {
 	}
 	if skill.Conversation() != nil {
 		t.Errorf("Conversation() should be nil after Load()")
+	}
+}
+
+func TestLoadFS_ParsesMetadataWithoutHostDir(t *testing.T) {
+	fsys := fstest.MapFS{
+		"builtin/SKILL.md": &fstest.MapFile{Data: []byte("---\nname: embedded\ndescription: Embedded skill.\n---\nembedded body\n")},
+	}
+	skill, err := LoadFS(fsys, "builtin")
+	if err != nil {
+		t.Fatalf("LoadFS: %v", err)
+	}
+	if skill.Name != "embedded" {
+		t.Fatalf("Name = %q, want %q", skill.Name, "embedded")
+	}
+	if skill.Description != "Embedded skill." {
+		t.Fatalf("Description = %q, want %q", skill.Description, "Embedded skill.")
+	}
+	if skill.Instruction != "embedded body\n" {
+		t.Fatalf("Instruction = %q, want %q", skill.Instruction, "embedded body\n")
+	}
+	if skill.Dir() != "" {
+		t.Fatalf("Dir() = %q, want empty for embedded skill", skill.Dir())
+	}
+	if skill.Client() != nil {
+		t.Fatalf("Client() = %p, want nil", skill.Client())
+	}
+	if skill.Conversation() != nil {
+		t.Fatal("Conversation() should be nil after LoadFS()")
+	}
+}
+
+func TestBind_BuildsRunnableCopyFromLoadedSkill(t *testing.T) {
+	dir := writeSkillDir(t, "---\nname: loaded\ndescription: d\n---\nbody\n")
+	loaded, err := Load(dir)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	client := stubClient()
+	bound, err := loaded.Bind(RuntimeConfig{Client: client})
+	if err != nil {
+		t.Fatalf("Bind: %v", err)
+	}
+	if bound == loaded {
+		t.Fatal("Bind returned the original skill pointer, want a fresh copy")
+	}
+	if bound.Client() != client {
+		t.Fatalf("Client() = %p, want %p", bound.Client(), client)
+	}
+	if bound.Conversation() == nil {
+		t.Fatal("Conversation() = nil, want a runnable conversation")
+	}
+	if loaded.Client() != nil {
+		t.Fatalf("loaded Client() = %p, want nil after Bind", loaded.Client())
+	}
+	if loaded.Conversation() != nil {
+		t.Fatal("loaded Conversation() changed after Bind")
+	}
+	if bound.Name != loaded.Name || bound.Description != loaded.Description || bound.Dir() != loaded.Dir() {
+		t.Fatalf("bound skill metadata changed unexpectedly: got %+v want name=%q description=%q dir=%q", bound, loaded.Name, loaded.Description, loaded.Dir())
+	}
+}
+
+func TestBind_ErrorWhenClientNil(t *testing.T) {
+	loaded, err := Load(writeSkillDir(t, "---\nname: x\ndescription: d\n---\nbody\n"))
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if _, err := loaded.Bind(RuntimeConfig{}); err == nil {
+		t.Fatal("expected error when binding without a client")
 	}
 }
 

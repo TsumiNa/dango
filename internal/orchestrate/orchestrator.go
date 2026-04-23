@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"sync"
 
+	"github.com/tsumina/dango/internal/llm"
 	"github.com/tsumina/dango/internal/llm/skill"
 	runnerpkg "github.com/tsumina/dango/internal/orchestrate/runner"
 )
@@ -23,19 +24,30 @@ var (
 // planner to convert a request into a coarse execution plan, and materializes a
 // fresh runner plus its Executor graph for each accepted plan.
 type Orchestrator struct {
-	logger *slog.Logger
+	logger            *slog.Logger
+	orchestratorSkill *skill.Skill
+	envClientOnce     sync.Once
+	envClient         *llm.Client
+	envClientErr      error
 
 	mu                sync.RWMutex
 	configLocked      bool
 	runnerStore       runnerpkg.RunnerStore
 	maxRunningRunners int
 	skills            map[string]*skill.Skill
+	skillClientByName map[string]SkillClientFactory
 	runners           map[string]*runnerpkg.Runner
 	runningRunnerIDs  map[string]struct{}
 	queuedRunnerByID  map[string]*queuedRunner
 	queuedRunners     runnerStartQueue
 	nextQueueOrder    uint64
-	planFn            PlanningFunc
+}
+
+func (o *Orchestrator) resolveEnvClient() (*llm.Client, error) {
+	o.envClientOnce.Do(func() {
+		o.envClient, o.envClientErr = llm.NewClientFromEnv()
+	})
+	return o.envClient, o.envClientErr
 }
 
 // Default returns the process-wide Orchestrator singleton.
@@ -54,12 +66,36 @@ func newOrchestrator(logger *slog.Logger) *Orchestrator {
 		logger = slog.Default()
 	}
 	return &Orchestrator{
-		logger:           logger,
-		skills:           make(map[string]*skill.Skill),
-		runners:          make(map[string]*runnerpkg.Runner),
-		runningRunnerIDs: make(map[string]struct{}),
-		queuedRunnerByID: make(map[string]*queuedRunner),
-		planFn:           rejectUnconfiguredPlan,
+		logger:            logger,
+		orchestratorSkill: defaultOrchestratorSkill(),
+		skills:            make(map[string]*skill.Skill),
+		skillClientByName: make(map[string]SkillClientFactory),
+		runners:           make(map[string]*runnerpkg.Runner),
+		runningRunnerIDs:  make(map[string]struct{}),
+		queuedRunnerByID:  make(map[string]*queuedRunner),
+	}
+}
+
+// SkillClientFactory constructs the client a registered skill should use when
+// environment-based configuration is unavailable.
+//
+// It lets the registration site capture skill-specific LLM setup details while
+// keeping the runner assembly path independent from those configuration knobs.
+type SkillClientFactory func() (*llm.Client, error)
+
+type registerSkillConfig struct {
+	clientFactory SkillClientFactory
+}
+
+// RegisterSkillOption configures how a skill should be materialized later when
+// the orchestrator assembles executors for a runner.
+type RegisterSkillOption func(*registerSkillConfig)
+
+// WithSkillClientFactory records a per-skill client constructor that is used
+// when [llm.NewClientFromEnv] does not yield a client for that skill.
+func WithSkillClientFactory(factory SkillClientFactory) RegisterSkillOption {
+	return func(cfg *registerSkillConfig) {
+		cfg.clientFactory = factory
 	}
 }
 
@@ -81,23 +117,44 @@ func (o *Orchestrator) SetLogger(logger *slog.Logger) error {
 	return nil
 }
 
-// SetPlanningFunc replaces the planning function used by the Orchestrator's
-// internal planning step.
-// Passing nil restores the default planner, which rejects the request with a
-// structured explanation until a real planner is wired in. It can only be
-// called before the first planning call.
-func (o *Orchestrator) SetPlanningFunc(planFn PlanningFunc) error {
+// SetOrchestratorSkill replaces the current orchestrator-owned skill.
+//
+// Callers may provide either a lightweight skill or one that is already bound
+// to an LLM client. Passing nil restores the embedded default skill. Like the
+// other startup-only orchestrator settings, it must be called before the first
+// planning call.
+func (o *Orchestrator) SetOrchestratorSkill(sk *skill.Skill) error {
 	o.mu.Lock()
 	defer o.mu.Unlock()
 	if o.configLocked {
-		return fmt.Errorf("orchestrate: SetPlanningFunc can only be called during startup")
+		return fmt.Errorf("orchestrate: SetOrchestratorSkill can only be called during startup")
 	}
-	if planFn == nil {
-		o.planFn = rejectUnconfiguredPlan
+	if sk == nil {
+		o.orchestratorSkill = defaultOrchestratorSkill()
 		return nil
 	}
-	o.planFn = planFn
+	if sk.Name == "" {
+		return fmt.Errorf("orchestrate: orchestrator skill requires a non-empty name")
+	}
+	o.orchestratorSkill = sk
 	return nil
+}
+
+// SetOrchestratorSkillDir replaces the built-in orchestrator skill with the
+// lightweight skill loaded from dir.
+//
+// Passing an empty dir restores the embedded default skill. Like the other
+// startup-only orchestrator settings, it must be called before the first
+// planning call.
+func (o *Orchestrator) SetOrchestratorSkillDir(dir string) error {
+	if dir == "" {
+		return o.SetOrchestratorSkill(nil)
+	}
+	sk, err := skill.Load(dir)
+	if err != nil {
+		return err
+	}
+	return o.SetOrchestratorSkill(sk)
 }
 
 // SetRunnerStore configures the persistence store that newly assembled
@@ -140,13 +197,19 @@ func (o *Orchestrator) SetMaxRunningRunners(limit int) error {
 //
 // Skills are live managed state rather than startup-only configuration, so
 // RegisterSkill may be called throughout the daemon lifetime.
-func (o *Orchestrator) RegisterSkill(dir string) error {
+func (o *Orchestrator) RegisterSkill(dir string, opts ...RegisterSkillOption) error {
 	sk, err := skill.Load(dir)
 	if err != nil {
 		return err
 	}
 	if sk.Name == "" {
 		return fmt.Errorf("orchestrate: registered skill in %q has empty name", dir)
+	}
+	var cfg registerSkillConfig
+	for _, opt := range opts {
+		if opt != nil {
+			opt(&cfg)
+		}
 	}
 
 	o.mu.Lock()
@@ -155,6 +218,9 @@ func (o *Orchestrator) RegisterSkill(dir string) error {
 		return fmt.Errorf("orchestrate: skill %q already registered", sk.Name)
 	}
 	o.skills[sk.Name] = sk
+	if cfg.clientFactory != nil {
+		o.skillClientByName[sk.Name] = cfg.clientFactory
+	}
 	return nil
 }
 
@@ -173,6 +239,7 @@ func (o *Orchestrator) RemoveSkill(name string) error {
 		return fmt.Errorf("orchestrate: skill %q is not registered", name)
 	}
 	delete(o.skills, name)
+	delete(o.skillClientByName, name)
 	return nil
 }
 
@@ -181,6 +248,14 @@ func (o *Orchestrator) Skills() map[string]*skill.Skill {
 	o.mu.RLock()
 	defer o.mu.RUnlock()
 	return cloneSkillMap(o.skills)
+}
+
+// OrchestratorSkill returns the lightweight skill reserved for orchestrator
+// planning and review-style stages.
+func (o *Orchestrator) OrchestratorSkill() *skill.Skill {
+	o.mu.RLock()
+	defer o.mu.RUnlock()
+	return o.orchestratorSkill
 }
 
 // Runners returns a snapshot of the runner records the Orchestrator has

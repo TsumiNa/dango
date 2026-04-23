@@ -4,8 +4,11 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"sync"
 
+	"github.com/tsumina/dango/internal/llm"
 	"github.com/tsumina/dango/internal/llm/skill"
+	"github.com/tsumina/dango/internal/llm/skill/builtin"
 	runnerpkg "github.com/tsumina/dango/internal/orchestrate/runner"
 )
 
@@ -53,9 +56,14 @@ type SharedData struct {
 // task. The zero value is not usable; construct instances with
 // [NewExecutor].
 type Executor struct {
-	logger  *slog.Logger
-	skill   *skill.Skill
-	planner *ExecutionPlanner
+	logger             *slog.Logger
+	skill              *skill.Skill
+	planner            *ExecutionPlanner
+	llmClient          *llm.Client
+	skillClientFactory SkillClientFactory
+	envClientOnce      sync.Once
+	envClient          *llm.Client
+	envClientErr       error
 
 	// Result holds the structured outcome of the most recent execution.
 	Result *ExecutionResult
@@ -71,9 +79,10 @@ type Executor struct {
 // NewExecutor constructs an [Executor] bound to sk and planner.
 //
 // logger receives lifecycle log messages and may be nil to silence them.
-// sk and planner must be non-nil; sk supplies the workspace directory,
-// metadata, instruction prompt, and LLM client used during execution.
-func NewExecutor(logger *slog.Logger, sk *skill.Skill, planner *ExecutionPlanner) (*Executor, error) {
+// sk and planner must be non-nil. client is the orchestrator-wide fallback.
+// skillClientFactory constructs the per-skill client used when environment
+// configuration is unavailable.
+func NewExecutor(logger *slog.Logger, sk *skill.Skill, planner *ExecutionPlanner, client *llm.Client, skillClientFactory SkillClientFactory) (*Executor, error) {
 	if sk == nil {
 		return nil, fmt.Errorf("orchestrate: executor requires a non-nil skill")
 	}
@@ -84,9 +93,11 @@ func NewExecutor(logger *slog.Logger, sk *skill.Skill, planner *ExecutionPlanner
 		logger.Info("Creating a new Executor")
 	}
 	return &Executor{
-		logger:  logger,
-		skill:   sk,
-		planner: planner,
+		logger:             logger,
+		skill:              sk,
+		planner:            planner,
+		llmClient:          client,
+		skillClientFactory: skillClientFactory,
 	}, nil
 }
 
@@ -96,6 +107,22 @@ func (e *Executor) Skill() *skill.Skill { return e.skill }
 // Planner returns the [ExecutionPlanner] this executor mutates during
 // planning.
 func (e *Executor) Planner() *ExecutionPlanner { return e.planner }
+
+// SetLLMClient replaces the executor-specific fallback client.
+//
+// It is the last-resort fallback after environment-based resolution and any
+// per-skill factory.
+func (e *Executor) SetLLMClient(client *llm.Client) { e.llmClient = client }
+
+// LLMClient returns the effective client this executor will use for skill-run
+// stages.
+func (e *Executor) LLMClient() *llm.Client {
+	client, err := e.resolveLLMClient()
+	if err != nil {
+		return nil
+	}
+	return client
+}
 
 // PolishPlan refines the planner's reasoning and solution based on the
 // current task description. It bumps [ExecutionPlanner.Version] on success.
@@ -122,11 +149,32 @@ func (e *Executor) planTask() error {
 // directly; otherwise Execute is currently a no-op placeholder until the
 // real skill-driven execution path is implemented.
 func (e *Executor) Execute(ctx context.Context, parentOutputs map[string]any) (any, []*runnerpkg.Node, error) {
+	if ctx != nil {
+		if err := ctx.Err(); err != nil {
+			e.Status = StatusFailed
+			return nil, nil, err
+		}
+	}
 	e.logf("Executing tasks...")
+	e.Status = StatusRunning
 
 	if e.RunE != nil {
-		return e.RunE(ctx, parentOutputs)
+		output, newNodes, err := e.RunE(ctx, parentOutputs)
+		if err != nil {
+			e.Status = StatusFailed
+			return nil, nil, err
+		}
+		e.captureResult(output)
+		e.Status = StatusDone
+		if ctx != nil {
+			if err := ctx.Err(); err != nil {
+				e.Status = StatusFailed
+				return nil, nil, err
+			}
+		}
+		return output, newNodes, nil
 	}
+	e.Status = StatusDone
 	return nil, nil, nil
 }
 
@@ -159,6 +207,69 @@ func (e *Executor) Report(ctx context.Context, output any) (any, error) {
 		}
 	}
 	return output, nil
+}
+
+func (e *Executor) runtimeSkill() (*skill.Skill, error) {
+	if e.skill == nil {
+		return nil, fmt.Errorf("orchestrate: executor requires a non-nil skill")
+	}
+	client, err := e.resolveLLMClient()
+	if err != nil {
+		return nil, err
+	}
+	if e.skill.Client() == client && e.skill.Client() != nil {
+		return e.skill, nil
+	}
+	return e.skill.Bind(skill.RuntimeConfig{
+		Client: client,
+		Tools:  e.defaultSkillTools(),
+	})
+}
+
+func (e *Executor) resolveLLMClient() (*llm.Client, error) {
+	if client, err := e.resolveEnvClient(); err == nil && client != nil {
+		return client, nil
+	}
+	if e.skill != nil && e.skill.Client() != nil {
+		return e.skill.Client(), nil
+	}
+	if e.skillClientFactory != nil {
+		client, err := e.skillClientFactory()
+		if err == nil && client != nil {
+			return client, nil
+		}
+	}
+	if e.llmClient != nil {
+		return e.llmClient, nil
+	}
+	if e.skill != nil {
+		return nil, fmt.Errorf("orchestrate: executor skill %q has no bound llm client", e.skill.Name)
+	}
+	return nil, fmt.Errorf("orchestrate: executor has no bound llm client")
+}
+
+func (e *Executor) resolveEnvClient() (*llm.Client, error) {
+	e.envClientOnce.Do(func() {
+		e.envClient, e.envClientErr = llm.NewClientFromEnv()
+	})
+	return e.envClient, e.envClientErr
+}
+
+func (e *Executor) defaultSkillTools() []llm.Tool {
+	if e.skill == nil || e.skill.Dir() == "" {
+		return nil
+	}
+	return builtin.All(e.skill.Dir(), builtin.WithAllowlistAdjust(e.skill.BashAllow(), e.skill.BashBlock()))
+}
+
+func (e *Executor) captureResult(output any) {
+	switch result := output.(type) {
+	case *ExecutionResult:
+		e.Result = result
+	case ExecutionResult:
+		copyResult := result
+		e.Result = &copyResult
+	}
 }
 
 func (e *Executor) logf(format string, args ...any) {

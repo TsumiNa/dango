@@ -3,7 +3,6 @@ package orchestrate
 import (
 	"errors"
 
-	"github.com/tsumina/dango/internal/llm/skill"
 	runnerpkg "github.com/tsumina/dango/internal/orchestrate/runner"
 )
 
@@ -36,15 +35,12 @@ var ErrRunnerExecutionSlotsFull = errors.New("orchestrate: no execution slots av
 
 // CoarsePlan is the orchestrator's high-level task graph before execution
 // starts. It is defined in the runner package and re-exported here so
-// [PlanningFunc] stays ergonomic for orchestrator callers.
+// orchestrator callers can refer to planning results without importing the
+// runner package directly.
 type CoarsePlan = runnerpkg.CoarsePlan
 
 // CoarsePlanNode describes one executor-sized unit in a [CoarsePlan].
 type CoarsePlanNode = runnerpkg.CoarsePlanNode
-
-// PlanningFunc analyzes req against the registered skills and returns either a
-// coarse plan or a structured reason the task cannot proceed.
-type PlanningFunc func(req *Request, skills map[string]*skill.Skill) (*CoarsePlan, *RejectReason, error)
 
 // RequestPriority orders queued StartRequest submissions.
 //
@@ -74,4 +70,10 @@ type RejectReason struct {
 	Summary       string   `json:"summary" yaml:"summary"`
 	Analysis      string   `json:"analysis" yaml:"analysis"`
 	MissingSkills []string `json:"missing_skills,omitempty" yaml:"missing_skills,omitempty"`
+}
+
+// PlanReview is the orchestrator-owned review decision for a polished plan.
+type PlanReview struct {
+	Approved bool   `json:"approved" yaml:"approved"`
+	Reason   string `json:"reason,omitempty" yaml:"reason,omitempty"`
 }

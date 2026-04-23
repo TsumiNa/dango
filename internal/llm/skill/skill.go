@@ -3,8 +3,9 @@ package skill
 import (
 	"context"
 	"fmt"
+	"io/fs"
 	"os"
-	"path/filepath"
+	"path"
 
 	"github.com/adrg/frontmatter"
 	"github.com/tsumina/dango/internal/llm"
@@ -91,6 +92,24 @@ type Config struct {
 	SessionID    string
 }
 
+// RuntimeConfig configures the execution-time pieces bound onto an existing
+// loaded [Skill].
+//
+// It mirrors the runtime-oriented subset of [Config] so lightweight skills
+// returned by [Load] can later be turned into runnable copies without reading
+// [SkillFile] again.
+type RuntimeConfig struct {
+	Client *llm.Client
+
+	Tools      []llm.Tool
+	MaxSteps   int
+	AutoTrim   *llm.AutoShrinkConfig
+	Summarizer llm.Summarizer
+
+	SessionStore llm.SessionStore
+	SessionID    string
+}
+
 // Load reads the [SkillFile] in dir and parses its metadata and
 // instruction body into a [Skill] without binding an LLM client or
 // conversation. The returned Skill is lightweight and useful for
@@ -104,13 +123,38 @@ func Load(dir string) (*Skill, error) {
 		return nil, fmt.Errorf("skill path %q is not a directory", dir)
 	}
 
-	skillPath := filepath.Join(dir, SkillFile)
-	file, err := os.Open(skillPath)
+	return loadFromFS(os.DirFS(dir), ".", dir, dir)
+}
+
+// LoadFS reads the [SkillFile] in dir from fsys and returns the resulting
+// lightweight [Skill].
+//
+// It is the filesystem-agnostic counterpart to [Load] and is intended for
+// cases such as embedded skills that are packaged into the final binary.
+// Skills loaded from non-local filesystems do not expose a host directory, so
+// [Skill.Dir] returns an empty string.
+func LoadFS(fsys fs.FS, dir string) (*Skill, error) {
+	if fsys == nil {
+		return nil, fmt.Errorf("skill: requires a non-nil filesystem")
+	}
+	info, err := fs.Stat(fsys, dir)
+	if err != nil {
+		return nil, err
+	}
+	if !info.IsDir() {
+		return nil, fmt.Errorf("skill path %q is not a directory", dir)
+	}
+	return loadFromFS(fsys, dir, dir, "")
+}
+
+func loadFromFS(fsys fs.FS, dir string, displayDir string, hostDir string) (*Skill, error) {
+	skillPath := path.Join(dir, SkillFile)
+	file, err := fsys.Open(skillPath)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return nil, fmt.Errorf("skill directory %q is missing required %s: %w", dir, SkillFile, err)
+			return nil, fmt.Errorf("skill directory %q is missing required %s: %w", displayDir, SkillFile, err)
 		}
-		return nil, fmt.Errorf("open %s in %q: %w", SkillFile, dir, err)
+		return nil, fmt.Errorf("open %s in %q: %w", SkillFile, displayDir, err)
 	}
 	defer file.Close()
 
@@ -120,7 +164,7 @@ func Load(dir string) (*Skill, error) {
 		return nil, err
 	}
 	sk.Instruction = string(rest)
-	sk.dir = dir
+	sk.dir = hostDir
 
 	return &sk, nil
 }
@@ -142,32 +186,59 @@ func New(cfg Config) (*Skill, error) {
 	if cfg.Client == nil {
 		return nil, fmt.Errorf("skill: requires a non-nil client")
 	}
-	if err := validateTools(cfg.Tools); err != nil {
-		return nil, err
-	}
 
 	sk, err := Load(cfg.Dir)
 	if err != nil {
 		return nil, err
 	}
 
-	sk.client = cfg.Client
 	sk.bashAllow = append([]string(nil), cfg.BashAllow...)
 	sk.bashBlock = append([]string(nil), cfg.BashBlock...)
 
-	sk.conv = llm.NewConversation(cfg.Client, sk.Instruction, cfg.Tools)
+	return sk.Bind(RuntimeConfig{
+		Client:       cfg.Client,
+		Tools:        cfg.Tools,
+		MaxSteps:     cfg.MaxSteps,
+		AutoTrim:     cfg.AutoTrim,
+		Summarizer:   cfg.Summarizer,
+		SessionStore: cfg.SessionStore,
+		SessionID:    cfg.SessionID,
+	})
+}
+
+// Bind returns a fresh runnable copy of s using cfg for its runtime wiring.
+//
+// Bind is the bridge between [Load] and [Run]: callers can keep lightweight
+// skills in registries and later bind a chosen LLM client, tool set, and
+// optional session configuration when they are ready to execute.
+func (s *Skill) Bind(cfg RuntimeConfig) (*Skill, error) {
+	if s == nil {
+		return nil, fmt.Errorf("skill: Bind requires a non-nil skill")
+	}
+	if cfg.Client == nil {
+		return nil, fmt.Errorf("skill: Bind requires a non-nil client")
+	}
+	if err := validateTools(cfg.Tools); err != nil {
+		return nil, err
+	}
+
+	bound := *s
+	bound.client = cfg.Client
+	bound.bashAllow = append([]string(nil), s.bashAllow...)
+	bound.bashBlock = append([]string(nil), s.bashBlock...)
+	bound.conv = llm.NewConversation(cfg.Client, s.Instruction, cfg.Tools)
 	if cfg.MaxSteps > 0 {
-		sk.conv.SetMaxSteps(cfg.MaxSteps)
+		bound.conv.SetMaxSteps(cfg.MaxSteps)
 	}
 	if cfg.AutoTrim != nil {
-		sk.conv.SetAutoShrink(*cfg.AutoTrim)
+		bound.conv.SetAutoShrink(*cfg.AutoTrim)
 	}
 	if cfg.Summarizer != nil {
-		sk.conv.SetSummarizer(cfg.Summarizer)
+		bound.conv.SetSummarizer(cfg.Summarizer)
 	}
-	sk.sessStore = cfg.SessionStore
-	sk.sessID = cfg.SessionID
-	return sk, nil
+	bound.sessStore = cfg.SessionStore
+	bound.sessID = cfg.SessionID
+	return &bound, nil
 }
 
 func validateTools(tools []llm.Tool) error {
@@ -191,10 +262,13 @@ func validateTools(tools []llm.Tool) error {
 // Client returns the LLM client this skill is bound to.
 func (s *Skill) Client() *llm.Client { return s.client }
 
-// Dir returns the absolute path of the skill directory this Skill was
-// loaded from. It is the root used to resolve references, examples,
-// scripts, and any filesystem-scoped built-in tools (for example those
-// returned by [github.com/tsumina/dango/internal/llm/skill/builtin.All]).
+// Dir returns the host filesystem path of the skill directory this Skill was
+// loaded from.
+//
+// It is the root used to resolve references, examples, scripts, and any
+// filesystem-scoped built-in tools (for example those returned by
+// [github.com/tsumina/dango/internal/llm/skill/builtin.All]). Skills loaded
+// from non-local filesystems, such as via [LoadFS], return an empty string.
 func (s *Skill) Dir() string { return s.dir }
 
 // BashAllow returns the executables this skill wants to permit on top

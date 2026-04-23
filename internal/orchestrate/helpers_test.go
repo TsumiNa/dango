@@ -2,14 +2,20 @@ package orchestrate
 
 import (
 	"context"
+	"encoding/json"
 	"io"
 	"log/slog"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/openai/openai-go/v3"
+	"github.com/openai/openai-go/v3/option"
+	"github.com/tsumina/dango/internal/llm"
 	"github.com/tsumina/dango/internal/llm/skill"
 	runnerpkg "github.com/tsumina/dango/internal/orchestrate/runner"
 )
@@ -58,6 +64,20 @@ func newDiscardLogger() *slog.Logger {
 	return slog.New(slog.NewTextHandler(io.Discard, nil))
 }
 
+func clearLLMEnv(t *testing.T) {
+	t.Helper()
+	for _, key := range []string{
+		"OPENAI_API_KEY",
+		"OPENROUTER_API_KEY",
+		"GEMINI_API_KEY",
+		"ORCHESTRATION_MODEL",
+		"REASONING_EFFORT",
+		"REASONING_REPLAY",
+	} {
+		t.Setenv(key, "")
+	}
+}
+
 func writeTestSkill(t *testing.T, name, description string) string {
 	t.Helper()
 	dir := t.TempDir()
@@ -68,24 +88,114 @@ func writeTestSkill(t *testing.T, name, description string) string {
 	return dir
 }
 
+func bindTestOrchestratorSkill(t *testing.T, outputs ...string) *skill.Skill {
+	t.Helper()
+	clearLLMEnv(t)
+	var responded int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		text := outputs[len(outputs)-1]
+		if responded < len(outputs) {
+			text = outputs[responded]
+		}
+		responded++
+		payload, err := json.Marshal(map[string]any{
+			"id":         "r1",
+			"object":     "response",
+			"created_at": 0,
+			"model":      "test-model",
+			"status":     "completed",
+			"output": []map[string]any{{
+				"id":     "m1",
+				"type":   "message",
+				"role":   "assistant",
+				"status": "completed",
+				"content": []map[string]any{{
+					"type":        "output_text",
+					"text":        text,
+					"annotations": []any{},
+				}},
+			}},
+			"parallel_tool_calls": false,
+			"tool_choice":         "auto",
+			"tools":               []any{},
+		})
+		if err != nil {
+			t.Fatalf("marshal planner response: %v", err)
+		}
+		_, _ = w.Write(payload)
+	}))
+	t.Cleanup(srv.Close)
+	raw := openai.NewClient(option.WithAPIKey("test-key"), option.WithBaseURL(srv.URL+"/"))
+	client, err := llm.NewClient(llm.ClientConfig{Provider: llm.ProviderOpenAI, Model: "test-model", Raw: raw})
+	if err != nil {
+		t.Fatalf("NewClient: %v", err)
+	}
+	bound, err := defaultOrchestratorSkill().Bind(skill.RuntimeConfig{Client: client})
+	if err != nil {
+		t.Fatalf("Bind(default orchestrator skill): %v", err)
+	}
+	return bound
+}
+
+func mustPlanJSON(t *testing.T, plan *CoarsePlan) string {
+	t.Helper()
+	buf, err := json.Marshal(map[string]any{"plan": plan})
+	if err != nil {
+		t.Fatalf("marshal plan json: %v", err)
+	}
+	return string(buf)
+}
+
+func mustRejectJSON(t *testing.T, reject *RejectReason) string {
+	t.Helper()
+	buf, err := json.Marshal(map[string]any{"reject": reject})
+	if err != nil {
+		t.Fatalf("marshal reject json: %v", err)
+	}
+	return string(buf)
+}
+
+func mustReviewJSON(t *testing.T, approved bool, reason string) string {
+	t.Helper()
+	buf, err := json.Marshal(map[string]any{"approved": approved, "reason": reason})
+	if err != nil {
+		t.Fatalf("marshal review json: %v", err)
+	}
+	return string(buf)
+}
+
 func mustPlanSingleNodeRunner(t *testing.T, o *Orchestrator) (*CoarsePlan, *runnerpkg.Runner) {
+	t.Helper()
+	return mustPlanSingleNodeRunnerWithOutputs(t, o, mustPlanJSON(t, &CoarsePlan{
+		Request: "run a single node",
+		Nodes: []CoarsePlanNode{{
+			ID:              "only",
+			SkillName:       "single",
+			TaskDescription: "Run the only node.",
+		}},
+	}))
+}
+
+func mustPlanSingleNodeRunnerWithOutputs(t *testing.T, o *Orchestrator, outputs ...string) (*CoarsePlan, *runnerpkg.Runner) {
 	t.Helper()
 	if err := o.RegisterSkill(writeTestSkill(t, "single", "Single-step runner.")); err != nil {
 		t.Fatalf("RegisterSkill(single): %v", err)
 	}
-	if err := o.SetPlanningFunc(func(req *Request, skills map[string]*skill.Skill) (*CoarsePlan, *RejectReason, error) {
-		return &CoarsePlan{
-			Request: req.Input,
+	if len(outputs) == 0 {
+		outputs = []string{mustPlanJSON(t, &CoarsePlan{
+			Request: "run a single node",
 			Nodes: []CoarsePlanNode{{
 				ID:              "only",
 				SkillName:       "single",
 				TaskDescription: "Run the only node.",
 			}},
-		}, nil, nil
-	}); err != nil {
-		t.Fatalf("SetPlanningFunc: %v", err)
+		})}
 	}
-	plan, reject, err := o.planFromRequest(&Request{Input: "run a single node"})
+	if err := o.SetOrchestratorSkill(bindTestOrchestratorSkill(t, outputs...)); err != nil {
+		t.Fatalf("SetOrchestratorSkill: %v", err)
+	}
+	plan, reject, err := o.planFromRequest(context.Background(), &Request{Input: "run a single node"})
 	if err != nil {
 		t.Fatalf("planFromRequest: %v", err)
 	}

@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/tsumina/dango/internal/llm/skill"
+	"github.com/tsumina/dango/internal/llm"
 )
 
 func TestDefault_ReturnsSingleton(t *testing.T) {
@@ -59,7 +59,7 @@ func TestSetLogger_NilRestoresDefaultLogger(t *testing.T) {
 
 func TestSetLogger_RejectsChangesAfterStartup(t *testing.T) {
 	o := newOrchestrator(testLogger)
-	if _, _, err := o.planFromRequest(&Request{Input: "summarize this repository"}); err != nil {
+	if _, _, err := o.planFromRequest(context.Background(), &Request{Input: "summarize this repository"}); err != nil {
 		t.Fatalf("planFromRequest: %v", err)
 	}
 	if err := o.SetLogger(newDiscardLogger()); err == nil {
@@ -72,7 +72,7 @@ func TestSetLogger_RejectsChangesAfterStartup(t *testing.T) {
 
 func TestSetRunnerStore_RejectsChangesAfterStartup(t *testing.T) {
 	o := newOrchestrator(testLogger)
-	if _, _, err := o.planFromRequest(&Request{Input: "summarize this repository"}); err != nil {
+	if _, _, err := o.planFromRequest(context.Background(), &Request{Input: "summarize this repository"}); err != nil {
 		t.Fatalf("planFromRequest: %v", err)
 	}
 	if err := o.SetRunnerStore(mustNewRunnerStore(t, t.TempDir())); err == nil {
@@ -82,7 +82,7 @@ func TestSetRunnerStore_RejectsChangesAfterStartup(t *testing.T) {
 
 func TestSetMaxRunningRunners_RejectsChangesAfterStartup(t *testing.T) {
 	o := newOrchestrator(testLogger)
-	if _, _, err := o.planFromRequest(&Request{Input: "summarize this repository"}); err != nil {
+	if _, _, err := o.planFromRequest(context.Background(), &Request{Input: "summarize this repository"}); err != nil {
 		t.Fatalf("planFromRequest: %v", err)
 	}
 	if err := o.SetMaxRunningRunners(1); err == nil {
@@ -90,18 +90,90 @@ func TestSetMaxRunningRunners_RejectsChangesAfterStartup(t *testing.T) {
 	}
 }
 
-func TestSetPlanningFunc_RejectsChangesAfterStartup(t *testing.T) {
+func TestSetOrchestratorSkill_RejectsChangesAfterStartup(t *testing.T) {
 	o := newOrchestrator(testLogger)
-	if _, _, err := o.planFromRequest(&Request{Input: "summarize this repository"}); err != nil {
+	if _, _, err := o.planFromRequest(context.Background(), &Request{Input: "summarize this repository"}); err != nil {
 		t.Fatalf("planFromRequest: %v", err)
 	}
-	if err := o.SetPlanningFunc(func(req *Request, skills map[string]*skill.Skill) (*CoarsePlan, *RejectReason, error) {
-		return nil, nil, nil
-	}); err == nil {
-		t.Fatal("expected SetPlanningFunc to fail after startup")
+	if err := o.SetOrchestratorSkill(defaultOrchestratorSkill()); err == nil {
+		t.Fatal("expected SetOrchestratorSkill to fail after startup")
 	}
-	if o.planFn == nil {
-		t.Fatal("planner should remain configured after startup rejection")
+}
+
+func TestSetOrchestratorSkill_UsesProvidedSkillBeforeStartup(t *testing.T) {
+	o := newOrchestrator(testLogger)
+	sk := defaultOrchestratorSkill()
+	sk.Name = "custom"
+	if err := o.SetOrchestratorSkill(sk); err != nil {
+		t.Fatalf("SetOrchestratorSkill: %v", err)
+	}
+	if got := o.OrchestratorSkill(); got != sk {
+		t.Fatalf("OrchestratorSkill() = %p, want %p", got, sk)
+	}
+}
+
+func TestSetOrchestratorSkillDir_UsesLoadedSkillBeforeStartup(t *testing.T) {
+	o := newOrchestrator(testLogger)
+	dir := writeTestSkill(t, "custom-orchestrator", "A custom orchestrator skill.")
+	if err := o.SetOrchestratorSkillDir(dir); err != nil {
+		t.Fatalf("SetOrchestratorSkillDir: %v", err)
+	}
+	sk := o.OrchestratorSkill()
+	if sk == nil {
+		t.Fatal("expected orchestrator skill to be configured")
+	}
+	if sk.Name != "custom-orchestrator" {
+		t.Fatalf("Name = %q, want %q", sk.Name, "custom-orchestrator")
+	}
+	if sk.Dir() != dir {
+		t.Fatalf("Dir() = %q, want %q", sk.Dir(), dir)
+	}
+}
+
+func TestSetOrchestratorSkillDir_RejectsChangesAfterStartup(t *testing.T) {
+	o := newOrchestrator(testLogger)
+	if _, _, err := o.planFromRequest(context.Background(), &Request{Input: "summarize this repository"}); err != nil {
+		t.Fatalf("planFromRequest: %v", err)
+	}
+	if err := o.SetOrchestratorSkillDir(writeTestSkill(t, "late-orchestrator", "late")); err == nil {
+		t.Fatal("expected SetOrchestratorSkillDir to fail after startup")
+	}
+}
+
+func TestOrchestratorSkill_DefaultsToEmbeddedSkill(t *testing.T) {
+	o := newOrchestrator(testLogger)
+	sk := o.OrchestratorSkill()
+	if sk == nil {
+		t.Fatal("expected embedded orchestrator skill")
+	}
+	if sk.Name != "orchestrator" {
+		t.Fatalf("Name = %q, want %q", sk.Name, "orchestrator")
+	}
+	if sk.Dir() != "" {
+		t.Fatalf("Dir() = %q, want empty for embedded skill", sk.Dir())
+	}
+	if sk.Instruction == "" {
+		t.Fatal("expected embedded orchestrator instruction to be populated")
+	}
+}
+
+func TestResolveEnvClient_CachesOrchestratorEnvClient(t *testing.T) {
+	t.Setenv("OPENAI_API_KEY", "env-key")
+	t.Setenv("ORCHESTRATION_MODEL", "env-model")
+	o := newOrchestrator(testLogger)
+	first, err := o.resolveEnvClient()
+	if err != nil {
+		t.Fatalf("resolveEnvClient(first): %v", err)
+	}
+	second, err := o.resolveEnvClient()
+	if err != nil {
+		t.Fatalf("resolveEnvClient(second): %v", err)
+	}
+	if first == nil || second == nil {
+		t.Fatal("resolveEnvClient() returned nil client")
+	}
+	if first != second {
+		t.Fatalf("resolveEnvClient() returned different client pointers: %p vs %p", first, second)
 	}
 }
 
@@ -180,6 +252,27 @@ func TestRegisterSkill_LoadsLightweightSkill(t *testing.T) {
 	}
 }
 
+func TestRegisterSkill_StoresPerSkillClientFactory(t *testing.T) {
+	o := newOrchestrator(testLogger)
+	client := &llm.Client{}
+	if err := o.RegisterSkill(writeTestSkill(t, "factory-skill", "Configured skill."), WithSkillClientFactory(func() (*llm.Client, error) {
+		return client, nil
+	})); err != nil {
+		t.Fatalf("RegisterSkill: %v", err)
+	}
+	factory := o.skillClientByName["factory-skill"]
+	if factory == nil {
+		t.Fatal("expected per-skill client factory to be stored")
+	}
+	got, err := factory()
+	if err != nil {
+		t.Fatalf("factory(): %v", err)
+	}
+	if got != client {
+		t.Fatalf("factory() = %p, want %p", got, client)
+	}
+}
+
 func TestRegisterSkill_RejectsDuplicateSkillNames(t *testing.T) {
 	o := newOrchestrator(testLogger)
 	if err := o.RegisterSkill(writeTestSkill(t, "duplicate", "first")); err != nil {
@@ -192,7 +285,7 @@ func TestRegisterSkill_RejectsDuplicateSkillNames(t *testing.T) {
 
 func TestRegisterSkill_AllowsChangesAfterStartup(t *testing.T) {
 	o := newOrchestrator(testLogger)
-	if _, _, err := o.planFromRequest(&Request{Input: "summarize this repository"}); err != nil {
+	if _, _, err := o.planFromRequest(context.Background(), &Request{Input: "summarize this repository"}); err != nil {
 		t.Fatalf("planFromRequest: %v", err)
 	}
 
@@ -215,7 +308,7 @@ func TestRemoveSkill_AllowsChangesAfterStartup(t *testing.T) {
 	if err := o.RegisterSkill(writeTestSkill(t, "ephemeral", "Removed after startup.")); err != nil {
 		t.Fatalf("RegisterSkill: %v", err)
 	}
-	if _, _, err := o.planFromRequest(&Request{Input: "summarize this repository"}); err != nil {
+	if _, _, err := o.planFromRequest(context.Background(), &Request{Input: "summarize this repository"}); err != nil {
 		t.Fatalf("planFromRequest: %v", err)
 	}
 
