@@ -26,6 +26,9 @@ var (
 type Orchestrator struct {
 	logger            *slog.Logger
 	orchestratorSkill *skill.Skill
+	envClientOnce     sync.Once
+	envClient         *llm.Client
+	envClientErr      error
 
 	mu                sync.RWMutex
 	configLocked      bool
@@ -38,6 +41,13 @@ type Orchestrator struct {
 	queuedRunnerByID  map[string]*queuedRunner
 	queuedRunners     runnerStartQueue
 	nextQueueOrder    uint64
+}
+
+func (o *Orchestrator) resolveEnvClient() (*llm.Client, error) {
+	o.envClientOnce.Do(func() {
+		o.envClient, o.envClientErr = llm.NewClientFromEnv()
+	})
+	return o.envClient, o.envClientErr
 }
 
 // Default returns the process-wide Orchestrator singleton.

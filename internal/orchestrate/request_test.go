@@ -10,7 +10,7 @@ import (
 
 func TestPlanFromRequest_ReturnsRejectWithoutPlanner(t *testing.T) {
 	o := newOrchestrator(testLogger)
-	plan, reject, err := o.planFromRequest(&Request{Input: "summarize this repository"})
+	plan, reject, err := o.planFromRequest(context.Background(), &Request{Input: "summarize this repository"})
 	if err != nil {
 		t.Fatalf("planFromRequest: %v", err)
 	}
@@ -55,7 +55,7 @@ func TestPlanFromRequest_BuildsRunnerFromPlan(t *testing.T) {
 		t.Fatalf("SetOrchestratorSkill(test planner): %v", err)
 	}
 
-	plan, reject, err := o.planFromRequest(&Request{Input: "build a report"})
+	plan, reject, err := o.planFromRequest(context.Background(), &Request{Input: "build a report"})
 	if err != nil {
 		t.Fatalf("planFromRequest: %v", err)
 	}
@@ -116,7 +116,7 @@ func TestPlanFromRequest_ErrorsWhenPlanUsesUnknownSkill(t *testing.T) {
 		t.Fatalf("SetOrchestratorSkill(test planner): %v", err)
 	}
 
-	plan, reject, err := o.planFromRequest(&Request{Input: "process images"})
+	plan, reject, err := o.planFromRequest(context.Background(), &Request{Input: "process images"})
 	if err == nil {
 		t.Fatal("expected error when the plan references an unknown skill")
 	}

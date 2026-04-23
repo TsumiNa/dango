@@ -201,6 +201,9 @@ func TestLLMClient_PrefersEnvOverSkillAndFallback(t *testing.T) {
 	if client.Model() != "env-model" {
 		t.Fatalf("Model() = %q, want %q", client.Model(), "env-model")
 	}
+	if again := exec.LLMClient(); again != client {
+		t.Fatalf("LLMClient() returned different env client pointers: %p vs %p", client, again)
+	}
 }
 
 func TestRuntimeSkill_PrefersSkillFactoryOverOrchestratorFallback(t *testing.T) {

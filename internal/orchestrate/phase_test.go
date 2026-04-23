@@ -108,7 +108,7 @@ func TestRejectAndReplanRunner_TransitionsBackToAwaitingReview(t *testing.T) {
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
-	if err := o.RejectRunnerPlan(plan.RunnerID, "needs rework"); err != nil {
+	if err := o.RejectRunnerPlan(context.Background(), plan.RunnerID, "needs rework"); err != nil {
 		t.Fatalf("RejectRunnerPlan: %v", err)
 	}
 	view, err := o.QueryRunner(plan.RunnerID)
@@ -170,7 +170,7 @@ func TestRejectRunnerPlan_UsesAutomaticReviewWhenReasonEmpty(t *testing.T) {
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
-	if err := o.RejectRunnerPlan(plan.RunnerID, ""); err != nil {
+	if err := o.RejectRunnerPlan(context.Background(), plan.RunnerID, ""); err != nil {
 		t.Fatalf("RejectRunnerPlan(auto): %v", err)
 	}
 	runner, err := o.Runner(plan.RunnerID)
@@ -217,7 +217,7 @@ func TestReplanRunner_GeneratesPlanWhenNilPlan(t *testing.T) {
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
-	if err := o.RejectRunnerPlan(plan.RunnerID, ""); err != nil {
+	if err := o.RejectRunnerPlan(context.Background(), plan.RunnerID, ""); err != nil {
 		t.Fatalf("RejectRunnerPlan(auto): %v", err)
 	}
 	if err := o.ReplanRunner(context.Background(), plan.RunnerID, nil); err != nil {
@@ -243,7 +243,7 @@ func TestReplanRunner_GeneratesPlanWhenNilPlan(t *testing.T) {
 func TestRejectRunnerPlan_RejectsWrongPhase(t *testing.T) {
 	o := newOrchestrator(testLogger)
 	plan, _ := mustPlanSingleNodeRunner(t, o)
-	if err := o.RejectRunnerPlan(plan.RunnerID, "nope"); !errors.Is(err, ErrRunnerPlanNotAwaitingReview) {
+	if err := o.RejectRunnerPlan(context.Background(), plan.RunnerID, "nope"); !errors.Is(err, ErrRunnerPlanNotAwaitingReview) {
 		t.Fatalf("RejectRunnerPlan err = %v, want ErrRunnerPlanNotAwaitingReview", err)
 	}
 }
@@ -371,7 +371,7 @@ func TestCompleteRunner_ReleasesExecutionSlot(t *testing.T) {
 		t.Fatalf("CompleteRunner(first): %v", err)
 	}
 
-	secondPlan, _, err := o.planFromRequest(&Request{Input: "run second node"})
+	secondPlan, _, err := o.planFromRequest(context.Background(), &Request{Input: "run second node"})
 	if err != nil {
 		t.Fatalf("planFromRequest(second): %v", err)
 	}

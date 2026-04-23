@@ -195,7 +195,7 @@ func mustPlanSingleNodeRunnerWithOutputs(t *testing.T, o *Orchestrator, outputs 
 	if err := o.SetOrchestratorSkill(bindTestOrchestratorSkill(t, outputs...)); err != nil {
 		t.Fatalf("SetOrchestratorSkill: %v", err)
 	}
-	plan, reject, err := o.planFromRequest(&Request{Input: "run a single node"})
+	plan, reject, err := o.planFromRequest(context.Background(), &Request{Input: "run a single node"})
 	if err != nil {
 		t.Fatalf("planFromRequest: %v", err)
 	}

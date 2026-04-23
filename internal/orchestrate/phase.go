@@ -21,7 +21,8 @@ func (o *Orchestrator) ReviewRunnerPlan(ctx context.Context, id string) (*PlanRe
 	o.mu.RLock()
 	orchestratorSkill := o.orchestratorSkill
 	o.mu.RUnlock()
-	return reviewWithOrchestratorSkill(ctx, runner.Plan(), runner.PolishFragments(), orchestratorSkill)
+	envClient, envClientErr := o.resolveEnvClient()
+	return reviewWithOrchestratorSkill(ctx, runner.Plan(), runner.PolishFragments(), orchestratorSkill, envClient, envClientErr)
 }
 
 // AcceptRunnerPlan adopts the reviewed plan for the identified runner and
@@ -60,13 +61,13 @@ func (o *Orchestrator) AcceptRunnerPlan(ctx context.Context, id string, plan *Co
 
 // RejectRunnerPlan rejects the reviewed plan for the identified runner and
 // returns it to the replanning state.
-func (o *Orchestrator) RejectRunnerPlan(id string, reason string) error {
+func (o *Orchestrator) RejectRunnerPlan(ctx context.Context, id string, reason string) error {
 	runner, err := o.Runner(id)
 	if err != nil {
 		return err
 	}
 	if reason == "" {
-		review, err := o.ReviewRunnerPlan(context.Background(), id)
+		review, err := o.ReviewRunnerPlan(ctx, id)
 		if err != nil {
 			return err
 		}
@@ -102,7 +103,8 @@ func (o *Orchestrator) ReplanRunner(ctx context.Context, id string, plan *Coarse
 		skills := cloneSkillMap(o.skills)
 		orchestratorSkill := o.orchestratorSkill
 		o.mu.RUnlock()
-		plan, err = replanWithOrchestratorSkill(ctx, runner.Plan().Request, runner.Plan(), runner.ReplanReason(), runner.PolishFragments(), skills, orchestratorSkill)
+		envClient, envClientErr := o.resolveEnvClient()
+		plan, err = replanWithOrchestratorSkill(ctx, runner.Plan().Request, runner.Plan(), runner.ReplanReason(), runner.PolishFragments(), skills, orchestratorSkill, envClient, envClientErr)
 		if err != nil {
 			return err
 		}

@@ -2,6 +2,7 @@ package orchestrate
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sort"
 
@@ -16,10 +17,15 @@ const (
 	defaultReplanEffort   llm.ReasoningEffort = llm.ReasoningEffortMedium
 )
 
-func planWithOrchestratorSkill(ctx context.Context, req *Request, skills map[string]*skill.Skill, orchestratorSkill *skill.Skill) (*CoarsePlan, *RejectReason, error) {
-	runtimeSkill, err := runtimeOrchestratorSkill(orchestratorSkill)
+var errOrchestratorSkillUnconfigured = errors.New("orchestrate: orchestrator skill has no runnable llm client")
+
+func planWithOrchestratorSkill(ctx context.Context, req *Request, skills map[string]*skill.Skill, orchestratorSkill *skill.Skill, envClient *llm.Client, envClientErr error) (*CoarsePlan, *RejectReason, error) {
+	runtimeSkill, err := runtimeOrchestratorSkill(orchestratorSkill, envClient, envClientErr)
 	if err != nil {
-		return rejectUnconfiguredPlan(req, skills, orchestratorSkill)
+		if errors.Is(err, errOrchestratorSkillUnconfigured) {
+			return rejectUnconfiguredPlan(req, skills, orchestratorSkill)
+		}
+		return nil, nil, err
 	}
 	prompt, err := marshalOrchestratorPlanningInput(req.Input, collectSkillSummaries(skills))
 	if err != nil {
@@ -36,8 +42,8 @@ func planWithOrchestratorSkill(ctx context.Context, req *Request, skills map[str
 	return plan, reject, nil
 }
 
-func reviewWithOrchestratorSkill(ctx context.Context, plan *CoarsePlan, polishFragments map[string]any, orchestratorSkill *skill.Skill) (*PlanReview, error) {
-	runtimeSkill, err := runtimeOrchestratorSkill(orchestratorSkill)
+func reviewWithOrchestratorSkill(ctx context.Context, plan *CoarsePlan, polishFragments map[string]any, orchestratorSkill *skill.Skill, envClient *llm.Client, envClientErr error) (*PlanReview, error) {
+	runtimeSkill, err := runtimeOrchestratorSkill(orchestratorSkill, envClient, envClientErr)
 	if err != nil {
 		return nil, err
 	}
@@ -56,8 +62,8 @@ func reviewWithOrchestratorSkill(ctx context.Context, plan *CoarsePlan, polishFr
 	return decision, nil
 }
 
-func replanWithOrchestratorSkill(ctx context.Context, request string, currentPlan *CoarsePlan, reason string, polishFragments map[string]any, skills map[string]*skill.Skill, orchestratorSkill *skill.Skill) (*CoarsePlan, error) {
-	runtimeSkill, err := runtimeOrchestratorSkill(orchestratorSkill)
+func replanWithOrchestratorSkill(ctx context.Context, request string, currentPlan *CoarsePlan, reason string, polishFragments map[string]any, skills map[string]*skill.Skill, orchestratorSkill *skill.Skill, envClient *llm.Client, envClientErr error) (*CoarsePlan, error) {
+	runtimeSkill, err := runtimeOrchestratorSkill(orchestratorSkill, envClient, envClientErr)
 	if err != nil {
 		return nil, err
 	}
@@ -76,17 +82,17 @@ func replanWithOrchestratorSkill(ctx context.Context, request string, currentPla
 	return plan, nil
 }
 
-func runtimeOrchestratorSkill(sk *skill.Skill) (*skill.Skill, error) {
+func runtimeOrchestratorSkill(sk *skill.Skill, envClient *llm.Client, envClientErr error) (*skill.Skill, error) {
 	if sk == nil {
-		return nil, fmt.Errorf("orchestrate: orchestrator skill is not configured")
+		return nil, errOrchestratorSkillUnconfigured
 	}
-	if client, err := llm.NewClientFromEnv(); err == nil {
-		return bindOrchestratorSkill(sk, client)
+	if envClientErr == nil && envClient != nil {
+		return bindOrchestratorSkill(sk, envClient)
 	}
 	if sk.Client() != nil {
 		return bindOrchestratorSkill(sk, sk.Client())
 	}
-	return nil, fmt.Errorf("orchestrate: orchestrator skill has no runnable llm client")
+	return nil, errOrchestratorSkillUnconfigured
 }
 
 func bindOrchestratorSkill(sk *skill.Skill, client *llm.Client) (*skill.Skill, error) {

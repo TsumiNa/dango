@@ -59,7 +59,7 @@ func TestSetLogger_NilRestoresDefaultLogger(t *testing.T) {
 
 func TestSetLogger_RejectsChangesAfterStartup(t *testing.T) {
 	o := newOrchestrator(testLogger)
-	if _, _, err := o.planFromRequest(&Request{Input: "summarize this repository"}); err != nil {
+	if _, _, err := o.planFromRequest(context.Background(), &Request{Input: "summarize this repository"}); err != nil {
 		t.Fatalf("planFromRequest: %v", err)
 	}
 	if err := o.SetLogger(newDiscardLogger()); err == nil {
@@ -72,7 +72,7 @@ func TestSetLogger_RejectsChangesAfterStartup(t *testing.T) {
 
 func TestSetRunnerStore_RejectsChangesAfterStartup(t *testing.T) {
 	o := newOrchestrator(testLogger)
-	if _, _, err := o.planFromRequest(&Request{Input: "summarize this repository"}); err != nil {
+	if _, _, err := o.planFromRequest(context.Background(), &Request{Input: "summarize this repository"}); err != nil {
 		t.Fatalf("planFromRequest: %v", err)
 	}
 	if err := o.SetRunnerStore(mustNewRunnerStore(t, t.TempDir())); err == nil {
@@ -82,7 +82,7 @@ func TestSetRunnerStore_RejectsChangesAfterStartup(t *testing.T) {
 
 func TestSetMaxRunningRunners_RejectsChangesAfterStartup(t *testing.T) {
 	o := newOrchestrator(testLogger)
-	if _, _, err := o.planFromRequest(&Request{Input: "summarize this repository"}); err != nil {
+	if _, _, err := o.planFromRequest(context.Background(), &Request{Input: "summarize this repository"}); err != nil {
 		t.Fatalf("planFromRequest: %v", err)
 	}
 	if err := o.SetMaxRunningRunners(1); err == nil {
@@ -92,7 +92,7 @@ func TestSetMaxRunningRunners_RejectsChangesAfterStartup(t *testing.T) {
 
 func TestSetOrchestratorSkill_RejectsChangesAfterStartup(t *testing.T) {
 	o := newOrchestrator(testLogger)
-	if _, _, err := o.planFromRequest(&Request{Input: "summarize this repository"}); err != nil {
+	if _, _, err := o.planFromRequest(context.Background(), &Request{Input: "summarize this repository"}); err != nil {
 		t.Fatalf("planFromRequest: %v", err)
 	}
 	if err := o.SetOrchestratorSkill(defaultOrchestratorSkill()); err == nil {
@@ -132,7 +132,7 @@ func TestSetOrchestratorSkillDir_UsesLoadedSkillBeforeStartup(t *testing.T) {
 
 func TestSetOrchestratorSkillDir_RejectsChangesAfterStartup(t *testing.T) {
 	o := newOrchestrator(testLogger)
-	if _, _, err := o.planFromRequest(&Request{Input: "summarize this repository"}); err != nil {
+	if _, _, err := o.planFromRequest(context.Background(), &Request{Input: "summarize this repository"}); err != nil {
 		t.Fatalf("planFromRequest: %v", err)
 	}
 	if err := o.SetOrchestratorSkillDir(writeTestSkill(t, "late-orchestrator", "late")); err == nil {
@@ -154,6 +154,26 @@ func TestOrchestratorSkill_DefaultsToEmbeddedSkill(t *testing.T) {
 	}
 	if sk.Instruction == "" {
 		t.Fatal("expected embedded orchestrator instruction to be populated")
+	}
+}
+
+func TestResolveEnvClient_CachesOrchestratorEnvClient(t *testing.T) {
+	t.Setenv("OPENAI_API_KEY", "env-key")
+	t.Setenv("ORCHESTRATION_MODEL", "env-model")
+	o := newOrchestrator(testLogger)
+	first, err := o.resolveEnvClient()
+	if err != nil {
+		t.Fatalf("resolveEnvClient(first): %v", err)
+	}
+	second, err := o.resolveEnvClient()
+	if err != nil {
+		t.Fatalf("resolveEnvClient(second): %v", err)
+	}
+	if first == nil || second == nil {
+		t.Fatal("resolveEnvClient() returned nil client")
+	}
+	if first != second {
+		t.Fatalf("resolveEnvClient() returned different client pointers: %p vs %p", first, second)
 	}
 }
 
@@ -265,7 +285,7 @@ func TestRegisterSkill_RejectsDuplicateSkillNames(t *testing.T) {
 
 func TestRegisterSkill_AllowsChangesAfterStartup(t *testing.T) {
 	o := newOrchestrator(testLogger)
-	if _, _, err := o.planFromRequest(&Request{Input: "summarize this repository"}); err != nil {
+	if _, _, err := o.planFromRequest(context.Background(), &Request{Input: "summarize this repository"}); err != nil {
 		t.Fatalf("planFromRequest: %v", err)
 	}
 
@@ -288,7 +308,7 @@ func TestRemoveSkill_AllowsChangesAfterStartup(t *testing.T) {
 	if err := o.RegisterSkill(writeTestSkill(t, "ephemeral", "Removed after startup.")); err != nil {
 		t.Fatalf("RegisterSkill: %v", err)
 	}
-	if _, _, err := o.planFromRequest(&Request{Input: "summarize this repository"}); err != nil {
+	if _, _, err := o.planFromRequest(context.Background(), &Request{Input: "summarize this repository"}); err != nil {
 		t.Fatalf("planFromRequest: %v", err)
 	}
 

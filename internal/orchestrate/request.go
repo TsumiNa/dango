@@ -22,7 +22,7 @@ func (o *Orchestrator) StartRequest(ctx context.Context, req *Request) (coarsePl
 	if !req.Priority.valid() {
 		return nil, nil, fmt.Errorf("orchestrate: request priority must be between %d and %d", RequestPriorityDefault, RequestPriorityHighest)
 	}
-	plan, reject, err := o.planFromRequest(req)
+	plan, reject, err := o.planFromRequest(ctx, req)
 	if err != nil || reject != nil || plan == nil {
 		return plan, reject, err
 	}
@@ -44,7 +44,7 @@ func (o *Orchestrator) StartRequest(ctx context.Context, req *Request) (coarsePl
 // planFromRequest materializes the plan into Executors and Nodes, creates a new
 // runner for them, stores that runner inside the Orchestrator, and returns the
 // plan annotated with the runner ID.
-func (o *Orchestrator) planFromRequest(req *Request) (coarsePlan *CoarsePlan, rejectReason *RejectReason, err error) {
+func (o *Orchestrator) planFromRequest(ctx context.Context, req *Request) (coarsePlan *CoarsePlan, rejectReason *RejectReason, err error) {
 	if req == nil {
 		return nil, nil, fmt.Errorf("orchestrate: nil request")
 	}
@@ -57,8 +57,9 @@ func (o *Orchestrator) planFromRequest(req *Request) (coarsePlan *CoarsePlan, re
 	skills := cloneSkillMap(o.skills)
 	skillClients := cloneSkillClientFactories(o.skillClientByName)
 	o.mu.Unlock()
+	envClient, envClientErr := o.resolveEnvClient()
 
-	plan, reject, err := planWithOrchestratorSkill(context.Background(), req, skills, orchestratorSkill)
+	plan, reject, err := planWithOrchestratorSkill(ctx, req, skills, orchestratorSkill, envClient, envClientErr)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -86,6 +87,7 @@ func (o *Orchestrator) planFromRequest(req *Request) (coarsePlan *CoarsePlan, re
 
 	return plan, nil, nil
 }
+
 func buildRunner(logger *slog.Logger, client *llm.Client, store runnerpkg.RunnerStore, req *Request, plan *CoarsePlan, skills map[string]*skill.Skill, skillClients map[string]SkillClientFactory) (*runnerpkg.Runner, error) {
 	if len(plan.Nodes) == 0 {
 		return nil, fmt.Errorf("orchestrate: coarse plan must contain at least one node")

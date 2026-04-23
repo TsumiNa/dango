@@ -36,7 +36,7 @@ func TestQueuedRunnerCanReachAwaitingReviewWithoutConsumingExecutionSlot(t *test
 		time.Sleep(10 * time.Millisecond)
 	}
 
-	secondPlan, _, err := o.planFromRequest(&Request{Input: "run second node"})
+	secondPlan, _, err := o.planFromRequest(context.Background(), &Request{Input: "run second node"})
 	if err != nil {
 		t.Fatalf("planFromRequest(second): %v", err)
 	}
@@ -94,7 +94,7 @@ func TestQueuedRunnerPolishFailureDoesNotLeakExecutionSlot(t *testing.T) {
 		t.Fatal("first runner did not start executing")
 	}
 
-	secondPlan, _, err := o.planFromRequest(&Request{Input: "run second node"})
+	secondPlan, _, err := o.planFromRequest(context.Background(), &Request{Input: "run second node"})
 	if err != nil {
 		t.Fatalf("planFromRequest(second): %v", err)
 	}
@@ -127,7 +127,7 @@ func TestQueuedRunnerPolishFailureDoesNotLeakExecutionSlot(t *testing.T) {
 		t.Fatalf("runningRunnerIDs size after queued polish failure = %d, want 0", got)
 	}
 
-	thirdPlan, _, err := o.planFromRequest(&Request{Input: "run third node"})
+	thirdPlan, _, err := o.planFromRequest(context.Background(), &Request{Input: "run third node"})
 	if err != nil {
 		t.Fatalf("planFromRequest(third): %v", err)
 	}
@@ -269,7 +269,7 @@ func TestAcceptRunnerPlan_RespectsExecutionSlotLimit(t *testing.T) {
 		t.Fatalf("runningRunnerIDs size = %d, want 1 while first runner is executing", len(o.runningRunnerIDs))
 	}
 
-	secondPlan, _, err := o.planFromRequest(&Request{Input: "run second node"})
+	secondPlan, _, err := o.planFromRequest(context.Background(), &Request{Input: "run second node"})
 	if err != nil {
 		t.Fatalf("planFromRequest(second): %v", err)
 	}

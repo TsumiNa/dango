@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"sync"
 
 	"github.com/tsumina/dango/internal/llm"
 	"github.com/tsumina/dango/internal/llm/skill"
@@ -60,6 +61,9 @@ type Executor struct {
 	planner            *ExecutionPlanner
 	llmClient          *llm.Client
 	skillClientFactory SkillClientFactory
+	envClientOnce      sync.Once
+	envClient          *llm.Client
+	envClientErr       error
 
 	// Result holds the structured outcome of the most recent execution.
 	Result *ExecutionResult
@@ -223,7 +227,7 @@ func (e *Executor) runtimeSkill() (*skill.Skill, error) {
 }
 
 func (e *Executor) resolveLLMClient() (*llm.Client, error) {
-	if client, err := llm.NewClientFromEnv(); err == nil {
+	if client, err := e.resolveEnvClient(); err == nil && client != nil {
 		return client, nil
 	}
 	if e.skill != nil && e.skill.Client() != nil {
@@ -242,6 +246,13 @@ func (e *Executor) resolveLLMClient() (*llm.Client, error) {
 		return nil, fmt.Errorf("orchestrate: executor skill %q has no bound llm client", e.skill.Name)
 	}
 	return nil, fmt.Errorf("orchestrate: executor has no bound llm client")
+}
+
+func (e *Executor) resolveEnvClient() (*llm.Client, error) {
+	e.envClientOnce.Do(func() {
+		e.envClient, e.envClientErr = llm.NewClientFromEnv()
+	})
+	return e.envClient, e.envClientErr
 }
 
 func (e *Executor) defaultSkillTools() []llm.Tool {
