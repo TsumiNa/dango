@@ -91,6 +91,24 @@ type Config struct {
 	SessionID    string
 }
 
+// RuntimeConfig configures the execution-time pieces bound onto an existing
+// loaded [Skill].
+//
+// It mirrors the runtime-oriented subset of [Config] so lightweight skills
+// returned by [Load] can later be turned into runnable copies without reading
+// [SkillFile] again.
+type RuntimeConfig struct {
+	Client *llm.Client
+
+	Tools      []llm.Tool
+	MaxSteps   int
+	AutoTrim   *llm.AutoShrinkConfig
+	Summarizer llm.Summarizer
+
+	SessionStore llm.SessionStore
+	SessionID    string
+}
+
 // Load reads the [SkillFile] in dir and parses its metadata and
 // instruction body into a [Skill] without binding an LLM client or
 // conversation. The returned Skill is lightweight and useful for
@@ -142,32 +160,59 @@ func New(cfg Config) (*Skill, error) {
 	if cfg.Client == nil {
 		return nil, fmt.Errorf("skill: requires a non-nil client")
 	}
-	if err := validateTools(cfg.Tools); err != nil {
-		return nil, err
-	}
 
 	sk, err := Load(cfg.Dir)
 	if err != nil {
 		return nil, err
 	}
 
-	sk.client = cfg.Client
 	sk.bashAllow = append([]string(nil), cfg.BashAllow...)
 	sk.bashBlock = append([]string(nil), cfg.BashBlock...)
 
-	sk.conv = llm.NewConversation(cfg.Client, sk.Instruction, cfg.Tools)
+	return sk.Bind(RuntimeConfig{
+		Client:       cfg.Client,
+		Tools:        cfg.Tools,
+		MaxSteps:     cfg.MaxSteps,
+		AutoTrim:     cfg.AutoTrim,
+		Summarizer:   cfg.Summarizer,
+		SessionStore: cfg.SessionStore,
+		SessionID:    cfg.SessionID,
+	})
+}
+
+// Bind returns a fresh runnable copy of s using cfg for its runtime wiring.
+//
+// Bind is the bridge between [Load] and [Run]: callers can keep lightweight
+// skills in registries and later bind a chosen LLM client, tool set, and
+// optional session configuration when they are ready to execute.
+func (s *Skill) Bind(cfg RuntimeConfig) (*Skill, error) {
+	if s == nil {
+		return nil, fmt.Errorf("skill: Bind requires a non-nil skill")
+	}
+	if cfg.Client == nil {
+		return nil, fmt.Errorf("skill: Bind requires a non-nil client")
+	}
+	if err := validateTools(cfg.Tools); err != nil {
+		return nil, err
+	}
+
+	bound := *s
+	bound.client = cfg.Client
+	bound.bashAllow = append([]string(nil), s.bashAllow...)
+	bound.bashBlock = append([]string(nil), s.bashBlock...)
+	bound.conv = llm.NewConversation(cfg.Client, s.Instruction, cfg.Tools)
 	if cfg.MaxSteps > 0 {
-		sk.conv.SetMaxSteps(cfg.MaxSteps)
+		bound.conv.SetMaxSteps(cfg.MaxSteps)
 	}
 	if cfg.AutoTrim != nil {
-		sk.conv.SetAutoShrink(*cfg.AutoTrim)
+		bound.conv.SetAutoShrink(*cfg.AutoTrim)
 	}
 	if cfg.Summarizer != nil {
-		sk.conv.SetSummarizer(cfg.Summarizer)
+		bound.conv.SetSummarizer(cfg.Summarizer)
 	}
-	sk.sessStore = cfg.SessionStore
-	sk.sessID = cfg.SessionID
-	return sk, nil
+	bound.sessStore = cfg.SessionStore
+	bound.sessID = cfg.SessionID
+	return &bound, nil
 }
 
 func validateTools(tools []llm.Tool) error {

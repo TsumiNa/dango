@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/tsumina/dango/internal/llm"
 	"github.com/tsumina/dango/internal/llm/skill"
 )
 
@@ -105,6 +106,16 @@ func TestSetPlanningFunc_RejectsChangesAfterStartup(t *testing.T) {
 	}
 }
 
+func TestSetLLMClient_RejectsChangesAfterStartup(t *testing.T) {
+	o := newOrchestrator(testLogger)
+	if _, _, err := o.planFromRequest(&Request{Input: "summarize this repository"}); err != nil {
+		t.Fatalf("planFromRequest: %v", err)
+	}
+	if err := o.SetLLMClient(&llm.Client{}); err == nil {
+		t.Fatal("expected SetLLMClient to fail after startup")
+	}
+}
+
 func TestRunner_ReturnsManagedRunnerByID(t *testing.T) {
 	o := newOrchestrator(testLogger)
 	plan, managedRunner := mustPlanSingleNodeRunner(t, o)
@@ -177,6 +188,27 @@ func TestRegisterSkill_LoadsLightweightSkill(t *testing.T) {
 	}
 	if sk.Dir() != dir {
 		t.Errorf("Dir() = %q, want %q", sk.Dir(), dir)
+	}
+}
+
+func TestRegisterSkill_StoresPerSkillClientFactory(t *testing.T) {
+	o := newOrchestrator(testLogger)
+	client := &llm.Client{}
+	if err := o.RegisterSkill(writeTestSkill(t, "factory-skill", "Configured skill."), WithSkillClientFactory(func() (*llm.Client, error) {
+		return client, nil
+	})); err != nil {
+		t.Fatalf("RegisterSkill: %v", err)
+	}
+	factory := o.skillClientByName["factory-skill"]
+	if factory == nil {
+		t.Fatal("expected per-skill client factory to be stored")
+	}
+	got, err := factory()
+	if err != nil {
+		t.Fatalf("factory(): %v", err)
+	}
+	if got != client {
+		t.Fatalf("factory() = %p, want %p", got, client)
 	}
 }
 

@@ -58,6 +58,20 @@ func newDiscardLogger() *slog.Logger {
 	return slog.New(slog.NewTextHandler(io.Discard, nil))
 }
 
+func clearLLMEnv(t *testing.T) {
+	t.Helper()
+	for _, key := range []string{
+		"OPENAI_API_KEY",
+		"OPENROUTER_API_KEY",
+		"GEMINI_API_KEY",
+		"ORCHESTRATION_MODEL",
+		"REASONING_EFFORT",
+		"REASONING_REPLAY",
+	} {
+		t.Setenv(key, "")
+	}
+}
+
 func writeTestSkill(t *testing.T, name, description string) string {
 	t.Helper()
 	dir := t.TempDir()

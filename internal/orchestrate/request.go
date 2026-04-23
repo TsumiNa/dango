@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 
+	"github.com/tsumina/dango/internal/llm"
 	"github.com/tsumina/dango/internal/llm/skill"
 	runnerpkg "github.com/tsumina/dango/internal/orchestrate/runner"
 )
@@ -51,9 +52,11 @@ func (o *Orchestrator) planFromRequest(req *Request) (coarsePlan *CoarsePlan, re
 	o.mu.Lock()
 	o.configLocked = true
 	logger := o.logger
+	llmClient := o.llmClient
 	planFn := o.planFn
 	runnerStore := o.runnerStore
 	skills := cloneSkillMap(o.skills)
+	skillClients := cloneSkillClientFactories(o.skillClientByName)
 	o.mu.Unlock()
 
 	plan, reject, err := planFn(req, skills)
@@ -70,7 +73,7 @@ func (o *Orchestrator) planFromRequest(req *Request) (coarsePlan *CoarsePlan, re
 		return nil, nil, fmt.Errorf("orchestrate: planner returned neither a plan nor a reject reason")
 	}
 
-	runner, err := buildRunner(logger, runnerStore, req, plan, skills)
+	runner, err := buildRunner(logger, llmClient, runnerStore, req, plan, skills, skillClients)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -85,7 +88,7 @@ func (o *Orchestrator) planFromRequest(req *Request) (coarsePlan *CoarsePlan, re
 	return plan, nil, nil
 }
 
-func buildRunner(logger *slog.Logger, store runnerpkg.RunnerStore, req *Request, plan *CoarsePlan, skills map[string]*skill.Skill) (*runnerpkg.Runner, error) {
+func buildRunner(logger *slog.Logger, client *llm.Client, store runnerpkg.RunnerStore, req *Request, plan *CoarsePlan, skills map[string]*skill.Skill, skillClients map[string]SkillClientFactory) (*runnerpkg.Runner, error) {
 	if len(plan.Nodes) == 0 {
 		return nil, fmt.Errorf("orchestrate: coarse plan must contain at least one node")
 	}
@@ -113,7 +116,7 @@ func buildRunner(logger *slog.Logger, store runnerpkg.RunnerStore, req *Request,
 		if planner.TaskDescription == "" {
 			planner.TaskDescription = req.Input
 		}
-		executor, err := NewExecutor(logger, sk, planner)
+		executor, err := NewExecutor(logger, sk, planner, client, skillClients[step.SkillName])
 		if err != nil {
 			return nil, fmt.Errorf("orchestrate: build executor for node %q: %w", step.ID, err)
 		}
@@ -143,6 +146,14 @@ func cloneSkillMap(skills map[string]*skill.Skill) map[string]*skill.Skill {
 	copyMap := make(map[string]*skill.Skill, len(skills))
 	for name, sk := range skills {
 		copyMap[name] = sk
+	}
+	return copyMap
+}
+
+func cloneSkillClientFactories(factories map[string]SkillClientFactory) map[string]SkillClientFactory {
+	copyMap := make(map[string]SkillClientFactory, len(factories))
+	for name, factory := range factories {
+		copyMap[name] = factory
 	}
 	return copyMap
 }

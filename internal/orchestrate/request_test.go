@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/tsumina/dango/internal/llm"
 	"github.com/tsumina/dango/internal/llm/skill"
 )
 
@@ -29,12 +30,20 @@ func TestPlanFromRequest_ReturnsRejectWithoutPlanner(t *testing.T) {
 }
 
 func TestPlanFromRequest_BuildsRunnerFromPlan(t *testing.T) {
+	clearLLMEnv(t)
 	o := newOrchestrator(testLogger)
+	orchestratorClient := &llm.Client{}
+	perSkillClient := &llm.Client{}
+	if err := o.SetLLMClient(orchestratorClient); err != nil {
+		t.Fatalf("SetLLMClient: %v", err)
+	}
 	store := mustNewRunnerStore(t, t.TempDir())
 	if err := o.SetRunnerStore(store); err != nil {
 		t.Fatalf("SetRunnerStore: %v", err)
 	}
-	if err := o.RegisterSkill(writeTestSkill(t, "plan", "Draft a plan.")); err != nil {
+	if err := o.RegisterSkill(writeTestSkill(t, "plan", "Draft a plan."), WithSkillClientFactory(func() (*llm.Client, error) {
+		return perSkillClient, nil
+	})); err != nil {
 		t.Fatalf("RegisterSkill(plan): %v", err)
 	}
 	if err := o.RegisterSkill(writeTestSkill(t, "execute", "Execute a plan.")); err != nil {
@@ -93,9 +102,15 @@ func TestPlanFromRequest_BuildsRunnerFromPlan(t *testing.T) {
 	if draftExecutor.Skill().Name != "plan" {
 		t.Fatalf("draft executor skill = %v, want plan", draftExecutor)
 	}
+	if got := draftExecutor.LLMClient(); got != perSkillClient {
+		t.Fatalf("draft executor LLMClient() = %p, want %p", got, perSkillClient)
+	}
 	runExecutor := mustNodeExecutor(t, run)
 	if runExecutor.Skill().Name != "execute" {
 		t.Fatalf("run executor skill = %v, want execute", runExecutor)
+	}
+	if got := runExecutor.LLMClient(); got != orchestratorClient {
+		t.Fatalf("run executor LLMClient() = %p, want %p", got, orchestratorClient)
 	}
 	if len(run.Parents) != 1 || run.Parents[0].Id != "draft" {
 		t.Fatalf("run parents = %+v, want [draft]", run.Parents)

@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"sync"
 
+	"github.com/tsumina/dango/internal/llm"
 	"github.com/tsumina/dango/internal/llm/skill"
 	runnerpkg "github.com/tsumina/dango/internal/orchestrate/runner"
 )
@@ -23,13 +24,15 @@ var (
 // planner to convert a request into a coarse execution plan, and materializes a
 // fresh runner plus its Executor graph for each accepted plan.
 type Orchestrator struct {
-	logger *slog.Logger
+	logger    *slog.Logger
+	llmClient *llm.Client
 
 	mu                sync.RWMutex
 	configLocked      bool
 	runnerStore       runnerpkg.RunnerStore
 	maxRunningRunners int
 	skills            map[string]*skill.Skill
+	skillClientByName map[string]SkillClientFactory
 	runners           map[string]*runnerpkg.Runner
 	runningRunnerIDs  map[string]struct{}
 	queuedRunnerByID  map[string]*queuedRunner
@@ -54,12 +57,36 @@ func newOrchestrator(logger *slog.Logger) *Orchestrator {
 		logger = slog.Default()
 	}
 	return &Orchestrator{
-		logger:           logger,
-		skills:           make(map[string]*skill.Skill),
-		runners:          make(map[string]*runnerpkg.Runner),
-		runningRunnerIDs: make(map[string]struct{}),
-		queuedRunnerByID: make(map[string]*queuedRunner),
-		planFn:           rejectUnconfiguredPlan,
+		logger:            logger,
+		skills:            make(map[string]*skill.Skill),
+		skillClientByName: make(map[string]SkillClientFactory),
+		runners:           make(map[string]*runnerpkg.Runner),
+		runningRunnerIDs:  make(map[string]struct{}),
+		queuedRunnerByID:  make(map[string]*queuedRunner),
+		planFn:            rejectUnconfiguredPlan,
+	}
+}
+
+// SkillClientFactory constructs the client a registered skill should use when
+// environment-based configuration is unavailable.
+//
+// It lets the registration site capture skill-specific LLM setup details while
+// keeping the runner assembly path independent from those configuration knobs.
+type SkillClientFactory func() (*llm.Client, error)
+
+type registerSkillConfig struct {
+	clientFactory SkillClientFactory
+}
+
+// RegisterSkillOption configures how a skill should be materialized later when
+// the orchestrator assembles executors for a runner.
+type RegisterSkillOption func(*registerSkillConfig)
+
+// WithSkillClientFactory records a per-skill client constructor that is used
+// when [llm.NewClientFromEnv] does not yield a client for that skill.
+func WithSkillClientFactory(factory SkillClientFactory) RegisterSkillOption {
+	return func(cfg *registerSkillConfig) {
+		cfg.clientFactory = factory
 	}
 }
 
@@ -97,6 +124,21 @@ func (o *Orchestrator) SetPlanningFunc(planFn PlanningFunc) error {
 		return nil
 	}
 	o.planFn = planFn
+	return nil
+}
+
+// SetLLMClient configures the default client new executors should inherit when
+// their bound skill is lightweight and does not already carry its own client.
+//
+// Passing nil clears the default. Like the other startup-only orchestrator
+// settings, it must be called before the first planning call.
+func (o *Orchestrator) SetLLMClient(client *llm.Client) error {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	if o.configLocked {
+		return fmt.Errorf("orchestrate: SetLLMClient can only be called during startup")
+	}
+	o.llmClient = client
 	return nil
 }
 
@@ -140,13 +182,19 @@ func (o *Orchestrator) SetMaxRunningRunners(limit int) error {
 //
 // Skills are live managed state rather than startup-only configuration, so
 // RegisterSkill may be called throughout the daemon lifetime.
-func (o *Orchestrator) RegisterSkill(dir string) error {
+func (o *Orchestrator) RegisterSkill(dir string, opts ...RegisterSkillOption) error {
 	sk, err := skill.Load(dir)
 	if err != nil {
 		return err
 	}
 	if sk.Name == "" {
 		return fmt.Errorf("orchestrate: registered skill in %q has empty name", dir)
+	}
+	var cfg registerSkillConfig
+	for _, opt := range opts {
+		if opt != nil {
+			opt(&cfg)
+		}
 	}
 
 	o.mu.Lock()
@@ -155,6 +203,9 @@ func (o *Orchestrator) RegisterSkill(dir string) error {
 		return fmt.Errorf("orchestrate: skill %q already registered", sk.Name)
 	}
 	o.skills[sk.Name] = sk
+	if cfg.clientFactory != nil {
+		o.skillClientByName[sk.Name] = cfg.clientFactory
+	}
 	return nil
 }
 
@@ -173,6 +224,7 @@ func (o *Orchestrator) RemoveSkill(name string) error {
 		return fmt.Errorf("orchestrate: skill %q is not registered", name)
 	}
 	delete(o.skills, name)
+	delete(o.skillClientByName, name)
 	return nil
 }
 

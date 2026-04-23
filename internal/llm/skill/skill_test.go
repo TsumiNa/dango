@@ -198,6 +198,47 @@ func TestLoad_ParsesMetadataWithoutClient(t *testing.T) {
 	}
 }
 
+func TestBind_BuildsRunnableCopyFromLoadedSkill(t *testing.T) {
+	dir := writeSkillDir(t, "---\nname: loaded\ndescription: d\n---\nbody\n")
+	loaded, err := Load(dir)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	client := stubClient()
+	bound, err := loaded.Bind(RuntimeConfig{Client: client})
+	if err != nil {
+		t.Fatalf("Bind: %v", err)
+	}
+	if bound == loaded {
+		t.Fatal("Bind returned the original skill pointer, want a fresh copy")
+	}
+	if bound.Client() != client {
+		t.Fatalf("Client() = %p, want %p", bound.Client(), client)
+	}
+	if bound.Conversation() == nil {
+		t.Fatal("Conversation() = nil, want a runnable conversation")
+	}
+	if loaded.Client() != nil {
+		t.Fatalf("loaded Client() = %p, want nil after Bind", loaded.Client())
+	}
+	if loaded.Conversation() != nil {
+		t.Fatal("loaded Conversation() changed after Bind")
+	}
+	if bound.Name != loaded.Name || bound.Description != loaded.Description || bound.Dir() != loaded.Dir() {
+		t.Fatalf("bound skill metadata changed unexpectedly: got %+v want name=%q description=%q dir=%q", bound, loaded.Name, loaded.Description, loaded.Dir())
+	}
+}
+
+func TestBind_ErrorWhenClientNil(t *testing.T) {
+	loaded, err := Load(writeSkillDir(t, "---\nname: x\ndescription: d\n---\nbody\n"))
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if _, err := loaded.Bind(RuntimeConfig{}); err == nil {
+		t.Fatal("expected error when binding without a client")
+	}
+}
+
 func equalStrings(a, b []string) bool {
 	if len(a) != len(b) {
 		return false
