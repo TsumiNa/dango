@@ -2,12 +2,15 @@ package skill
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io/fs"
 	"os"
 	"path"
+	"path/filepath"
 
 	"github.com/adrg/frontmatter"
+	"github.com/lithammer/shortuuid/v4"
 	"github.com/tsumina/dango/internal/llm"
 )
 
@@ -39,82 +42,31 @@ const DefaultMaxSteps = llm.DefaultMaxSteps
 // and the remaining body becomes [Skill.Instruction], which is used as
 // the system prompt of the conversation.
 //
-// The zero value is not usable; construct instances with [New].
+// The zero value is not usable; construct instances with [NewFromDir] or
+// [NewFromFS].
 type Skill struct {
 	Name        string `yaml:"name" toml:"name" json:"name"`
 	Description string `yaml:"description" toml:"description" json:"description"`
 	License     string `yaml:"license,omitempty" toml:"license,omitempty" json:"license,omitempty"`
 	Instruction string
 
-	dir       string
-	client    *llm.Client
+	dir       fs.FS
+	envFiles  []string
 	bashAllow []string
 	bashBlock []string
+	tools     []llm.Tool
 
-	conv      *llm.Conversation
-	sessStore llm.SessionStore
-	sessID    string
+	conv *llm.Conversation
 }
 
-// Config configures how a [Skill] is loaded and wired for execution.
+// NewFromDir reads the [SkillFile] in dir and prepares a Skill using the
+// host filesystem as its skill workspace.
 //
-// Dir must point to a skill directory containing a [SkillFile]. Client
-// is the LLM client the loaded Skill binds to and must be non-nil.
-//
-// BashAllow and BashBlock let callers narrow or widen the built-in bash
-// allowlist; the effective set the built-in tools should honour is
-// builtin.DefaultAllowlist ∪ BashAllow \ BashBlock.
-//
-// Tools lists the tools the Skill's conversation will dispatch during
-// [Skill.Run]. Names must be unique and non-empty.
-//
-// MaxSteps overrides the conversation iteration bound. Values less than
-// or equal to zero fall back to [llm.DefaultMaxSteps].
-//
-// AutoTrim, when non-nil, enables automatic history shrinking on the
-// conversation. Summarizer optionally collapses dropped history into a
-// single summary turn; without one the shrink pass simply trims.
-//
-// SessionStore and SessionID, when both set, bind the Skill to a
-// persistent session that is opened lazily on the first [Skill.Run].
-type Config struct {
-	Dir       string
-	Client    *llm.Client
-	BashAllow []string
-	BashBlock []string
-
-	Tools      []llm.Tool
-	MaxSteps   int
-	AutoTrim   *llm.AutoShrinkConfig
-	Summarizer llm.Summarizer
-
-	SessionStore llm.SessionStore
-	SessionID    string
-}
-
-// RuntimeConfig configures the execution-time pieces bound onto an existing
-// loaded [Skill].
-//
-// It mirrors the runtime-oriented subset of [Config] so lightweight skills
-// returned by [Load] can later be turned into runnable copies without reading
-// [SkillFile] again.
-type RuntimeConfig struct {
-	Client *llm.Client
-
-	Tools      []llm.Tool
-	MaxSteps   int
-	AutoTrim   *llm.AutoShrinkConfig
-	Summarizer llm.Summarizer
-
-	SessionStore llm.SessionStore
-	SessionID    string
-}
-
-// Load reads the [SkillFile] in dir and parses its metadata and
-// instruction body into a [Skill] without binding an LLM client or
-// conversation. The returned Skill is lightweight and useful for
-// discovering and inspecting skills, but cannot be executed.
-func Load(dir string) (*Skill, error) {
+// bashAllow and bashBlock are stored for callers that compose built-in bash
+// tools around the skill. tools is the complete tool set advertised to the
+// model when the skill is bound with [Skill.Bind]. Tool names must be unique
+// and non-empty.
+func NewFromDir(dir string, bashAllow []string, bashBlock []string, tools ...llm.Tool) (*Skill, error) {
 	info, err := os.Stat(dir)
 	if err != nil {
 		return nil, err
@@ -123,32 +75,35 @@ func Load(dir string) (*Skill, error) {
 		return nil, fmt.Errorf("skill path %q is not a directory", dir)
 	}
 
-	return loadFromFS(os.DirFS(dir), ".", dir, dir)
+	envFiles := []string(nil)
+	envFile := filepath.Join(dir, ".env")
+	if _, err := os.Stat(envFile); err == nil {
+		envFiles = append(envFiles, envFile)
+	} else if !os.IsNotExist(err) {
+		return nil, fmt.Errorf("skill: inspect env file %q: %w", envFile, err)
+	}
+
+	return newFromFS(os.DirFS(dir), dir, envFiles, bashAllow, bashBlock, tools...)
 }
 
-// LoadFS reads the [SkillFile] in dir from fsys and returns the resulting
-// lightweight [Skill].
+// NewFromFS reads [SkillFile] from fsys and prepares a Skill using fsys as its
+// skill workspace.
 //
-// It is the filesystem-agnostic counterpart to [Load] and is intended for
-// cases such as embedded skills that are packaged into the final binary.
-// Skills loaded from non-local filesystems do not expose a host directory, so
-// [Skill.Dir] returns an empty string.
-func LoadFS(fsys fs.FS, dir string) (*Skill, error) {
+// It is the filesystem-agnostic counterpart to [NewFromDir] and is intended
+// for cases such as embedded skills that are packaged into the final binary.
+// SKILL.md must be at the root of fsys.
+func NewFromFS(fsys fs.FS, bashAllow []string, bashBlock []string, tools ...llm.Tool) (*Skill, error) {
 	if fsys == nil {
 		return nil, fmt.Errorf("skill: requires a non-nil filesystem")
 	}
-	info, err := fs.Stat(fsys, dir)
-	if err != nil {
-		return nil, err
-	}
-	if !info.IsDir() {
-		return nil, fmt.Errorf("skill path %q is not a directory", dir)
-	}
-	return loadFromFS(fsys, dir, dir, "")
+	return newFromFS(fsys, "skill filesystem", nil, bashAllow, bashBlock, tools...)
 }
 
-func loadFromFS(fsys fs.FS, dir string, displayDir string, hostDir string) (*Skill, error) {
-	skillPath := path.Join(dir, SkillFile)
+func newFromFS(fsys fs.FS, displayDir string, envFiles []string, bashAllow []string, bashBlock []string, tools ...llm.Tool) (*Skill, error) {
+	if err := validateTools(tools); err != nil {
+		return nil, err
+	}
+	skillPath := path.Join(".", SkillFile)
 	file, err := fsys.Open(skillPath)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -164,81 +119,78 @@ func loadFromFS(fsys fs.FS, dir string, displayDir string, hostDir string) (*Ski
 		return nil, err
 	}
 	sk.Instruction = string(rest)
-	sk.dir = hostDir
+	sk.dir = fsys
+	sk.envFiles = append([]string(nil), envFiles...)
+	sk.bashAllow = append([]string(nil), bashAllow...)
+	sk.bashBlock = append([]string(nil), bashBlock...)
+	sk.tools = append([]llm.Tool(nil), tools...)
 
 	return &sk, nil
 }
 
-// New loads a [Skill] from cfg.Dir, binds it to cfg.Client, and builds
-// the conversation that [Skill.Run] will drive.
+// Bind returns a fresh runnable copy of s using the provided runtime wiring.
 //
-// cfg.Dir must point to a directory containing a [SkillFile]. The
-// frontmatter in that file is decoded into the Skill metadata fields
-// and the remaining body is stored in [Skill.Instruction]. cfg.Client
-// must be non-nil; tool names in cfg.Tools must be unique and non-empty
-// so misconfigured tool sets fail fast rather than silently shadowing
-// each other at call time.
-//
-// Other entries in the directory such as scripts, references, and
-// examples are not read here; callers that need them can resolve their
-// own paths relative to [Skill.Dir].
-func New(cfg Config) (*Skill, error) {
-	if cfg.Client == nil {
-		return nil, fmt.Errorf("skill: requires a non-nil client")
-	}
-
-	sk, err := Load(cfg.Dir)
-	if err != nil {
-		return nil, err
-	}
-
-	sk.bashAllow = append([]string(nil), cfg.BashAllow...)
-	sk.bashBlock = append([]string(nil), cfg.BashBlock...)
-
-	return sk.Bind(RuntimeConfig{
-		Client:       cfg.Client,
-		Tools:        cfg.Tools,
-		MaxSteps:     cfg.MaxSteps,
-		AutoTrim:     cfg.AutoTrim,
-		Summarizer:   cfg.Summarizer,
-		SessionStore: cfg.SessionStore,
-		SessionID:    cfg.SessionID,
-	})
-}
-
-// Bind returns a fresh runnable copy of s using cfg for its runtime wiring.
-//
-// Bind is the bridge between [Load] and [Run]: callers can keep lightweight
-// skills in registries and later bind a chosen LLM client, tool set, and
-// optional session configuration when they are ready to execute.
-func (s *Skill) Bind(cfg RuntimeConfig) (*Skill, error) {
+// Bind is the bridge between [NewFromDir]/[NewFromFS] and [Run]: callers can
+// keep lightweight skills in registries and later bind a chosen LLM client and
+// optional persistent session when they are ready to execute. When client is
+// nil, Bind constructs one with [llm.NewClientFromEnv]; skills loaded from a
+// host directory pass that directory's .env file when it exists.
+func (s *Skill) Bind(client *llm.Client, cfg *llm.ConversationConfig, sessID *string, sessStores ...llm.SessionStore) (*Skill, error) {
 	if s == nil {
 		return nil, fmt.Errorf("skill: Bind requires a non-nil skill")
 	}
-	if cfg.Client == nil {
-		return nil, fmt.Errorf("skill: Bind requires a non-nil client")
-	}
-	if err := validateTools(cfg.Tools); err != nil {
-		return nil, err
+	if client == nil {
+		var err error
+		client, err = llm.NewClientFromEnv(s.envFiles...)
+		if err != nil {
+			return nil, fmt.Errorf("skill: bind client from environment: %w", err)
+		}
 	}
 
 	bound := *s
-	bound.client = cfg.Client
 	bound.bashAllow = append([]string(nil), s.bashAllow...)
 	bound.bashBlock = append([]string(nil), s.bashBlock...)
-	bound.conv = llm.NewConversation(cfg.Client, s.Instruction, cfg.Tools)
-	if cfg.MaxSteps > 0 {
-		bound.conv.SetMaxSteps(cfg.MaxSteps)
+	bound.envFiles = append([]string(nil), s.envFiles...)
+	bound.tools = append([]llm.Tool(nil), s.tools...)
+
+	conv, err := llm.NewConversation(client, s.Instruction, bound.tools, cfg)
+	if err != nil {
+		return nil, err
 	}
-	if cfg.AutoTrim != nil {
-		bound.conv.SetAutoShrink(*cfg.AutoTrim)
+	if len(sessStores) > 0 || sessID != nil {
+		id, err := resolveSessionID(context.Background(), sessID, sessStores)
+		if err != nil {
+			return nil, err
+		}
+		if err := conv.OpenSession(context.Background(), id, sessStores...); err != nil {
+			return nil, fmt.Errorf("skill: open session %q: %w", id, err)
+		}
 	}
-	if cfg.Summarizer != nil {
-		bound.conv.SetSummarizer(cfg.Summarizer)
-	}
-	bound.sessStore = cfg.SessionStore
-	bound.sessID = cfg.SessionID
+	bound.conv = conv
 	return &bound, nil
+}
+
+func resolveSessionID(ctx context.Context, sessID *string, stores []llm.SessionStore) (string, error) {
+	if len(stores) == 0 {
+		return "", fmt.Errorf("skill: session id requires at least one session store")
+	}
+	if sessID == nil {
+		return shortuuid.New(), nil
+	}
+	if *sessID == "" {
+		return "", fmt.Errorf("skill: session id must not be empty")
+	}
+	for i, store := range stores {
+		if store == nil {
+			return "", fmt.Errorf("skill: session store %d is nil", i)
+		}
+		if _, err := store.Load(ctx, *sessID); err == nil {
+			return *sessID, nil
+		} else if !errors.Is(err, llm.ErrSessionNotFound) {
+			return "", fmt.Errorf("skill: load session %q store %d: %w", *sessID, i, err)
+		}
+	}
+	return "", fmt.Errorf("skill: session %q not found: %w", *sessID, llm.ErrSessionNotFound)
 }
 
 func validateTools(tools []llm.Tool) error {
@@ -259,17 +211,17 @@ func validateTools(tools []llm.Tool) error {
 	return nil
 }
 
-// Client returns the LLM client this skill is bound to.
-func (s *Skill) Client() *llm.Client { return s.client }
+// Client returns the LLM client of the bound conversation, or nil when this
+// Skill has not been bound yet.
+func (s *Skill) Client() *llm.Client {
+	if s == nil || s.conv == nil {
+		return nil
+	}
+	return s.conv.Client()
+}
 
-// Dir returns the host filesystem path of the skill directory this Skill was
-// loaded from.
-//
-// It is the root used to resolve references, examples, scripts, and any
-// filesystem-scoped built-in tools (for example those returned by
-// [github.com/tsumina/dango/internal/llm/skill/builtin.All]). Skills loaded
-// from non-local filesystems, such as via [LoadFS], return an empty string.
-func (s *Skill) Dir() string { return s.dir }
+// Dir returns the filesystem rooted at this skill's directory.
+func (s *Skill) Dir() fs.FS { return s.dir }
 
 // BashAllow returns the executables this skill wants to permit on top
 // of the built-in default bash allowlist. Callers pass it alongside
@@ -288,10 +240,8 @@ func (s *Skill) BashBlock() []string { return append([]string(nil), s.bashBlock.
 // it concurrently with a running [Skill.Run].
 func (s *Skill) Conversation() *llm.Conversation { return s.conv }
 
-// Run drives a single task to completion. It lazily binds the
-// conversation to the configured session on the first call when
-// [Config.SessionStore] and [Config.SessionID] were provided, then
-// delegates to [llm.Conversation.Run].
+// Run drives a single task to completion by delegating to
+// [llm.Conversation.Run].
 //
 // userInput is appended as a user turn before the loop starts. The
 // returned string is the concatenated output_text of the model's final
@@ -303,10 +253,8 @@ func (s *Skill) Conversation() *llm.Conversation { return s.conv }
 // underlying [llm.Client]. Pass an empty string to use the level
 // configured on the client.
 func (s *Skill) Run(ctx context.Context, userInput string, effort llm.ReasoningEffort) (string, error) {
-	if s.sessStore != nil && s.conv.SessionID() == "" {
-		if err := s.conv.OpenSession(ctx, s.sessStore, s.sessID); err != nil {
-			return "", fmt.Errorf("skill: open session %q: %w", s.sessID, err)
-		}
+	if s == nil || s.conv == nil {
+		return "", fmt.Errorf("skill: Run requires a bound conversation")
 	}
 	return s.conv.Run(ctx, userInput, effort)
 }

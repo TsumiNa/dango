@@ -5,5 +5,5 @@
 // the appropriate provider endpoint. Supported providers are selected by the
 // first matching API key among OPENAI_API_KEY, OPENROUTER_API_KEY, and
 // GEMINI_API_KEY. The model used for orchestration requests is read from the
-// ORCHESTRATION_MODEL environment variable.
+// MODEL environment variable.
 package llm

@@ -9,6 +9,7 @@ import (
 
 	"github.com/tsumina/dango/internal/llm"
 	"github.com/tsumina/dango/internal/llm/skill"
+	"github.com/tsumina/dango/internal/llm/skill/builtin"
 	runnerpkg "github.com/tsumina/dango/internal/orchestrate/runner"
 )
 
@@ -20,8 +21,8 @@ var (
 // Orchestrator is the singleton runner factory that bridges external user
 // requests to runner assembly.
 //
-// It keeps a registry of lightweight skills loaded through skill.Load, asks a
-// planner to convert a request into a coarse execution plan, and materializes a
+// It keeps a registry of lightweight skills loaded through skill.NewFromDir,
+// initializes its orchestrator-owned skill during startup, and materializes a
 // fresh runner plus its Executor graph for each accepted plan.
 type Orchestrator struct {
 	logger            *slog.Logger
@@ -65,15 +66,34 @@ func newOrchestrator(logger *slog.Logger) *Orchestrator {
 	if logger == nil {
 		logger = slog.Default()
 	}
-	return &Orchestrator{
+	o := &Orchestrator{
 		logger:            logger,
-		orchestratorSkill: defaultOrchestratorSkill(),
 		skills:            make(map[string]*skill.Skill),
 		skillClientByName: make(map[string]SkillClientFactory),
 		runners:           make(map[string]*runnerpkg.Runner),
 		runningRunnerIDs:  make(map[string]struct{}),
 		queuedRunnerByID:  make(map[string]*queuedRunner),
 	}
+	sk, err := o.configuredOrchestratorSkill(defaultOrchestratorSkill())
+	if err != nil {
+		panic(fmt.Sprintf("orchestrate: initialize default orchestrator skill: %v", err))
+	}
+	o.orchestratorSkill = sk
+	return o
+}
+
+func (o *Orchestrator) configuredOrchestratorSkill(sk *skill.Skill) (*skill.Skill, error) {
+	if sk == nil {
+		sk = defaultOrchestratorSkill()
+	}
+	if sk.Client() != nil && sk.Conversation() != nil {
+		return sk, nil
+	}
+	client, err := o.resolveEnvClient()
+	if err != nil || client == nil {
+		return sk, nil
+	}
+	return bindOrchestratorSkill(sk, client)
 }
 
 // SkillClientFactory constructs the client a registered skill should use when
@@ -120,23 +140,24 @@ func (o *Orchestrator) SetLogger(logger *slog.Logger) error {
 // SetOrchestratorSkill replaces the current orchestrator-owned skill.
 //
 // Callers may provide either a lightweight skill or one that is already bound
-// to an LLM client. Passing nil restores the embedded default skill. Like the
-// other startup-only orchestrator settings, it must be called before the first
-// planning call.
+// to an LLM client. Lightweight skills are eagerly bound to the orchestrator's
+// env-derived client when one is available. Passing nil restores the embedded
+// default skill. Like the other startup-only orchestrator settings, it must be
+// called before the first planning call.
 func (o *Orchestrator) SetOrchestratorSkill(sk *skill.Skill) error {
+	configured, err := o.configuredOrchestratorSkill(sk)
+	if err != nil {
+		return err
+	}
 	o.mu.Lock()
 	defer o.mu.Unlock()
 	if o.configLocked {
 		return fmt.Errorf("orchestrate: SetOrchestratorSkill can only be called during startup")
 	}
-	if sk == nil {
-		o.orchestratorSkill = defaultOrchestratorSkill()
-		return nil
-	}
-	if sk.Name == "" {
+	if configured.Name == "" {
 		return fmt.Errorf("orchestrate: orchestrator skill requires a non-empty name")
 	}
-	o.orchestratorSkill = sk
+	o.orchestratorSkill = configured
 	return nil
 }
 
@@ -150,7 +171,7 @@ func (o *Orchestrator) SetOrchestratorSkillDir(dir string) error {
 	if dir == "" {
 		return o.SetOrchestratorSkill(nil)
 	}
-	sk, err := skill.Load(dir)
+	sk, err := skill.NewFromDir(dir, nil, nil, builtin.All(dir)...)
 	if err != nil {
 		return err
 	}
@@ -192,13 +213,13 @@ func (o *Orchestrator) SetMaxRunningRunners(limit int) error {
 	return nil
 }
 
-// RegisterSkill loads dir through skill.Load and stores the resulting
+// RegisterSkill loads dir through skill.NewFromDir and stores the resulting
 // lightweight Skill in the registry under its declared name.
 //
 // Skills are live managed state rather than startup-only configuration, so
 // RegisterSkill may be called throughout the daemon lifetime.
 func (o *Orchestrator) RegisterSkill(dir string, opts ...RegisterSkillOption) error {
-	sk, err := skill.Load(dir)
+	sk, err := skill.NewFromDir(dir, nil, nil, builtin.All(dir)...)
 	if err != nil {
 		return err
 	}
@@ -250,8 +271,8 @@ func (o *Orchestrator) Skills() map[string]*skill.Skill {
 	return cloneSkillMap(o.skills)
 }
 
-// OrchestratorSkill returns the lightweight skill reserved for orchestrator
-// planning and review-style stages.
+// OrchestratorSkill returns the startup-initialized skill reserved for
+// orchestrator planning and review-style stages.
 func (o *Orchestrator) OrchestratorSkill() *skill.Skill {
 	o.mu.RLock()
 	defer o.mu.RUnlock()

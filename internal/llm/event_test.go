@@ -38,7 +38,7 @@ func TestEventJSONRoundTrip(t *testing.T) {
 }
 
 func TestEventApplyAppendsTurn(t *testing.T) {
-	c := NewConversation(nil, "sys", nil)
+	c := mustNewConversation(t, nil, "sys", nil)
 	ev := &Event{Kind: EventAppendUser, Turn: &Turn{Role: RoleUser, Text: "hi"}}
 	if err := ev.apply(c); err != nil {
 		t.Fatalf("apply: %v", err)
@@ -49,7 +49,7 @@ func TestEventApplyAppendsTurn(t *testing.T) {
 }
 
 func TestEventApplyAppendRequiresTurn(t *testing.T) {
-	c := NewConversation(nil, "sys", nil)
+	c := mustNewConversation(t, nil, "sys", nil)
 	ev := &Event{Kind: EventAppendUser}
 	if err := ev.apply(c); err == nil {
 		t.Error("apply accepted append event without Turn")
@@ -57,7 +57,7 @@ func TestEventApplyAppendRequiresTurn(t *testing.T) {
 }
 
 func TestEventApplyInitSetsAnchor(t *testing.T) {
-	c := NewConversation(nil, "", nil)
+	c := mustNewConversation(t, nil, "", nil)
 	ev := &Event{Kind: EventInit, Instructions: "sys", Tools: []ToolSpec{{Name: "t"}}}
 	if err := ev.apply(c); err != nil {
 		t.Fatalf("apply: %v", err)
@@ -71,7 +71,7 @@ func TestEventApplyInitSetsAnchor(t *testing.T) {
 }
 
 func TestEventApplyUnknownKind(t *testing.T) {
-	c := NewConversation(nil, "", nil)
+	c := mustNewConversation(t, nil, "", nil)
 	ev := &Event{Kind: "bogus"}
 	if err := ev.apply(c); err == nil {
 		t.Error("apply accepted unknown kind")

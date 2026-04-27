@@ -132,6 +132,19 @@ type AutoShrinkConfig struct {
 	KeepTurns         int
 }
 
+// ConversationConfig configures optional runtime behaviour for a
+// [Conversation].
+//
+// A nil *ConversationConfig passed to [NewConversation] uses the default
+// conversation settings. Non-zero MaxSteps overrides the request/tool-call
+// loop bound, AutoShrink overrides the default shrinking policy when non-nil,
+// and Summarizer enables summary-based compression.
+type ConversationConfig struct {
+	MaxSteps   int
+	AutoShrink *AutoShrinkConfig
+	Summarizer Summarizer
+}
+
 // Summarizer collapses an older slice of turns into a single compact
 // summary string. Implementations are typically backed by an LLM call but
 // can also be deterministic (for example, joining titles for tests).
@@ -179,12 +192,12 @@ type Conversation struct {
 	// treated as [DefaultMaxSteps].
 	maxSteps int
 
-	// Persistence. store and sessionID are set by [Conversation.OpenSession];
-	// when store is nil all mutating methods are pure in-memory
-	// updates. replaying suppresses emission while applying a loaded
-	// log so replay does not feed back into the store. lastErr
-	// captures the most recent emit failure for [Conversation.LastError].
-	store     SessionStore
+	// Persistence. stores and sessionID are set by [Conversation.OpenSession];
+	// when stores is empty all mutating methods are pure in-memory updates.
+	// replaying suppresses emission while applying a loaded log so replay does
+	// not feed back into the stores. lastErr captures the most recent emit
+	// failure for [Conversation.LastError].
+	stores    []SessionStore
 	sessionID string
 	replaying bool
 	lastErr   error
@@ -206,26 +219,27 @@ const DefaultMaxSteps = 20
 // Each [Tool] in tools is advertised to the model via its Name,
 // Description, and Parameters, and is dispatched directly by
 // [Conversation.Run] when the model emits a matching function call.
-// Tool names must be unique; duplicates cause NewConversation to panic
-// because the ambiguity would silently shadow a tool at call time.
+// Tool names must be unique; duplicates return an error because the ambiguity
+// would silently shadow a tool at call time.
 //
 // Instructions and the derived tool schema form the cache-stable
 // prefix and are treated as immutable for the life of the
 // conversation. NewConversation builds a private copy of both so
-// later mutations by the caller do not disturb the cache key.
-func NewConversation(client *Client, instructions string, tools []Tool) *Conversation {
+// later mutations by the caller do not disturb the cache key. cfg may be nil
+// to use the default max-step and auto-shrink settings.
+func NewConversation(client *Client, instructions string, tools []Tool, cfg *ConversationConfig) (*Conversation, error) {
 	specs := make([]ToolSpec, len(tools))
 	byName := make(map[string]Tool, len(tools))
 	for i, t := range tools {
 		if t == nil {
-			panic("llm: NewConversation received a nil tool")
+			return nil, fmt.Errorf("llm: NewConversation received a nil tool")
 		}
 		name := t.Name()
 		if name == "" {
-			panic("llm: NewConversation received a tool with empty name")
+			return nil, fmt.Errorf("llm: NewConversation received a tool with empty name")
 		}
 		if _, dup := byName[name]; dup {
-			panic(fmt.Sprintf("llm: NewConversation received duplicate tool %q", name))
+			return nil, fmt.Errorf("llm: NewConversation received duplicate tool %q", name)
 		}
 		specs[i] = ToolSpec{
 			Name:        name,
@@ -234,7 +248,7 @@ func NewConversation(client *Client, instructions string, tools []Tool) *Convers
 		}
 		byName[name] = t
 	}
-	return &Conversation{
+	c := &Conversation{
 		client:       client,
 		instructions: instructions,
 		tools:        append([]Tool(nil), tools...),
@@ -247,6 +261,18 @@ func NewConversation(client *Client, instructions string, tools []Tool) *Convers
 			KeepTurns:         10,
 		},
 	}
+	if cfg != nil {
+		if cfg.MaxSteps > 0 {
+			c.maxSteps = cfg.MaxSteps
+		}
+		if cfg.AutoShrink != nil {
+			c.autoShrink = *cfg.AutoShrink
+		}
+		if cfg.Summarizer != nil {
+			c.summarizer = cfg.Summarizer
+		}
+	}
+	return c, nil
 }
 
 // Client returns the [Client] bound at construction time, or nil when
@@ -259,11 +285,11 @@ func (c *Conversation) Client() *Client { return c.client }
 // [Conversation.Send] or [Conversation.Stream].
 func (c *Conversation) SetClient(client *Client) { c.client = client }
 
-// OpenSession binds c to store under sessionID and either replays the
-// existing event log or seeds a fresh one with c's current
-// instructions and tools.
+// OpenSession binds c to one or more stores under sessionID and either replays
+// the existing event log or seeds a fresh one with c's current instructions
+// and tools.
 //
-// On a fresh session (no events on the store) OpenSession emits an
+// On a fresh session (no events on any store) OpenSession emits an
 // [EventInit] carrying c's current instructions and tools so future
 // loads can reconstruct the cache anchor.
 //
@@ -279,19 +305,26 @@ func (c *Conversation) SetClient(client *Client) { c.client = client }
 // AppendAssistantText, ...) so the recorded log is a complete record
 // of c's state. Calling it on a conversation that already has turns
 // returns an error rather than silently mixing transient and
-// persisted history.
-func (c *Conversation) OpenSession(ctx context.Context, store SessionStore, sessionID string) error {
-	if store == nil {
-		return fmt.Errorf("llm: OpenSession requires a non-nil store")
+// persisted history. When multiple stores are provided, the first store that
+// contains sessionID supplies the replay log and subsequent mutations are
+// appended to every store.
+func (c *Conversation) OpenSession(ctx context.Context, sessionID string, stores ...SessionStore) error {
+	if len(stores) == 0 {
+		return fmt.Errorf("llm: OpenSession requires at least one store")
 	}
-	if c.store != nil {
+	for i, store := range stores {
+		if store == nil {
+			return fmt.Errorf("llm: OpenSession store %d is nil", i)
+		}
+	}
+	if len(c.stores) > 0 {
 		return fmt.Errorf("llm: conversation is already bound to a session")
 	}
 	if len(c.turns) > 0 {
 		return fmt.Errorf("llm: OpenSession requires a fresh conversation (has %d turns)", len(c.turns))
 	}
 
-	events, err := store.Load(ctx, sessionID)
+	events, sourceIndex, err := loadSessionEvents(ctx, sessionID, stores)
 	switch {
 	case err == nil:
 		c.replaying = true
@@ -311,21 +344,58 @@ func (c *Conversation) OpenSession(ctx context.Context, store SessionStore, sess
 			}
 		}
 		c.replaying = false
+		if err := mirrorSessionEvents(ctx, sessionID, stores, sourceIndex, events); err != nil {
+			return err
+		}
 	case errors.Is(err, ErrSessionNotFound):
 		init := &Event{
 			Kind:         EventInit,
 			Instructions: c.instructions,
 			Tools:        append([]ToolSpec(nil), c.toolSpecs...),
 		}
-		if _, appendErr := store.Append(ctx, sessionID, init); appendErr != nil {
-			return fmt.Errorf("llm: seed session %q: %w", sessionID, appendErr)
+		for i, store := range stores {
+			if _, appendErr := store.Append(ctx, sessionID, cloneEvent(init)); appendErr != nil {
+				return fmt.Errorf("llm: seed session %q store %d: %w", sessionID, i, appendErr)
+			}
 		}
 	default:
 		return fmt.Errorf("llm: load session %q: %w", sessionID, err)
 	}
 
-	c.store = store
+	c.stores = append([]SessionStore(nil), stores...)
 	c.sessionID = sessionID
+	return nil
+}
+
+func loadSessionEvents(ctx context.Context, sessionID string, stores []SessionStore) ([]Event, int, error) {
+	for i, store := range stores {
+		events, err := store.Load(ctx, sessionID)
+		if err == nil {
+			return events, i, nil
+		}
+		if !errors.Is(err, ErrSessionNotFound) {
+			return nil, -1, err
+		}
+	}
+	return nil, -1, ErrSessionNotFound
+}
+
+func mirrorSessionEvents(ctx context.Context, sessionID string, stores []SessionStore, sourceIndex int, events []Event) error {
+	for i, store := range stores {
+		if i == sourceIndex {
+			continue
+		}
+		if _, err := store.Load(ctx, sessionID); err == nil {
+			continue
+		} else if !errors.Is(err, ErrSessionNotFound) {
+			return fmt.Errorf("llm: load mirrored session %q store %d: %w", sessionID, i, err)
+		}
+		for _, ev := range events {
+			if _, err := store.Append(ctx, sessionID, cloneEvent(&ev)); err != nil {
+				return fmt.Errorf("llm: mirror session %q store %d: %w", sessionID, i, err)
+			}
+		}
+	}
 	return nil
 }
 
@@ -345,13 +415,15 @@ func (c *Conversation) LastError() error { return c.lastErr }
 // Passing toSeq <= 0 leaves only the [EventInit] anchor (and an empty
 // turn list). Truncate is a no-op error when no session is bound.
 func (c *Conversation) Truncate(ctx context.Context, toSeq int64) error {
-	if c.store == nil {
+	if len(c.stores) == 0 {
 		return fmt.Errorf("llm: Truncate requires an open session")
 	}
-	if err := c.store.Truncate(ctx, c.sessionID, toSeq); err != nil {
-		return err
+	for i, store := range c.stores {
+		if err := store.Truncate(ctx, c.sessionID, toSeq); err != nil {
+			return fmt.Errorf("llm: truncate session %q store %d: %w", c.sessionID, i, err)
+		}
 	}
-	events, err := c.store.Load(ctx, c.sessionID)
+	events, err := c.stores[0].Load(ctx, c.sessionID)
 	if err != nil {
 		return err
 	}
@@ -377,14 +449,55 @@ func (c *Conversation) Truncate(ctx context.Context, toSeq int64) error {
 // emits because the event log is already divergent. emit is a no-op
 // when no store is bound or when c is replaying a loaded log.
 func (c *Conversation) emit(ev *Event) {
-	if c.store == nil || c.replaying {
+	if len(c.stores) == 0 || c.replaying {
 		return
 	}
-	if _, err := c.store.Append(context.Background(), c.sessionID, ev); err != nil {
-		if c.lastErr == nil {
-			c.lastErr = err
+	for _, store := range c.stores {
+		if _, err := store.Append(context.Background(), c.sessionID, cloneEvent(ev)); err != nil {
+			if c.lastErr == nil {
+				c.lastErr = err
+			}
 		}
 	}
+}
+
+func cloneEvent(ev *Event) *Event {
+	if ev == nil {
+		return nil
+	}
+	out := *ev
+	out.Tools = append([]ToolSpec(nil), ev.Tools...)
+	if ev.Turn != nil {
+		turn := cloneTurn(*ev.Turn)
+		out.Turn = &turn
+	}
+	out.Replacement = cloneTurns(ev.Replacement)
+	if ev.Usage != nil {
+		usage := *ev.Usage
+		out.Usage = &usage
+	}
+	return &out
+}
+
+func cloneTurns(turns []Turn) []Turn {
+	if turns == nil {
+		return nil
+	}
+	out := make([]Turn, len(turns))
+	for i, turn := range turns {
+		out[i] = cloneTurn(turn)
+	}
+	return out
+}
+
+func cloneTurn(turn Turn) Turn {
+	out := turn
+	if turn.Tool != nil {
+		tool := *turn.Tool
+		out.Tool = &tool
+	}
+	out.Raw = append(json.RawMessage(nil), turn.Raw...)
+	return out
 }
 
 // Instructions returns the system prompt bound at construction time.

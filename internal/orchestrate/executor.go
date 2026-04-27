@@ -8,7 +8,6 @@ import (
 
 	"github.com/tsumina/dango/internal/llm"
 	"github.com/tsumina/dango/internal/llm/skill"
-	"github.com/tsumina/dango/internal/llm/skill/builtin"
 	runnerpkg "github.com/tsumina/dango/internal/orchestrate/runner"
 )
 
@@ -220,10 +219,7 @@ func (e *Executor) runtimeSkill() (*skill.Skill, error) {
 	if e.skill.Client() == client && e.skill.Client() != nil {
 		return e.skill, nil
 	}
-	return e.skill.Bind(skill.RuntimeConfig{
-		Client: client,
-		Tools:  e.defaultSkillTools(),
-	})
+	return e.skill.Bind(client, nil, nil)
 }
 
 func (e *Executor) resolveLLMClient() (*llm.Client, error) {
@@ -253,13 +249,6 @@ func (e *Executor) resolveEnvClient() (*llm.Client, error) {
 		e.envClient, e.envClientErr = llm.NewClientFromEnv()
 	})
 	return e.envClient, e.envClientErr
-}
-
-func (e *Executor) defaultSkillTools() []llm.Tool {
-	if e.skill == nil || e.skill.Dir() == "" {
-		return nil
-	}
-	return builtin.All(e.skill.Dir(), builtin.WithAllowlistAdjust(e.skill.BashAllow(), e.skill.BashBlock()))
 }
 
 func (e *Executor) captureResult(output any) {

@@ -101,6 +101,7 @@ func TestSetOrchestratorSkill_RejectsChangesAfterStartup(t *testing.T) {
 }
 
 func TestSetOrchestratorSkill_UsesProvidedSkillBeforeStartup(t *testing.T) {
+	clearLLMEnv(t)
 	o := newOrchestrator(testLogger)
 	sk := defaultOrchestratorSkill()
 	sk.Name = "custom"
@@ -125,8 +126,8 @@ func TestSetOrchestratorSkillDir_UsesLoadedSkillBeforeStartup(t *testing.T) {
 	if sk.Name != "custom-orchestrator" {
 		t.Fatalf("Name = %q, want %q", sk.Name, "custom-orchestrator")
 	}
-	if sk.Dir() != dir {
-		t.Fatalf("Dir() = %q, want %q", sk.Dir(), dir)
+	if sk.Dir() == nil {
+		t.Fatal("Dir() = nil, want loaded skill filesystem")
 	}
 }
 
@@ -149,17 +150,43 @@ func TestOrchestratorSkill_DefaultsToEmbeddedSkill(t *testing.T) {
 	if sk.Name != "orchestrator" {
 		t.Fatalf("Name = %q, want %q", sk.Name, "orchestrator")
 	}
-	if sk.Dir() != "" {
-		t.Fatalf("Dir() = %q, want empty for embedded skill", sk.Dir())
+	if sk.Dir() == nil {
+		t.Fatal("Dir() = nil, want embedded skill filesystem")
 	}
 	if sk.Instruction == "" {
 		t.Fatal("expected embedded orchestrator instruction to be populated")
 	}
 }
 
+func TestOrchestratorSkill_IsInitializedWithEnvClientOnConstruction(t *testing.T) {
+	t.Setenv("OPENAI_API_KEY", "env-key")
+	t.Setenv("MODEL", "env-model")
+	o := newOrchestrator(testLogger)
+	sk := o.OrchestratorSkill()
+	if sk == nil {
+		t.Fatal("expected orchestrator skill to be configured")
+	}
+	if sk.Client() == nil {
+		t.Fatal("expected orchestrator skill client to be initialized")
+	}
+	if sk.Conversation() == nil {
+		t.Fatal("expected orchestrator skill conversation to be initialized")
+	}
+	client, err := o.resolveEnvClient()
+	if err != nil {
+		t.Fatalf("resolveEnvClient: %v", err)
+	}
+	if sk.Client() != client {
+		t.Fatalf("orchestrator skill client = %p, want %p", sk.Client(), client)
+	}
+	if got := sk.Client().Model(); got != "env-model" {
+		t.Fatalf("Model() = %q, want %q", got, "env-model")
+	}
+}
+
 func TestResolveEnvClient_CachesOrchestratorEnvClient(t *testing.T) {
 	t.Setenv("OPENAI_API_KEY", "env-key")
-	t.Setenv("ORCHESTRATION_MODEL", "env-model")
+	t.Setenv("MODEL", "env-model")
 	o := newOrchestrator(testLogger)
 	first, err := o.resolveEnvClient()
 	if err != nil {
@@ -247,8 +274,8 @@ func TestRegisterSkill_LoadsLightweightSkill(t *testing.T) {
 	if sk.Conversation() != nil {
 		t.Errorf("Conversation() should be nil for a lightweight registered skill")
 	}
-	if sk.Dir() != dir {
-		t.Errorf("Dir() = %q, want %q", sk.Dir(), dir)
+	if sk.Dir() == nil {
+		t.Error("Dir() = nil, want registered skill filesystem")
 	}
 }
 
@@ -298,8 +325,8 @@ func TestRegisterSkill_AllowsChangesAfterStartup(t *testing.T) {
 	if sk == nil {
 		t.Fatal("expected late-skill to be registered after startup")
 	}
-	if sk.Dir() != dir {
-		t.Fatalf("Dir() = %q, want %q", sk.Dir(), dir)
+	if sk.Dir() == nil {
+		t.Fatal("Dir() = nil, want registered skill filesystem")
 	}
 }
 

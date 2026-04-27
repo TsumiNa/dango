@@ -128,8 +128,8 @@ func (c *Client) String() string {
 // ErrNoAPIKey is returned when no supported *_API_KEY variable is set.
 var ErrNoAPIKey = errors.New("llm: no supported API key found (OPENAI_API_KEY, OPENROUTER_API_KEY, GEMINI_API_KEY)")
 
-// ErrNoModel is returned when ORCHESTRATION_MODEL is not set.
-var ErrNoModel = errors.New("llm: ORCHESTRATION_MODEL environment variable is not set")
+// ErrNoModel is returned when MODEL is not set.
+var ErrNoModel = errors.New("llm: MODEL environment variable is not set")
 
 // ClientConfig carries all the knobs used to construct a [Client]. New
 // extension points (for example per-client timeouts, temperature
@@ -201,21 +201,21 @@ func NewClient(cfg ClientConfig) (*Client, error) {
 // If a .env file is present in the current working directory, its values are
 // loaded into the process environment without overriding existing variables.
 // The first matching API key in the order OPENAI, OPENROUTER, GEMINI selects
-// the provider and base URL. The ORCHESTRATION_MODEL variable must be set.
+// the provider and base URL. The MODEL variable must be set.
 // REASONING_EFFORT is optional; when set, its value is forwarded verbatim
 // as the reasoning effort (expected values: none, minimal, low, medium,
 // high, xhigh). REASONING_REPLAY, when set to a truthy value ("1",
 // "true", "yes", or "on"; case- and surrounding-whitespace-insensitive),
 // enables reasoning replay for tool-calling continuity.
-func NewClientFromEnv() (*Client, error) {
-	_ = godotenv.Load()
+func NewClientFromEnv(filenames ...string) (*Client, error) {
+	_ = godotenv.Load(filenames...) // Ignore error; we don't require a .env file to be present
 
 	provider, apiKey, ok := detectProvider()
 	if !ok {
 		return nil, ErrNoAPIKey
 	}
 
-	model := os.Getenv("ORCHESTRATION_MODEL")
+	model := os.Getenv("MODEL")
 	if model == "" {
 		return nil, ErrNoModel
 	}

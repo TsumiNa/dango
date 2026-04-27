@@ -45,7 +45,7 @@ func TestConversationRun_HappyPath(t *testing.T) {
 			return "ok", nil
 		},
 	)
-	conv := NewConversation(testClient(srv.URL), "sys", []Tool{echo})
+	conv := mustNewConversation(t, testClient(srv.URL), "sys", []Tool{echo})
 	out, err := conv.Run(t.Context(), "do it", "")
 	if err != nil {
 		t.Fatalf("Run: %v", err)
@@ -89,7 +89,7 @@ func TestConversationRun_MaxStepsExceeded(t *testing.T) {
 	loop := NewFuncTool("loop", "", map[string]any{"type": "object"},
 		func(_ context.Context, _ string) (string, error) { return "again", nil },
 	)
-	conv := NewConversation(testClient(srv.URL), "sys", []Tool{loop})
+	conv := mustNewConversation(t, testClient(srv.URL), "sys", []Tool{loop})
 	conv.SetMaxSteps(2)
 	if _, err := conv.Run(t.Context(), "go", ""); err == nil {
 		t.Fatal("expected max-steps error")
@@ -123,7 +123,7 @@ func TestConversationRun_UnknownToolRecovers(t *testing.T) {
 	}))
 	t.Cleanup(srv.Close)
 
-	conv := NewConversation(testClient(srv.URL), "sys", nil)
+	conv := mustNewConversation(t, testClient(srv.URL), "sys", nil)
 	out, err := conv.Run(t.Context(), "go", "")
 	if err != nil {
 		t.Fatalf("Run: %v", err)
@@ -151,7 +151,7 @@ func TestConversationRun_UnknownToolRecovers(t *testing.T) {
 // TestConversationRun_NilClientReturnsError confirms Run rejects
 // conversations that are not bound to a transport.
 func TestConversationRun_NilClientReturnsError(t *testing.T) {
-	conv := NewConversation(nil, "sys", nil)
+	conv := mustNewConversation(t, nil, "sys", nil)
 	if _, err := conv.Run(t.Context(), "hi", ""); err == nil {
 		t.Fatal("expected ErrNoClient")
 	}

@@ -70,7 +70,7 @@ func clearLLMEnv(t *testing.T) {
 		"OPENAI_API_KEY",
 		"OPENROUTER_API_KEY",
 		"GEMINI_API_KEY",
-		"ORCHESTRATION_MODEL",
+		"MODEL",
 		"REASONING_EFFORT",
 		"REASONING_REPLAY",
 	} {
@@ -131,7 +131,7 @@ func bindTestOrchestratorSkill(t *testing.T, outputs ...string) *skill.Skill {
 	if err != nil {
 		t.Fatalf("NewClient: %v", err)
 	}
-	bound, err := defaultOrchestratorSkill().Bind(skill.RuntimeConfig{Client: client})
+	bound, err := defaultOrchestratorSkill().Bind(client, nil, nil)
 	if err != nil {
 		t.Fatalf("Bind(default orchestrator skill): %v", err)
 	}

@@ -19,9 +19,13 @@ func loadTestSkill(t *testing.T) *skill.Skill {
 	if err := os.WriteFile(filepath.Join(dir, skill.SkillFile), []byte(content), 0o644); err != nil {
 		t.Fatalf("write SKILL.md: %v", err)
 	}
-	sk, err := skill.New(skill.Config{Dir: dir, Client: &llm.Client{}})
+	loaded, err := skill.NewFromDir(dir, nil, nil)
 	if err != nil {
-		t.Fatalf("skill.New: %v", err)
+		t.Fatalf("skill.NewFromDir: %v", err)
+	}
+	sk, err := loaded.Bind(&llm.Client{}, nil, nil)
+	if err != nil {
+		t.Fatalf("Skill.Bind: %v", err)
 	}
 	return sk
 }
@@ -33,9 +37,9 @@ func loadLightweightTestSkill(t *testing.T) *skill.Skill {
 	if err := os.WriteFile(filepath.Join(dir, skill.SkillFile), []byte(content), 0o644); err != nil {
 		t.Fatalf("write SKILL.md: %v", err)
 	}
-	sk, err := skill.Load(dir)
+	sk, err := skill.NewFromDir(dir, nil, nil)
 	if err != nil {
-		t.Fatalf("skill.Load: %v", err)
+		t.Fatalf("skill.NewFromDir: %v", err)
 	}
 	return sk
 }
@@ -137,7 +141,7 @@ func TestLLMClient_PrefersSkillClientWhenNoHigherPrioritySourceExists(t *testing
 	skillClient := &llm.Client{}
 	fallbackClient := &llm.Client{}
 	sk := loadTestSkill(t)
-	bound, err := sk.Bind(skill.RuntimeConfig{Client: skillClient})
+	bound, err := sk.Bind(skillClient, nil, nil)
 	if err != nil {
 		t.Fatalf("Bind: %v", err)
 	}
@@ -178,7 +182,7 @@ func TestRuntimeSkill_BindsLightweightSkillWithFallbackClient(t *testing.T) {
 
 func TestLLMClient_PrefersEnvOverSkillAndFallback(t *testing.T) {
 	t.Setenv("OPENAI_API_KEY", "env-key")
-	t.Setenv("ORCHESTRATION_MODEL", "env-model")
+	t.Setenv("MODEL", "env-model")
 	sk := loadTestSkill(t)
 	fallbackClient := &llm.Client{}
 	exec, err := NewExecutor(nil, sk, &ExecutionPlanner{}, fallbackClient, nil)

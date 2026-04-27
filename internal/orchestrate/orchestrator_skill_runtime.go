@@ -8,7 +8,6 @@ import (
 
 	"github.com/tsumina/dango/internal/llm"
 	"github.com/tsumina/dango/internal/llm/skill"
-	llmskillbuiltin "github.com/tsumina/dango/internal/llm/skill/builtin"
 )
 
 const (
@@ -86,11 +85,11 @@ func runtimeOrchestratorSkill(sk *skill.Skill, envClient *llm.Client, envClientE
 	if sk == nil {
 		return nil, errOrchestratorSkillUnconfigured
 	}
-	if envClientErr == nil && envClient != nil {
-		return bindOrchestratorSkill(sk, envClient)
-	}
 	if sk.Client() != nil {
 		return bindOrchestratorSkill(sk, sk.Client())
+	}
+	if envClientErr == nil && envClient != nil {
+		return bindOrchestratorSkill(sk, envClient)
 	}
 	return nil, errOrchestratorSkillUnconfigured
 }
@@ -99,17 +98,7 @@ func bindOrchestratorSkill(sk *skill.Skill, client *llm.Client) (*skill.Skill, e
 	if sk.Client() == client && sk.Conversation() != nil {
 		return sk, nil
 	}
-	return sk.Bind(skill.RuntimeConfig{
-		Client: client,
-		Tools:  orchestratorSkillTools(sk),
-	})
-}
-
-func orchestratorSkillTools(sk *skill.Skill) []llm.Tool {
-	if sk == nil || sk.Dir() == "" {
-		return nil
-	}
-	return llmskillbuiltin.All(sk.Dir(), llmskillbuiltin.WithAllowlistAdjust(sk.BashAllow(), sk.BashBlock()))
+	return sk.Bind(client, nil, nil)
 }
 
 func collectSkillSummaries(skills map[string]*skill.Skill) []orchestratorSkillSummary {
