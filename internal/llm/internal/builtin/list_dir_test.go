@@ -16,7 +16,7 @@ func TestListDirSortedWithSlash(t *testing.T) {
 		t.Fatalf("write: %v", err)
 	}
 
-	tool := NewListDir(root)
+	tool := newListDir(testWorkspace{root})
 	out, err := tool.Execute(context.Background(), `{"path": "."}`)
 	if err != nil {
 		t.Fatalf("list_dir: %v", err)

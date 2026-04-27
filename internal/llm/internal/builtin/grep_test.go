@@ -10,7 +10,7 @@ import (
 )
 
 func TestGrepInText(t *testing.T) {
-	tool := NewGrep(t.TempDir())
+	tool := newGrep(testWorkspace{t.TempDir()})
 	text := "alpha\nbeta\nalpha again\ngamma\n"
 	args, _ := json.Marshal(map[string]any{
 		"pattern": "alpha",
@@ -32,7 +32,7 @@ func TestGrepInFileWithContext(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(root, "manual.md"), []byte(body), 0o644); err != nil {
 		t.Fatalf("write: %v", err)
 	}
-	tool := NewGrep(root)
+	tool := newGrep(testWorkspace{root})
 	args, _ := json.Marshal(map[string]any{
 		"pattern":       "^# ",
 		"path":          "manual.md",
@@ -52,7 +52,7 @@ func TestGrepInFileWithContext(t *testing.T) {
 }
 
 func TestGrepRejectsBothPathAndText(t *testing.T) {
-	tool := NewGrep(t.TempDir())
+	tool := newGrep(testWorkspace{t.TempDir()})
 	args, _ := json.Marshal(map[string]any{
 		"pattern": "x",
 		"path":    "a.txt",
@@ -64,7 +64,7 @@ func TestGrepRejectsBothPathAndText(t *testing.T) {
 }
 
 func TestGrepRejectsNeither(t *testing.T) {
-	tool := NewGrep(t.TempDir())
+	tool := newGrep(testWorkspace{t.TempDir()})
 	args, _ := json.Marshal(map[string]any{"pattern": "x"})
 	if _, err := tool.Execute(context.Background(), string(args)); err == nil {
 		t.Fatal("expected error when neither path nor text are set")
@@ -72,7 +72,7 @@ func TestGrepRejectsNeither(t *testing.T) {
 }
 
 func TestGrepMaxMatchesTruncates(t *testing.T) {
-	tool := NewGrep(t.TempDir())
+	tool := newGrep(testWorkspace{t.TempDir()})
 	text := "hit\nhit\nhit\nhit\nhit\n"
 	args, _ := json.Marshal(map[string]any{
 		"pattern":     "hit",
@@ -89,7 +89,7 @@ func TestGrepMaxMatchesTruncates(t *testing.T) {
 }
 
 func TestGrepInvalidRegex(t *testing.T) {
-	tool := NewGrep(t.TempDir())
+	tool := newGrep(testWorkspace{t.TempDir()})
 	args, _ := json.Marshal(map[string]any{
 		"pattern": "(",
 		"text":    "x",

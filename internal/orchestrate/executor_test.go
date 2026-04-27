@@ -8,20 +8,19 @@ import (
 	"testing"
 
 	"github.com/tsumina/dango/internal/llm"
-	"github.com/tsumina/dango/internal/llm/skill"
 	runnerpkg "github.com/tsumina/dango/internal/orchestrate/runner"
 )
 
-func loadTestSkill(t *testing.T) *skill.Skill {
+func loadTestSkill(t *testing.T) *llm.Skill {
 	t.Helper()
 	dir := t.TempDir()
 	content := "---\nname: t\ndescription: d\n---\nbody\n"
-	if err := os.WriteFile(filepath.Join(dir, skill.SkillFile), []byte(content), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, llm.SkillFile), []byte(content), 0o644); err != nil {
 		t.Fatalf("write SKILL.md: %v", err)
 	}
-	loaded, err := skill.NewFromDir(dir, nil, nil)
+	loaded, err := llm.NewFromDir(dir, nil, nil)
 	if err != nil {
-		t.Fatalf("skill.NewFromDir: %v", err)
+		t.Fatalf("llm.NewFromDir: %v", err)
 	}
 	sk, err := loaded.Bind(&llm.Client{}, nil, nil)
 	if err != nil {
@@ -30,16 +29,16 @@ func loadTestSkill(t *testing.T) *skill.Skill {
 	return sk
 }
 
-func loadLightweightTestSkill(t *testing.T) *skill.Skill {
+func loadLightweightTestSkill(t *testing.T) *llm.Skill {
 	t.Helper()
 	dir := t.TempDir()
 	content := "---\nname: t\ndescription: d\n---\nbody\n"
-	if err := os.WriteFile(filepath.Join(dir, skill.SkillFile), []byte(content), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, llm.SkillFile), []byte(content), 0o644); err != nil {
 		t.Fatalf("write SKILL.md: %v", err)
 	}
-	sk, err := skill.NewFromDir(dir, nil, nil)
+	sk, err := llm.NewFromDir(dir, nil, nil)
 	if err != nil {
-		t.Fatalf("skill.NewFromDir: %v", err)
+		t.Fatalf("llm.NewFromDir: %v", err)
 	}
 	return sk
 }

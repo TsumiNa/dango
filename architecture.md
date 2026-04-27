@@ -183,7 +183,7 @@ sequenceDiagram
 
 当前实现里的 `Orchestrator` 不再依赖外部 `planning function`。planning、review、replan 现在都通过同一个 orchestrator-owned skill 完成。这里的重点是先把 orchestrator 级控制流和输入输出 contract 对齐，而不是在这一轮就把所有 skill 内部 prompt/runtime 能力做满：
 
-- 默认 skill 来自编译时 embed 的 `internal/orchestrate/builtin/SKILL.md`，通过 `skill.NewFromFS` 初始化，并在 `Orchestrator` 实例化时就尝试绑定到当时可用的 env-derived LLM client。
+- 默认 skill 来自编译时 embed 的 `internal/orchestrate/builtin/SKILL.md`，通过 `llm.NewFromFS` 初始化，并在 `Orchestrator` 实例化时就尝试绑定到当时可用的 env-derived LLM client。
 - 调用方可以在 startup 阶段通过 `SetOrchestratorSkill` 或 `SetOrchestratorSkillDir` 覆盖它。
 - 如果调用方传入的是 lightweight skill，startup 阶段也会按同样的初始化语义优先绑定可用的 orchestrator client。
 - `StartRequest` 会调用 `planFromRequest(ctx, req)`，由 `planWithOrchestratorSkill` 返回 `CoarsePlan` 或 `RejectReason`。
@@ -241,7 +241,9 @@ sequenceDiagram
 
 当前 `Executor` 还有一个实现细节值得写清：它持有的是 skill 的“运行时绑定逻辑”，而不是只持有一份静态 prompt 文件。也正因为如此，这轮 PR 先把 skill 初始化、绑定边界、client 选择顺序、runner 调用面收敛稳定，后面再继续往 skill prompt / memo 能力上填内容会更自然。
 
-- `skill.NewFromDir` / `skill.NewFromFS` 只负责读取 `SKILL.md`、保存 skill workspace `fs.FS`、bash allow/block 和 tools；它们不会创建 LLM client 或 conversation。
+- `llm.NewFromDir` / `llm.NewFromFS` 只负责读取 `SKILL.md`、保存 skill workspace `fs.FS`、bash allow/block 和 tools；它们不会创建 LLM client 或 conversation。
+- 每个 skill 在 New 阶段都会拿到独立的临时 playground。内置工具的相对路径和 shell cwd 都落在这个临时目录；绝对路径只允许指向该临时目录、本地目录 skill 的 source root，或用户通过 `Skill.WithAccessibleDirs` / `WithSkillAccessibleDirs` 追加的目录，从而把脚本执行区、用户指定的额外访问区和越界保护一起收敛在 `Skill` 的 workspace 设计里。
+- Bind 时会把 workspace 使用说明附加到 runtime instruction：source root 适合作为 skill 自身的工作区，temp playground 适合试错和中间产物，用户追加目录则完全按用户给定意图使用。
 - 注册到 orchestrator 里的通常是这种 lightweight skill，本地目录注册会在初始化时把目录内置工具一并放进 skill。
 - 真正运行前，executor 会调用 `Skill.Bind(client, conversationConfig, sessionID, stores...)` 把 skill bind 成 runnable skill。
 - client 解析优先级是：环境变量缓存 client -> skill 自带 client -> per-skill client factory -> orchestrator fallback client。

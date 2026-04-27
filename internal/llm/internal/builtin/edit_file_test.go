@@ -14,7 +14,7 @@ func TestEditFileReplacesUnique(t *testing.T) {
 	if err := os.WriteFile(path, []byte("hello world\nhello there\n"), 0o644); err != nil {
 		t.Fatalf("write: %v", err)
 	}
-	tool := NewEditFile(root)
+	tool := newEditFile(testWorkspace{root})
 	args, _ := json.Marshal(map[string]string{
 		"path":       "doc.md",
 		"old_string": "hello world",
@@ -35,7 +35,7 @@ func TestEditFileRejectsNonUnique(t *testing.T) {
 	if err := os.WriteFile(path, []byte("foo\nfoo\n"), 0o644); err != nil {
 		t.Fatalf("write: %v", err)
 	}
-	tool := NewEditFile(root)
+	tool := newEditFile(testWorkspace{root})
 	args, _ := json.Marshal(map[string]string{
 		"path":       "doc.md",
 		"old_string": "foo",
@@ -52,7 +52,7 @@ func TestEditFileRejectsMissing(t *testing.T) {
 	if err := os.WriteFile(path, []byte("hello\n"), 0o644); err != nil {
 		t.Fatalf("write: %v", err)
 	}
-	tool := NewEditFile(root)
+	tool := newEditFile(testWorkspace{root})
 	args, _ := json.Marshal(map[string]string{
 		"path":       "doc.md",
 		"old_string": "not-present",
@@ -68,7 +68,7 @@ func TestEditFileRejectsEmptyOldString(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(root, "doc.md"), []byte("x"), 0o644); err != nil {
 		t.Fatalf("write: %v", err)
 	}
-	tool := NewEditFile(root)
+	tool := newEditFile(testWorkspace{root})
 	args, _ := json.Marshal(map[string]string{
 		"path":       "doc.md",
 		"old_string": "",

@@ -7,30 +7,28 @@ import (
 	"os"
 	"regexp"
 	"strings"
-
-	"github.com/tsumina/dango/internal/llm"
-	"github.com/tsumina/dango/internal/llm/skill"
 )
 
 // grepDefaultMaxMatches bounds the number of matches returned by the grep
 // tool when max_matches is not specified.
 const grepDefaultMaxMatches = 50
 
-// NewGrep returns a Tool that searches for a pattern in a file or in an
+// newGrep returns a Tool that searches for a pattern in a file or in an
 // inline string.
 //
-// Callers must supply exactly one of path (a file inside root) or text (an
-// inline string). The default matching mode is a case-sensitive literal
+// Callers must supply exactly one of path (a file inside the temp playground,
+// source workspace, or a user-added accessible directory) or text (an inline
+// string). The default matching mode is a case-sensitive literal
 // substring; set regex=true to interpret pattern as a Go regular expression.
 // Matches are returned one per line, prefixed with the 1-indexed line
 // number. context_lines adds surrounding lines to each hit (like grep -C),
 // and max_matches caps the number of hits to keep responses small. This
 // tool is the preferred way to locate sections of long manuals, READMEs, or
-// logs before issuing a targeted [NewReadFile] call.
-func NewGrep(root string) llm.Tool {
-	return llm.NewFuncTool(
+// logs before issuing a targeted [newReadFile] call.
+func newGrep(ws workspace) tool {
+	return newFuncTool(
 		"grep",
-		"Search for a pattern in a file or an inline text string and return matching lines with 1-indexed line numbers. Supply exactly one of path or text. Use this before read_file to locate sections in long documents.",
+		"Search for a pattern in a file or an inline text string and return matching lines with 1-indexed line numbers. Relative file paths resolve in the temp playground; absolute paths must stay inside the temp playground, source workspace, or user-added accessible directories. Supply exactly one of path or text. Use this before read_file to locate sections in long documents.",
 		map[string]any{
 			"type": "object",
 			"properties": map[string]any{
@@ -40,7 +38,7 @@ func NewGrep(root string) llm.Tool {
 				},
 				"path": map[string]any{
 					"type":        "string",
-					"description": "Optional file path relative to the workspace root. Mutually exclusive with text.",
+					"description": "Optional file path. Relative paths resolve inside the temp playground; absolute paths must stay inside the temp playground, source workspace, or user-added accessible directories. Mutually exclusive with text.",
 				},
 				"text": map[string]any{
 					"type":        "string",
@@ -94,7 +92,7 @@ func NewGrep(root string) llm.Tool {
 			if args.Text != nil {
 				source = *args.Text
 			} else {
-				p, err := skill.ResolveWorkspacePath(root, args.Path)
+				p, err := ws.ResolvePath(args.Path)
 				if err != nil {
 					return "", fmt.Errorf("grep: %w", err)
 				}

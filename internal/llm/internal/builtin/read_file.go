@@ -6,28 +6,26 @@ import (
 	"fmt"
 	"os"
 	"strings"
-
-	"github.com/tsumina/dango/internal/llm"
-	"github.com/tsumina/dango/internal/llm/skill"
 )
 
-// NewReadFile returns a Tool that reads a file's contents as UTF-8 text. The
-// path must resolve inside root.
+// newReadFile returns a Tool that reads a file's contents as UTF-8 text. The
+// path must resolve inside the skill source root, temp playground, or a
+// user-added accessible directory.
 //
 // When start_line and/or end_line are provided (1-indexed, inclusive) the
 // tool returns only that slice of lines, which is useful for sampling long
 // files without sending every byte back to the model. end_line is clamped
 // to the last line of the file.
-func NewReadFile(root string) llm.Tool {
-	return llm.NewFuncTool(
+func newReadFile(ws workspace) tool {
+	return newFuncTool(
 		"read_file",
-		"Read the contents of a file within the skill workspace and return it as text. Optional start_line/end_line (1-indexed, inclusive) return only a slice of lines, useful for long files.",
+		"Read the contents of a file in the skill temp playground, source workspace, or user-added accessible directories and return it as text. Relative paths resolve in the temp playground; absolute paths must stay inside one of those roots. Optional start_line/end_line (1-indexed, inclusive) return only a slice of lines, useful for long files.",
 		map[string]any{
 			"type": "object",
 			"properties": map[string]any{
 				"path": map[string]any{
 					"type":        "string",
-					"description": "Path to the file relative to the skill workspace root.",
+					"description": "File path. Relative paths resolve inside the temp playground; absolute paths must stay inside the temp playground, source workspace, or user-added accessible directories.",
 				},
 				"start_line": map[string]any{
 					"type":        "integer",
@@ -52,7 +50,7 @@ func NewReadFile(root string) llm.Tool {
 			if err := json.Unmarshal([]byte(arguments), &args); err != nil {
 				return "", fmt.Errorf("read_file: parse arguments: %w", err)
 			}
-			p, err := skill.ResolveWorkspacePath(root, args.Path)
+			p, err := ws.ResolvePath(args.Path)
 			if err != nil {
 				return "", fmt.Errorf("read_file: %w", err)
 			}

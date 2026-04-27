@@ -6,24 +6,21 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-
-	"github.com/tsumina/dango/internal/llm"
-	"github.com/tsumina/dango/internal/llm/skill"
 )
 
-// NewWriteFile returns a Tool that writes UTF-8 content to a file within
-// root, creating parent directories as needed. Existing files are
-// overwritten.
-func NewWriteFile(root string) llm.Tool {
-	return llm.NewFuncTool(
+// newWriteFile returns a Tool that writes UTF-8 content to a file within the
+// temp playground, source workspace, or a user-added accessible directory,
+// creating parent directories as needed. Existing files are overwritten.
+func newWriteFile(ws workspace) tool {
+	return newFuncTool(
 		"write_file",
-		"Write UTF-8 text content to a file within the skill workspace, creating parent directories as needed. Overwrites existing files.",
+		"Write UTF-8 text content to a file in the skill temp playground, source workspace, or user-added accessible directories, creating parent directories as needed. Relative paths resolve in the temp playground; absolute paths must stay inside one of those roots. Overwrites existing files.",
 		map[string]any{
 			"type": "object",
 			"properties": map[string]any{
 				"path": map[string]any{
 					"type":        "string",
-					"description": "Path to the file relative to the skill workspace root.",
+					"description": "File path. Relative paths resolve inside the temp playground; absolute paths must stay inside the temp playground, source workspace, or user-added accessible directories.",
 				},
 				"content": map[string]any{
 					"type":        "string",
@@ -41,7 +38,7 @@ func NewWriteFile(root string) llm.Tool {
 			if err := json.Unmarshal([]byte(arguments), &args); err != nil {
 				return "", fmt.Errorf("write_file: parse arguments: %w", err)
 			}
-			p, err := skill.ResolveWorkspacePath(root, args.Path)
+			p, err := ws.ResolvePath(args.Path)
 			if err != nil {
 				return "", fmt.Errorf("write_file: %w", err)
 			}

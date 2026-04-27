@@ -1,4 +1,4 @@
-package skill
+package llm
 
 import (
 	"context"
@@ -8,24 +8,20 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"strings"
 
 	"github.com/adrg/frontmatter"
 	"github.com/lithammer/shortuuid/v4"
-	"github.com/tsumina/dango/internal/llm"
 )
 
 // SkillFile is the required filename inside a skill directory that carries
 // the skill's frontmatter metadata and prompt body.
 const SkillFile = "SKILL.md"
 
-// DefaultMaxSteps re-exports [llm.DefaultMaxSteps] so skill callers do
-// not need a direct dependency on the llm package for the common case.
-const DefaultMaxSteps = llm.DefaultMaxSteps
-
 // Skill is the service module for a single skill directory.
 //
 // A Skill bundles the metadata and instruction prompt loaded from the
-// skill's SKILL.md with a multi-turn [llm.Conversation] that runs that
+// skill's SKILL.md with a multi-turn [Conversation] that runs that
 // instruction against a configured set of tools. Callers drive it with
 // [Skill.Run]; the underlying conversation owns the request/tool-call
 // loop and, when a session is configured, the append-only event log.
@@ -51,12 +47,13 @@ type Skill struct {
 	Instruction string
 
 	dir       fs.FS
+	workspace *workspaceRoot
 	envFiles  []string
 	bashAllow []string
 	bashBlock []string
-	tools     []llm.Tool
+	tools     []Tool
 
-	conv *llm.Conversation
+	conv *Conversation
 }
 
 // NewFromDir reads the [SkillFile] in dir and prepares a Skill using the
@@ -66,24 +63,27 @@ type Skill struct {
 // tools around the skill. tools is the complete tool set advertised to the
 // model when the skill is bound with [Skill.Bind]. Tool names must be unique
 // and non-empty.
-func NewFromDir(dir string, bashAllow []string, bashBlock []string, tools ...llm.Tool) (*Skill, error) {
-	info, err := os.Stat(dir)
+func NewFromDir(dir string, bashAllow []string, bashBlock []string, tools ...Tool) (*Skill, error) {
+	workspace, err := newWorkspaceRoot(dir)
 	if err != nil {
 		return nil, err
 	}
-	if !info.IsDir() {
-		return nil, fmt.Errorf("skill path %q is not a directory", dir)
-	}
 
 	envFiles := []string(nil)
-	envFile := filepath.Join(dir, ".env")
+	envFile := filepath.Join(workspace.SkillRoot(), ".env")
 	if _, err := os.Stat(envFile); err == nil {
 		envFiles = append(envFiles, envFile)
 	} else if !os.IsNotExist(err) {
+		_ = workspace.cleanup()
 		return nil, fmt.Errorf("skill: inspect env file %q: %w", envFile, err)
 	}
 
-	return newFromFS(os.DirFS(dir), dir, envFiles, bashAllow, bashBlock, tools...)
+	sk, err := newFromFS(os.DirFS(workspace.SkillRoot()), workspace.SkillRoot(), workspace, envFiles, bashAllow, bashBlock, tools...)
+	if err != nil {
+		_ = workspace.cleanup()
+		return nil, err
+	}
+	return sk, nil
 }
 
 // NewFromFS reads [SkillFile] from fsys and prepares a Skill using fsys as its
@@ -92,14 +92,23 @@ func NewFromDir(dir string, bashAllow []string, bashBlock []string, tools ...llm
 // It is the filesystem-agnostic counterpart to [NewFromDir] and is intended
 // for cases such as embedded skills that are packaged into the final binary.
 // SKILL.md must be at the root of fsys.
-func NewFromFS(fsys fs.FS, bashAllow []string, bashBlock []string, tools ...llm.Tool) (*Skill, error) {
+func NewFromFS(fsys fs.FS, bashAllow []string, bashBlock []string, tools ...Tool) (*Skill, error) {
 	if fsys == nil {
 		return nil, fmt.Errorf("skill: requires a non-nil filesystem")
 	}
-	return newFromFS(fsys, "skill filesystem", nil, bashAllow, bashBlock, tools...)
+	workspace, err := newTempWorkspaceRoot()
+	if err != nil {
+		return nil, err
+	}
+	sk, err := newFromFS(fsys, "skill filesystem", workspace, nil, bashAllow, bashBlock, tools...)
+	if err != nil {
+		_ = workspace.cleanup()
+		return nil, err
+	}
+	return sk, nil
 }
 
-func newFromFS(fsys fs.FS, displayDir string, envFiles []string, bashAllow []string, bashBlock []string, tools ...llm.Tool) (*Skill, error) {
+func newFromFS(fsys fs.FS, displayDir string, workspace *workspaceRoot, envFiles []string, bashAllow []string, bashBlock []string, tools ...Tool) (*Skill, error) {
 	if err := validateTools(tools); err != nil {
 		return nil, err
 	}
@@ -120,10 +129,11 @@ func newFromFS(fsys fs.FS, displayDir string, envFiles []string, bashAllow []str
 	}
 	sk.Instruction = string(rest)
 	sk.dir = fsys
+	sk.workspace = workspace
 	sk.envFiles = append([]string(nil), envFiles...)
 	sk.bashAllow = append([]string(nil), bashAllow...)
 	sk.bashBlock = append([]string(nil), bashBlock...)
-	sk.tools = append([]llm.Tool(nil), tools...)
+	sk.tools = append([]Tool(nil), tools...)
 
 	return &sk, nil
 }
@@ -133,15 +143,15 @@ func newFromFS(fsys fs.FS, displayDir string, envFiles []string, bashAllow []str
 // Bind is the bridge between [NewFromDir]/[NewFromFS] and [Run]: callers can
 // keep lightweight skills in registries and later bind a chosen LLM client and
 // optional persistent session when they are ready to execute. When client is
-// nil, Bind constructs one with [llm.NewClientFromEnv]; skills loaded from a
+// nil, Bind constructs one with [NewClientFromEnv]; skills loaded from a
 // host directory pass that directory's .env file when it exists.
-func (s *Skill) Bind(client *llm.Client, cfg *llm.ConversationConfig, sessID *string, sessStores ...llm.SessionStore) (*Skill, error) {
+func (s *Skill) Bind(client *Client, cfg *ConversationConfig, sessID *string, sessStores ...SessionStore) (*Skill, error) {
 	if s == nil {
 		return nil, fmt.Errorf("skill: Bind requires a non-nil skill")
 	}
 	if client == nil {
 		var err error
-		client, err = llm.NewClientFromEnv(s.envFiles...)
+		client, err = NewClientFromEnv(s.envFiles...)
 		if err != nil {
 			return nil, fmt.Errorf("skill: bind client from environment: %w", err)
 		}
@@ -151,9 +161,9 @@ func (s *Skill) Bind(client *llm.Client, cfg *llm.ConversationConfig, sessID *st
 	bound.bashAllow = append([]string(nil), s.bashAllow...)
 	bound.bashBlock = append([]string(nil), s.bashBlock...)
 	bound.envFiles = append([]string(nil), s.envFiles...)
-	bound.tools = append([]llm.Tool(nil), s.tools...)
+	bound.tools = append([]Tool(nil), s.tools...)
 
-	conv, err := llm.NewConversation(client, s.Instruction, bound.tools, cfg)
+	conv, err := NewConversation(client, s.runtimeInstruction(), bound.tools, cfg)
 	if err != nil {
 		return nil, err
 	}
@@ -170,7 +180,74 @@ func (s *Skill) Bind(client *llm.Client, cfg *llm.ConversationConfig, sessID *st
 	return &bound, nil
 }
 
-func resolveSessionID(ctx context.Context, sessID *string, stores []llm.SessionStore) (string, error) {
+// WithAccessibleDirs configures the additional directories this skill's
+// built-in tools may access in addition to the skill source root and temp
+// playground.
+//
+// Each directory must already exist. Access is recursive: any file or
+// subdirectory that remains inside one of these roots is accepted by the Skill
+// workspace resolver. Relative tool paths still resolve inside [Skill.TempDir];
+// use absolute paths to access these additional directories. Calling
+// WithAccessibleDirs replaces the previous additional directory set; passing no
+// directories removes them all. It must be called after construction and before
+// [Skill.Bind].
+func (s *Skill) WithAccessibleDirs(dirs ...string) error {
+	if s == nil {
+		return fmt.Errorf("skill: WithAccessibleDirs requires a non-nil skill")
+	}
+	if s.conv != nil {
+		return fmt.Errorf("skill: WithAccessibleDirs requires an unbound skill")
+	}
+	if s.workspace == nil {
+		return fmt.Errorf("skill: WithAccessibleDirs requires a skill workspace")
+	}
+	return s.workspace.setAccessibleDirs(dirs...)
+}
+
+func (s *Skill) copy() *Skill {
+	bound := *s
+	bound.bashAllow = append([]string(nil), s.bashAllow...)
+	bound.bashBlock = append([]string(nil), s.bashBlock...)
+	bound.envFiles = append([]string(nil), s.envFiles...)
+	bound.tools = append([]Tool(nil), s.tools...)
+	return &bound
+}
+
+func (s *Skill) runtimeInstruction() string {
+	if s == nil {
+		return ""
+	}
+	if s.workspace == nil {
+		return s.Instruction
+	}
+	return appendWorkspaceInstruction(s.Instruction, s.workspace)
+}
+
+func appendWorkspaceInstruction(instruction string, workspace *workspaceRoot) string {
+	if workspace == nil {
+		return instruction
+	}
+	var b strings.Builder
+	b.WriteString(strings.TrimRight(instruction, "\n"))
+	if b.Len() > 0 {
+		b.WriteString("\n\n")
+	}
+	b.WriteString("Workspace access:\n")
+	if root := workspace.SkillRoot(); root != "" {
+		fmt.Fprintf(&b, "- Source workspace: %s. Prefer this area for durable skill work when the task belongs with the skill. Use absolute paths under this directory.\n", root)
+	}
+	fmt.Fprintf(&b, "- Temp playground: %s. Relative file paths and shell commands run here. Use it for drafts, experiments, generated logs, and other disposable work.\n", workspace.TempRoot())
+	if dirs := workspace.AccessibleDirs(); len(dirs) > 0 {
+		b.WriteString("- User-added directories: use absolute paths under these roots exactly as requested by the user. Access is recursive within each root.\n")
+		for _, dir := range dirs {
+			fmt.Fprintf(&b, "  - %s\n", dir)
+		}
+	}
+	b.WriteString("Do not access paths outside these roots.")
+	return b.String()
+}
+
+func resolveSessionID(ctx context.Context, sessID *string, stores []SessionStore) (string, error) {
 	if len(stores) == 0 {
 		return "", fmt.Errorf("skill: session id requires at least one session store")
 	}
@@ -186,14 +263,14 @@ func resolveSessionID(ctx context.Context, sessID *string, stores []llm.SessionS
 		}
 		if _, err := store.Load(ctx, *sessID); err == nil {
 			return *sessID, nil
-		} else if !errors.Is(err, llm.ErrSessionNotFound) {
+		} else if !errors.Is(err, ErrSessionNotFound) {
 			return "", fmt.Errorf("skill: load session %q store %d: %w", *sessID, i, err)
 		}
 	}
-	return "", fmt.Errorf("skill: session %q not found: %w", *sessID, llm.ErrSessionNotFound)
+	return "", fmt.Errorf("skill: session %q not found: %w", *sessID, ErrSessionNotFound)
 }
 
-func validateTools(tools []llm.Tool) error {
+func validateTools(tools []Tool) error {
 	seen := make(map[string]struct{}, len(tools))
 	for _, t := range tools {
 		if t == nil {
@@ -213,7 +290,7 @@ func validateTools(tools []llm.Tool) error {
 
 // Client returns the LLM client of the bound conversation, or nil when this
 // Skill has not been bound yet.
-func (s *Skill) Client() *llm.Client {
+func (s *Skill) Client() *Client {
 	if s == nil || s.conv == nil {
 		return nil
 	}
@@ -223,11 +300,37 @@ func (s *Skill) Client() *llm.Client {
 // Dir returns the filesystem rooted at this skill's directory.
 func (s *Skill) Dir() fs.FS { return s.dir }
 
+// WorkspaceRoot returns the host directory this skill was loaded from, or an
+// empty string for skills loaded from an abstract filesystem.
+func (s *Skill) WorkspaceRoot() string {
+	if s == nil || s.workspace == nil {
+		return ""
+	}
+	return s.workspace.SkillRoot()
+}
+
+// TempDir returns the private temporary playground allocated for this skill.
+// Built-in tools use this directory as their working area for relative paths
+// and shell execution.
+func (s *Skill) TempDir() string {
+	if s == nil || s.workspace == nil {
+		return ""
+	}
+	return s.workspace.TempRoot()
+}
+
+// AccessibleDirs returns the additional host directories this skill's built-in
+// tools may access beyond [Skill.WorkspaceRoot] and [Skill.TempDir].
+func (s *Skill) AccessibleDirs() []string {
+	if s == nil || s.workspace == nil {
+		return nil
+	}
+	return s.workspace.AccessibleDirs()
+}
+
 // BashAllow returns the executables this skill wants to permit on top
 // of the built-in default bash allowlist. Callers pass it alongside
-// [Skill.BashBlock] to
-// [github.com/tsumina/dango/internal/llm/skill/builtin.WithAllowlistAdjust]
-// when wiring the built-in tools.
+// [Skill.BashBlock] to [Skill.BuiltinTools] when wiring the built-in tools.
 func (s *Skill) BashAllow() []string { return append([]string(nil), s.bashAllow...) }
 
 // BashBlock returns the executables this skill wants to remove from
@@ -235,13 +338,13 @@ func (s *Skill) BashAllow() []string { return append([]string(nil), s.bashAllow.
 // both the default list and [Skill.BashAllow].
 func (s *Skill) BashBlock() []string { return append([]string(nil), s.bashBlock...) }
 
-// Conversation returns the underlying [llm.Conversation]. Callers may
+// Conversation returns the underlying [Conversation]. Callers may
 // inspect its turns, usage, or session metadata but should not mutate
 // it concurrently with a running [Skill.Run].
-func (s *Skill) Conversation() *llm.Conversation { return s.conv }
+func (s *Skill) Conversation() *Conversation { return s.conv }
 
 // Run drives a single task to completion by delegating to
-// [llm.Conversation.Run].
+// [Conversation.Run].
 //
 // userInput is appended as a user turn before the loop starts. The
 // returned string is the concatenated output_text of the model's final
@@ -250,9 +353,9 @@ func (s *Skill) Conversation() *llm.Conversation { return s.conv }
 // effort overrides the reasoning-effort level for every request this
 // Run issues, letting different driver stages (for example planning
 // vs. execution) pick different levels without reconfiguring the
-// underlying [llm.Client]. Pass an empty string to use the level
+// underlying [Client]. Pass an empty string to use the level
 // configured on the client.
-func (s *Skill) Run(ctx context.Context, userInput string, effort llm.ReasoningEffort) (string, error) {
+func (s *Skill) Run(ctx context.Context, userInput string, effort ReasoningEffort) (string, error) {
 	if s == nil || s.conv == nil {
 		return "", fmt.Errorf("skill: Run requires a bound conversation")
 	}

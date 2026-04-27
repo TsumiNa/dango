@@ -4,11 +4,10 @@ import (
 	"testing"
 
 	"github.com/tsumina/dango/internal/llm"
-	"github.com/tsumina/dango/internal/llm/skill"
 )
 
 func TestCollectSkillSummaries_SortsByName(t *testing.T) {
-	summaries := collectSkillSummaries(map[string]*skill.Skill{
+	summaries := collectSkillSummaries(map[string]*llm.Skill{
 		"zeta":  {Description: "last"},
 		"alpha": {Description: "first"},
 		"mid":   {Description: "middle"},

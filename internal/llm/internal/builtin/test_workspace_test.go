@@ -1,4 +1,4 @@
-package skill
+package builtin
 
 import (
 	"fmt"
@@ -6,22 +6,28 @@ import (
 	"strings"
 )
 
-// ResolveWorkspacePath resolves rel against root and ensures the cleaned
-// result stays inside root. It returns a cleaned absolute path on success
-// and is the standard helper that built-in filesystem tools (and
-// third-party tools that want the same containment guarantees) should use
-// to validate user-supplied paths.
-//
-// rel must be non-empty and relative; absolute paths and parent traversals
-// that escape root are rejected.
-func ResolveWorkspacePath(root, rel string) (string, error) {
+type testWorkspace struct {
+	root string
+}
+
+func (w testWorkspace) Root() string { return w.root }
+
+func (w testWorkspace) WorkDir() string { return w.root }
+
+func (w testWorkspace) SkillRoot() string { return w.root }
+
+func (w testWorkspace) TempRoot() string { return w.root }
+
+func (w testWorkspace) AccessibleDirs() []string { return nil }
+
+func (w testWorkspace) ResolvePath(rel string) (string, error) {
 	if rel == "" {
 		return "", fmt.Errorf("path is required")
 	}
 	if filepath.IsAbs(rel) {
 		return "", fmt.Errorf("path %q must be relative to the workspace root", rel)
 	}
-	absRoot, err := filepath.Abs(root)
+	absRoot, err := filepath.Abs(w.root)
 	if err != nil {
 		return "", fmt.Errorf("resolve root: %w", err)
 	}

@@ -1,4 +1,4 @@
-package skill
+package llm
 
 import (
 	"errors"
@@ -8,8 +8,6 @@ import (
 	"strings"
 	"testing"
 	"testing/fstest"
-
-	"github.com/tsumina/dango/internal/llm"
 )
 
 func writeSkillDir(t *testing.T, content string) string {
@@ -21,9 +19,19 @@ func writeSkillDir(t *testing.T, content string) string {
 	return dir
 }
 
+func cleanupSkillTemp(t *testing.T, skill *Skill) {
+	t.Helper()
+	if skill == nil || skill.TempDir() == "" {
+		return
+	}
+	t.Cleanup(func() {
+		_ = os.RemoveAll(skill.TempDir())
+	})
+}
+
 // stubClient returns a non-nil *Client suitable for tests that only need to
 // verify the Skill carries a client reference.
-func stubClient() *llm.Client { return &llm.Client{} }
+func stubClient() *Client { return &Client{} }
 
 func TestNewFromDir_ParsesYAMLFrontmatter(t *testing.T) {
 	const body = "This is the skill instruction body.\n\nIt may span multiple lines.\n"
@@ -197,6 +205,7 @@ func TestNewFromFS_ParsesMetadata(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewFromFS: %v", err)
 	}
+	cleanupSkillTemp(t, skill)
 	if skill.Name != "embedded" {
 		t.Fatalf("Name = %q, want %q", skill.Name, "embedded")
 	}
@@ -214,6 +223,146 @@ func TestNewFromFS_ParsesMetadata(t *testing.T) {
 	}
 	if skill.Conversation() != nil {
 		t.Fatal("Conversation() should be nil after NewFromFS()")
+	}
+}
+
+func TestNewFromDir_AssignsUniqueTempDirs(t *testing.T) {
+	content := "---\nname: x\ndescription: d\n---\nbody\n"
+	first, err := NewFromDir(writeSkillDir(t, content), nil, nil)
+	if err != nil {
+		t.Fatalf("first NewFromDir: %v", err)
+	}
+	cleanupSkillTemp(t, first)
+	second, err := NewFromDir(writeSkillDir(t, content), nil, nil)
+	if err != nil {
+		t.Fatalf("second NewFromDir: %v", err)
+	}
+	cleanupSkillTemp(t, second)
+
+	if first.TempDir() == "" || second.TempDir() == "" {
+		t.Fatalf("TempDir() should not be empty: first=%q second=%q", first.TempDir(), second.TempDir())
+	}
+	if first.TempDir() == second.TempDir() {
+		t.Fatalf("TempDir() = %q for two skills, want unique temp dirs", first.TempDir())
+	}
+	for _, dir := range []string{first.TempDir(), second.TempDir()} {
+		info, err := os.Stat(dir)
+		if err != nil {
+			t.Fatalf("stat temp dir %q: %v", dir, err)
+		}
+		if !info.IsDir() {
+			t.Fatalf("temp path %q is not a directory", dir)
+		}
+	}
+}
+
+func TestSkillCopiesPreserveTempDir(t *testing.T) {
+	loaded, err := NewFromDir(writeSkillDir(t, "---\nname: x\ndescription: d\n---\nbody\n"), nil, nil)
+	if err != nil {
+		t.Fatalf("NewFromDir: %v", err)
+	}
+	cleanupSkillTemp(t, loaded)
+
+	withTools, err := loaded.WithTools()
+	if err != nil {
+		t.Fatalf("WithTools: %v", err)
+	}
+	if withTools.TempDir() != loaded.TempDir() {
+		t.Fatalf("WithTools TempDir() = %q, want %q", withTools.TempDir(), loaded.TempDir())
+	}
+
+	bound, err := loaded.Bind(stubClient(), nil, nil)
+	if err != nil {
+		t.Fatalf("Bind: %v", err)
+	}
+	if bound.TempDir() != loaded.TempDir() {
+		t.Fatalf("Bind TempDir() = %q, want %q", bound.TempDir(), loaded.TempDir())
+	}
+}
+
+func TestWithAccessibleDirsOverwritesAndClearsRuntimeInstruction(t *testing.T) {
+	loaded, err := NewFromDir(writeSkillDir(t, "---\nname: x\ndescription: d\n---\nbody\n"), nil, nil)
+	if err != nil {
+		t.Fatalf("NewFromDir: %v", err)
+	}
+	cleanupSkillTemp(t, loaded)
+	firstDir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(firstDir, "nested"), 0o755); err != nil {
+		t.Fatalf("mkdir nested extra dir: %v", err)
+	}
+	if err := loaded.WithAccessibleDirs(firstDir); err != nil {
+		t.Fatalf("WithAccessibleDirs: %v", err)
+	}
+	gotDirs := loaded.AccessibleDirs()
+	if len(gotDirs) != 1 {
+		t.Fatalf("AccessibleDirs() = %v, want one dir", gotDirs)
+	}
+	realFirstDir, err := filepath.EvalSymlinks(firstDir)
+	if err != nil {
+		t.Fatalf("EvalSymlinks(firstDir): %v", err)
+	}
+	if gotDirs[0] != realFirstDir {
+		t.Fatalf("AccessibleDirs()[0] = %q, want %q", gotDirs[0], realFirstDir)
+	}
+
+	secondDir := t.TempDir()
+	if err := loaded.WithAccessibleDirs(secondDir); err != nil {
+		t.Fatalf("WithAccessibleDirs overwrite: %v", err)
+	}
+	realSecondDir, err := filepath.EvalSymlinks(secondDir)
+	if err != nil {
+		t.Fatalf("EvalSymlinks(secondDir): %v", err)
+	}
+	gotDirs = loaded.AccessibleDirs()
+	if len(gotDirs) != 1 || gotDirs[0] != realSecondDir {
+		t.Fatalf("AccessibleDirs() after overwrite = %v, want [%s]", gotDirs, realSecondDir)
+	}
+
+	bound, err := loaded.Bind(stubClient(), nil, nil)
+	if err != nil {
+		t.Fatalf("Bind: %v", err)
+	}
+	instructions := bound.Conversation().Instructions()
+	for _, want := range []string{
+		"body",
+		"Workspace access:",
+		loaded.TempDir(),
+		realSecondDir,
+		"Relative file paths and shell commands run here",
+		"User-added directories",
+	} {
+		if !strings.Contains(instructions, want) {
+			t.Fatalf("runtime instructions missing %q:\n%s", want, instructions)
+		}
+	}
+	if strings.Contains(instructions, realFirstDir) {
+		t.Fatalf("runtime instructions still contain overwritten dir %q:\n%s", realFirstDir, instructions)
+	}
+
+	cleared, err := loaded.WithTools()
+	if err != nil {
+		t.Fatalf("WithTools: %v", err)
+	}
+	if err := cleared.WithAccessibleDirs(); err != nil {
+		t.Fatalf("WithAccessibleDirs clear: %v", err)
+	}
+	if got := cleared.AccessibleDirs(); len(got) != 0 {
+		t.Fatalf("AccessibleDirs() after clear = %v, want none", got)
+	}
+}
+
+func TestWithAccessibleDirsRejectsBoundSkill(t *testing.T) {
+	loaded, err := NewFromDir(writeSkillDir(t, "---\nname: x\ndescription: d\n---\nbody\n"), nil, nil)
+	if err != nil {
+		t.Fatalf("NewFromDir: %v", err)
+	}
+	cleanupSkillTemp(t, loaded)
+	bound, err := loaded.Bind(stubClient(), nil, nil)
+	if err != nil {
+		t.Fatalf("Bind: %v", err)
+	}
+	if err := bound.WithAccessibleDirs(t.TempDir()); err == nil {
+		t.Fatal("expected WithAccessibleDirs to reject a bound skill")
 	}
 }
 
@@ -268,7 +417,7 @@ func TestBind_UsesSkillDirEnvFileWhenClientNil(t *testing.T) {
 }
 
 func TestBind_ExplicitMissingSessionReturnsError(t *testing.T) {
-	store, err := llm.NewJSONStore(t.TempDir())
+	store, err := NewJSONStore(t.TempDir())
 	if err != nil {
 		t.Fatalf("NewJSONStore: %v", err)
 	}
@@ -278,7 +427,7 @@ func TestBind_ExplicitMissingSessionReturnsError(t *testing.T) {
 	}
 	sessionID := "missing-session"
 	_, err = loaded.Bind(stubClient(), nil, &sessionID, store)
-	if !errors.Is(err, llm.ErrSessionNotFound) {
+	if !errors.Is(err, ErrSessionNotFound) {
 		t.Fatalf("Bind error = %v, want ErrSessionNotFound", err)
 	}
 }

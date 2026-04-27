@@ -10,8 +10,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/tsumina/dango/internal/llm"
-	"github.com/tsumina/dango/internal/llm/skill"
 	"mvdan.cc/sh/v3/syntax"
 )
 
@@ -24,13 +22,14 @@ const bashDefaultTimeout = 60 * time.Second
 // that data was dropped.
 const bashMaxOutputBytes = 16 * 1024
 
-// NewBash returns a Tool that runs a shell command via /bin/bash -c with cwd
-// fixed to root and the parent process environment inherited.
+// newBash returns a Tool that runs a shell command via /bin/bash -c with cwd
+// fixed to the skill's temp playground and the parent process environment
+// inherited.
 //
-// By default the tool enforces [DefaultAllowlist]: every executable that
+// By default the tool enforces [defaultAllowlist]: every executable that
 // appears in a simple command, pipeline, subshell, or command substitution
 // must be on the list, otherwise the call is rejected before bash is
-// invoked. Use [WithAllowlist] to replace the list or [WithoutAllowlist] to
+// invoked. Use [withAllowlist] to replace the list or [withoutAllowlist] to
 // disable enforcement entirely.
 //
 // The command is bounded by timeout_seconds (default 60) and its combined
@@ -42,20 +41,20 @@ const bashMaxOutputBytes = 16 * 1024
 //     job submission helpers, ML training, or any command the skill knows
 //     may exceed the default bound. The parent context still cancels the
 //     command, so the agent can still abort it.
-//   - output_file: when set (a path relative to the workspace root), combined
+//   - output_file: when set (a path resolved by the Skill workspace), combined
 //     stdout+stderr is streamed directly to that file instead of being
 //     returned to the model. The tool returns a short summary (path and byte
 //     count) so the model can follow up with grep or read_file for the
 //     sections it actually cares about, keeping its context small.
-func NewBash(root string, opts ...Option) llm.Tool {
-	return newBashWithConfig(root, newConfig(opts))
+func newBash(ws workspace, opts ...option) tool {
+	return newBashWithConfig(ws, newConfig(opts))
 }
 
-func newBashWithConfig(root string, cfg *config) llm.Tool {
+func newBashWithConfig(ws workspace, cfg *config) tool {
 	allowlist := cfg.resolveAllowlist()
-	return llm.NewFuncTool(
+	return newFuncTool(
 		"bash",
-		"Run a shell command via /bin/bash -c. Use for ad-hoc scripting, invoking skill scripts, or running helper programs. Returns combined stdout+stderr unless output_file is set. Commands are restricted to the configured allowlist (see DefaultAllowlist).",
+		"Run a shell command via /bin/bash -c inside the skill's private temp playground. Use for ad-hoc scripting, invoking helper programs, or generating temporary files. Returns combined stdout+stderr unless output_file is set. Commands are restricted to the configured allowlist (see defaultAllowlist).",
 		map[string]any{
 			"type": "object",
 			"properties": map[string]any{
@@ -74,7 +73,7 @@ func newBashWithConfig(root string, cfg *config) llm.Tool {
 				},
 				"output_file": map[string]any{
 					"type":        "string",
-					"description": "Optional path (relative to the workspace root) to stream combined stdout+stderr into. When set, the tool returns a short summary instead of the raw output; use grep or read_file to extract sections from the file.",
+					"description": "Optional output path. Relative paths resolve inside the temp playground; absolute paths must stay inside the temp playground, source workspace, or user-added accessible directories. When set, the tool returns a short summary instead of the raw output; use grep or read_file to extract sections from the file.",
 				},
 			},
 			"required":             []string{"command"},
@@ -118,10 +117,10 @@ func newBashWithConfig(root string, cfg *config) llm.Tool {
 			defer cancel()
 
 			cmd := exec.CommandContext(cctx, "/bin/bash", "-c", args.Command)
-			cmd.Dir = root
+			cmd.Dir = ws.WorkDir()
 
 			if args.OutputFile != "" {
-				return runBashToFile(cctx, cmd, root, args.OutputFile, timeout)
+				return runBashToFile(cctx, cmd, ws, args.OutputFile, timeout)
 			}
 			return runBashBuffered(cctx, cmd, timeout)
 		},
@@ -211,8 +210,8 @@ func runBashBuffered(cctx context.Context, cmd *exec.Cmd, timeout time.Duration)
 // (resolved against root) and returns a summary describing the file. This
 // keeps large outputs out of the model's context; the model can grep or
 // read_file the resulting file for just the sections it needs.
-func runBashToFile(cctx context.Context, cmd *exec.Cmd, root, outputFile string, timeout time.Duration) (string, error) {
-	p, err := skill.ResolveWorkspacePath(root, outputFile)
+func runBashToFile(cctx context.Context, cmd *exec.Cmd, ws workspace, outputFile string, timeout time.Duration) (string, error) {
+	p, err := ws.ResolvePath(outputFile)
 	if err != nil {
 		return "", fmt.Errorf("bash: %w", err)
 	}

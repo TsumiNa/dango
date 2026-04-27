@@ -1,12 +1,12 @@
 package builtin
 
-// DefaultAllowlist lists the executable names that the bash tool permits by
+// defaultAllowlist lists the executable names that the bash tool permits by
 // default. It covers common read-only shell utilities, network fetchers, and
 // the primary language / package-manager toolchains dango skills reach for.
 // Destructive utilities such as rm, mv, sudo, and dd are intentionally
-// omitted; use [NewDeleteFile] or [NewMoveFile] for workspace-scoped
-// deletion and renaming, or extend the allowlist via [WithAllowlist].
-var DefaultAllowlist = []string{
+// omitted; use the delete_file or move_file tools for workspace-scoped
+// deletion and renaming.
+var defaultAllowlist = []string{
 	// Read-only filesystem / text utilities.
 	"cat", "head", "tail", "wc", "file", "stat", "ls", "find", "du", "df",
 	"echo", "printf", "grep", "egrep", "fgrep", "sed", "awk", "cut",

@@ -6,28 +6,26 @@ import (
 	"fmt"
 	"os"
 	"strings"
-
-	"github.com/tsumina/dango/internal/llm"
-	"github.com/tsumina/dango/internal/llm/skill"
 )
 
-// NewEditFile returns a Tool that performs a targeted string replacement
-// within a single file in root.
+// newEditFile returns a Tool that performs a targeted string replacement
+// within a single file in the temp playground, source workspace, or a
+// user-added accessible directory.
 //
 // The tool requires old_string to appear exactly once in the file; callers
 // should include enough surrounding context to make the match unique. This
 // lets the model amend large files without having to rewrite them via
-// [NewWriteFile], saving tokens and avoiding accidental deletions.
-func NewEditFile(root string) llm.Tool {
-	return llm.NewFuncTool(
+// [newWriteFile], saving tokens and avoiding accidental deletions.
+func newEditFile(ws workspace) tool {
+	return newFuncTool(
 		"edit_file",
-		"Replace a unique occurrence of old_string with new_string inside an existing file. old_string must match exactly once; include enough surrounding context to disambiguate.",
+		"Replace a unique occurrence of old_string with new_string inside an existing file in the temp playground, source workspace, or user-added accessible directories. Relative paths resolve in the temp playground; absolute paths must stay inside one of those roots. old_string must match exactly once; include enough surrounding context to disambiguate.",
 		map[string]any{
 			"type": "object",
 			"properties": map[string]any{
 				"path": map[string]any{
 					"type":        "string",
-					"description": "Path to the file relative to the skill workspace root.",
+					"description": "File path. Relative paths resolve inside the temp playground; absolute paths must stay inside the temp playground, source workspace, or user-added accessible directories.",
 				},
 				"old_string": map[string]any{
 					"type":        "string",
@@ -53,7 +51,7 @@ func NewEditFile(root string) llm.Tool {
 			if args.OldString == "" {
 				return "", fmt.Errorf("edit_file: old_string must not be empty")
 			}
-			p, err := skill.ResolveWorkspacePath(root, args.Path)
+			p, err := ws.ResolvePath(args.Path)
 			if err != nil {
 				return "", fmt.Errorf("edit_file: %w", err)
 			}

@@ -13,7 +13,7 @@ func TestMoveFileRenames(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(root, "old.txt"), []byte("hi"), 0o644); err != nil {
 		t.Fatalf("write: %v", err)
 	}
-	tool := NewMoveFile(root)
+	tool := newMoveFile(testWorkspace{root})
 	args, _ := json.Marshal(map[string]string{"src": "old.txt", "dst": "renamed/new.txt"})
 	if _, err := tool.Execute(context.Background(), string(args)); err != nil {
 		t.Fatalf("move_file: %v", err)
@@ -35,7 +35,7 @@ func TestMoveFileRejectsEscape(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(root, "a.txt"), []byte("x"), 0o644); err != nil {
 		t.Fatalf("write: %v", err)
 	}
-	tool := NewMoveFile(root)
+	tool := newMoveFile(testWorkspace{root})
 
 	argsSrc, _ := json.Marshal(map[string]string{"src": "../a.txt", "dst": "b.txt"})
 	if _, err := tool.Execute(context.Background(), string(argsSrc)); err == nil {

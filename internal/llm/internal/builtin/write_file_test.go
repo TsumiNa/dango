@@ -10,13 +10,13 @@ func TestWriteAndReadRoundTrip(t *testing.T) {
 	root := t.TempDir()
 	ctx := context.Background()
 
-	write := NewWriteFile(root)
+	write := newWriteFile(testWorkspace{root})
 	args, _ := json.Marshal(map[string]string{"path": "sub/hello.txt", "content": "hi"})
 	if _, err := write.Execute(ctx, string(args)); err != nil {
 		t.Fatalf("write_file: %v", err)
 	}
 
-	read := NewReadFile(root)
+	read := newReadFile(testWorkspace{root})
 	args, _ = json.Marshal(map[string]string{"path": "sub/hello.txt"})
 	out, err := read.Execute(ctx, string(args))
 	if err != nil {

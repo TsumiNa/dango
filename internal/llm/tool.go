@@ -16,9 +16,8 @@ import (
 // the tool's output; that string is sent back to the model verbatim as the
 // function_call_output.
 //
-// The default set of filesystem and shell tools lives in the
-// [github.com/tsumina/dango/internal/llm/skill/builtin] subpackage; callers
-// typically wire those alongside any tool they implement themselves.
+// Callers can get the default filesystem and shell tool set with
+// [Skill.BuiltinTools], then append any tool they implement themselves.
 type Tool interface {
 	// Name returns the unique tool name advertised to the model.
 	Name() string

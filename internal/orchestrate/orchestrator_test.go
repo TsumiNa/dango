@@ -5,6 +5,7 @@ import (
 	"errors"
 	"io"
 	"log/slog"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -297,6 +298,25 @@ func TestRegisterSkill_StoresPerSkillClientFactory(t *testing.T) {
 	}
 	if got != client {
 		t.Fatalf("factory() = %p, want %p", got, client)
+	}
+}
+
+func TestRegisterSkill_StoresAccessibleDirs(t *testing.T) {
+	o := newOrchestrator(testLogger)
+	extraDir := t.TempDir()
+	if err := o.RegisterSkill(writeTestSkill(t, "accessible-skill", "Configured skill."), WithSkillAccessibleDirs(extraDir)); err != nil {
+		t.Fatalf("RegisterSkill: %v", err)
+	}
+	sk := o.Skills()["accessible-skill"]
+	if sk == nil {
+		t.Fatal("expected accessible-skill to be registered")
+	}
+	realExtraDir, err := filepath.EvalSymlinks(extraDir)
+	if err != nil {
+		t.Fatalf("EvalSymlinks(extraDir): %v", err)
+	}
+	if got := sk.AccessibleDirs(); len(got) != 1 || got[0] != realExtraDir {
+		t.Fatalf("AccessibleDirs() = %v, want [%s]", got, realExtraDir)
 	}
 }
 

@@ -14,7 +14,7 @@ func TestReadFileRejectsEscape(t *testing.T) {
 	if err := os.WriteFile(outside, []byte("secret"), 0o644); err != nil {
 		t.Fatalf("write: %v", err)
 	}
-	tool := NewReadFile(root)
+	tool := newReadFile(testWorkspace{root})
 	args, _ := json.Marshal(map[string]string{"path": "../" + filepath.Base(outside)})
 	if _, err := tool.Execute(context.Background(), string(args)); err == nil {
 		t.Fatal("expected error when path escapes root")
@@ -27,7 +27,7 @@ func TestReadFileLineRange(t *testing.T) {
 	if err := os.WriteFile(path, []byte("a\nb\nc\nd\ne"), 0o644); err != nil {
 		t.Fatalf("write: %v", err)
 	}
-	tool := NewReadFile(root)
+	tool := newReadFile(testWorkspace{root})
 	ctx := context.Background()
 
 	// Explicit slice.

@@ -7,7 +7,6 @@ import (
 	"sort"
 
 	"github.com/tsumina/dango/internal/llm"
-	"github.com/tsumina/dango/internal/llm/skill"
 )
 
 const (
@@ -18,7 +17,7 @@ const (
 
 var errOrchestratorSkillUnconfigured = errors.New("orchestrate: orchestrator skill has no runnable llm client")
 
-func planWithOrchestratorSkill(ctx context.Context, req *Request, skills map[string]*skill.Skill, orchestratorSkill *skill.Skill, envClient *llm.Client, envClientErr error) (*CoarsePlan, *RejectReason, error) {
+func planWithOrchestratorSkill(ctx context.Context, req *Request, skills map[string]*llm.Skill, orchestratorSkill *llm.Skill, envClient *llm.Client, envClientErr error) (*CoarsePlan, *RejectReason, error) {
 	runtimeSkill, err := runtimeOrchestratorSkill(orchestratorSkill, envClient, envClientErr)
 	if err != nil {
 		if errors.Is(err, errOrchestratorSkillUnconfigured) {
@@ -41,7 +40,7 @@ func planWithOrchestratorSkill(ctx context.Context, req *Request, skills map[str
 	return plan, reject, nil
 }
 
-func reviewWithOrchestratorSkill(ctx context.Context, plan *CoarsePlan, polishFragments map[string]any, orchestratorSkill *skill.Skill, envClient *llm.Client, envClientErr error) (*PlanReview, error) {
+func reviewWithOrchestratorSkill(ctx context.Context, plan *CoarsePlan, polishFragments map[string]any, orchestratorSkill *llm.Skill, envClient *llm.Client, envClientErr error) (*PlanReview, error) {
 	runtimeSkill, err := runtimeOrchestratorSkill(orchestratorSkill, envClient, envClientErr)
 	if err != nil {
 		return nil, err
@@ -61,7 +60,7 @@ func reviewWithOrchestratorSkill(ctx context.Context, plan *CoarsePlan, polishFr
 	return decision, nil
 }
 
-func replanWithOrchestratorSkill(ctx context.Context, request string, currentPlan *CoarsePlan, reason string, polishFragments map[string]any, skills map[string]*skill.Skill, orchestratorSkill *skill.Skill, envClient *llm.Client, envClientErr error) (*CoarsePlan, error) {
+func replanWithOrchestratorSkill(ctx context.Context, request string, currentPlan *CoarsePlan, reason string, polishFragments map[string]any, skills map[string]*llm.Skill, orchestratorSkill *llm.Skill, envClient *llm.Client, envClientErr error) (*CoarsePlan, error) {
 	runtimeSkill, err := runtimeOrchestratorSkill(orchestratorSkill, envClient, envClientErr)
 	if err != nil {
 		return nil, err
@@ -81,7 +80,7 @@ func replanWithOrchestratorSkill(ctx context.Context, request string, currentPla
 	return plan, nil
 }
 
-func runtimeOrchestratorSkill(sk *skill.Skill, envClient *llm.Client, envClientErr error) (*skill.Skill, error) {
+func runtimeOrchestratorSkill(sk *llm.Skill, envClient *llm.Client, envClientErr error) (*llm.Skill, error) {
 	if sk == nil {
 		return nil, errOrchestratorSkillUnconfigured
 	}
@@ -94,14 +93,14 @@ func runtimeOrchestratorSkill(sk *skill.Skill, envClient *llm.Client, envClientE
 	return nil, errOrchestratorSkillUnconfigured
 }
 
-func bindOrchestratorSkill(sk *skill.Skill, client *llm.Client) (*skill.Skill, error) {
+func bindOrchestratorSkill(sk *llm.Skill, client *llm.Client) (*llm.Skill, error) {
 	if sk.Client() == client && sk.Conversation() != nil {
 		return sk, nil
 	}
 	return sk.Bind(client, nil, nil)
 }
 
-func collectSkillSummaries(skills map[string]*skill.Skill) []orchestratorSkillSummary {
+func collectSkillSummaries(skills map[string]*llm.Skill) []orchestratorSkillSummary {
 	out := make([]orchestratorSkillSummary, 0, len(skills))
 	for name, sk := range skills {
 		summary := orchestratorSkillSummary{Name: name}

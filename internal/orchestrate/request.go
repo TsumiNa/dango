@@ -6,7 +6,6 @@ import (
 	"log/slog"
 
 	"github.com/tsumina/dango/internal/llm"
-	"github.com/tsumina/dango/internal/llm/skill"
 	runnerpkg "github.com/tsumina/dango/internal/orchestrate/runner"
 )
 
@@ -88,7 +87,7 @@ func (o *Orchestrator) planFromRequest(ctx context.Context, req *Request) (coars
 	return plan, nil, nil
 }
 
-func buildRunner(logger *slog.Logger, client *llm.Client, store runnerpkg.RunnerStore, req *Request, plan *CoarsePlan, skills map[string]*skill.Skill, skillClients map[string]SkillClientFactory) (*runnerpkg.Runner, error) {
+func buildRunner(logger *slog.Logger, client *llm.Client, store runnerpkg.RunnerStore, req *Request, plan *CoarsePlan, skills map[string]*llm.Skill, skillClients map[string]SkillClientFactory) (*runnerpkg.Runner, error) {
 	if len(plan.Nodes) == 0 {
 		return nil, fmt.Errorf("orchestrate: coarse plan must contain at least one node")
 	}
@@ -142,8 +141,8 @@ func buildRunner(logger *slog.Logger, client *llm.Client, store runnerpkg.Runner
 	), nil
 }
 
-func cloneSkillMap(skills map[string]*skill.Skill) map[string]*skill.Skill {
-	copyMap := make(map[string]*skill.Skill, len(skills))
+func cloneSkillMap(skills map[string]*llm.Skill) map[string]*llm.Skill {
+	copyMap := make(map[string]*llm.Skill, len(skills))
 	for name, sk := range skills {
 		copyMap[name] = sk
 	}
@@ -158,7 +157,7 @@ func cloneSkillClientFactories(factories map[string]SkillClientFactory) map[stri
 	return copyMap
 }
 
-func rejectUnconfiguredPlan(req *Request, skills map[string]*skill.Skill, orchestratorSkill *skill.Skill) (*CoarsePlan, *RejectReason, error) {
+func rejectUnconfiguredPlan(req *Request, skills map[string]*llm.Skill, orchestratorSkill *llm.Skill) (*CoarsePlan, *RejectReason, error) {
 	return nil, &RejectReason{
 		Summary:  "task cannot proceed",
 		Analysis: "the orchestrator skill is not bound to an llm client, so the request cannot be planned yet",

@@ -16,7 +16,6 @@ import (
 	"github.com/openai/openai-go/v3"
 	"github.com/openai/openai-go/v3/option"
 	"github.com/tsumina/dango/internal/llm"
-	"github.com/tsumina/dango/internal/llm/skill"
 	runnerpkg "github.com/tsumina/dango/internal/orchestrate/runner"
 )
 
@@ -82,13 +81,13 @@ func writeTestSkill(t *testing.T, name, description string) string {
 	t.Helper()
 	dir := t.TempDir()
 	content := "---\nname: " + name + "\ndescription: " + description + "\n---\nbody"
-	if err := os.WriteFile(filepath.Join(dir, skill.SkillFile), []byte(content), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, llm.SkillFile), []byte(content), 0o644); err != nil {
 		t.Fatalf("write SKILL.md: %v", err)
 	}
 	return dir
 }
 
-func bindTestOrchestratorSkill(t *testing.T, outputs ...string) *skill.Skill {
+func bindTestOrchestratorSkill(t *testing.T, outputs ...string) *llm.Skill {
 	t.Helper()
 	clearLLMEnv(t)
 	var responded int

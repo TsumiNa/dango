@@ -11,7 +11,7 @@ import (
 
 func TestBashRunsInRoot(t *testing.T) {
 	root := t.TempDir()
-	tool := NewBash(root)
+	tool := newBash(testWorkspace{root})
 	out, err := tool.Execute(context.Background(), `{"command": "pwd"}`)
 	if err != nil {
 		t.Fatalf("bash: %v", err)
@@ -25,21 +25,21 @@ func TestBashRunsInRoot(t *testing.T) {
 }
 
 func TestBashEmptyCommand(t *testing.T) {
-	tool := NewBash(t.TempDir())
+	tool := newBash(testWorkspace{t.TempDir()})
 	if _, err := tool.Execute(context.Background(), `{"command": "  "}`); err == nil {
 		t.Fatal("expected error for empty command")
 	}
 }
 
 func TestBashInvalidJSON(t *testing.T) {
-	tool := NewBash(t.TempDir())
+	tool := newBash(testWorkspace{t.TempDir()})
 	if _, err := tool.Execute(context.Background(), `not json`); err == nil {
 		t.Fatal("expected error for invalid JSON arguments")
 	}
 }
 
 func TestBashTimeout(t *testing.T) {
-	tool := NewBash(t.TempDir())
+	tool := newBash(testWorkspace{t.TempDir()})
 	args, _ := json.Marshal(map[string]any{
 		"command":         "sleep 2",
 		"timeout_seconds": 1,
@@ -52,7 +52,7 @@ func TestBashTimeout(t *testing.T) {
 }
 
 func TestBashOutputTruncation(t *testing.T) {
-	tool := NewBash(t.TempDir())
+	tool := newBash(testWorkspace{t.TempDir()})
 	// Produce more than bashMaxOutputBytes by printing a big block.
 	args, _ := json.Marshal(map[string]any{
 		"command": "head -c 40000 /dev/zero | tr '\\0' 'a'",
@@ -70,7 +70,7 @@ func TestBashOutputTruncation(t *testing.T) {
 }
 
 func TestBashLongRunningSkipsTimeout(t *testing.T) {
-	tool := NewBash(t.TempDir())
+	tool := newBash(testWorkspace{t.TempDir()})
 	// 2s sleep with a 1s timeout would normally fail; long_running skips it.
 	args, _ := json.Marshal(map[string]any{
 		"command":         "sleep 2 && echo done",
@@ -88,7 +88,7 @@ func TestBashLongRunningSkipsTimeout(t *testing.T) {
 
 func TestBashOutputFileStreams(t *testing.T) {
 	root := t.TempDir()
-	tool := NewBash(root)
+	tool := newBash(testWorkspace{root})
 	args, _ := json.Marshal(map[string]any{
 		"command":     "printf 'line1\\nline2\\nline3\\n'",
 		"output_file": "logs/run.log",
@@ -110,7 +110,7 @@ func TestBashOutputFileStreams(t *testing.T) {
 }
 
 func TestBashOutputFileRejectsEscape(t *testing.T) {
-	tool := NewBash(t.TempDir())
+	tool := newBash(testWorkspace{t.TempDir()})
 	args, _ := json.Marshal(map[string]any{
 		"command":     "echo hi",
 		"output_file": "../escape.log",
@@ -122,7 +122,7 @@ func TestBashOutputFileRejectsEscape(t *testing.T) {
 
 func TestBashOutputFileCapturesLargeOutputWithoutTruncation(t *testing.T) {
 	root := t.TempDir()
-	tool := NewBash(root)
+	tool := newBash(testWorkspace{root})
 	// 40000 bytes would be truncated in buffered mode; file mode keeps all of it.
 	args, _ := json.Marshal(map[string]any{
 		"command":     "head -c 40000 /dev/zero | tr '\\0' 'a'",
@@ -145,7 +145,7 @@ func TestBashOutputFileCapturesLargeOutputWithoutTruncation(t *testing.T) {
 }
 
 func TestBashAllowlistBlocksRm(t *testing.T) {
-	tool := NewBash(t.TempDir())
+	tool := newBash(testWorkspace{t.TempDir()})
 	args, _ := json.Marshal(map[string]any{"command": "rm -rf /"})
 	_, err := tool.Execute(context.Background(), string(args))
 	if err == nil {
@@ -157,7 +157,7 @@ func TestBashAllowlistBlocksRm(t *testing.T) {
 }
 
 func TestBashAllowlistBlocksInPipeline(t *testing.T) {
-	tool := NewBash(t.TempDir())
+	tool := newBash(testWorkspace{t.TempDir()})
 	// echo is allowed; mv is not. The whole command must be rejected.
 	args, _ := json.Marshal(map[string]any{"command": "echo hi && mv a b"})
 	if _, err := tool.Execute(context.Background(), string(args)); err == nil {
@@ -166,7 +166,7 @@ func TestBashAllowlistBlocksInPipeline(t *testing.T) {
 }
 
 func TestBashAllowlistBlocksInSubshell(t *testing.T) {
-	tool := NewBash(t.TempDir())
+	tool := newBash(testWorkspace{t.TempDir()})
 	args, _ := json.Marshal(map[string]any{"command": "echo $(rm /tmp/x)"})
 	if _, err := tool.Execute(context.Background(), string(args)); err == nil {
 		t.Fatal("expected subshell allowlist rejection")
@@ -174,7 +174,7 @@ func TestBashAllowlistBlocksInSubshell(t *testing.T) {
 }
 
 func TestBashAllowlistBlocksDynamicHead(t *testing.T) {
-	tool := NewBash(t.TempDir())
+	tool := newBash(testWorkspace{t.TempDir()})
 	// Dynamic head such as $CMD cannot be statically checked; reject it.
 	args, _ := json.Marshal(map[string]any{"command": "$CMD hello"})
 	if _, err := tool.Execute(context.Background(), string(args)); err == nil {
@@ -183,7 +183,7 @@ func TestBashAllowlistBlocksDynamicHead(t *testing.T) {
 }
 
 func TestBashAllowlistAcceptsPathedExecutable(t *testing.T) {
-	tool := NewBash(t.TempDir())
+	tool := newBash(testWorkspace{t.TempDir()})
 	// basename("/bin/echo") == "echo" which is in the default allowlist.
 	args, _ := json.Marshal(map[string]any{"command": "/bin/echo ok"})
 	out, err := tool.Execute(context.Background(), string(args))
@@ -196,7 +196,7 @@ func TestBashAllowlistAcceptsPathedExecutable(t *testing.T) {
 }
 
 func TestBashAllowlistCustom(t *testing.T) {
-	tool := NewBash(t.TempDir(), WithAllowlist([]string{"rm"}))
+	tool := newBash(testWorkspace{t.TempDir()}, withAllowlist([]string{"rm"}))
 	// With a custom allowlist, rm is now permitted but echo is not.
 	args, _ := json.Marshal(map[string]any{"command": "echo hi"})
 	if _, err := tool.Execute(context.Background(), string(args)); err == nil {
@@ -205,7 +205,7 @@ func TestBashAllowlistCustom(t *testing.T) {
 }
 
 func TestBashAllowlistDisabled(t *testing.T) {
-	tool := NewBash(t.TempDir(), WithoutAllowlist())
+	tool := newBash(testWorkspace{t.TempDir()}, withoutAllowlist())
 	// Without enforcement, any command is accepted by the allowlist check
 	// (the command itself may still fail, but not due to allowlist).
 	args, _ := json.Marshal(map[string]any{"command": "true"})
@@ -215,7 +215,7 @@ func TestBashAllowlistDisabled(t *testing.T) {
 }
 
 func TestBashAllowlistAllowsEnvPrefix(t *testing.T) {
-	tool := NewBash(t.TempDir())
+	tool := newBash(testWorkspace{t.TempDir()})
 	args, _ := json.Marshal(map[string]any{"command": "FOO=bar echo ok"})
 	out, err := tool.Execute(context.Background(), string(args))
 	if err != nil {

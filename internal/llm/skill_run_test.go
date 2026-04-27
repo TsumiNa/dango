@@ -1,4 +1,4 @@
-package skill
+package llm
 
 import (
 	"context"
@@ -11,18 +11,16 @@ import (
 
 	"github.com/openai/openai-go/v3"
 	"github.com/openai/openai-go/v3/option"
-
-	"github.com/tsumina/dango/internal/llm"
 )
 
-func newTestClient(t *testing.T, baseURL string) *llm.Client {
+func newTestClient(t *testing.T, baseURL string) *Client {
 	t.Helper()
 	raw := openai.NewClient(
 		option.WithAPIKey("test-key"),
 		option.WithBaseURL(baseURL+"/"),
 	)
-	c, err := llm.NewClient(llm.ClientConfig{
-		Provider: llm.ProviderOpenAI,
+	c, err := NewClient(ClientConfig{
+		Provider: ProviderOpenAI,
 		Model:    "test-model",
 		Raw:      raw,
 	})
@@ -34,12 +32,12 @@ func newTestClient(t *testing.T, baseURL string) *llm.Client {
 
 type runSkillConfig struct {
 	Dir          string
-	Client       *llm.Client
-	Tools        []llm.Tool
+	Client       *Client
+	Tools        []Tool
 	MaxSteps     int
-	AutoTrim     *llm.AutoShrinkConfig
-	Summarizer   llm.Summarizer
-	SessionStore llm.SessionStore
+	AutoTrim     *AutoShrinkConfig
+	Summarizer   Summarizer
+	SessionStore SessionStore
 	SessionID    string
 }
 
@@ -55,9 +53,9 @@ func newRunSkill(t *testing.T, cfg runSkillConfig) *Skill {
 	if err != nil {
 		t.Fatalf("NewFromDir: %v", err)
 	}
-	var convCfg *llm.ConversationConfig
+	var convCfg *ConversationConfig
 	if cfg.MaxSteps > 0 || cfg.AutoTrim != nil || cfg.Summarizer != nil {
-		convCfg = &llm.ConversationConfig{
+		convCfg = &ConversationConfig{
 			MaxSteps:   cfg.MaxSteps,
 			AutoShrink: cfg.AutoTrim,
 			Summarizer: cfg.Summarizer,
@@ -67,7 +65,7 @@ func newRunSkill(t *testing.T, cfg runSkillConfig) *Skill {
 	if cfg.SessionID != "" {
 		sessID = &cfg.SessionID
 	}
-	var stores []llm.SessionStore
+	var stores []SessionStore
 	if cfg.SessionStore != nil {
 		stores = append(stores, cfg.SessionStore)
 	}
@@ -79,8 +77,8 @@ func newRunSkill(t *testing.T, cfg runSkillConfig) *Skill {
 }
 
 func TestSkillRejectsDuplicateToolNames(t *testing.T) {
-	a := llm.NewFuncTool("x", "", map[string]any{}, func(context.Context, string) (string, error) { return "", nil })
-	b := llm.NewFuncTool("x", "", map[string]any{}, func(context.Context, string) (string, error) { return "", nil })
+	a := NewFuncTool("x", "", map[string]any{}, func(context.Context, string) (string, error) { return "", nil })
+	b := NewFuncTool("x", "", map[string]any{}, func(context.Context, string) (string, error) { return "", nil })
 	dir := writeSkillDir(t, "---\nname: x\ndescription: d\n---\n")
 	if _, err := NewFromDir(dir, nil, nil, a, b); err == nil {
 		t.Fatal("expected error for duplicate tool names")
@@ -121,7 +119,7 @@ func TestSkillRunToolLoop(t *testing.T) {
 	t.Cleanup(srv.Close)
 
 	var echoed string
-	echo := llm.NewFuncTool("echo", "echo msg", map[string]any{
+	echo := NewFuncTool("echo", "echo msg", map[string]any{
 		"type": "object",
 		"properties": map[string]any{
 			"msg": map[string]any{"type": "string"},
@@ -138,7 +136,7 @@ func TestSkillRunToolLoop(t *testing.T) {
 
 	sk := newRunSkill(t, runSkillConfig{
 		Client: newTestClient(t, srv.URL),
-		Tools:  []llm.Tool{echo},
+		Tools:  []Tool{echo},
 	})
 	out, err := sk.Run(context.Background(), "please echo hello", "")
 	if err != nil {
@@ -204,12 +202,12 @@ func TestSkillRunMaxStepsExceeded(t *testing.T) {
 	}))
 	t.Cleanup(srv.Close)
 
-	loop := llm.NewFuncTool("loop", "", map[string]any{"type": "object"},
+	loop := NewFuncTool("loop", "", map[string]any{"type": "object"},
 		func(context.Context, string) (string, error) { return "", nil })
 
 	sk := newRunSkill(t, runSkillConfig{
 		Client:   newTestClient(t, srv.URL),
-		Tools:    []llm.Tool{loop},
+		Tools:    []Tool{loop},
 		MaxSteps: 2,
 	})
 	if _, err := sk.Run(context.Background(), "go", ""); err == nil {
@@ -251,19 +249,19 @@ func TestSkillWithSummarizerAndAutoTrim(t *testing.T) {
 	}))
 	t.Cleanup(srv.Close)
 
-	echo := llm.NewFuncTool("echo", "", map[string]any{"type": "object"},
+	echo := NewFuncTool("echo", "", map[string]any{"type": "object"},
 		func(context.Context, string) (string, error) { return "out", nil })
 
 	called := 0
-	sum := llm.SummarizerFunc(func(_ context.Context, _ []llm.Turn) (string, error) {
+	sum := SummarizerFunc(func(_ context.Context, _ []Turn) (string, error) {
 		called++
 		return "compact", nil
 	})
 
 	sk := newRunSkill(t, runSkillConfig{
 		Client: newTestClient(t, srv.URL),
-		Tools:  []llm.Tool{echo},
-		AutoTrim: &llm.AutoShrinkConfig{
+		Tools:  []Tool{echo},
+		AutoTrim: &AutoShrinkConfig{
 			ContextWindow:     1000,
 			Threshold:         0.5,
 			KeepToolExchanges: 1,
@@ -298,7 +296,7 @@ func TestSkillWithSession(t *testing.T) {
 	}))
 	t.Cleanup(srv.Close)
 
-	store, err := llm.NewJSONStore(t.TempDir())
+	store, err := NewJSONStore(t.TempDir())
 	if err != nil {
 		t.Fatalf("NewJSONStore: %v", err)
 	}
@@ -352,12 +350,12 @@ func TestSkillWithSession(t *testing.T) {
 
 // countTurnEvents returns the number of events in the session log that
 // represent appended turns (user/assistant/reasoning/tool_call/tool_output).
-func countTurnEvents(events []llm.Event) int {
+func countTurnEvents(events []Event) int {
 	n := 0
 	for _, ev := range events {
 		switch ev.Kind {
-		case llm.EventAppendUser, llm.EventAppendAssistant,
-			llm.EventAppendReasoning, llm.EventAppendToolCall, llm.EventAppendToolOutput:
+		case EventAppendUser, EventAppendAssistant,
+			EventAppendReasoning, EventAppendToolCall, EventAppendToolOutput:
 			n++
 		}
 	}

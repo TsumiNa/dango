@@ -7,7 +7,6 @@ import (
 	"sync"
 
 	"github.com/tsumina/dango/internal/llm"
-	"github.com/tsumina/dango/internal/llm/skill"
 	runnerpkg "github.com/tsumina/dango/internal/orchestrate/runner"
 )
 
@@ -48,7 +47,7 @@ type SharedData struct {
 	Description string `json:"description" yaml:"description"`
 }
 
-// Executor runs a single task on top of a loaded [skill.Skill].
+// Executor runs a single task on top of a loaded [llm.Skill].
 //
 // An Executor is bound to one Skill at construction time and uses the
 // Skill's directory, prompt, and bound LLM client to plan and run the
@@ -56,7 +55,7 @@ type SharedData struct {
 // [NewExecutor].
 type Executor struct {
 	logger             *slog.Logger
-	skill              *skill.Skill
+	skill              *llm.Skill
 	planner            *ExecutionPlanner
 	llmClient          *llm.Client
 	skillClientFactory SkillClientFactory
@@ -81,7 +80,7 @@ type Executor struct {
 // sk and planner must be non-nil. client is the orchestrator-wide fallback.
 // skillClientFactory constructs the per-skill client used when environment
 // configuration is unavailable.
-func NewExecutor(logger *slog.Logger, sk *skill.Skill, planner *ExecutionPlanner, client *llm.Client, skillClientFactory SkillClientFactory) (*Executor, error) {
+func NewExecutor(logger *slog.Logger, sk *llm.Skill, planner *ExecutionPlanner, client *llm.Client, skillClientFactory SkillClientFactory) (*Executor, error) {
 	if sk == nil {
 		return nil, fmt.Errorf("orchestrate: executor requires a non-nil skill")
 	}
@@ -100,8 +99,8 @@ func NewExecutor(logger *slog.Logger, sk *skill.Skill, planner *ExecutionPlanner
 	}, nil
 }
 
-// Skill returns the [skill.Skill] this executor was bound to.
-func (e *Executor) Skill() *skill.Skill { return e.skill }
+// Skill returns the [llm.Skill] this executor was bound to.
+func (e *Executor) Skill() *llm.Skill { return e.skill }
 
 // Planner returns the [ExecutionPlanner] this executor mutates during
 // planning.
@@ -208,7 +207,7 @@ func (e *Executor) Report(ctx context.Context, output any) (any, error) {
 	return output, nil
 }
 
-func (e *Executor) runtimeSkill() (*skill.Skill, error) {
+func (e *Executor) runtimeSkill() (*llm.Skill, error) {
 	if e.skill == nil {
 		return nil, fmt.Errorf("orchestrate: executor requires a non-nil skill")
 	}

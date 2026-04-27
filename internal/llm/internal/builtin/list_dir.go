@@ -7,23 +7,21 @@ import (
 	"os"
 	"sort"
 	"strings"
-
-	"github.com/tsumina/dango/internal/llm"
-	"github.com/tsumina/dango/internal/llm/skill"
 )
 
-// NewListDir returns a Tool that lists entries in a directory within root.
+// newListDir returns a Tool that lists entries in a directory within the temp
+// playground, source workspace, or a user-added accessible directory.
 // Entries are returned one per line; directories are suffixed with "/".
-func NewListDir(root string) llm.Tool {
-	return llm.NewFuncTool(
+func newListDir(ws workspace) tool {
+	return newFuncTool(
 		"list_dir",
-		"List the entries of a directory within the skill workspace. Directories are suffixed with '/'.",
+		"List entries in a directory within the skill temp playground, source workspace, or user-added accessible directories. Relative paths resolve in the temp playground; absolute paths must stay inside one of those roots. Directories are suffixed with '/'.",
 		map[string]any{
 			"type": "object",
 			"properties": map[string]any{
 				"path": map[string]any{
 					"type":        "string",
-					"description": "Directory path relative to the workspace root. Use '.' for the root.",
+					"description": "Directory path. Relative paths resolve inside the temp playground; use '.' for the temp root. Absolute paths must stay inside the temp playground, source workspace, or user-added accessible directories.",
 				},
 			},
 			"required":             []string{"path"},
@@ -39,7 +37,7 @@ func NewListDir(root string) llm.Tool {
 			if args.Path == "" {
 				args.Path = "."
 			}
-			p, err := skill.ResolveWorkspacePath(root, args.Path)
+			p, err := ws.ResolvePath(args.Path)
 			if err != nil {
 				return "", fmt.Errorf("list_dir: %w", err)
 			}

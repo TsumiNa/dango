@@ -14,7 +14,7 @@ func TestDeleteFileRemovesFile(t *testing.T) {
 	if err := os.WriteFile(path, []byte("x"), 0o644); err != nil {
 		t.Fatalf("write: %v", err)
 	}
-	tool := NewDeleteFile(root)
+	tool := newDeleteFile(testWorkspace{root})
 	args, _ := json.Marshal(map[string]string{"path": "a.txt"})
 	if _, err := tool.Execute(context.Background(), string(args)); err != nil {
 		t.Fatalf("delete_file: %v", err)
@@ -32,7 +32,7 @@ func TestDeleteFileRecursive(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(root, "sub", "nested", "x.txt"), []byte("x"), 0o644); err != nil {
 		t.Fatalf("write: %v", err)
 	}
-	tool := NewDeleteFile(root)
+	tool := newDeleteFile(testWorkspace{root})
 
 	// Non-recursive should fail because directory is non-empty.
 	args, _ := json.Marshal(map[string]any{"path": "sub"})
@@ -52,7 +52,7 @@ func TestDeleteFileRecursive(t *testing.T) {
 
 func TestDeleteFileRejectsEscape(t *testing.T) {
 	root := t.TempDir()
-	tool := NewDeleteFile(root)
+	tool := newDeleteFile(testWorkspace{root})
 	args, _ := json.Marshal(map[string]string{"path": "../escape.txt"})
 	if _, err := tool.Execute(context.Background(), string(args)); err == nil {
 		t.Fatal("expected escape rejection")
