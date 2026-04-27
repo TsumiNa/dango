@@ -5,6 +5,8 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -124,6 +126,31 @@ func TestNewClientFromEnv_Success(t *testing.T) {
 	}
 }
 
+func TestNewClientFromEnv_LoadsSpecifiedFile(t *testing.T) {
+	unsetProviderEnv(t)
+	envFile := filepath.Join(t.TempDir(), "custom.env")
+	if err := os.WriteFile(envFile, []byte("OPENROUTER_API_KEY=or-file\nMODEL=file-model\nREASONING_EFFORT=low\nREASONING_REPLAY=yes\n"), 0o644); err != nil {
+		t.Fatalf("write env file: %v", err)
+	}
+
+	c, err := NewClientFromEnv(envFile)
+	if err != nil {
+		t.Fatalf("NewClientFromEnv: %v", err)
+	}
+	if c.Provider() != ProviderOpenRouter {
+		t.Errorf("Provider() = %s, want %s", c.Provider(), ProviderOpenRouter)
+	}
+	if c.Model() != "file-model" {
+		t.Errorf("Model() = %s, want file-model", c.Model())
+	}
+	if c.ReasoningEffort() != ReasoningEffortLow {
+		t.Errorf("ReasoningEffort() = %q, want low", c.ReasoningEffort())
+	}
+	if !c.ReplayReasoning() {
+		t.Error("ReplayReasoning() = false, want true")
+	}
+}
+
 func TestClient_Respond(t *testing.T) {
 	var gotPath, gotAuth, gotBody string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -198,6 +225,24 @@ func clearProviderEnv(t *testing.T) {
 	t.Helper()
 	for _, k := range []string{"OPENAI_API_KEY", "OPENROUTER_API_KEY", "GEMINI_API_KEY", "MODEL", "REASONING_EFFORT", "REASONING_REPLAY"} {
 		t.Setenv(k, "")
+	}
+}
+
+func unsetProviderEnv(t *testing.T) {
+	t.Helper()
+	for _, k := range []string{"OPENAI_API_KEY", "OPENROUTER_API_KEY", "GEMINI_API_KEY", "MODEL", "REASONING_EFFORT", "REASONING_REPLAY"} {
+		key := k
+		old, ok := os.LookupEnv(key)
+		if err := os.Unsetenv(key); err != nil {
+			t.Fatalf("unset %s: %v", key, err)
+		}
+		t.Cleanup(func() {
+			if ok {
+				_ = os.Setenv(key, old)
+				return
+			}
+			_ = os.Unsetenv(key)
+		})
 	}
 }
 
