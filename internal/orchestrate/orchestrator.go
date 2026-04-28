@@ -97,11 +97,14 @@ func (o *Orchestrator) configuredOrchestratorSkill(sk *llm.Skill) (*llm.Skill, e
 //
 // Skill must be a lightweight instance created by [llm.New]. AddSkills augments
 // it with the built-in tools before placing it in the orchestrator registry.
-// Client and Config are forwarded unchanged to the runner-owned bind step.
+// AccessibleDirs is applied through [llm.Skill.WithAccessibleDirs] before the
+// skill is stored. Client and Config are forwarded unchanged to the
+// runner-owned bind step.
 type AddSkillConfig struct {
-	Skill  *llm.Skill
-	Client *llm.Client
-	Config *llm.ConversationConfig
+	Skill          *llm.Skill
+	AccessibleDirs []string
+	Client         *llm.Client
+	Config         *llm.ConversationConfig
 }
 
 // SetLogger replaces the Orchestrator logger.
@@ -233,6 +236,9 @@ func (o *Orchestrator) AddSkills(cfgs ...AddSkillConfig) error {
 		if err != nil {
 			return err
 		}
+		if err := sk.WithAccessibleDirs(cfg.AccessibleDirs...); err != nil {
+			return err
+		}
 		if sk.Name == "" {
 			return fmt.Errorf("orchestrate: add skill config %d has empty skill name", i)
 		}
@@ -240,9 +246,10 @@ func (o *Orchestrator) AddSkills(cfgs ...AddSkillConfig) error {
 			return fmt.Errorf("orchestrate: skill %q already provided in AddSkills", sk.Name)
 		}
 		prepared[sk.Name] = AddSkillConfig{
-			Skill:  sk,
-			Client: cfg.Client,
-			Config: cloneConversationConfig(cfg.Config),
+			Skill:          sk,
+			AccessibleDirs: append([]string(nil), cfg.AccessibleDirs...),
+			Client:         cfg.Client,
+			Config:         cloneConversationConfig(cfg.Config),
 		}
 	}
 

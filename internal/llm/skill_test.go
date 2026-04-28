@@ -376,6 +376,40 @@ func TestWithAccessibleDirsRejectsBoundSkill(t *testing.T) {
 	}
 }
 
+func TestWithToolsCopyDoesNotShareAccessibleDirs(t *testing.T) {
+	loaded, err := New(writeSkillDir(t, "---\nname: x\ndescription: d\n---\nbody\n"), nil, nil)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	cleanupSkillTemp(t, loaded)
+	firstDir := t.TempDir()
+	if err := loaded.WithAccessibleDirs(firstDir); err != nil {
+		t.Fatalf("loaded.WithAccessibleDirs: %v", err)
+	}
+	copyWithTools, err := loaded.WithTools()
+	if err != nil {
+		t.Fatalf("WithTools: %v", err)
+	}
+	secondDir := t.TempDir()
+	if err := copyWithTools.WithAccessibleDirs(secondDir); err != nil {
+		t.Fatalf("copyWithTools.WithAccessibleDirs: %v", err)
+	}
+	realFirstDir, err := filepath.EvalSymlinks(firstDir)
+	if err != nil {
+		t.Fatalf("EvalSymlinks(firstDir): %v", err)
+	}
+	realSecondDir, err := filepath.EvalSymlinks(secondDir)
+	if err != nil {
+		t.Fatalf("EvalSymlinks(secondDir): %v", err)
+	}
+	if got := loaded.AccessibleDirs(); len(got) != 1 || got[0] != realFirstDir {
+		t.Fatalf("loaded.AccessibleDirs() = %v, want [%s]", got, realFirstDir)
+	}
+	if got := copyWithTools.AccessibleDirs(); len(got) != 1 || got[0] != realSecondDir {
+		t.Fatalf("copyWithTools.AccessibleDirs() = %v, want [%s]", got, realSecondDir)
+	}
+}
+
 func TestBind_BuildsRunnableCopyFromLoadedSkill(t *testing.T) {
 	dir := writeSkillDir(t, "---\nname: loaded\ndescription: d\n---\nbody\n")
 	loaded, err := New(dir, nil, nil)

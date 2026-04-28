@@ -299,10 +299,7 @@ func TestAddSkills_PreservesAccessibleDirs(t *testing.T) {
 	o := newOrchestrator(testLogger)
 	extraDir := t.TempDir()
 	loaded := loadTestSkillFromDir(t, writeTestSkill(t, "accessible-skill", "Configured skill."))
-	if err := loaded.WithAccessibleDirs(extraDir); err != nil {
-		t.Fatalf("WithAccessibleDirs: %v", err)
-	}
-	mustAddSkills(t, o, AddSkillConfig{Skill: loaded, Client: &llm.Client{}})
+	mustAddSkills(t, o, AddSkillConfig{Skill: loaded, AccessibleDirs: []string{extraDir}, Client: &llm.Client{}})
 	sk := o.Skills()["accessible-skill"]
 	if sk == nil {
 		t.Fatal("expected accessible-skill to be registered")
@@ -313,6 +310,12 @@ func TestAddSkills_PreservesAccessibleDirs(t *testing.T) {
 	}
 	if got := sk.AccessibleDirs(); len(got) != 1 || got[0] != realExtraDir {
 		t.Fatalf("AccessibleDirs() = %v, want [%s]", got, realExtraDir)
+	}
+	if got := o.skills["accessible-skill"].AccessibleDirs; len(got) != 1 || got[0] != extraDir {
+		t.Fatalf("stored AccessibleDirs = %v, want [%s]", got, extraDir)
+	}
+	if got := loaded.AccessibleDirs(); len(got) != 0 {
+		t.Fatalf("source skill AccessibleDirs() = %v, want none", got)
 	}
 }
 

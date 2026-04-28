@@ -206,6 +206,7 @@ func (s *Skill) WithAccessibleDirs(dirs ...string) error {
 
 func (s *Skill) copy() *Skill {
 	bound := *s
+	bound.workspace = s.workspace.copy()
 	bound.bashAllow = append([]string(nil), s.bashAllow...)
 	bound.bashBlock = append([]string(nil), s.bashBlock...)
 	bound.envFiles = append([]string(nil), s.envFiles...)

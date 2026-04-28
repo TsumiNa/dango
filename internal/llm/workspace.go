@@ -13,6 +13,15 @@ type workspaceRoot struct {
 	extraRoots []string
 }
 
+func (w *workspaceRoot) copy() *workspaceRoot {
+	if w == nil {
+		return nil
+	}
+	clone := *w
+	clone.extraRoots = append([]string(nil), w.extraRoots...)
+	return &clone
+}
+
 func newWorkspaceRoot(root string) (*workspaceRoot, error) {
 	skillRoot, err := canonicalDir(root)
 	if err != nil {

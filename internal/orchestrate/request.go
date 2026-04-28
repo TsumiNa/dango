@@ -144,9 +144,10 @@ func cloneAddSkillConfigs(skills map[string]AddSkillConfig) map[string]AddSkillC
 	copyMap := make(map[string]AddSkillConfig, len(skills))
 	for name, cfg := range skills {
 		copyMap[name] = AddSkillConfig{
-			Skill:  cfg.Skill,
-			Client: cfg.Client,
-			Config: cloneConversationConfig(cfg.Config),
+			Skill:          cfg.Skill,
+			AccessibleDirs: append([]string(nil), cfg.AccessibleDirs...),
+			Client:         cfg.Client,
+			Config:         cloneConversationConfig(cfg.Config),
 		}
 	}
 	return copyMap
