@@ -583,6 +583,21 @@ func TestOpenSessionWritesToMultipleStores(t *testing.T) {
 	}
 }
 
+func TestOpenSession_LoadErrorIncludesStoreIndex(t *testing.T) {
+	ctx := context.Background()
+	conv := mustNewConversation(t, nil, "sys", nil)
+	err := conv.OpenSession(ctx, "s", loadErrorStore{err: errors.New("boom")})
+	if err == nil {
+		t.Fatal("OpenSession returned nil error, want wrapped load error")
+	}
+	message := err.Error()
+	for _, want := range []string{"load session \"s\"", "store 0", "loadErrorStore", "boom"} {
+		if !strings.Contains(message, want) {
+			t.Fatalf("OpenSession error = %q, want to contain %q", message, want)
+		}
+	}
+}
+
 func TestOpenSessionReplaysExistingLog(t *testing.T) {
 	store := mustNewStore(t, t.TempDir())
 	ctx := context.Background()
@@ -692,3 +707,12 @@ func TestConversationTruncateRollsBack(t *testing.T) {
 		t.Errorf("remaining turn text = %q, want %q", got, "one")
 	}
 }
+
+type loadErrorStore struct {
+	err error
+}
+
+func (s loadErrorStore) Append(context.Context, string, *Event) (int64, error) { return 0, s.err }
+func (s loadErrorStore) Load(context.Context, string) ([]Event, error)         { return nil, s.err }
+func (s loadErrorStore) Truncate(context.Context, string, int64) error         { return s.err }
+func (s loadErrorStore) Delete(context.Context, string) error                  { return s.err }

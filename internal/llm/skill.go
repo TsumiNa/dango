@@ -149,6 +149,12 @@ func newFromFS(fs fs.FS, displayDir string, workspace *workspaceRoot, envFiles [
 // runnable instance with its own [Conversation]. When client is nil, Bind
 // constructs one with [NewClientFromEnv]; skills loaded from a host directory
 // pass that directory's .env file when it exists.
+//
+// When sessID is non-nil and non-empty, it must identify a session that
+// already exists in at least one of sessStores. In that case Bind resumes that
+// persisted session; it does not seed or create a new stored session for an
+// explicit caller-provided id. If the id cannot be resolved from the supplied
+// stores, Bind returns [ErrSessionNotFound].
 func (s *Skill) Bind(client *Client, cfg *ConversationConfig, sessID *string, sessStores ...SessionStore) (*Skill, error) {
 	if s == nil {
 		return nil, fmt.Errorf("skill: Bind requires a non-nil skill")

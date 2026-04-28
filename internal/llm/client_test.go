@@ -149,6 +149,32 @@ func TestNewClientFromEnv_LoadsSpecifiedFile(t *testing.T) {
 	if !c.ReplayReasoning() {
 		t.Error("ReplayReasoning() = false, want true")
 	}
+	for _, key := range []string{"OPENROUTER_API_KEY", "MODEL", "REASONING_EFFORT", "REASONING_REPLAY"} {
+		if _, ok := os.LookupEnv(key); ok {
+			t.Fatalf("NewClientFromEnv should not mutate process env, but %s is now set", key)
+		}
+	}
+}
+
+func TestNewClientFromEnv_ProcessEnvOverridesFile(t *testing.T) {
+	unsetProviderEnv(t)
+	envFile := filepath.Join(t.TempDir(), "custom.env")
+	if err := os.WriteFile(envFile, []byte("OPENROUTER_API_KEY=or-file\nMODEL=file-model\n"), 0o644); err != nil {
+		t.Fatalf("write env file: %v", err)
+	}
+	t.Setenv("OPENAI_API_KEY", "env-openai")
+	t.Setenv("MODEL", "env-model")
+
+	c, err := NewClientFromEnv(envFile)
+	if err != nil {
+		t.Fatalf("NewClientFromEnv: %v", err)
+	}
+	if c.Provider() != ProviderOpenAI {
+		t.Fatalf("Provider() = %s, want %s", c.Provider(), ProviderOpenAI)
+	}
+	if c.Model() != "env-model" {
+		t.Fatalf("Model() = %s, want env-model", c.Model())
+	}
 }
 
 func TestClient_Respond(t *testing.T) {

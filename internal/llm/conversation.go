@@ -374,7 +374,7 @@ func loadSessionEvents(ctx context.Context, sessionID string, stores []SessionSt
 			return events, i, nil
 		}
 		if !errors.Is(err, ErrSessionNotFound) {
-			return nil, -1, err
+			return nil, -1, fmt.Errorf("llm: load session %q store %d (%T): %w", sessionID, i, store, err)
 		}
 	}
 	return nil, -1, ErrSessionNotFound
