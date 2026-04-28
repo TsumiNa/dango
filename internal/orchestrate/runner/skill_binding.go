@@ -1,0 +1,142 @@
+package runner
+
+import (
+	"context"
+	"fmt"
+	"sync"
+	"time"
+
+	"github.com/tsumina/dango/internal/llm"
+)
+
+type skillBinder interface {
+	BindForRunner(sessID *string, sessStores ...llm.SessionStore) (string, error)
+}
+
+type memorySessionStore struct {
+	mu       sync.Mutex
+	sessions map[string][]llm.Event
+}
+
+func newMemorySessionStore() *memorySessionStore {
+	return &memorySessionStore{sessions: make(map[string][]llm.Event)}
+}
+
+func (s *memorySessionStore) Append(ctx context.Context, sessionID string, ev *llm.Event) (int64, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return 0, err
+	}
+	if sessionID == "" {
+		return 0, fmt.Errorf("runner: session id must not be empty")
+	}
+	if ev == nil {
+		return 0, fmt.Errorf("runner: append requires a non-nil event")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	events := s.sessions[sessionID]
+	switch {
+	case len(events) == 0 && ev.Kind != llm.EventInit:
+		return 0, llm.ErrSessionNotInitialised
+	case len(events) > 0 && ev.Kind == llm.EventInit:
+		return 0, llm.ErrSessionAlreadyInitialised
+	}
+	copyEvent := *ev
+	copyEvent.Seq = int64(len(events) + 1)
+	if copyEvent.Timestamp.IsZero() {
+		copyEvent.Timestamp = time.Now()
+	}
+	s.sessions[sessionID] = append(events, copyEvent)
+	return copyEvent.Seq, nil
+}
+
+func (s *memorySessionStore) Load(ctx context.Context, sessionID string) ([]llm.Event, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	events, ok := s.sessions[sessionID]
+	if !ok || len(events) == 0 {
+		return nil, llm.ErrSessionNotFound
+	}
+	copyEvents := make([]llm.Event, len(events))
+	copy(copyEvents, events)
+	return copyEvents, nil
+}
+
+func (s *memorySessionStore) Truncate(ctx context.Context, sessionID string, toSeq int64) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	events, ok := s.sessions[sessionID]
+	if !ok || len(events) == 0 {
+		return llm.ErrSessionNotFound
+	}
+	if toSeq <= 0 {
+		s.sessions[sessionID] = append([]llm.Event(nil), events[:1]...)
+		return nil
+	}
+	if toSeq >= int64(len(events)) {
+		return nil
+	}
+	s.sessions[sessionID] = append([]llm.Event(nil), events[:toSeq]...)
+	return nil
+}
+
+func (s *memorySessionStore) Delete(ctx context.Context, sessionID string) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, ok := s.sessions[sessionID]; !ok {
+		return llm.ErrSessionNotFound
+	}
+	delete(s.sessions, sessionID)
+	return nil
+}
+
+func (r *Runner) prepareNodeExecutors(nodes map[string]*Node) error {
+	if len(nodes) == 0 || r.skillSessionStore == nil {
+		return nil
+	}
+	r.skillSessionMu.Lock()
+	defer r.skillSessionMu.Unlock()
+	for id, node := range nodes {
+		if node == nil || node.Executor == nil {
+			continue
+		}
+		binder, ok := node.Executor.(skillBinder)
+		if !ok {
+			continue
+		}
+		var sessionID *string
+		if existing := r.skillSessionIDs[id]; existing != "" {
+			existingCopy := existing
+			sessionID = &existingCopy
+		}
+		boundSessionID, err := binder.BindForRunner(sessionID, r.skillSessionStore)
+		if err != nil {
+			return fmt.Errorf("prepare node %q executor: %w", id, err)
+		}
+		if boundSessionID != "" {
+			r.skillSessionIDs[id] = boundSessionID
+		}
+	}
+	return nil
+}

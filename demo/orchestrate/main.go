@@ -310,7 +310,9 @@ func configureDemoOrchestrator(logger *slog.Logger) (*orchestrate.Orchestrator, 
 		must(os.MkdirAll(dir, 0o755))
 		content := fmt.Sprintf("---\nname: %s\ndescription: %s\n---\nDemo skill body.\n", spec.name, spec.description)
 		must(os.WriteFile(filepath.Join(dir, llm.SkillFile), []byte(content), 0o644))
-		must(o.RegisterSkill(dir))
+		sk, err := llm.New(dir, nil, nil)
+		must(err)
+		must(o.AddSkills(orchestrate.AddSkillConfig{Skill: sk, Client: plannerClient}))
 	}
 	return o, func() {
 		plannerServer.Close()

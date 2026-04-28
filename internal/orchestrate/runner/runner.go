@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/lithammer/shortuuid/v4"
+	"github.com/tsumina/dango/internal/llm"
 )
 
 // Runner is the execution engine that drives a [CoarsePlan] through its
@@ -25,9 +26,12 @@ type Runner struct {
 	logger *slog.Logger
 
 	// Startup configuration set once via Options.
-	store        RunnerStore
-	plan         *CoarsePlan
-	initialNodes map[string]*Node
+	store             RunnerStore
+	plan              *CoarsePlan
+	initialNodes      map[string]*Node
+	skillSessionStore llm.SessionStore
+	skillSessionIDs   map[string]string
+	skillSessionMu    sync.Mutex
 
 	// Engine-level lifecycle state.
 	stateMu sync.RWMutex
@@ -94,6 +98,8 @@ func New(opts ...Option) *Runner {
 		queryCh:           make(chan chan<- RunnerSnapshot),
 		subscribers:       make([]chan<- RunnerEvent, 0),
 		updateSubscribers: make(map[uint64]chan RunnerUpdate),
+		skillSessionStore: newMemorySessionStore(),
+		skillSessionIDs:   make(map[string]string),
 	}
 	for _, opt := range opts {
 		opt(r)
@@ -305,6 +311,9 @@ func (r *Runner) Start(ctx context.Context) error {
 }
 
 func (r *Runner) prepareEngineLaunch(from RunnerPhase, mutate func()) ([]*Node, error) {
+	if err := r.prepareNodeExecutors(r.initialNodes); err != nil {
+		return nil, err
+	}
 	r.stateMu.Lock()
 	defer r.stateMu.Unlock()
 	if r.state.Status != RunnerStatusPending {

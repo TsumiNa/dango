@@ -254,13 +254,11 @@ func TestSubscribeRunner_RejectsUnknownID(t *testing.T) {
 	}
 }
 
-func TestRegisterSkill_LoadsLightweightSkill(t *testing.T) {
+func TestAddSkills_LoadsLightweightSkill(t *testing.T) {
 	o := newOrchestrator(testLogger)
 	dir := writeTestSkill(t, "test-skill", "A skill for orchestrator test.")
 
-	if err := o.RegisterSkill(dir); err != nil {
-		t.Fatalf("RegisterSkill: %v", err)
-	}
+	mustAddSkills(t, o, AddSkillConfig{Skill: loadTestSkillFromDir(t, dir), Client: &llm.Client{}})
 
 	sk := o.Skills()["test-skill"]
 	if sk == nil {
@@ -280,33 +278,31 @@ func TestRegisterSkill_LoadsLightweightSkill(t *testing.T) {
 	}
 }
 
-func TestRegisterSkill_StoresPerSkillClientFactory(t *testing.T) {
+func TestAddSkills_StoresRuntimeConfig(t *testing.T) {
 	o := newOrchestrator(testLogger)
 	client := &llm.Client{}
-	if err := o.RegisterSkill(writeTestSkill(t, "factory-skill", "Configured skill."), WithSkillClientFactory(func() (*llm.Client, error) {
-		return client, nil
-	})); err != nil {
-		t.Fatalf("RegisterSkill: %v", err)
+	convCfg := &llm.ConversationConfig{MaxSteps: 7}
+	mustAddSkills(t, o, AddSkillConfig{Skill: loadTestSkillFromDir(t, writeTestSkill(t, "factory-skill", "Configured skill.")), Client: client, Config: convCfg})
+	stored := o.skills["factory-skill"]
+	if stored.Skill == nil {
+		t.Fatal("expected skill config to be stored")
 	}
-	factory := o.skillClientByName["factory-skill"]
-	if factory == nil {
-		t.Fatal("expected per-skill client factory to be stored")
+	if stored.Client != client {
+		t.Fatalf("stored client = %p, want %p", stored.Client, client)
 	}
-	got, err := factory()
-	if err != nil {
-		t.Fatalf("factory(): %v", err)
-	}
-	if got != client {
-		t.Fatalf("factory() = %p, want %p", got, client)
+	if stored.Config == nil || stored.Config.MaxSteps != convCfg.MaxSteps {
+		t.Fatalf("stored config = %+v, want MaxSteps=%d", stored.Config, convCfg.MaxSteps)
 	}
 }
 
-func TestRegisterSkill_StoresAccessibleDirs(t *testing.T) {
+func TestAddSkills_PreservesAccessibleDirs(t *testing.T) {
 	o := newOrchestrator(testLogger)
 	extraDir := t.TempDir()
-	if err := o.RegisterSkill(writeTestSkill(t, "accessible-skill", "Configured skill."), WithSkillAccessibleDirs(extraDir)); err != nil {
-		t.Fatalf("RegisterSkill: %v", err)
+	loaded := loadTestSkillFromDir(t, writeTestSkill(t, "accessible-skill", "Configured skill."))
+	if err := loaded.WithAccessibleDirs(extraDir); err != nil {
+		t.Fatalf("WithAccessibleDirs: %v", err)
 	}
+	mustAddSkills(t, o, AddSkillConfig{Skill: loaded, Client: &llm.Client{}})
 	sk := o.Skills()["accessible-skill"]
 	if sk == nil {
 		t.Fatal("expected accessible-skill to be registered")
@@ -320,26 +316,22 @@ func TestRegisterSkill_StoresAccessibleDirs(t *testing.T) {
 	}
 }
 
-func TestRegisterSkill_RejectsDuplicateSkillNames(t *testing.T) {
+func TestAddSkills_RejectsDuplicateSkillNames(t *testing.T) {
 	o := newOrchestrator(testLogger)
-	if err := o.RegisterSkill(writeTestSkill(t, "duplicate", "first")); err != nil {
-		t.Fatalf("RegisterSkill(first): %v", err)
-	}
-	if err := o.RegisterSkill(writeTestSkill(t, "duplicate", "second")); err == nil {
+	mustAddSkills(t, o, newTestSkillConfig(t, "duplicate", "first", nil))
+	if err := o.AddSkills(newTestSkillConfig(t, "duplicate", "second", nil)); err == nil {
 		t.Fatal("expected duplicate registration to fail")
 	}
 }
 
-func TestRegisterSkill_AllowsChangesAfterStartup(t *testing.T) {
+func TestAddSkills_AllowsChangesAfterStartup(t *testing.T) {
 	o := newOrchestrator(testLogger)
 	if _, _, err := o.planFromRequest(context.Background(), &Request{Input: "summarize this repository"}); err != nil {
 		t.Fatalf("planFromRequest: %v", err)
 	}
 
 	dir := writeTestSkill(t, "late-skill", "Registered after startup.")
-	if err := o.RegisterSkill(dir); err != nil {
-		t.Fatalf("RegisterSkill: %v", err)
-	}
+	mustAddSkills(t, o, AddSkillConfig{Skill: loadTestSkillFromDir(t, dir), Client: &llm.Client{}})
 
 	sk := o.Skills()["late-skill"]
 	if sk == nil {
@@ -350,27 +342,49 @@ func TestRegisterSkill_AllowsChangesAfterStartup(t *testing.T) {
 	}
 }
 
-func TestRemoveSkill_AllowsChangesAfterStartup(t *testing.T) {
+func TestRemoveSkills_AllowsChangesAfterStartup(t *testing.T) {
 	o := newOrchestrator(testLogger)
-	if err := o.RegisterSkill(writeTestSkill(t, "ephemeral", "Removed after startup.")); err != nil {
-		t.Fatalf("RegisterSkill: %v", err)
-	}
+	mustAddSkills(t, o,
+		newTestSkillConfig(t, "ephemeral", "Removed after startup.", nil),
+		newTestSkillConfig(t, "ephemeral-2", "Also removed after startup.", nil),
+	)
 	if _, _, err := o.planFromRequest(context.Background(), &Request{Input: "summarize this repository"}); err != nil {
 		t.Fatalf("planFromRequest: %v", err)
 	}
 
-	if err := o.RemoveSkill("ephemeral"); err != nil {
-		t.Fatalf("RemoveSkill: %v", err)
+	if err := o.RemoveSkills("ephemeral", "ephemeral-2"); err != nil {
+		t.Fatalf("RemoveSkills: %v", err)
 	}
 	if sk := o.Skills()["ephemeral"]; sk != nil {
 		t.Fatal("expected ephemeral to be removed after startup")
 	}
+	if sk := o.Skills()["ephemeral-2"]; sk != nil {
+		t.Fatal("expected ephemeral-2 to be removed after startup")
+	}
 }
 
-func TestRemoveSkill_RejectsUnknownSkill(t *testing.T) {
+func TestRemoveSkills_RejectsUnknownSkill(t *testing.T) {
 	o := newOrchestrator(testLogger)
-	if err := o.RemoveSkill("missing"); err == nil {
-		t.Fatal("expected RemoveSkill to fail for an unknown skill")
+	if err := o.RemoveSkills("missing"); err == nil {
+		t.Fatal("expected RemoveSkills to fail for an unknown skill")
+	}
+}
+
+func TestRemoveSkills_IsAtomicOnValidationFailure(t *testing.T) {
+	o := newOrchestrator(testLogger)
+	mustAddSkills(t, o,
+		newTestSkillConfig(t, "kept", "Must remain registered.", nil),
+		newTestSkillConfig(t, "removed", "Would be removed if validation passed.", nil),
+	)
+
+	if err := o.RemoveSkills("removed", "missing"); err == nil {
+		t.Fatal("expected RemoveSkills to fail when one requested skill is unknown")
+	}
+	if sk := o.Skills()["removed"]; sk == nil {
+		t.Fatal("expected removed to remain registered after atomic validation failure")
+	}
+	if sk := o.Skills()["kept"]; sk == nil {
+		t.Fatal("expected kept to remain registered after atomic validation failure")
 	}
 }
 

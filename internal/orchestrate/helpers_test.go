@@ -87,6 +87,33 @@ func writeTestSkill(t *testing.T, name, description string) string {
 	return dir
 }
 
+func loadTestSkillFromDir(t *testing.T, dir string) *llm.Skill {
+	t.Helper()
+	sk, err := llm.New(dir, nil, nil)
+	if err != nil {
+		t.Fatalf("llm.New(%q): %v", dir, err)
+	}
+	return sk
+}
+
+func newTestSkillConfig(t *testing.T, name, description string, client *llm.Client) AddSkillConfig {
+	t.Helper()
+	if client == nil {
+		client = &llm.Client{}
+	}
+	return AddSkillConfig{
+		Skill:  loadTestSkillFromDir(t, writeTestSkill(t, name, description)),
+		Client: client,
+	}
+}
+
+func mustAddSkills(t *testing.T, o *Orchestrator, cfgs ...AddSkillConfig) {
+	t.Helper()
+	if err := o.AddSkills(cfgs...); err != nil {
+		t.Fatalf("AddSkills: %v", err)
+	}
+}
+
 func bindTestOrchestratorSkill(t *testing.T, outputs ...string) *llm.Skill {
 	t.Helper()
 	clearLLMEnv(t)
@@ -178,9 +205,7 @@ func mustPlanSingleNodeRunner(t *testing.T, o *Orchestrator) (*CoarsePlan, *runn
 
 func mustPlanSingleNodeRunnerWithOutputs(t *testing.T, o *Orchestrator, outputs ...string) (*CoarsePlan, *runnerpkg.Runner) {
 	t.Helper()
-	if err := o.RegisterSkill(writeTestSkill(t, "single", "Single-step runner.")); err != nil {
-		t.Fatalf("RegisterSkill(single): %v", err)
-	}
+	mustAddSkills(t, o, newTestSkillConfig(t, "single", "Single-step runner.", nil))
 	if len(outputs) == 0 {
 		outputs = []string{mustPlanJSON(t, &CoarsePlan{
 			Request: "run a single node",

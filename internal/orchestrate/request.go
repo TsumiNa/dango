@@ -53,12 +53,11 @@ func (o *Orchestrator) planFromRequest(ctx context.Context, req *Request) (coars
 	logger := o.logger
 	orchestratorSkill := o.orchestratorSkill
 	runnerStore := o.runnerStore
-	skills := cloneSkillMap(o.skills)
-	skillClients := cloneSkillClientFactories(o.skillClientByName)
+	skillConfigs := cloneAddSkillConfigs(o.skills)
 	o.mu.Unlock()
 	envClient, envClientErr := o.resolveEnvClient()
 
-	plan, reject, err := planWithOrchestratorSkill(ctx, req, skills, orchestratorSkill, envClient, envClientErr)
+	plan, reject, err := planWithOrchestratorSkill(ctx, req, cloneSkillMap(skillConfigs), orchestratorSkill, envClient, envClientErr)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -72,7 +71,7 @@ func (o *Orchestrator) planFromRequest(ctx context.Context, req *Request) (coars
 		return nil, nil, fmt.Errorf("orchestrate: planner returned neither a plan nor a reject reason")
 	}
 
-	runner, err := buildRunner(logger, orchestratorSkill.Client(), runnerStore, req, plan, skills, skillClients)
+	runner, err := buildRunner(logger, runnerStore, req, plan, skillConfigs)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -87,7 +86,7 @@ func (o *Orchestrator) planFromRequest(ctx context.Context, req *Request) (coars
 	return plan, nil, nil
 }
 
-func buildRunner(logger *slog.Logger, client *llm.Client, store runnerpkg.RunnerStore, req *Request, plan *CoarsePlan, skills map[string]*llm.Skill, skillClients map[string]SkillClientFactory) (*runnerpkg.Runner, error) {
+func buildRunner(logger *slog.Logger, store runnerpkg.RunnerStore, req *Request, plan *CoarsePlan, skills map[string]AddSkillConfig) (*runnerpkg.Runner, error) {
 	if len(plan.Nodes) == 0 {
 		return nil, fmt.Errorf("orchestrate: coarse plan must contain at least one node")
 	}
@@ -103,8 +102,8 @@ func buildRunner(logger *slog.Logger, client *llm.Client, store runnerpkg.Runner
 		if step.SkillName == "" {
 			return nil, fmt.Errorf("orchestrate: coarse plan node %q has empty skill name", step.ID)
 		}
-		sk := skills[step.SkillName]
-		if sk == nil {
+		skillCfg, ok := skills[step.SkillName]
+		if !ok || skillCfg.Skill == nil {
 			return nil, fmt.Errorf("orchestrate: coarse plan node %q references unregistered skill %q", step.ID, step.SkillName)
 		}
 
@@ -115,7 +114,7 @@ func buildRunner(logger *slog.Logger, client *llm.Client, store runnerpkg.Runner
 		if planner.TaskDescription == "" {
 			planner.TaskDescription = req.Input
 		}
-		executor, err := NewExecutor(logger, sk, planner, client, skillClients[step.SkillName])
+		executor, err := NewExecutor(logger, skillCfg.Skill, skillCfg.Client, skillCfg.Config, planner)
 		if err != nil {
 			return nil, fmt.Errorf("orchestrate: build executor for node %q: %w", step.ID, err)
 		}
@@ -141,18 +140,22 @@ func buildRunner(logger *slog.Logger, client *llm.Client, store runnerpkg.Runner
 	), nil
 }
 
-func cloneSkillMap(skills map[string]*llm.Skill) map[string]*llm.Skill {
-	copyMap := make(map[string]*llm.Skill, len(skills))
-	for name, sk := range skills {
-		copyMap[name] = sk
+func cloneAddSkillConfigs(skills map[string]AddSkillConfig) map[string]AddSkillConfig {
+	copyMap := make(map[string]AddSkillConfig, len(skills))
+	for name, cfg := range skills {
+		copyMap[name] = AddSkillConfig{
+			Skill:  cfg.Skill,
+			Client: cfg.Client,
+			Config: cloneConversationConfig(cfg.Config),
+		}
 	}
 	return copyMap
 }
 
-func cloneSkillClientFactories(factories map[string]SkillClientFactory) map[string]SkillClientFactory {
-	copyMap := make(map[string]SkillClientFactory, len(factories))
-	for name, factory := range factories {
-		copyMap[name] = factory
+func cloneSkillMap(skills map[string]AddSkillConfig) map[string]*llm.Skill {
+	copyMap := make(map[string]*llm.Skill, len(skills))
+	for name, cfg := range skills {
+		copyMap[name] = cfg.Skill
 	}
 	return copyMap
 }
