@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -195,13 +196,11 @@ func configureDemoOrchestrator(ctx context.Context, logger *slog.Logger) (*orche
 	}
 	plannerServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		var req struct {
-			Input string `json:"input"`
-		}
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		input, err := demoPlannerInputFromOpenAIRequest(r.Body)
+		if err != nil {
 			fatalf("decode planner request: %v", err)
 		}
-		plannerRequest, err := demoPlannerRequestFromInput(req.Input)
+		plannerRequest, err := demoPlannerRequestFromInput(input)
 		if err != nil {
 			fatalf("parse planner input: %v", err)
 		}
@@ -265,6 +264,73 @@ func configureDemoOrchestrator(ctx context.Context, logger *slog.Logger) (*orche
 		plannerServer.Close()
 		_ = os.RemoveAll(root)
 	}
+}
+
+func demoPlannerInputFromOpenAIRequest(r io.Reader) (string, error) {
+	var req struct {
+		Input json.RawMessage `json:"input"`
+	}
+	if err := json.NewDecoder(r).Decode(&req); err != nil {
+		return "", err
+	}
+	return demoPlannerInputFromResponsesInput(req.Input)
+}
+
+func demoPlannerInputFromResponsesInput(raw json.RawMessage) (string, error) {
+	if strings.TrimSpace(string(raw)) == "" || strings.TrimSpace(string(raw)) == "null" {
+		return "", fmt.Errorf("missing input")
+	}
+	var text string
+	if err := json.Unmarshal(raw, &text); err == nil {
+		return text, nil
+	}
+
+	var items []struct {
+		Role    string          `json:"role"`
+		Content json.RawMessage `json:"content"`
+		Text    string          `json:"text"`
+	}
+	if err := json.Unmarshal(raw, &items); err != nil {
+		return "", err
+	}
+	for i := len(items) - 1; i >= 0; i-- {
+		if items[i].Role != "" && items[i].Role != "user" {
+			continue
+		}
+		if text, ok := demoPlannerTextFromContent(items[i].Content); ok {
+			return text, nil
+		}
+		if items[i].Text != "" {
+			return items[i].Text, nil
+		}
+	}
+	return "", fmt.Errorf("responses input did not contain user text")
+}
+
+func demoPlannerTextFromContent(raw json.RawMessage) (string, bool) {
+	if strings.TrimSpace(string(raw)) == "" || strings.TrimSpace(string(raw)) == "null" {
+		return "", false
+	}
+	var text string
+	if err := json.Unmarshal(raw, &text); err == nil {
+		return text, true
+	}
+	var parts []struct {
+		Text string `json:"text"`
+	}
+	if err := json.Unmarshal(raw, &parts); err != nil {
+		return "", false
+	}
+	texts := make([]string, 0, len(parts))
+	for _, part := range parts {
+		if part.Text != "" {
+			texts = append(texts, part.Text)
+		}
+	}
+	if len(texts) == 0 {
+		return "", false
+	}
+	return strings.Join(texts, "\n"), true
 }
 
 func demoPlannerRequestFromInput(input string) (*struct {
