@@ -31,7 +31,7 @@ flowchart LR
 	subgraph Orchestrator Layer
 		O --> REQ[Request Validation]
 		O --> OS[Orchestrator Skill\nembedded builtin/SKILL.md\nor caller override]
-		O --> SK[Skill Registry\nlightweight skills + per-skill client factories]
+		O --> SK[Skill Registry\nlightweight skills + AddSkillConfig\nClient / Config / AccessibleDirs]
 		O --> BR[buildRunner]
 		O --> Q[Priority Queue + Execution Slot Control]
 		O --> RM[Runner Registry + Query / Subscribe / Remove]
@@ -46,6 +46,7 @@ flowchart LR
 
 	subgraph Runner Layer
 		R --> PH[Phase State Machine]
+		R --> BIND[Runner-owned Skill Bind\nBindForRunner + session reuse]
 		R --> VIEW[RunnerView / RunnerSnapshot]
 		R --> UPD[RunnerUpdate Stream]
 		R --> EVT[RunnerEvent Stream]
@@ -86,7 +87,7 @@ sequenceDiagram
 	C->>O: StartRequest(ctx, req)
 	O->>O: validate request priority
 	O->>O: planFromRequest(ctx, req)
-	O->>O: snapshot skills / config / runnerStore
+	O->>O: snapshot AddSkillConfig registry / runnerStore
 	O->>O: resolveEnvClient() once
 	O->>S: planWithOrchestratorSkill(ctx, req, skill summaries)
 	S-->>O: CoarsePlan or RejectReason
@@ -94,7 +95,7 @@ sequenceDiagram
 	alt planner rejects
 		O-->>C: RejectReason
 	else planner returns coarse plan
-		O->>O: buildRunner(plan, registered skills)
+		O->>O: buildRunner(plan, AddSkillConfig registry)
 		O->>O: store runner in registry
 		O->>O: watchRunnerDone(runner)
 
@@ -105,6 +106,8 @@ sequenceDiagram
 			Note over O,R: queued runner does not hold an execution slot
 		end
 	end
+
+	R->>R: prepareNodeExecutors(initial nodes; bind skills and allocate/reuse session ids)
 
 	par polish initial nodes
 		R->>E: Polish(ctx)
@@ -143,6 +146,7 @@ sequenceDiagram
 		end
 
 		O->>R: ReplanWith(ctx, revisedPlan, rebuilt nodes)
+		R->>R: prepareNodeExecutors(replanned nodes; bind skills and reuse session ids)
 		R->>E: Polish(ctx) again
 		E-->>R: revised fragments
 		R-->>C: RunnerUpdate(phase=awaiting_review)
@@ -151,6 +155,7 @@ sequenceDiagram
 		C->>O: AcceptRunnerPlan(ctx, runnerID, reviewedPlan)
 		O->>O: reserve execution slot
 		O->>R: AcceptPolishedPlan(ctx, reviewedPlan)
+		R->>R: prepareNodeExecutors(executing nodes; rebind before engine launch)
 		R-->>C: RunnerUpdate(phase=executing)
 	end
 
@@ -193,7 +198,7 @@ sequenceDiagram
 除此之外，Orchestrator 还负责：
 
 - startup-only 配置：`SetLogger`、`SetOrchestratorSkill`、`SetOrchestratorSkillDir`、`SetRunnerStore`、`SetMaxRunningRunners`。
-- runtime 可变注册表：`RegisterSkill` / `RemoveSkill`。
+- runtime 可变注册表：`AddSkills` / `RemoveSkills`。
 - 把 `CoarsePlanNode` materialize 成 `Runner + Node + Executor` 图。
 - 管理 `runners`、`runningRunnerIDs`、优先级队列和 `watchRunnerDone`。
 - 对外暴露 `QueryRunner`、`SubscribeRunner`、`LoadRunnerRecords`、`RemoveRunner`、`ReviewRunnerPlan`、`AcceptRunnerPlan`、`RejectRunnerPlan`、`ReplanRunner`、`CompleteRunner` 等控制面 API。
@@ -242,12 +247,11 @@ sequenceDiagram
 当前 `Executor` 还有一个实现细节值得写清：它持有的是 skill 的“运行时绑定逻辑”，而不是只持有一份静态 prompt 文件。也正因为如此，这轮 PR 先把 skill 初始化、绑定边界、client 选择顺序、runner 调用面收敛稳定，后面再继续往 skill prompt / memo 能力上填内容会更自然。
 
 - `llm.New` 只负责读取 `SKILL.md`、保存 skill workspace `fs.FS`、bash allow/block 和 tools；它不会创建 LLM client 或 conversation。
-- 每个 skill 在 New 阶段都会拿到独立的临时 playground。内置工具的相对路径和 shell cwd 都落在这个临时目录；绝对路径只允许指向该临时目录、本地目录 skill 的 source root，或用户通过 `Skill.WithAccessibleDirs` / `WithSkillAccessibleDirs` 追加的目录，从而把脚本执行区、用户指定的额外访问区和越界保护一起收敛在 `Skill` 的 workspace 设计里。
+- 每个 skill 在 New 阶段都会拿到独立的临时 playground。内置工具的相对路径和 shell cwd 都落在这个临时目录；绝对路径只允许指向该临时目录、本地目录 skill 的 source root，或用户通过 `Skill.WithAccessibleDirs` 追加的目录，从而把脚本执行区、用户指定的额外访问区和越界保护一起收敛在 `Skill` 的 workspace 设计里。
 - Bind 时会把 workspace 使用说明附加到 runtime instruction：source root 适合作为 skill 自身的工作区，temp playground 适合试错和中间产物，用户追加目录则完全按用户给定意图使用。
-- 注册到 orchestrator 里的通常是这种 lightweight skill，本地目录注册会在初始化时把目录内置工具一并放进 skill。
-- 真正运行前，executor 会调用 `Skill.Bind(client, conversationConfig, sessionID, stores...)` 把 skill bind 成 runnable skill。
-- client 解析优先级是：环境变量缓存 client -> skill 自带 client -> per-skill client factory -> orchestrator fallback client。
-- `Bind` 的 client 为 nil 时会从环境构造 client；本地目录 skill 如果有自己的 `.env`，会优先把该 `.env` 作为 env source。
+- 注册到 orchestrator 里的通常是这种 lightweight skill，本地目录注册会在 `AddSkills` 阶段把目录内置工具一并放进 skill；`AddSkillConfig` 则同时携带 `Client`、`ConversationConfig` 和 `AccessibleDirs` 这三类运行时绑定输入。
+- 真正运行前，runner 会通过 executor 的 `BindForRunner` 调用 `Skill.Bind(client, conversationConfig, sessionID, stores...)`，并负责填充与复用最后两个 session 参数。
+- executor 自身只保存 `bindClient` / `bindConfig`。如果 `AddSkillConfig.Client` 为空，`Skill.Bind` 会结合 skill 的 `.env` 文件回退到 `NewClientFromEnv(...)`。
 - `Bind` 的 session store 为空时 conversation 只存在于内存中；有 store 时，nil session id 会自动创建新 id，显式 session id 必须已经存在；多个 store 会同时写入同一份 event log。
 
 因此，Executor 不关心全局 queue、slot、review 状态；它只关心“这个 node 在当前阶段应该如何返回 fragment / output / summary”。
