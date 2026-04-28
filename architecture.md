@@ -77,109 +77,109 @@ flowchart LR
 
 ```mermaid
 sequenceDiagram
-	autonumber
-	participant C as Caller
-	participant O as Orchestrator
-	participant S as Orchestrator Skill
-	participant R as Runner
-	participant E as Executor(s)
+    autonumber
+    participant C as Caller
+    participant O as Orchestrator
+    participant S as Orchestrator Skill
+    participant R as Runner
+    participant E as Executor(s)
 
-	C->>O: StartRequest(ctx, req)
-	O->>O: validate request priority
-	O->>O: planFromRequest(ctx, req)
-	O->>O: snapshot AddSkillConfig registry / runnerStore
-	O->>O: resolveEnvClient() once
-	O->>S: planWithOrchestratorSkill(ctx, req, skill summaries)
-	S-->>O: CoarsePlan or RejectReason
+    C->>O: StartRequest(ctx, req)
+    O->>O: validate request priority
+    O->>O: planFromRequest(ctx, req)
+    O->>O: snapshot AddSkillConfig registry / runnerStore
+    O->>O: resolveEnvClient() once
+    O->>S: planWithOrchestratorSkill(ctx, req, skill summaries)
+    S-->>O: CoarsePlan or RejectReason
 
-	alt planner rejects
-		O-->>C: RejectReason
-	else planner returns coarse plan
-		O->>O: buildRunner(plan, AddSkillConfig registry)
-		O->>O: store runner in registry
-		O->>O: watchRunnerDone(runner)
+    alt planner rejects
+        O-->>C: RejectReason
+    else planner returns coarse plan
+        O->>O: buildRunner(plan, AddSkillConfig registry)
+        O->>O: store runner in registry
+        O->>O: watchRunnerDone(runner)
 
-		alt no execution limit or queue has capacity to start polish now
-			O->>R: StartPolish(ctx)
-		else execution limit blocks new starts
-			O->>O: enqueue runner by priority
-			Note over O,R: queued runner does not hold an execution slot
-		end
-	end
+        alt no execution limit or queue has capacity to start polish now
+            O->>R: StartPolish(ctx)
+        else execution limit blocks new starts
+            O->>O: enqueue runner by priority
+            Note over O,R: queued runner does not hold an execution slot
+        end
+    end
 
-	R->>R: prepareNodeExecutors(initial nodes; bind skills and allocate/reuse session ids)
+    R->>R: prepareNodeExecutors(initial nodes&#59; bind skills and allocate/reuse session ids)
 
-	par polish initial nodes
-		R->>E: Polish(ctx)
-		E-->>R: planner fragment
-	and polish initial nodes
-		R->>E: Polish(ctx)
-		E-->>R: planner fragment
-	end
+    par polish initial nodes:
+        R->>E: Polish(ctx)
+        E-->>R: planner fragment
+    and polish initial nodes:
+        R->>E: Polish(ctx)
+        E-->>R: planner fragment
+    end
 
-	R->>R: save PolishFragments
-	R-->>C: RunnerUpdate(phase=awaiting_review)
+    R->>R: save PolishFragments
+    R-->>C: RunnerUpdate(phase=awaiting_review)
 
-	opt caller wants an explicit review decision first
-		C->>O: ReviewRunnerPlan(ctx, runnerID)
-		O->>S: reviewWithOrchestratorSkill(ctx, plan, polishFragments)
-		S-->>O: PlanReview
-		O-->>C: approved / rejected + reason
-	end
+    opt caller wants an explicit review decision first
+        C->>O: ReviewRunnerPlan(ctx, runnerID)
+        O->>S: reviewWithOrchestratorSkill(ctx, plan, polishFragments)
+        S-->>O: PlanReview
+        O-->>C: approved / rejected + reason
+    end
 
-	alt plan is rejected
-		C->>O: RejectRunnerPlan(ctx, runnerID, reason)
-		opt reason == ""
-			O->>O: ReviewRunnerPlan(ctx, runnerID)
-			O->>S: reviewWithOrchestratorSkill(...)
-			S-->>O: rejection reason
-		end
-		O->>R: RejectPolishedPlan(reason)
-		R-->>C: RunnerUpdate(phase=awaiting_replan)
+    alt plan is rejected
+        C->>O: RejectRunnerPlan(ctx, runnerID, reason)
+        opt reason == ""
+            O->>O: ReviewRunnerPlan(ctx, runnerID)
+            O->>S: reviewWithOrchestratorSkill(...)
+            S-->>O: rejection reason
+        end
+        O->>R: RejectPolishedPlan(reason)
+        R-->>C: RunnerUpdate(phase=awaiting_replan)
 
-		alt caller provides revised plan
-			C->>O: ReplanRunner(ctx, runnerID, revisedPlan)
-		else caller asks orchestrator to regenerate
-			C->>O: ReplanRunner(ctx, runnerID, nil)
-			O->>S: replanWithOrchestratorSkill(ctx, request, currentPlan, reason, polishFragments)
-			S-->>O: revised CoarsePlan
-		end
+        alt caller provides revised plan
+            C->>O: ReplanRunner(ctx, runnerID, revisedPlan)
+        else caller asks orchestrator to regenerate
+            C->>O: ReplanRunner(ctx, runnerID, nil)
+            O->>S: replanWithOrchestratorSkill(ctx, request, currentPlan, reason, polishFragments)
+            S-->>O: revised CoarsePlan
+        end
 
-		O->>R: ReplanWith(ctx, revisedPlan, rebuilt nodes)
-		R->>R: prepareNodeExecutors(replanned nodes; bind skills and reuse session ids)
-		R->>E: Polish(ctx) again
-		E-->>R: revised fragments
-		R-->>C: RunnerUpdate(phase=awaiting_review)
+        O->>R: ReplanWith(ctx, revisedPlan, rebuilt nodes)
+        R->>R: prepareNodeExecutors(replanned nodes&#59; bind skills and reuse session ids)
+        R->>E: Polish(ctx) again
+        E-->>R: revised fragments
+        R-->>C: RunnerUpdate(phase=awaiting_review)
 
-	else plan is accepted
-		C->>O: AcceptRunnerPlan(ctx, runnerID, reviewedPlan)
-		O->>O: reserve execution slot
-		O->>R: AcceptPolishedPlan(ctx, reviewedPlan)
-		R->>R: prepareNodeExecutors(executing nodes; rebind before engine launch)
-		R-->>C: RunnerUpdate(phase=executing)
-	end
+    else plan is accepted
+        C->>O: AcceptRunnerPlan(ctx, runnerID, reviewedPlan)
+        O->>O: reserve execution slot
+        O->>R: AcceptPolishedPlan(ctx, reviewedPlan)
+        R->>R: prepareNodeExecutors(executing nodes&#59; rebind before engine launch)
+        R-->>C: RunnerUpdate(phase=executing)
+    end
 
-	loop dependency-driven execution
-		R->>E: Execute(ctx, parentOutputs)
-		E-->>R: output, optional newNodes
-		R-->>C: RunnerUpdate(Event + Snapshot)
-	end
+    loop dependency-driven execution
+        R->>E: Execute(ctx, parentOutputs)
+        E-->>R: output, optional newNodes
+        R-->>C: RunnerUpdate(Event + Snapshot)
+    end
 
-	C->>O: CompleteRunner(ctx, runnerID)
-	O->>R: Complete(ctx)
+    C->>O: CompleteRunner(ctx, runnerID)
+    O->>R: Complete(ctx)
 
-	par report completed nodes
-		R->>E: Report(ctx, output)
-		E-->>R: summary
-	and report completed nodes
-		R->>E: Report(ctx, output)
-		E-->>R: summary
-	end
+    par report completed nodes
+        R->>E: Report(ctx, output)
+        E-->>R: summary
+        and report completed nodes
+            R->>E: Report(ctx, output)
+            E-->>R: summary
+    end
 
-	R->>R: save ReportSummaries
-	R-->>C: terminal RunnerUpdate(phase=settled)
-	O->>O: release execution slot on EngineIdle / Done()
-	O->>O: drain queued runners into StartPolish
+    R->>R: save ReportSummaries
+    R-->>C: terminal RunnerUpdate(phase=settled)
+    O->>O: release execution slot on EngineIdle / Done()
+    O->>O: drain queued runners into StartPolish
 ```
 
 ## 三者之间的职责边界
