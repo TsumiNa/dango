@@ -31,7 +31,7 @@ func TestRuntimeOrchestratorSkill_PrefersInitializedSkillClient(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Bind(default orchestrator skill): %v", err)
 	}
-	runtimeSkill, err := runtimeOrchestratorSkill(sk, envClient, nil)
+	runtimeSkill, err := runtimeOrchestrator(sk, envClient, nil)
 	if err != nil {
 		t.Fatalf("runtimeOrchestratorSkill: %v", err)
 	}

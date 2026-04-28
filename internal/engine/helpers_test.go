@@ -3,6 +3,7 @@ package engine
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"log/slog"
 	"net/http"
@@ -211,23 +212,39 @@ func mustPlanSingleNodeRunnerWithOutputs(t *testing.T, o *Orchestrator, outputs 
 				SkillName:       "single",
 				TaskDescription: "Run the only node.",
 			}},
-		})}
+		}), mustReviewJSON(t, true, "")}
+	} else if len(outputs) == 1 {
+		outputs = append(outputs, mustReviewJSON(t, true, ""))
 	}
 	if err := o.SetOrchestratorSkill(bindTestOrchestratorSkill(t, outputs...)); err != nil {
 		t.Fatalf("SetOrchestratorSkill: %v", err)
 	}
-	plan, reject, err := o.planFromRequest(context.Background(), &Request{Input: "run a single node"})
+	runnerID, err := o.StartRequest(context.Background(), &Request{Input: "run a single node"})
 	if err != nil {
-		t.Fatalf("planFromRequest: %v", err)
+		t.Fatalf("StartRequest: %v", err)
 	}
-	if reject != nil {
-		t.Fatalf("reject = %+v, want nil", reject)
-	}
-	managedRunner, ok := o.Runners()[plan.RunnerID]
+	managedRunner, ok := o.Runners()[runnerID]
 	if !ok || managedRunner == nil {
-		t.Fatalf("expected runner %q to be stored", plan.RunnerID)
+		t.Fatalf("expected runner %q to be stored", runnerID)
+	}
+	plan := managedRunner.Plan()
+	if plan == nil {
+		t.Fatal("expected runner plan to be populated")
 	}
 	return plan, managedRunner
+}
+
+func mustRejectStartRequest(t *testing.T, o *Orchestrator) *RejectReason {
+	t.Helper()
+	_, err := o.StartRequest(context.Background(), &Request{Input: "summarize this repository"})
+	var rejected *RequestRejectedError
+	if !errors.As(err, &rejected) {
+		t.Fatalf("StartRequest rejection err = %v, want RequestRejectedError", err)
+	}
+	if rejected.Reason == nil {
+		t.Fatal("RequestRejectedError.Reason = nil")
+	}
+	return rejected.Reason
 }
 
 func mustNewRunnerStore(t *testing.T, dir string) *runnerpkg.JSONRunnerStore {
@@ -278,13 +295,15 @@ func waitForRunnerUpdateClosed(t *testing.T, ch <-chan RunnerUpdate, label strin
 	t.Helper()
 	timer := time.NewTimer(2 * time.Second)
 	defer timer.Stop()
-	select {
-	case _, ok := <-ch:
-		if ok {
-			t.Fatalf("runner update stream still open while waiting for %s", label)
+	for {
+		select {
+		case _, ok := <-ch:
+			if !ok {
+				return
+			}
+		case <-timer.C:
+			t.Fatalf("timed out waiting for runner update stream to close: %s", label)
 		}
-	case <-timer.C:
-		t.Fatalf("timed out waiting for runner update stream to close: %s", label)
 	}
 }
 

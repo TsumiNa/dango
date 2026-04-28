@@ -2,33 +2,29 @@ package engine
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
 	"github.com/tsumina/dango/internal/llm"
 )
 
-func TestPlanFromRequest_ReturnsRejectWithoutPlanner(t *testing.T) {
+func TestStartRequest_ReturnsRejectedErrorWithoutPlanner(t *testing.T) {
 	o := newOrchestrator(testLogger)
-	plan, reject, err := o.planFromRequest(context.Background(), &Request{Input: "summarize this repository"})
-	if err != nil {
-		t.Fatalf("planFromRequest: %v", err)
+	_, err := o.StartRequest(context.Background(), &Request{Input: "summarize this repository"})
+	var rejected *RequestRejectedError
+	if !errors.As(err, &rejected) {
+		t.Fatalf("StartRequest err = %v, want RequestRejectedError", err)
 	}
-	if plan != nil {
-		t.Fatalf("plan = %#v, want nil", plan)
-	}
-	if reject == nil {
-		t.Fatal("expected a reject reason when no planner is configured")
-	}
-	if reject.Summary == "" || reject.Analysis == "" {
-		t.Errorf("reject = %+v, want populated summary and analysis", reject)
+	if rejected.Reason == nil || rejected.Reason.Summary == "" || rejected.Reason.Analysis == "" {
+		t.Fatalf("rejected reason = %+v, want populated summary and analysis", rejected.Reason)
 	}
 	if len(o.Runners()) != 0 {
 		t.Fatalf("expected no runners to be created on rejection")
 	}
 }
 
-func TestPlanFromRequest_BuildsRunnerFromPlan(t *testing.T) {
+func TestStartRequest_BuildsRunnerFromPlanAndReturnsID(t *testing.T) {
 	clearLLMEnv(t)
 	o := newOrchestrator(testLogger)
 	perSkillClient := &llm.Client{}
@@ -41,37 +37,36 @@ func TestPlanFromRequest_BuildsRunnerFromPlan(t *testing.T) {
 		newTestSkillConfig(t, "plan", "Draft a plan.", perSkillClient),
 		newTestSkillConfig(t, "execute", "Execute a plan.", executeClient),
 	)
-	orchestratorSkill := bindTestOrchestratorSkill(t, mustPlanJSON(t, &CoarsePlan{
-		Request: "build a report",
-		Nodes: []CoarsePlanNode{
-			{ID: "draft", SkillName: "plan", TaskDescription: "Draft the execution outline."},
-			{ID: "run", SkillName: "execute", TaskDescription: "Execute the approved outline.", DependsOn: []string{"draft"}},
-		},
-	}))
-	if err := o.SetOrchestratorSkill(orchestratorSkill); err != nil {
+	if err := o.SetOrchestratorSkill(bindTestOrchestratorSkill(t,
+		mustPlanJSON(t, &CoarsePlan{
+			Request: "build a report",
+			Nodes: []CoarsePlanNode{
+				{ID: "draft", SkillName: "plan", TaskDescription: "Draft the execution outline."},
+				{ID: "run", SkillName: "execute", TaskDescription: "Execute the approved outline.", DependsOn: []string{"draft"}},
+			},
+		}),
+		mustReviewJSON(t, true, ""),
+	)); err != nil {
 		t.Fatalf("SetOrchestratorSkill(test planner): %v", err)
 	}
 
-	plan, reject, err := o.planFromRequest(context.Background(), &Request{Input: "build a report"})
+	runnerID, err := o.StartRequest(context.Background(), &Request{Input: "build a report"})
 	if err != nil {
-		t.Fatalf("planFromRequest: %v", err)
+		t.Fatalf("StartRequest: %v", err)
 	}
-	if reject != nil {
-		t.Fatalf("reject = %+v, want nil", reject)
-	}
-	if plan == nil {
-		t.Fatal("expected a coarse plan")
-	}
-	if plan.RunnerID == "" {
-		t.Fatal("expected coarse plan to be annotated with a runner ID")
+	if runnerID == "" {
+		t.Fatal("runnerID is empty")
 	}
 
-	managedRunner := o.Runners()[plan.RunnerID]
+	managedRunner := o.Runners()[runnerID]
 	if managedRunner == nil {
-		t.Fatalf("expected runner %q to be stored", plan.RunnerID)
+		t.Fatalf("expected runner %q to be stored", runnerID)
 	}
-	if managedRunner.ID() != plan.RunnerID {
-		t.Errorf("Runner.ID() = %q, want %q", managedRunner.ID(), plan.RunnerID)
+	if managedRunner.ID() != runnerID {
+		t.Errorf("Runner.ID() = %q, want %q", managedRunner.ID(), runnerID)
+	}
+	if managedRunner.PlannerSkill() == nil {
+		t.Fatal("expected runner planner skill to be configured")
 	}
 	if len(managedRunner.Nodes()) != 2 {
 		t.Fatalf("len(Nodes) = %d, want 2", len(managedRunner.Nodes()))
@@ -102,9 +97,22 @@ func TestPlanFromRequest_BuildsRunnerFromPlan(t *testing.T) {
 	if got := runExecutor.Planner().TaskDescription; got != "Execute the approved outline." {
 		t.Errorf("run task description = %q, want %q", got, "Execute the approved outline.")
 	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	if err := managedRunner.Wait(ctx); err != nil {
+		t.Fatalf("runner Wait: %v", err)
+	}
+	view, err := o.QueryRunner(runnerID)
+	if err != nil {
+		t.Fatalf("QueryRunner: %v", err)
+	}
+	if view.Phase != PhaseSettled {
+		t.Fatalf("final phase = %q, want settled", view.Phase)
+	}
 }
 
-func TestPlanFromRequest_ErrorsWhenPlanUsesUnknownSkill(t *testing.T) {
+func TestStartRequest_ErrorsWhenPlanUsesUnknownSkill(t *testing.T) {
 	o := newOrchestrator(testLogger)
 	if err := o.SetOrchestratorSkill(bindTestOrchestratorSkill(t, mustPlanJSON(t, &CoarsePlan{
 		Request: "process images",
@@ -113,90 +121,16 @@ func TestPlanFromRequest_ErrorsWhenPlanUsesUnknownSkill(t *testing.T) {
 		t.Fatalf("SetOrchestratorSkill(test planner): %v", err)
 	}
 
-	plan, reject, err := o.planFromRequest(context.Background(), &Request{Input: "process images"})
+	runnerID, err := o.StartRequest(context.Background(), &Request{Input: "process images"})
 	if err == nil {
 		t.Fatal("expected error when the plan references an unknown skill")
 	}
-	if plan != nil || reject != nil {
-		t.Fatalf("expected nil plan and reject on internal plan error, got plan=%v reject=%v", plan, reject)
+	if runnerID != "" {
+		t.Fatalf("runnerID = %q, want empty", runnerID)
 	}
 	if len(o.Runners()) != 0 {
 		t.Fatalf("expected no runners to be stored when plan assembly fails")
 	}
-}
-
-func TestStartRequest_StartsRunnerImmediately(t *testing.T) {
-	o := newOrchestrator(testLogger)
-	mustAddSkills(t, o, newTestSkillConfig(t, "single", "Single-step runner.", nil))
-	if err := o.SetOrchestratorSkill(bindTestOrchestratorSkill(t, mustPlanJSON(t, &CoarsePlan{
-		Request: "run now",
-		Nodes: []CoarsePlanNode{{
-			ID:              "only",
-			SkillName:       "single",
-			TaskDescription: "Run the only node.",
-		}},
-	}))); err != nil {
-		t.Fatalf("SetOrchestratorSkill(test planner): %v", err)
-	}
-
-	ctx, cancel := context.WithCancel(context.Background())
-	plan, reject, err := o.StartRequest(ctx, &Request{Input: "run now"})
-	if err != nil {
-		t.Fatalf("StartRequest: %v", err)
-	}
-	if reject != nil {
-		t.Fatalf("reject = %+v, want nil", reject)
-	}
-	deadline := time.Now().Add(2 * time.Second)
-	for time.Now().Before(deadline) {
-		view, queryErr := o.QueryRunner(plan.RunnerID)
-		if queryErr != nil {
-			t.Fatalf("QueryRunner: %v", queryErr)
-		}
-		if view.Phase == PhaseAwaitingReview {
-			if err := o.AcceptRunnerPlan(ctx, plan.RunnerID, plan); err != nil {
-				t.Fatalf("AcceptRunnerPlan: %v", err)
-			}
-		}
-		if view.State.Status == RunnerStatusRunning || view.State.Status == RunnerStatusIdle {
-			cancel()
-			finalDeadline := time.Now().Add(2 * time.Second)
-			for time.Now().Before(finalDeadline) {
-				finalView, finalErr := o.QueryRunner(plan.RunnerID)
-				if finalErr != nil {
-					t.Fatalf("QueryRunner(final): %v", finalErr)
-				}
-				if finalView.State.Status == RunnerStatusCanceled {
-					return
-				}
-				time.Sleep(10 * time.Millisecond)
-			}
-			t.Fatal("runner did not reach canceled after StartRequest context cancellation")
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
-	cancel()
-	t.Fatal("runner did not start after StartRequest")
-}
-
-func TestStartRequest_EntersAwaitingReviewBeforeAccept(t *testing.T) {
-	o := newOrchestrator(testLogger)
-	plan, _ := mustPlanSingleNodeRunner(t, o)
-	if err := o.StartRunner(context.Background(), plan.RunnerID); err != nil {
-		t.Fatalf("StartRunner: %v", err)
-	}
-	deadline := time.Now().Add(2 * time.Second)
-	for time.Now().Before(deadline) {
-		view, queryErr := o.QueryRunner(plan.RunnerID)
-		if queryErr != nil {
-			t.Fatalf("QueryRunner: %v", queryErr)
-		}
-		if view.Phase == PhaseAwaitingReview {
-			return
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
-	t.Fatal("runner did not reach awaiting review")
 }
 
 func TestStartRequest_RejectsPriorityOutsideRange(t *testing.T) {
@@ -214,12 +148,12 @@ func TestStartRequest_RejectsPriorityOutsideRange(t *testing.T) {
 	}
 
 	for _, priority := range []RequestPriority{-1, RequestPriorityHighest + 1} {
-		plan, reject, err := o.StartRequest(context.Background(), &Request{Input: "run now", Priority: priority})
+		runnerID, err := o.StartRequest(context.Background(), &Request{Input: "run now", Priority: priority})
 		if err == nil {
 			t.Fatalf("expected StartRequest to reject priority %d", priority)
 		}
-		if plan != nil || reject != nil {
-			t.Fatalf("expected nil plan and reject for invalid priority %d, got plan=%v reject=%v", priority, plan, reject)
+		if runnerID != "" {
+			t.Fatalf("expected empty runnerID for invalid priority %d, got %q", priority, runnerID)
 		}
 		if len(o.Runners()) != 0 {
 			t.Fatalf("expected no runners to be created for invalid priority %d", priority)

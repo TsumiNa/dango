@@ -57,9 +57,7 @@ type testContextKey string
 
 func TestSetLogger_RejectsChangesAfterStartup(t *testing.T) {
 	o := newOrchestrator(testLogger)
-	if _, _, err := o.planFromRequest(context.Background(), &Request{Input: "summarize this repository"}); err != nil {
-		t.Fatalf("planFromRequest: %v", err)
-	}
+	mustRejectStartRequest(t, o)
 	if err := o.SetLogger(newDiscardLogger()); err == nil {
 		t.Fatal("expected SetLogger to fail after startup")
 	}
@@ -70,9 +68,7 @@ func TestSetLogger_RejectsChangesAfterStartup(t *testing.T) {
 
 func TestSetRunnerStore_RejectsChangesAfterStartup(t *testing.T) {
 	o := newOrchestrator(testLogger)
-	if _, _, err := o.planFromRequest(context.Background(), &Request{Input: "summarize this repository"}); err != nil {
-		t.Fatalf("planFromRequest: %v", err)
-	}
+	mustRejectStartRequest(t, o)
 	if err := o.SetRunnerStore(mustNewRunnerStore(t, t.TempDir())); err == nil {
 		t.Fatal("expected SetRunnerStore to fail after startup")
 	}
@@ -80,9 +76,7 @@ func TestSetRunnerStore_RejectsChangesAfterStartup(t *testing.T) {
 
 func TestSetMaxRunningRunners_RejectsChangesAfterStartup(t *testing.T) {
 	o := newOrchestrator(testLogger)
-	if _, _, err := o.planFromRequest(context.Background(), &Request{Input: "summarize this repository"}); err != nil {
-		t.Fatalf("planFromRequest: %v", err)
-	}
+	mustRejectStartRequest(t, o)
 	if err := o.SetMaxRunningRunners(1); err == nil {
 		t.Fatal("expected SetMaxRunningRunners to fail after startup")
 	}
@@ -90,9 +84,7 @@ func TestSetMaxRunningRunners_RejectsChangesAfterStartup(t *testing.T) {
 
 func TestSetOrchestratorSkill_RejectsChangesAfterStartup(t *testing.T) {
 	o := newOrchestrator(testLogger)
-	if _, _, err := o.planFromRequest(context.Background(), &Request{Input: "summarize this repository"}); err != nil {
-		t.Fatalf("planFromRequest: %v", err)
-	}
+	mustRejectStartRequest(t, o)
 	if err := o.SetOrchestratorSkill(defaultOrchestratorSkill()); err == nil {
 		t.Fatal("expected SetOrchestratorSkill to fail after startup")
 	}
@@ -131,9 +123,7 @@ func TestSetOrchestratorSkillDir_UsesLoadedSkillBeforeStartup(t *testing.T) {
 
 func TestSetOrchestratorSkillDir_RejectsChangesAfterStartup(t *testing.T) {
 	o := newOrchestrator(testLogger)
-	if _, _, err := o.planFromRequest(context.Background(), &Request{Input: "summarize this repository"}); err != nil {
-		t.Fatalf("planFromRequest: %v", err)
-	}
+	mustRejectStartRequest(t, o)
 	if err := o.SetOrchestratorSkillDir(writeTestSkill(t, "late-orchestrator", "late")); err == nil {
 		t.Fatal("expected SetOrchestratorSkillDir to fail after startup")
 	}
@@ -326,9 +316,7 @@ func TestAddSkills_RejectsDuplicateSkillNames(t *testing.T) {
 
 func TestAddSkills_AllowsChangesAfterStartup(t *testing.T) {
 	o := newOrchestrator(testLogger)
-	if _, _, err := o.planFromRequest(context.Background(), &Request{Input: "summarize this repository"}); err != nil {
-		t.Fatalf("planFromRequest: %v", err)
-	}
+	mustRejectStartRequest(t, o)
 
 	dir := writeTestSkill(t, "late-skill", "Registered after startup.")
 	mustAddSkills(t, o, AddSkillConfig{Skill: loadTestSkillFromDir(t, dir), Client: &llm.Client{}})
@@ -348,9 +336,7 @@ func TestRemoveSkills_AllowsChangesAfterStartup(t *testing.T) {
 		newTestSkillConfig(t, "ephemeral", "Removed after startup.", nil),
 		newTestSkillConfig(t, "ephemeral-2", "Also removed after startup.", nil),
 	)
-	if _, _, err := o.planFromRequest(context.Background(), &Request{Input: "summarize this repository"}); err != nil {
-		t.Fatalf("planFromRequest: %v", err)
-	}
+	mustRejectStartRequest(t, o)
 
 	if err := o.RemoveSkills("ephemeral", "ephemeral-2"); err != nil {
 		t.Fatalf("RemoveSkills: %v", err)
@@ -400,17 +386,19 @@ func TestLoadRunnerRecords_RequiresConfiguredStore(t *testing.T) {
 
 func TestStartRunner_ForwardsStreamAndQueryState(t *testing.T) {
 	o := newOrchestrator(testLogger)
-	plan, managedRunner := mustPlanSingleNodeRunner(t, o)
-
 	started := make(chan struct{})
 	release := make(chan struct{})
-	mustNodeExecutor(t, managedRunner.Nodes()["only"]).RunE = func(ctx context.Context, parentOutputs map[string]any) (any, []*Node, error) {
+	managedRunner := newManagedQueueTestRunner(t, "stream", func(ctx context.Context, parentOutputs map[string]any) (any, []*Node, error) {
 		close(started)
 		<-release
 		return "done", nil, nil
-	}
+	})
+	o.mu.Lock()
+	o.runners[managedRunner.ID()] = managedRunner
+	o.mu.Unlock()
+	go o.watchRunnerDone(managedRunner)
 
-	updates, unsubscribe, err := o.SubscribeRunner(plan.RunnerID, 8)
+	updates, unsubscribe, err := o.SubscribeRunner(managedRunner.ID(), 32)
 	if err != nil {
 		t.Fatalf("SubscribeRunner: %v", err)
 	}
@@ -424,22 +412,14 @@ func TestStartRunner_ForwardsStreamAndQueryState(t *testing.T) {
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
-	if err := o.StartRunner(ctx, plan.RunnerID); err != nil {
+	defer cancel()
+	if err := o.StartRunner(ctx, managedRunner.ID()); err != nil {
 		t.Fatalf("StartRunner: %v", err)
-	}
-	awaitingReviewUpdate := waitForRunnerUpdate(t, updates, func(update RunnerUpdate) bool {
-		return update.Phase == PhaseAwaitingReview
-	}, "awaiting review update")
-	if awaitingReviewUpdate.State.Status != RunnerStatusPending {
-		t.Fatalf("state while awaiting review = %q, want pending", awaitingReviewUpdate.State.Status)
-	}
-	if err := o.AcceptRunnerPlan(ctx, plan.RunnerID, plan); err != nil {
-		t.Fatalf("AcceptRunnerPlan: %v", err)
 	}
 	select {
 	case <-started:
 	case <-time.After(2 * time.Second):
-		t.Fatal("timed out waiting for runner to start after plan acceptance")
+		t.Fatal("timed out waiting for runner to start")
 	}
 
 	startedUpdate := waitForRunnerUpdate(t, updates, func(update RunnerUpdate) bool {
@@ -449,7 +429,7 @@ func TestStartRunner_ForwardsStreamAndQueryState(t *testing.T) {
 		t.Fatalf("state after node started = %q, want running", startedUpdate.State.Status)
 	}
 
-	view, err := o.QueryRunner(plan.RunnerID)
+	view, err := o.QueryRunner(managedRunner.ID())
 	if err != nil {
 		t.Fatalf("QueryRunner: %v", err)
 	}
@@ -458,34 +438,19 @@ func TestStartRunner_ForwardsStreamAndQueryState(t *testing.T) {
 	}
 
 	close(release)
-	completedUpdate := waitForRunnerUpdate(t, updates, func(update RunnerUpdate) bool {
-		return update.Event != nil && update.Event.Type == EventNodeCompleted
-	}, "node completed")
-	if completedUpdate.Event.NodeID != "only" {
-		t.Fatalf("completed node = %q, want only", completedUpdate.Event.NodeID)
+	waitCtx, waitCancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer waitCancel()
+	if err := managedRunner.Wait(waitCtx); err != nil {
+		t.Fatalf("Wait: %v", err)
 	}
-	idleUpdate := waitForRunnerUpdate(t, updates, func(update RunnerUpdate) bool {
-		return update.Event != nil && update.Event.Type == EventEngineIdle
-	}, "engine idle")
-	if idleUpdate.State.Status != RunnerStatusIdle {
-		t.Fatalf("idle state = %q, want idle", idleUpdate.State.Status)
-	}
-
-	cancel()
-	terminalUpdate := waitForRunnerUpdate(t, updates, func(update RunnerUpdate) bool {
-		return update.State.Status == RunnerStatusCanceled
-	}, "canceled terminal update")
-	if terminalUpdate.State.Status != RunnerStatusCanceled {
-		t.Fatalf("terminal state = %q, want canceled", terminalUpdate.State.Status)
-	}
-	finalView, err := o.QueryRunner(plan.RunnerID)
+	finalView, err := o.QueryRunner(managedRunner.ID())
 	if err != nil {
 		t.Fatalf("QueryRunner(final): %v", err)
 	}
-	if finalView.State.Status != RunnerStatusCanceled {
-		t.Fatalf("final queried state = %q, want canceled", finalView.State.Status)
+	if finalView.Phase != PhaseSettled {
+		t.Fatalf("final queried phase = %q, want settled", finalView.Phase)
 	}
-	waitForRunnerUpdateClosed(t, updates, "canceled terminal update")
+	waitForRunnerUpdateClosed(t, updates, "settled terminal update")
 }
 
 func TestLoadRunnerRecords_LoadsPersistedLog(t *testing.T) {
@@ -494,28 +459,32 @@ func TestLoadRunnerRecords_LoadsPersistedLog(t *testing.T) {
 	if err := o.SetRunnerStore(store); err != nil {
 		t.Fatalf("SetRunnerStore: %v", err)
 	}
-	plan, managedRunner := mustPlanSingleNodeRunner(t, o)
-
-	ctx, cancel := context.WithCancel(context.Background())
-	done := make(chan error, 1)
-	sub := managedRunner.Subscribe(16)
-	go func() {
-		if err := managedRunner.Start(ctx); err != nil {
-			done <- err
-			return
-		}
-		done <- managedRunner.Wait(context.Background())
-	}()
-	if err := managedRunner.AddNodes(ctx, managedRunner.Nodes()["only"]); err != nil {
-		t.Fatalf("AddNodes: %v", err)
+	mustAddSkills(t, o, newTestSkillConfig(t, "single", "Single-step runner.", nil))
+	if err := o.SetOrchestratorSkill(bindTestOrchestratorSkill(t, mustPlanJSON(t, &CoarsePlan{
+		Request: "run a single node",
+		Nodes: []CoarsePlanNode{{
+			ID:              "only",
+			SkillName:       "single",
+			TaskDescription: "Run the only node.",
+		}},
+	}), mustReviewJSON(t, true, ""))); err != nil {
+		t.Fatalf("SetOrchestratorSkill: %v", err)
 	}
-	waitForRunnerEvent(t, sub, EventNodeCompleted, "only")
-	cancel()
-	if err := <-done; !errors.Is(err, context.Canceled) {
-		t.Fatalf("Start err = %v, want context.Canceled", err)
+	runnerID, err := o.StartRequest(context.Background(), &Request{Input: "run a single node"})
+	if err != nil {
+		t.Fatalf("StartRequest: %v", err)
+	}
+	managedRunner, err := o.Runner(runnerID)
+	if err != nil {
+		t.Fatalf("Runner: %v", err)
+	}
+	waitCtx, waitCancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer waitCancel()
+	if err := managedRunner.Wait(waitCtx); err != nil {
+		t.Fatalf("Wait: %v", err)
 	}
 
-	records, err := o.LoadRunnerRecords(context.Background(), plan.RunnerID)
+	records, err := o.LoadRunnerRecords(context.Background(), runnerID)
 	if err != nil {
 		t.Fatalf("LoadRunnerRecords: %v", err)
 	}
@@ -533,37 +502,33 @@ func TestRemoveRunner_RejectsActiveRunner(t *testing.T) {
 	if err := o.SetRunnerStore(store); err != nil {
 		t.Fatalf("SetRunnerStore: %v", err)
 	}
-	plan, managedRunner := mustPlanSingleNodeRunner(t, o)
-
 	started := make(chan struct{})
 	release := make(chan struct{})
-	mustNodeExecutor(t, managedRunner.Nodes()["only"]).RunE = func(ctx context.Context, parentOutputs map[string]any) (any, []*Node, error) {
+	managedRunner := newManagedQueueTestRunner(t, "active", func(ctx context.Context, parentOutputs map[string]any) (any, []*Node, error) {
 		close(started)
 		<-release
 		return nil, nil, nil
-	}
+	})
+	o.mu.Lock()
+	o.runners[managedRunner.ID()] = managedRunner
+	o.mu.Unlock()
+	go o.watchRunnerDone(managedRunner)
 
 	ctx, cancel := context.WithCancel(context.Background())
-	done := make(chan error, 1)
-	go func() {
-		if err := managedRunner.Start(ctx); err != nil {
-			done <- err
-			return
-		}
-		done <- managedRunner.Wait(context.Background())
-	}()
-	if err := managedRunner.AddNodes(ctx, managedRunner.Nodes()["only"]); err != nil {
-		t.Fatalf("AddNodes: %v", err)
+	defer cancel()
+	if err := o.StartRunner(ctx, managedRunner.ID()); err != nil {
+		t.Fatalf("StartRunner: %v", err)
 	}
 	<-started
 
-	if err := o.RemoveRunner(context.Background(), plan.RunnerID); !errors.Is(err, ErrRunnerActive) {
+	if err := o.RemoveRunner(context.Background(), managedRunner.ID()); !errors.Is(err, ErrRunnerActive) {
 		t.Fatalf("RemoveRunner err = %v, want ErrRunnerActive", err)
 	}
 	close(release)
-	cancel()
-	if err := <-done; !errors.Is(err, context.Canceled) {
-		t.Fatalf("Start err = %v, want context.Canceled", err)
+	waitCtx, waitCancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer waitCancel()
+	if err := managedRunner.Wait(waitCtx); err != nil {
+		t.Fatalf("Wait: %v", err)
 	}
 }
 
@@ -573,35 +538,30 @@ func TestRemoveRunner_DeletesTerminalRunnerAndLog(t *testing.T) {
 	if err := o.SetRunnerStore(store); err != nil {
 		t.Fatalf("SetRunnerStore: %v", err)
 	}
-	plan, managedRunner := mustPlanSingleNodeRunner(t, o)
-	mustNodeExecutor(t, managedRunner.Nodes()["only"]).RunE = func(ctx context.Context, parentOutputs map[string]any) (any, []*Node, error) {
+	managedRunner := newManagedQueueTestRunner(t, "failing", func(ctx context.Context, parentOutputs map[string]any) (any, []*Node, error) {
 		return nil, nil, errors.New("boom")
-	}
+	})
+	o.mu.Lock()
+	o.runners[managedRunner.ID()] = managedRunner
+	o.mu.Unlock()
+	go o.watchRunnerDone(managedRunner)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
-	done := make(chan error, 1)
-	go func() {
-		if err := managedRunner.Start(ctx); err != nil {
-			done <- err
-			return
-		}
-		done <- managedRunner.Wait(context.Background())
-	}()
-	if err := managedRunner.AddNodes(ctx, managedRunner.Nodes()["only"]); err != nil {
-		t.Fatalf("AddNodes: %v", err)
+	if err := o.StartRunner(ctx, managedRunner.ID()); err != nil {
+		t.Fatalf("StartRunner: %v", err)
 	}
-	if err := <-done; err == nil {
+	if err := managedRunner.Wait(context.Background()); err == nil {
 		t.Fatal("expected runner failure")
 	}
 
-	if err := o.RemoveRunner(context.Background(), plan.RunnerID); err != nil {
+	if err := o.RemoveRunner(context.Background(), managedRunner.ID()); err != nil {
 		t.Fatalf("RemoveRunner: %v", err)
 	}
-	if _, err := o.Runner(plan.RunnerID); !errors.Is(err, ErrRunnerNotFound) {
+	if _, err := o.Runner(managedRunner.ID()); !errors.Is(err, ErrRunnerNotFound) {
 		t.Fatalf("Runner err = %v, want ErrRunnerNotFound", err)
 	}
-	if _, err := store.Load(context.Background(), plan.RunnerID); !errors.Is(err, ErrRunnerLogNotFound) {
+	if _, err := store.Load(context.Background(), managedRunner.ID()); !errors.Is(err, ErrRunnerLogNotFound) {
 		t.Fatalf("store.Load err = %v, want ErrRunnerLogNotFound", err)
 	}
 }

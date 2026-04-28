@@ -525,39 +525,27 @@ func (o *Orchestrator) StartRunner(ctx context.Context, id string) error {
 	if err != nil {
 		return err
 	}
-	return o.startManagedRunner(ctx, runner, nil)
+	return o.startManagedRunner(ctx, runner)
 }
 
-// watchRunnerDone releases the runner's execution slot when execution ends.
-//
-// A runner only consumes an execution slot while it is in
-// [runner.PhaseExecuting]. Review and replan phases do not count against the
-// concurrent execution limit.
+// watchRunnerDone releases the runner's execution slot when its managed
+// lifecycle settles.
 func (o *Orchestrator) watchRunnerDone(runner *runnerpkg.Runner) {
 	updates, unsubscribe := runner.SubscribeUpdates(16)
 	defer unsubscribe()
 	done := runner.Done()
-	executing := false
 	for {
 		select {
 		case <-done:
-			if executing {
-				o.releaseRunnerExecutionSlot(runner.ID())
-			}
+			o.releaseRunnerExecutionSlot(runner.ID())
 			return
 		case update, ok := <-updates:
 			if !ok {
-				if executing {
-					o.releaseRunnerExecutionSlot(runner.ID())
-				}
+				o.releaseRunnerExecutionSlot(runner.ID())
 				return
 			}
-			if update.Phase == runnerpkg.PhaseExecuting {
-				executing = true
-			}
-			if executing && update.Event != nil && update.Event.Type == runnerpkg.EventEngineIdle {
+			if update.Phase == runnerpkg.PhaseSettled {
 				o.releaseRunnerExecutionSlot(runner.ID())
-				executing = false
 				return
 			}
 		}
