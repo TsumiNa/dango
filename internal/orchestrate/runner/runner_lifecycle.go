@@ -45,6 +45,9 @@ func (r *Runner) StartPolish(ctx context.Context) error {
 	if ctx == nil {
 		ctx = context.Background()
 	}
+	if err := r.prepareNodeExecutors(r.initialNodes); err != nil {
+		return err
+	}
 	r.stateMu.Lock()
 	if r.plan == nil {
 		r.stateMu.Unlock()
@@ -128,6 +131,9 @@ func (r *Runner) ReplanWith(ctx context.Context, plan *CoarsePlan, nodes map[str
 		clonedPlan.RunnerID = r.id
 	}
 	clonedNodes := cloneNodeMap(nodes)
+	if err := r.prepareNodeExecutors(clonedNodes); err != nil {
+		return err
+	}
 
 	r.stateMu.Lock()
 	if r.phase != PhaseAwaitingReplan {

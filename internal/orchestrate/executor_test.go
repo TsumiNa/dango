@@ -8,42 +8,46 @@ import (
 	"testing"
 
 	"github.com/tsumina/dango/internal/llm"
-	"github.com/tsumina/dango/internal/llm/skill"
 	runnerpkg "github.com/tsumina/dango/internal/orchestrate/runner"
 )
 
-func loadTestSkill(t *testing.T) *skill.Skill {
+func loadTestSkill(t *testing.T) *llm.Skill {
 	t.Helper()
 	dir := t.TempDir()
 	content := "---\nname: t\ndescription: d\n---\nbody\n"
-	if err := os.WriteFile(filepath.Join(dir, skill.SkillFile), []byte(content), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, llm.SkillFile), []byte(content), 0o644); err != nil {
 		t.Fatalf("write SKILL.md: %v", err)
 	}
-	sk, err := skill.New(skill.Config{Dir: dir, Client: &llm.Client{}})
+	loaded, err := llm.New(dir, nil, nil)
 	if err != nil {
-		t.Fatalf("skill.New: %v", err)
+		t.Fatalf("llm.New: %v", err)
+	}
+	sk, err := loaded.Bind(&llm.Client{}, nil, nil)
+	if err != nil {
+		t.Fatalf("Skill.Bind: %v", err)
 	}
 	return sk
 }
 
-func loadLightweightTestSkill(t *testing.T) *skill.Skill {
+func loadLightweightTestSkill(t *testing.T) *llm.Skill {
 	t.Helper()
 	dir := t.TempDir()
 	content := "---\nname: t\ndescription: d\n---\nbody\n"
-	if err := os.WriteFile(filepath.Join(dir, skill.SkillFile), []byte(content), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, llm.SkillFile), []byte(content), 0o644); err != nil {
 		t.Fatalf("write SKILL.md: %v", err)
 	}
-	sk, err := skill.Load(dir)
+	sk, err := llm.New(dir, nil, nil)
 	if err != nil {
-		t.Fatalf("skill.Load: %v", err)
+		t.Fatalf("llm.New: %v", err)
 	}
 	return sk
 }
 
 func TestNewExecutor_BindsSkillAndPlanner(t *testing.T) {
-	sk := loadTestSkill(t)
+	sk := loadLightweightTestSkill(t)
+	client := &llm.Client{}
 	planner := &ExecutionPlanner{}
-	exec, err := NewExecutor(nil, sk, planner, nil, nil)
+	exec, err := NewExecutor(nil, sk, client, nil, planner)
 	if err != nil {
 		t.Fatalf("NewExecutor: %v", err)
 	}
@@ -53,23 +57,26 @@ func TestNewExecutor_BindsSkillAndPlanner(t *testing.T) {
 	if exec.Planner() != planner {
 		t.Errorf("Planner() = %p, want %p", exec.Planner(), planner)
 	}
+	if exec.LLMClient() != client {
+		t.Fatalf("LLMClient() = %p, want %p", exec.LLMClient(), client)
+	}
 }
 
 func TestNewExecutor_RejectsNilSkill(t *testing.T) {
-	if _, err := NewExecutor(nil, nil, &ExecutionPlanner{}, nil, nil); err == nil {
+	if _, err := NewExecutor(nil, nil, nil, nil, &ExecutionPlanner{}); err == nil {
 		t.Fatal("expected error for nil skill")
 	}
 }
 
 func TestNewExecutor_RejectsNilPlanner(t *testing.T) {
-	if _, err := NewExecutor(nil, loadTestSkill(t), nil, nil, nil); err == nil {
+	if _, err := NewExecutor(nil, loadLightweightTestSkill(t), nil, nil, nil); err == nil {
 		t.Fatal("expected error for nil planner")
 	}
 }
 
 func TestPolishPlan_BumpsVersionAndFillsPlan(t *testing.T) {
 	planner := &ExecutionPlanner{Version: 1}
-	exec, err := NewExecutor(nil, loadTestSkill(t), planner, nil, nil)
+	exec, err := NewExecutor(nil, loadLightweightTestSkill(t), &llm.Client{}, nil, planner)
 	if err != nil {
 		t.Fatalf("NewExecutor: %v", err)
 	}
@@ -85,7 +92,7 @@ func TestPolishPlan_BumpsVersionAndFillsPlan(t *testing.T) {
 }
 
 func TestExecute_UsesRunEWhenSet(t *testing.T) {
-	exec, err := NewExecutor(nil, loadTestSkill(t), &ExecutionPlanner{}, nil, nil)
+	exec, err := NewExecutor(nil, loadLightweightTestSkill(t), &llm.Client{}, nil, &ExecutionPlanner{})
 	if err != nil {
 		t.Fatalf("NewExecutor: %v", err)
 	}
@@ -107,7 +114,7 @@ func TestExecute_UsesRunEWhenSet(t *testing.T) {
 }
 
 func TestExecute_NoRunEReturnsZero(t *testing.T) {
-	exec, err := NewExecutor(slog.New(slog.NewTextHandler(os.Stderr, nil)), loadTestSkill(t), &ExecutionPlanner{}, nil, nil)
+	exec, err := NewExecutor(slog.New(slog.NewTextHandler(os.Stderr, nil)), loadLightweightTestSkill(t), &llm.Client{}, nil, &ExecutionPlanner{})
 	if err != nil {
 		t.Fatalf("NewExecutor: %v", err)
 	}
@@ -120,7 +127,7 @@ func TestExecute_NoRunEReturnsZero(t *testing.T) {
 func TestExecute_RespectsCanceledContext(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	exec, err := NewExecutor(nil, loadTestSkill(t), &ExecutionPlanner{}, nil, nil)
+	exec, err := NewExecutor(nil, loadLightweightTestSkill(t), &llm.Client{}, nil, &ExecutionPlanner{})
 	if err != nil {
 		t.Fatalf("NewExecutor: %v", err)
 	}
@@ -132,31 +139,45 @@ func TestExecute_RespectsCanceledContext(t *testing.T) {
 	}
 }
 
-func TestLLMClient_PrefersSkillClientWhenNoHigherPrioritySourceExists(t *testing.T) {
-	clearLLMEnv(t)
-	skillClient := &llm.Client{}
-	fallbackClient := &llm.Client{}
-	sk := loadTestSkill(t)
-	bound, err := sk.Bind(skill.RuntimeConfig{Client: skillClient})
-	if err != nil {
-		t.Fatalf("Bind: %v", err)
-	}
-	exec, err := NewExecutor(nil, bound, &ExecutionPlanner{}, fallbackClient, nil)
+func TestLLMClient_ReturnsConfiguredClientBeforeRunnerBind(t *testing.T) {
+	client := &llm.Client{}
+	exec, err := NewExecutor(nil, loadLightweightTestSkill(t), client, nil, &ExecutionPlanner{})
 	if err != nil {
 		t.Fatalf("NewExecutor: %v", err)
 	}
-	if got := exec.LLMClient(); got != skillClient {
-		t.Fatalf("LLMClient() = %p, want skill client %p", got, skillClient)
+	if got := exec.LLMClient(); got != client {
+		t.Fatalf("LLMClient() = %p, want %p", got, client)
 	}
 }
 
-func TestRuntimeSkill_BindsLightweightSkillWithFallbackClient(t *testing.T) {
-	clearLLMEnv(t)
-	fallbackClient := &llm.Client{}
+func TestRuntimeSkill_RequiresRunnerBinding(t *testing.T) {
 	lightweight := loadLightweightTestSkill(t)
-	exec, err := NewExecutor(nil, lightweight, &ExecutionPlanner{}, fallbackClient, nil)
+	exec, err := NewExecutor(nil, lightweight, &llm.Client{}, nil, &ExecutionPlanner{})
 	if err != nil {
 		t.Fatalf("NewExecutor: %v", err)
+	}
+	if _, err := exec.runtimeSkill(); err == nil {
+		t.Fatal("expected runtimeSkill to fail before runner binding")
+	}
+}
+
+func TestBindForRunner_BindsLightweightSkillAndAllocatesSession(t *testing.T) {
+	client := &llm.Client{}
+	store, err := llm.NewJSONStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewJSONStore: %v", err)
+	}
+	lightweight := loadLightweightTestSkill(t)
+	exec, err := NewExecutor(nil, lightweight, client, nil, &ExecutionPlanner{})
+	if err != nil {
+		t.Fatalf("NewExecutor: %v", err)
+	}
+	sessionID, err := exec.BindForRunner(nil, store)
+	if err != nil {
+		t.Fatalf("BindForRunner: %v", err)
+	}
+	if sessionID == "" {
+		t.Fatal("BindForRunner returned an empty session id")
 	}
 	runtimeSkill, err := exec.runtimeSkill()
 	if err != nil {
@@ -165,63 +186,33 @@ func TestRuntimeSkill_BindsLightweightSkillWithFallbackClient(t *testing.T) {
 	if runtimeSkill == lightweight {
 		t.Fatal("runtimeSkill returned the original lightweight skill, want bound copy")
 	}
-	if runtimeSkill.Client() != fallbackClient {
-		t.Fatalf("runtimeSkill client = %p, want %p", runtimeSkill.Client(), fallbackClient)
+	if runtimeSkill.Client() != client {
+		t.Fatalf("runtimeSkill client = %p, want %p", runtimeSkill.Client(), client)
 	}
-	if runtimeSkill.Conversation() == nil {
-		t.Fatal("runtimeSkill conversation = nil, want runnable conversation")
-	}
-	if lightweight.Client() != nil {
-		t.Fatal("lightweight skill unexpectedly gained a client")
+	if conv := runtimeSkill.Conversation(); conv == nil || conv.SessionID() != sessionID {
+		t.Fatalf("conversation/session = %v, want session %q", conv, sessionID)
 	}
 }
 
-func TestLLMClient_PrefersEnvOverSkillAndFallback(t *testing.T) {
-	t.Setenv("OPENAI_API_KEY", "env-key")
-	t.Setenv("ORCHESTRATION_MODEL", "env-model")
-	sk := loadTestSkill(t)
-	fallbackClient := &llm.Client{}
-	exec, err := NewExecutor(nil, sk, &ExecutionPlanner{}, fallbackClient, nil)
+func TestBindForRunner_ReusesExistingSession(t *testing.T) {
+	client := &llm.Client{}
+	store, err := llm.NewJSONStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewJSONStore: %v", err)
+	}
+	exec, err := NewExecutor(nil, loadLightweightTestSkill(t), client, nil, &ExecutionPlanner{})
 	if err != nil {
 		t.Fatalf("NewExecutor: %v", err)
 	}
-	client := exec.LLMClient()
-	if client == nil {
-		t.Fatal("LLMClient() = nil, want env client")
-	}
-	if client == sk.Client() {
-		t.Fatal("LLMClient() used the skill client, want env client")
-	}
-	if client == fallbackClient {
-		t.Fatal("LLMClient() used the fallback client, want env client")
-	}
-	if client.Provider() != llm.ProviderOpenAI {
-		t.Fatalf("Provider() = %q, want %q", client.Provider(), llm.ProviderOpenAI)
-	}
-	if client.Model() != "env-model" {
-		t.Fatalf("Model() = %q, want %q", client.Model(), "env-model")
-	}
-	if again := exec.LLMClient(); again != client {
-		t.Fatalf("LLMClient() returned different env client pointers: %p vs %p", client, again)
-	}
-}
-
-func TestRuntimeSkill_PrefersSkillFactoryOverOrchestratorFallback(t *testing.T) {
-	clearLLMEnv(t)
-	perSkillClient := &llm.Client{}
-	fallbackClient := &llm.Client{}
-	lightweight := loadLightweightTestSkill(t)
-	exec, err := NewExecutor(nil, lightweight, &ExecutionPlanner{}, fallbackClient, func() (*llm.Client, error) {
-		return perSkillClient, nil
-	})
+	firstSessionID, err := exec.BindForRunner(nil, store)
 	if err != nil {
-		t.Fatalf("NewExecutor: %v", err)
+		t.Fatalf("BindForRunner(first): %v", err)
 	}
-	runtimeSkill, err := exec.runtimeSkill()
+	secondSessionID, err := exec.BindForRunner(&firstSessionID, store)
 	if err != nil {
-		t.Fatalf("runtimeSkill: %v", err)
+		t.Fatalf("BindForRunner(second): %v", err)
 	}
-	if runtimeSkill.Client() != perSkillClient {
-		t.Fatalf("runtimeSkill client = %p, want %p", runtimeSkill.Client(), perSkillClient)
+	if secondSessionID != firstSessionID {
+		t.Fatalf("session id = %q, want %q", secondSessionID, firstSessionID)
 	}
 }

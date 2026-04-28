@@ -8,7 +8,6 @@ import (
 	"sync"
 
 	"github.com/tsumina/dango/internal/llm"
-	"github.com/tsumina/dango/internal/llm/skill"
 	runnerpkg "github.com/tsumina/dango/internal/orchestrate/runner"
 )
 
@@ -20,12 +19,12 @@ var (
 // Orchestrator is the singleton runner factory that bridges external user
 // requests to runner assembly.
 //
-// It keeps a registry of lightweight skills loaded through skill.Load, asks a
-// planner to convert a request into a coarse execution plan, and materializes a
+// It keeps a registry of lightweight skills loaded through llm.New,
+// initializes its orchestrator-owned skill during startup, and materializes a
 // fresh runner plus its Executor graph for each accepted plan.
 type Orchestrator struct {
 	logger            *slog.Logger
-	orchestratorSkill *skill.Skill
+	orchestratorSkill *llm.Skill
 	envClientOnce     sync.Once
 	envClient         *llm.Client
 	envClientErr      error
@@ -34,8 +33,7 @@ type Orchestrator struct {
 	configLocked      bool
 	runnerStore       runnerpkg.RunnerStore
 	maxRunningRunners int
-	skills            map[string]*skill.Skill
-	skillClientByName map[string]SkillClientFactory
+	skills            map[string]AddSkillConfig
 	runners           map[string]*runnerpkg.Runner
 	runningRunnerIDs  map[string]struct{}
 	queuedRunnerByID  map[string]*queuedRunner
@@ -65,38 +63,48 @@ func newOrchestrator(logger *slog.Logger) *Orchestrator {
 	if logger == nil {
 		logger = slog.Default()
 	}
-	return &Orchestrator{
-		logger:            logger,
-		orchestratorSkill: defaultOrchestratorSkill(),
-		skills:            make(map[string]*skill.Skill),
-		skillClientByName: make(map[string]SkillClientFactory),
-		runners:           make(map[string]*runnerpkg.Runner),
-		runningRunnerIDs:  make(map[string]struct{}),
-		queuedRunnerByID:  make(map[string]*queuedRunner),
+	o := &Orchestrator{
+		logger:           logger,
+		skills:           make(map[string]AddSkillConfig),
+		runners:          make(map[string]*runnerpkg.Runner),
+		runningRunnerIDs: make(map[string]struct{}),
+		queuedRunnerByID: make(map[string]*queuedRunner),
 	}
+	sk, err := o.configuredOrchestratorSkill(defaultOrchestratorSkill())
+	if err != nil {
+		panic(fmt.Sprintf("orchestrate: initialize default orchestrator skill: %v", err))
+	}
+	o.orchestratorSkill = sk
+	return o
 }
 
-// SkillClientFactory constructs the client a registered skill should use when
-// environment-based configuration is unavailable.
+func (o *Orchestrator) configuredOrchestratorSkill(sk *llm.Skill) (*llm.Skill, error) {
+	if sk == nil {
+		sk = defaultOrchestratorSkill()
+	}
+	if sk.Client() != nil && sk.Conversation() != nil {
+		return sk, nil
+	}
+	client, err := o.resolveEnvClient()
+	if err != nil || client == nil {
+		return sk, nil
+	}
+	return bindOrchestratorSkill(sk, client)
+}
+
+// AddSkillConfig describes one lightweight skill plus the runtime wiring the
+// runner will later pass to [llm.Skill.Bind].
 //
-// It lets the registration site capture skill-specific LLM setup details while
-// keeping the runner assembly path independent from those configuration knobs.
-type SkillClientFactory func() (*llm.Client, error)
-
-type registerSkillConfig struct {
-	clientFactory SkillClientFactory
-}
-
-// RegisterSkillOption configures how a skill should be materialized later when
-// the orchestrator assembles executors for a runner.
-type RegisterSkillOption func(*registerSkillConfig)
-
-// WithSkillClientFactory records a per-skill client constructor that is used
-// when [llm.NewClientFromEnv] does not yield a client for that skill.
-func WithSkillClientFactory(factory SkillClientFactory) RegisterSkillOption {
-	return func(cfg *registerSkillConfig) {
-		cfg.clientFactory = factory
-	}
+// Skill must be a lightweight instance created by [llm.New]. AddSkills augments
+// it with the built-in tools before placing it in the orchestrator registry.
+// AccessibleDirs is applied through [llm.Skill.WithAccessibleDirs] before the
+// skill is stored. Client and Config are forwarded unchanged to the
+// runner-owned bind step.
+type AddSkillConfig struct {
+	Skill          *llm.Skill
+	AccessibleDirs []string
+	Client         *llm.Client
+	Config         *llm.ConversationConfig
 }
 
 // SetLogger replaces the Orchestrator logger.
@@ -120,23 +128,24 @@ func (o *Orchestrator) SetLogger(logger *slog.Logger) error {
 // SetOrchestratorSkill replaces the current orchestrator-owned skill.
 //
 // Callers may provide either a lightweight skill or one that is already bound
-// to an LLM client. Passing nil restores the embedded default skill. Like the
-// other startup-only orchestrator settings, it must be called before the first
-// planning call.
-func (o *Orchestrator) SetOrchestratorSkill(sk *skill.Skill) error {
+// to an LLM client. Lightweight skills are eagerly bound to the orchestrator's
+// env-derived client when one is available. Passing nil restores the embedded
+// default skill. Like the other startup-only orchestrator settings, it must be
+// called before the first planning call.
+func (o *Orchestrator) SetOrchestratorSkill(sk *llm.Skill) error {
+	configured, err := o.configuredOrchestratorSkill(sk)
+	if err != nil {
+		return err
+	}
 	o.mu.Lock()
 	defer o.mu.Unlock()
 	if o.configLocked {
 		return fmt.Errorf("orchestrate: SetOrchestratorSkill can only be called during startup")
 	}
-	if sk == nil {
-		o.orchestratorSkill = defaultOrchestratorSkill()
-		return nil
-	}
-	if sk.Name == "" {
+	if configured.Name == "" {
 		return fmt.Errorf("orchestrate: orchestrator skill requires a non-empty name")
 	}
-	o.orchestratorSkill = sk
+	o.orchestratorSkill = configured
 	return nil
 }
 
@@ -150,7 +159,15 @@ func (o *Orchestrator) SetOrchestratorSkillDir(dir string) error {
 	if dir == "" {
 		return o.SetOrchestratorSkill(nil)
 	}
-	sk, err := skill.Load(dir)
+	sk, err := llm.New(dir, nil, nil)
+	if err != nil {
+		return err
+	}
+	builtinTools, err := sk.BuiltinTools()
+	if err != nil {
+		return err
+	}
+	sk, err = sk.WithTools(builtinTools...)
 	if err != nil {
 		return err
 	}
@@ -192,67 +209,117 @@ func (o *Orchestrator) SetMaxRunningRunners(limit int) error {
 	return nil
 }
 
-// RegisterSkill loads dir through skill.Load and stores the resulting
-// lightweight Skill in the registry under its declared name.
+// AddSkills appends one or more lightweight skills to the orchestrator's
+// registry.
 //
-// Skills are live managed state rather than startup-only configuration, so
-// RegisterSkill may be called throughout the daemon lifetime.
-func (o *Orchestrator) RegisterSkill(dir string, opts ...RegisterSkillOption) error {
-	sk, err := skill.Load(dir)
-	if err != nil {
-		return err
+// Each config carries the unbound [llm.Skill] plus the client and conversation
+// configuration that runner-owned execution will later pass into
+// [llm.Skill.Bind]. AddSkills augments each skill with the built-in tools but
+// does not bind it yet.
+func (o *Orchestrator) AddSkills(cfgs ...AddSkillConfig) error {
+	if len(cfgs) == 0 {
+		return nil
 	}
-	if sk.Name == "" {
-		return fmt.Errorf("orchestrate: registered skill in %q has empty name", dir)
-	}
-	var cfg registerSkillConfig
-	for _, opt := range opts {
-		if opt != nil {
-			opt(&cfg)
+	prepared := make(map[string]AddSkillConfig, len(cfgs))
+	for i, cfg := range cfgs {
+		if cfg.Skill == nil {
+			return fmt.Errorf("orchestrate: add skill config %d requires a non-nil skill", i)
+		}
+		if cfg.Skill.Conversation() != nil {
+			return fmt.Errorf("orchestrate: add skill config %d requires a lightweight unbound skill", i)
+		}
+		builtinTools, err := cfg.Skill.BuiltinTools()
+		if err != nil {
+			return err
+		}
+		sk, err := cfg.Skill.WithTools(builtinTools...)
+		if err != nil {
+			return err
+		}
+		if err := sk.WithAccessibleDirs(cfg.AccessibleDirs...); err != nil {
+			return err
+		}
+		if sk.Name == "" {
+			return fmt.Errorf("orchestrate: add skill config %d has empty skill name", i)
+		}
+		if _, exists := prepared[sk.Name]; exists {
+			return fmt.Errorf("orchestrate: skill %q already provided in AddSkills", sk.Name)
+		}
+		prepared[sk.Name] = AddSkillConfig{
+			Skill:          sk,
+			AccessibleDirs: append([]string(nil), cfg.AccessibleDirs...),
+			Client:         cfg.Client,
+			Config:         cloneConversationConfig(cfg.Config),
 		}
 	}
 
 	o.mu.Lock()
 	defer o.mu.Unlock()
-	if _, exists := o.skills[sk.Name]; exists {
-		return fmt.Errorf("orchestrate: skill %q already registered", sk.Name)
+	for name := range prepared {
+		if _, exists := o.skills[name]; exists {
+			return fmt.Errorf("orchestrate: skill %q already registered", name)
+		}
 	}
-	o.skills[sk.Name] = sk
-	if cfg.clientFactory != nil {
-		o.skillClientByName[sk.Name] = cfg.clientFactory
+	for name, cfg := range prepared {
+		o.skills[name] = cfg
 	}
 	return nil
 }
 
-// RemoveSkill deletes the registered lightweight Skill identified by name.
+// RemoveSkills deletes one or more registered lightweight skills by name.
 //
-// Like RegisterSkill, RemoveSkill is allowed during the daemon lifetime so the
-// available skill set can change while the Orchestrator is running.
-func (o *Orchestrator) RemoveSkill(name string) error {
-	if name == "" {
-		return fmt.Errorf("orchestrate: RemoveSkill requires a non-empty skill name")
+// Like AddSkills, RemoveSkills supports batch updates. The removal is atomic:
+// every requested skill name must be valid and already registered before any
+// entry is deleted. RemoveSkills remains allowed during the daemon lifetime so
+// the available skill set can change while the Orchestrator is running.
+func (o *Orchestrator) RemoveSkills(names ...string) error {
+	if len(names) == 0 {
+		return nil
 	}
 
 	o.mu.Lock()
 	defer o.mu.Unlock()
-	if _, exists := o.skills[name]; !exists {
-		return fmt.Errorf("orchestrate: skill %q is not registered", name)
+	seen := make(map[string]struct{}, len(names))
+	for i, name := range names {
+		if name == "" {
+			return fmt.Errorf("orchestrate: remove skill name %d must be non-empty", i)
+		}
+		if _, exists := seen[name]; exists {
+			return fmt.Errorf("orchestrate: skill %q already provided in RemoveSkills", name)
+		}
+		if _, exists := o.skills[name]; !exists {
+			return fmt.Errorf("orchestrate: skill %q is not registered", name)
+		}
+		seen[name] = struct{}{}
 	}
-	delete(o.skills, name)
-	delete(o.skillClientByName, name)
+	for name := range seen {
+		delete(o.skills, name)
+	}
 	return nil
 }
 
 // Skills returns a snapshot of the currently registered lightweight skill map.
-func (o *Orchestrator) Skills() map[string]*skill.Skill {
+func (o *Orchestrator) Skills() map[string]*llm.Skill {
 	o.mu.RLock()
 	defer o.mu.RUnlock()
 	return cloneSkillMap(o.skills)
 }
 
-// OrchestratorSkill returns the lightweight skill reserved for orchestrator
-// planning and review-style stages.
-func (o *Orchestrator) OrchestratorSkill() *skill.Skill {
+func cloneConversationConfig(cfg *llm.ConversationConfig) *llm.ConversationConfig {
+	if cfg == nil {
+		return nil
+	}
+	clone := *cfg
+	if cfg.AutoShrink != nil {
+		auto := *cfg.AutoShrink
+		clone.AutoShrink = &auto
+	}
+	return &clone
+}
+
+// OrchestratorSkill returns the startup-initialized skill reserved for
+// orchestrator planning and review-style stages.
+func (o *Orchestrator) OrchestratorSkill() *llm.Skill {
 	o.mu.RLock()
 	defer o.mu.RUnlock()
 	return o.orchestratorSkill

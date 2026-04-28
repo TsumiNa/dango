@@ -5,6 +5,8 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -86,7 +88,7 @@ func TestDetectProviderPriority(t *testing.T) {
 
 func TestNewClientFromEnv_NoAPIKey(t *testing.T) {
 	clearProviderEnv(t)
-	t.Setenv("ORCHESTRATION_MODEL", "gpt-test")
+	t.Setenv("MODEL", "gpt-test")
 	if _, err := NewClientFromEnv(); err != ErrNoAPIKey {
 		t.Fatalf("err = %v, want ErrNoAPIKey", err)
 	}
@@ -95,7 +97,7 @@ func TestNewClientFromEnv_NoAPIKey(t *testing.T) {
 func TestNewClientFromEnv_NoModel(t *testing.T) {
 	clearProviderEnv(t)
 	t.Setenv("OPENAI_API_KEY", "oai")
-	t.Setenv("ORCHESTRATION_MODEL", "")
+	t.Setenv("MODEL", "")
 	if _, err := NewClientFromEnv(); err != ErrNoModel {
 		t.Fatalf("err = %v, want ErrNoModel", err)
 	}
@@ -104,7 +106,7 @@ func TestNewClientFromEnv_NoModel(t *testing.T) {
 func TestNewClientFromEnv_Success(t *testing.T) {
 	clearProviderEnv(t)
 	t.Setenv("OPENROUTER_API_KEY", "or-key")
-	t.Setenv("ORCHESTRATION_MODEL", "some-model")
+	t.Setenv("MODEL", "some-model")
 
 	c, err := NewClientFromEnv()
 	if err != nil {
@@ -121,6 +123,57 @@ func TestNewClientFromEnv_Success(t *testing.T) {
 	}
 	if c.Raw() == nil {
 		t.Error("Raw() returned nil")
+	}
+}
+
+func TestNewClientFromEnv_LoadsSpecifiedFile(t *testing.T) {
+	unsetProviderEnv(t)
+	envFile := filepath.Join(t.TempDir(), "custom.env")
+	if err := os.WriteFile(envFile, []byte("OPENROUTER_API_KEY=or-file\nMODEL=file-model\nREASONING_EFFORT=low\nREASONING_REPLAY=yes\n"), 0o644); err != nil {
+		t.Fatalf("write env file: %v", err)
+	}
+
+	c, err := NewClientFromEnv(envFile)
+	if err != nil {
+		t.Fatalf("NewClientFromEnv: %v", err)
+	}
+	if c.Provider() != ProviderOpenRouter {
+		t.Errorf("Provider() = %s, want %s", c.Provider(), ProviderOpenRouter)
+	}
+	if c.Model() != "file-model" {
+		t.Errorf("Model() = %s, want file-model", c.Model())
+	}
+	if c.ReasoningEffort() != ReasoningEffortLow {
+		t.Errorf("ReasoningEffort() = %q, want low", c.ReasoningEffort())
+	}
+	if !c.ReplayReasoning() {
+		t.Error("ReplayReasoning() = false, want true")
+	}
+	for _, key := range []string{"OPENROUTER_API_KEY", "MODEL", "REASONING_EFFORT", "REASONING_REPLAY"} {
+		if _, ok := os.LookupEnv(key); ok {
+			t.Fatalf("NewClientFromEnv should not mutate process env, but %s is now set", key)
+		}
+	}
+}
+
+func TestNewClientFromEnv_ProcessEnvOverridesFile(t *testing.T) {
+	unsetProviderEnv(t)
+	envFile := filepath.Join(t.TempDir(), "custom.env")
+	if err := os.WriteFile(envFile, []byte("OPENROUTER_API_KEY=or-file\nMODEL=file-model\n"), 0o644); err != nil {
+		t.Fatalf("write env file: %v", err)
+	}
+	t.Setenv("OPENAI_API_KEY", "env-openai")
+	t.Setenv("MODEL", "env-model")
+
+	c, err := NewClientFromEnv(envFile)
+	if err != nil {
+		t.Fatalf("NewClientFromEnv: %v", err)
+	}
+	if c.Provider() != ProviderOpenAI {
+		t.Fatalf("Provider() = %s, want %s", c.Provider(), ProviderOpenAI)
+	}
+	if c.Model() != "env-model" {
+		t.Fatalf("Model() = %s, want env-model", c.Model())
 	}
 }
 
@@ -196,8 +249,26 @@ func TestClient_Respond(t *testing.T) {
 // environment (including any .env file loaded via godotenv.Load).
 func clearProviderEnv(t *testing.T) {
 	t.Helper()
-	for _, k := range []string{"OPENAI_API_KEY", "OPENROUTER_API_KEY", "GEMINI_API_KEY", "ORCHESTRATION_MODEL", "REASONING_EFFORT", "REASONING_REPLAY"} {
+	for _, k := range []string{"OPENAI_API_KEY", "OPENROUTER_API_KEY", "GEMINI_API_KEY", "MODEL", "REASONING_EFFORT", "REASONING_REPLAY"} {
 		t.Setenv(k, "")
+	}
+}
+
+func unsetProviderEnv(t *testing.T) {
+	t.Helper()
+	for _, k := range []string{"OPENAI_API_KEY", "OPENROUTER_API_KEY", "GEMINI_API_KEY", "MODEL", "REASONING_EFFORT", "REASONING_REPLAY"} {
+		key := k
+		old, ok := os.LookupEnv(key)
+		if err := os.Unsetenv(key); err != nil {
+			t.Fatalf("unset %s: %v", key, err)
+		}
+		t.Cleanup(func() {
+			if ok {
+				_ = os.Setenv(key, old)
+				return
+			}
+			_ = os.Unsetenv(key)
+		})
 	}
 }
 
@@ -221,7 +292,7 @@ func TestClient_SendAppendsAssistantAndUsage(t *testing.T) {
 	t.Cleanup(srv.Close)
 
 	c := testClient(srv.URL)
-	conv := NewConversation(c, "sys", nil)
+	conv := mustNewConversation(t, c, "sys", nil)
 	conv.AppendUser("hi")
 
 	resp, err := conv.Send(t.Context(), "")
@@ -261,7 +332,7 @@ func TestClient_SendRecordsToolCalls(t *testing.T) {
 	t.Cleanup(srv.Close)
 
 	c := testClient(srv.URL)
-	conv := NewConversation(c, "", []Tool{NewFuncTool("echo", "", map[string]any{"type": "object"}, nil)})
+	conv := mustNewConversation(t, c, "", []Tool{NewFuncTool("echo", "", map[string]any{"type": "object"}, nil)})
 	conv.AppendUser("please echo")
 
 	resp, err := conv.Send(t.Context(), "")
@@ -301,7 +372,7 @@ func TestClient_SendPrefixStable(t *testing.T) {
 	t.Cleanup(srv.Close)
 
 	c := testClient(srv.URL)
-	conv := NewConversation(c, "system prompt", []Tool{NewFuncTool("echo", "e", map[string]any{"type": "object"}, nil)})
+	conv := mustNewConversation(t, c, "system prompt", []Tool{NewFuncTool("echo", "e", map[string]any{"type": "object"}, nil)})
 	conv.AppendUser("hello")
 
 	if _, err := conv.Send(t.Context(), ""); err != nil {
@@ -340,7 +411,7 @@ func TestClient_SendPrefixStable(t *testing.T) {
 }
 
 func TestConversation_SendRejectsNilClient(t *testing.T) {
-	conv := NewConversation(nil, "", nil)
+	conv := mustNewConversation(t, nil, "", nil)
 	conv.AppendUser("hi")
 	if _, err := conv.Send(t.Context(), ""); err != ErrNoClient {
 		t.Errorf("err = %v, want ErrNoClient", err)
@@ -455,7 +526,7 @@ func TestClient_ReasoningEffortInRequest(t *testing.T) {
 	}
 	assertEffort("Respond(high)", "high")
 
-	conv := NewConversation(c, "sys", nil)
+	conv := mustNewConversation(t, c, "sys", nil)
 	conv.AppendUser("hello")
 	if _, err := conv.Send(t.Context(), ""); err != nil {
 		t.Fatalf("Send: %v", err)
@@ -468,7 +539,7 @@ func TestClient_ReasoningEffortInRequest(t *testing.T) {
 		t.Fatalf("Respond: %v", err)
 	}
 	assertEffort("Respond(empty)", "")
-	conv2 := NewConversation(c2, "sys", nil)
+	conv2 := mustNewConversation(t, c2, "sys", nil)
 	conv2.AppendUser("hello")
 	if _, err := conv2.Send(t.Context(), ""); err != nil {
 		t.Fatalf("Send: %v", err)
@@ -525,7 +596,7 @@ func TestConversation_SendEffortOverride(t *testing.T) {
 
 	// Client default is high; per-call "low" must override it.
 	c := mk(ReasoningEffortHigh)
-	conv := NewConversation(c, "sys", nil)
+	conv := mustNewConversation(t, c, "sys", nil)
 	conv.AppendUser("hello")
 	if _, err := conv.Send(t.Context(), ReasoningEffortLow); err != nil {
 		t.Fatalf("Send override: %v", err)
@@ -544,7 +615,7 @@ func TestConversation_SendEffortOverride(t *testing.T) {
 
 	// Client has no default and no per-call effort: field is omitted.
 	c2 := mk("")
-	conv2 := NewConversation(c2, "sys", nil)
+	conv2 := mustNewConversation(t, c2, "sys", nil)
 	conv2.AppendUser("hello")
 	if _, err := conv2.Send(t.Context(), ""); err != nil {
 		t.Fatalf("Send empty+empty: %v", err)
@@ -565,7 +636,7 @@ func TestConversation_SendEffortOverride(t *testing.T) {
 func TestNewClientFromEnv_ReasoningEffort(t *testing.T) {
 	clearProviderEnv(t)
 	t.Setenv("OPENAI_API_KEY", "oai")
-	t.Setenv("ORCHESTRATION_MODEL", "m")
+	t.Setenv("MODEL", "m")
 	t.Setenv("REASONING_EFFORT", "low")
 
 	c, err := NewClientFromEnv()
@@ -613,7 +684,7 @@ func TestClient_SendCapturesReasoning(t *testing.T) {
 	t.Cleanup(srv.Close)
 
 	c := testClient(srv.URL)
-	conv := NewConversation(c, "sys", nil)
+	conv := mustNewConversation(t, c, "sys", nil)
 	conv.AppendUser("hi")
 	if _, err := conv.Send(t.Context(), ""); err != nil {
 		t.Fatalf("Send 1: %v", err)

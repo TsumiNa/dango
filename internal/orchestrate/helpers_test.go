@@ -16,7 +16,6 @@ import (
 	"github.com/openai/openai-go/v3"
 	"github.com/openai/openai-go/v3/option"
 	"github.com/tsumina/dango/internal/llm"
-	"github.com/tsumina/dango/internal/llm/skill"
 	runnerpkg "github.com/tsumina/dango/internal/orchestrate/runner"
 )
 
@@ -70,7 +69,7 @@ func clearLLMEnv(t *testing.T) {
 		"OPENAI_API_KEY",
 		"OPENROUTER_API_KEY",
 		"GEMINI_API_KEY",
-		"ORCHESTRATION_MODEL",
+		"MODEL",
 		"REASONING_EFFORT",
 		"REASONING_REPLAY",
 	} {
@@ -82,13 +81,40 @@ func writeTestSkill(t *testing.T, name, description string) string {
 	t.Helper()
 	dir := t.TempDir()
 	content := "---\nname: " + name + "\ndescription: " + description + "\n---\nbody"
-	if err := os.WriteFile(filepath.Join(dir, skill.SkillFile), []byte(content), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, llm.SkillFile), []byte(content), 0o644); err != nil {
 		t.Fatalf("write SKILL.md: %v", err)
 	}
 	return dir
 }
 
-func bindTestOrchestratorSkill(t *testing.T, outputs ...string) *skill.Skill {
+func loadTestSkillFromDir(t *testing.T, dir string) *llm.Skill {
+	t.Helper()
+	sk, err := llm.New(dir, nil, nil)
+	if err != nil {
+		t.Fatalf("llm.New(%q): %v", dir, err)
+	}
+	return sk
+}
+
+func newTestSkillConfig(t *testing.T, name, description string, client *llm.Client) AddSkillConfig {
+	t.Helper()
+	if client == nil {
+		client = &llm.Client{}
+	}
+	return AddSkillConfig{
+		Skill:  loadTestSkillFromDir(t, writeTestSkill(t, name, description)),
+		Client: client,
+	}
+}
+
+func mustAddSkills(t *testing.T, o *Orchestrator, cfgs ...AddSkillConfig) {
+	t.Helper()
+	if err := o.AddSkills(cfgs...); err != nil {
+		t.Fatalf("AddSkills: %v", err)
+	}
+}
+
+func bindTestOrchestratorSkill(t *testing.T, outputs ...string) *llm.Skill {
 	t.Helper()
 	clearLLMEnv(t)
 	var responded int
@@ -131,7 +157,7 @@ func bindTestOrchestratorSkill(t *testing.T, outputs ...string) *skill.Skill {
 	if err != nil {
 		t.Fatalf("NewClient: %v", err)
 	}
-	bound, err := defaultOrchestratorSkill().Bind(skill.RuntimeConfig{Client: client})
+	bound, err := defaultOrchestratorSkill().Bind(client, nil, nil)
 	if err != nil {
 		t.Fatalf("Bind(default orchestrator skill): %v", err)
 	}
@@ -179,9 +205,7 @@ func mustPlanSingleNodeRunner(t *testing.T, o *Orchestrator) (*CoarsePlan, *runn
 
 func mustPlanSingleNodeRunnerWithOutputs(t *testing.T, o *Orchestrator, outputs ...string) (*CoarsePlan, *runnerpkg.Runner) {
 	t.Helper()
-	if err := o.RegisterSkill(writeTestSkill(t, "single", "Single-step runner.")); err != nil {
-		t.Fatalf("RegisterSkill(single): %v", err)
-	}
+	mustAddSkills(t, o, newTestSkillConfig(t, "single", "Single-step runner.", nil))
 	if len(outputs) == 0 {
 		outputs = []string{mustPlanJSON(t, &CoarsePlan{
 			Request: "run a single node",

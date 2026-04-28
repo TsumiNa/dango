@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"reflect"
+	"sort"
 	"strings"
 
 	"github.com/joho/godotenv"
@@ -128,8 +129,8 @@ func (c *Client) String() string {
 // ErrNoAPIKey is returned when no supported *_API_KEY variable is set.
 var ErrNoAPIKey = errors.New("llm: no supported API key found (OPENAI_API_KEY, OPENROUTER_API_KEY, GEMINI_API_KEY)")
 
-// ErrNoModel is returned when ORCHESTRATION_MODEL is not set.
-var ErrNoModel = errors.New("llm: ORCHESTRATION_MODEL environment variable is not set")
+// ErrNoModel is returned when MODEL is not set.
+var ErrNoModel = errors.New("llm: MODEL environment variable is not set")
 
 // ClientConfig carries all the knobs used to construct a [Client]. New
 // extension points (for example per-client timeouts, temperature
@@ -198,24 +199,28 @@ func NewClient(cfg ClientConfig) (*Client, error) {
 
 // NewClientFromEnv constructs a Client from the environment.
 //
-// If a .env file is present in the current working directory, its values are
-// loaded into the process environment without overriding existing variables.
+// When filenames are provided, they are read in order as env files before
+// consulting the process environment. Earlier files win over later ones, and
+// real process environment variables still take precedence over any value read
+// from a file. When filenames is empty, NewClientFromEnv behaves as if a single
+// ".env" path was provided. Missing or unreadable env files are ignored.
+//
 // The first matching API key in the order OPENAI, OPENROUTER, GEMINI selects
-// the provider and base URL. The ORCHESTRATION_MODEL variable must be set.
+// the provider and base URL. The MODEL variable must be set.
 // REASONING_EFFORT is optional; when set, its value is forwarded verbatim
 // as the reasoning effort (expected values: none, minimal, low, medium,
 // high, xhigh). REASONING_REPLAY, when set to a truthy value ("1",
 // "true", "yes", or "on"; case- and surrounding-whitespace-insensitive),
 // enables reasoning replay for tool-calling continuity.
-func NewClientFromEnv() (*Client, error) {
-	_ = godotenv.Load()
+func NewClientFromEnv(filenames ...string) (*Client, error) {
+	lookup := envLookupFromFiles(filenames...)
 
-	provider, apiKey, ok := detectProvider()
+	provider, apiKey, ok := detectProviderWithLookup(lookup)
 	if !ok {
 		return nil, ErrNoAPIKey
 	}
 
-	model := os.Getenv("ORCHESTRATION_MODEL")
+	model, _ := lookup("MODEL")
 	if model == "" {
 		return nil, ErrNoModel
 	}
@@ -229,10 +234,20 @@ func NewClientFromEnv() (*Client, error) {
 		provider:         provider,
 		model:            model,
 		raw:              openai.NewClient(opts...),
-		reasoningEffort:  ReasoningEffort(os.Getenv("REASONING_EFFORT")),
-		replayReasoning:  parseBoolEnv(os.Getenv("REASONING_REPLAY")),
+		reasoningEffort:  lookupReasoningEffort(lookup),
+		replayReasoning:  lookupReplayReasoning(lookup),
 		streamCategories: resolveStreamCategories(0),
 	}, nil
+}
+
+func lookupReasoningEffort(lookup func(string) (string, bool)) ReasoningEffort {
+	value, _ := lookup("REASONING_EFFORT")
+	return ReasoningEffort(value)
+}
+
+func lookupReplayReasoning(lookup func(string) (string, bool)) bool {
+	value, _ := lookup("REASONING_REPLAY")
+	return parseBoolEnv(value)
 }
 
 // parseBoolEnv reports whether s names a truthy boolean environment
@@ -248,6 +263,10 @@ func parseBoolEnv(s string) bool {
 // detectProvider inspects well-known environment variables and returns the
 // first provider that has a non-empty API key configured.
 func detectProvider() (Provider, string, bool) {
+	return detectProviderWithLookup(os.LookupEnv)
+}
+
+func detectProviderWithLookup(lookup func(string) (string, bool)) (Provider, string, bool) {
 	candidates := []struct {
 		provider Provider
 		envVar   string
@@ -257,9 +276,45 @@ func detectProvider() (Provider, string, bool) {
 		{ProviderGemini, "GEMINI_API_KEY"},
 	}
 	for _, c := range candidates {
-		if v := os.Getenv(c.envVar); v != "" {
+		if v, ok := lookup(c.envVar); ok && v != "" {
 			return c.provider, v, true
 		}
 	}
 	return "", "", false
+}
+
+func envLookupFromFiles(filenames ...string) func(string) (string, bool) {
+	fileEnv := readEnvFiles(filenames...)
+	return func(key string) (string, bool) {
+		if value, ok := os.LookupEnv(key); ok {
+			return value, true
+		}
+		value, ok := fileEnv[key]
+		return value, ok
+	}
+}
+
+func readEnvFiles(filenames ...string) map[string]string {
+	if len(filenames) == 0 {
+		filenames = []string{".env"}
+	}
+	values := make(map[string]string)
+	for _, name := range filenames {
+		envMap, err := godotenv.Read(name)
+		if err != nil {
+			continue
+		}
+		keys := make([]string, 0, len(envMap))
+		for key := range envMap {
+			keys = append(keys, key)
+		}
+		sort.Strings(keys)
+		for _, key := range keys {
+			if _, exists := values[key]; exists {
+				continue
+			}
+			values[key] = envMap[key]
+		}
+	}
+	return values
 }

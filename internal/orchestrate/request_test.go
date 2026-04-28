@@ -32,18 +32,15 @@ func TestPlanFromRequest_BuildsRunnerFromPlan(t *testing.T) {
 	clearLLMEnv(t)
 	o := newOrchestrator(testLogger)
 	perSkillClient := &llm.Client{}
+	executeClient := &llm.Client{}
 	store := mustNewRunnerStore(t, t.TempDir())
 	if err := o.SetRunnerStore(store); err != nil {
 		t.Fatalf("SetRunnerStore: %v", err)
 	}
-	if err := o.RegisterSkill(writeTestSkill(t, "plan", "Draft a plan."), WithSkillClientFactory(func() (*llm.Client, error) {
-		return perSkillClient, nil
-	})); err != nil {
-		t.Fatalf("RegisterSkill(plan): %v", err)
-	}
-	if err := o.RegisterSkill(writeTestSkill(t, "execute", "Execute a plan.")); err != nil {
-		t.Fatalf("RegisterSkill(execute): %v", err)
-	}
+	mustAddSkills(t, o,
+		newTestSkillConfig(t, "plan", "Draft a plan.", perSkillClient),
+		newTestSkillConfig(t, "execute", "Execute a plan.", executeClient),
+	)
 	orchestratorSkill := bindTestOrchestratorSkill(t, mustPlanJSON(t, &CoarsePlan{
 		Request: "build a report",
 		Nodes: []CoarsePlanNode{
@@ -96,8 +93,8 @@ func TestPlanFromRequest_BuildsRunnerFromPlan(t *testing.T) {
 	if runExecutor.Skill().Name != "execute" {
 		t.Fatalf("run executor skill = %v, want execute", runExecutor)
 	}
-	if got := runExecutor.LLMClient(); got != orchestratorSkill.Client() {
-		t.Fatalf("run executor LLMClient() = %p, want %p", got, orchestratorSkill.Client())
+	if got := runExecutor.LLMClient(); got != executeClient {
+		t.Fatalf("run executor LLMClient() = %p, want %p", got, executeClient)
 	}
 	if len(run.Parents) != 1 || run.Parents[0].Id != "draft" {
 		t.Fatalf("run parents = %+v, want [draft]", run.Parents)
@@ -130,9 +127,7 @@ func TestPlanFromRequest_ErrorsWhenPlanUsesUnknownSkill(t *testing.T) {
 
 func TestStartRequest_StartsRunnerImmediately(t *testing.T) {
 	o := newOrchestrator(testLogger)
-	if err := o.RegisterSkill(writeTestSkill(t, "single", "Single-step runner.")); err != nil {
-		t.Fatalf("RegisterSkill(single): %v", err)
-	}
+	mustAddSkills(t, o, newTestSkillConfig(t, "single", "Single-step runner.", nil))
 	if err := o.SetOrchestratorSkill(bindTestOrchestratorSkill(t, mustPlanJSON(t, &CoarsePlan{
 		Request: "run now",
 		Nodes: []CoarsePlanNode{{
@@ -206,9 +201,7 @@ func TestStartRequest_EntersAwaitingReviewBeforeAccept(t *testing.T) {
 
 func TestStartRequest_RejectsPriorityOutsideRange(t *testing.T) {
 	o := newOrchestrator(testLogger)
-	if err := o.RegisterSkill(writeTestSkill(t, "single", "Single-step runner.")); err != nil {
-		t.Fatalf("RegisterSkill(single): %v", err)
-	}
+	mustAddSkills(t, o, newTestSkillConfig(t, "single", "Single-step runner.", nil))
 	if err := o.SetOrchestratorSkill(bindTestOrchestratorSkill(t, mustPlanJSON(t, &CoarsePlan{
 		Request: "run now",
 		Nodes: []CoarsePlanNode{{

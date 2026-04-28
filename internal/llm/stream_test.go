@@ -103,7 +103,7 @@ func TestClient_Stream_ForwardsTextDeltas(t *testing.T) {
 	t.Cleanup(srv.Close)
 
 	c := testClient(srv.URL)
-	conv := NewConversation(c, "sys", nil)
+	conv := mustNewConversation(t, c, "sys", nil)
 	conv.AppendUser("hi")
 
 	ch, err := conv.Stream(t.Context(), "")
@@ -161,7 +161,7 @@ func TestClient_Stream_ForwardsReasoningDeltas(t *testing.T) {
 	t.Cleanup(srv.Close)
 
 	c := testClient(srv.URL)
-	conv := NewConversation(c, "sys", nil)
+	conv := mustNewConversation(t, c, "sys", nil)
 	conv.AppendUser("hi")
 
 	ch, err := conv.Stream(t.Context(), "")
@@ -221,7 +221,7 @@ func TestClient_Stream_CategoryFilter(t *testing.T) {
 
 	c := testClient(srv.URL)
 	c.streamCategories = StreamText // explicit override; reasoning suppressed
-	conv := NewConversation(c, "sys", nil)
+	conv := mustNewConversation(t, c, "sys", nil)
 	conv.AppendUser("hi")
 
 	ch, err := conv.Stream(t.Context(), "")
@@ -264,7 +264,7 @@ func TestClient_Stream_CommitsToolCalls(t *testing.T) {
 	t.Cleanup(srv.Close)
 
 	c := testClient(srv.URL)
-	conv := NewConversation(c, "sys", []Tool{NewFuncTool("echo", "", map[string]any{"type": "object"}, nil)})
+	conv := mustNewConversation(t, c, "sys", []Tool{NewFuncTool("echo", "", map[string]any{"type": "object"}, nil)})
 	conv.AppendUser("please echo")
 
 	ch, err := conv.Stream(t.Context(), "")
@@ -292,7 +292,7 @@ func TestClient_Stream_CommitsToolCalls(t *testing.T) {
 // precondition is enforced synchronously so callers do not have to
 // drain a nil-or-closed channel to discover a programming error.
 func TestConversation_Stream_RejectsNilClient(t *testing.T) {
-	conv := NewConversation(nil, "", nil)
+	conv := mustNewConversation(t, nil, "", nil)
 	conv.AppendUser("hi")
 	ch, err := conv.Stream(t.Context(), "")
 	if err != ErrNoClient {
@@ -317,7 +317,7 @@ data: {"type":"response.failed","sequence_number":0,"response":{"id":"r1","objec
 	t.Cleanup(srv.Close)
 
 	c := testClient(srv.URL)
-	conv := NewConversation(c, "sys", nil)
+	conv := mustNewConversation(t, c, "sys", nil)
 	conv.AppendUser("hi")
 
 	ch, err := conv.Stream(t.Context(), "")
@@ -364,7 +364,7 @@ func TestClient_Stream_CtxCancel(t *testing.T) {
 	t.Cleanup(srv.Close)
 
 	c := testClient(srv.URL)
-	conv := NewConversation(c, "sys", nil)
+	conv := mustNewConversation(t, c, "sys", nil)
 	conv.AppendUser("hi")
 
 	ctx, cancel := context.WithCancel(t.Context())
@@ -408,7 +408,7 @@ func TestClient_Stream_SurfacesMissingCompleted(t *testing.T) {
 	t.Cleanup(srv.Close)
 
 	c := testClient(srv.URL)
-	conv := NewConversation(c, "sys", nil)
+	conv := mustNewConversation(t, c, "sys", nil)
 	conv.AppendUser("hi")
 
 	ch, err := conv.Stream(t.Context(), "")

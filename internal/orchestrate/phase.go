@@ -144,14 +144,12 @@ func buildPlanNodes(o *Orchestrator, plan *CoarsePlan) (map[string]*runnerpkg.No
 	}
 	o.mu.RLock()
 	logger := o.logger
-	orchestratorSkill := o.orchestratorSkill
 	store := o.runnerStore
-	skills := cloneSkillMap(o.skills)
-	skillClients := cloneSkillClientFactories(o.skillClientByName)
+	skills := cloneAddSkillConfigs(o.skills)
 	o.mu.RUnlock()
 
 	request := &Request{Input: plan.Request}
-	runner, err := buildRunner(logger, orchestratorSkill.Client(), store, request, plan, skills, skillClients)
+	runner, err := buildRunner(logger, store, request, plan, skills)
 	if err != nil {
 		return nil, err
 	}
