@@ -86,21 +86,21 @@ func NewFromDir(dir string, bashAllow []string, bashBlock []string, tools ...Too
 	return sk, nil
 }
 
-// NewFromFS reads [SkillFile] from fsys and prepares a Skill using fsys as its
+// NewFromFS reads [SkillFile] from fs and prepares a Skill using fs as its
 // skill workspace.
 //
 // It is the filesystem-agnostic counterpart to [NewFromDir] and is intended
 // for cases such as embedded skills that are packaged into the final binary.
-// SKILL.md must be at the root of fsys.
-func NewFromFS(fsys fs.FS, bashAllow []string, bashBlock []string, tools ...Tool) (*Skill, error) {
-	if fsys == nil {
+// SKILL.md must be at the root of fs.
+func NewFromFS(fs fs.FS, bashAllow []string, bashBlock []string, tools ...Tool) (*Skill, error) {
+	if fs == nil {
 		return nil, fmt.Errorf("skill: requires a non-nil filesystem")
 	}
 	workspace, err := newTempWorkspaceRoot()
 	if err != nil {
 		return nil, err
 	}
-	sk, err := newFromFS(fsys, "skill filesystem", workspace, nil, bashAllow, bashBlock, tools...)
+	sk, err := newFromFS(fs, "skill filesystem", workspace, nil, bashAllow, bashBlock, tools...)
 	if err != nil {
 		_ = workspace.cleanup()
 		return nil, err
@@ -108,12 +108,12 @@ func NewFromFS(fsys fs.FS, bashAllow []string, bashBlock []string, tools ...Tool
 	return sk, nil
 }
 
-func newFromFS(fsys fs.FS, displayDir string, workspace *workspaceRoot, envFiles []string, bashAllow []string, bashBlock []string, tools ...Tool) (*Skill, error) {
+func newFromFS(fs fs.FS, displayDir string, workspace *workspaceRoot, envFiles []string, bashAllow []string, bashBlock []string, tools ...Tool) (*Skill, error) {
 	if err := validateTools(tools); err != nil {
 		return nil, err
 	}
 	skillPath := path.Join(".", SkillFile)
-	file, err := fsys.Open(skillPath)
+	file, err := fs.Open(skillPath)
 	if err != nil {
 		if os.IsNotExist(err) {
 			return nil, fmt.Errorf("skill directory %q is missing required %s: %w", displayDir, SkillFile, err)
@@ -128,7 +128,7 @@ func newFromFS(fsys fs.FS, displayDir string, workspace *workspaceRoot, envFiles
 		return nil, err
 	}
 	sk.Instruction = string(rest)
-	sk.dir = fsys
+	sk.dir = fs
 	sk.workspace = workspace
 	sk.envFiles = append([]string(nil), envFiles...)
 	sk.bashAllow = append([]string(nil), bashAllow...)
