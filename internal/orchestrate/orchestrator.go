@@ -19,7 +19,7 @@ var (
 // Orchestrator is the singleton runner factory that bridges external user
 // requests to runner assembly.
 //
-// It keeps a registry of lightweight skills loaded through llm.NewFromDir,
+// It keeps a registry of lightweight skills loaded through llm.New,
 // initializes its orchestrator-owned skill during startup, and materializes a
 // fresh runner plus its Executor graph for each accepted plan.
 type Orchestrator struct {
@@ -178,7 +178,7 @@ func (o *Orchestrator) SetOrchestratorSkillDir(dir string) error {
 	if dir == "" {
 		return o.SetOrchestratorSkill(nil)
 	}
-	sk, err := llm.NewFromDir(dir, nil, nil)
+	sk, err := llm.New(dir, nil, nil)
 	if err != nil {
 		return err
 	}
@@ -228,7 +228,7 @@ func (o *Orchestrator) SetMaxRunningRunners(limit int) error {
 	return nil
 }
 
-// RegisterSkill loads dir through llm.NewFromDir and stores the resulting
+// RegisterSkill loads dir through llm.New and stores the resulting
 // lightweight Skill in the registry under its declared name.
 //
 // Skills are live managed state rather than startup-only configuration, so
@@ -241,7 +241,7 @@ func (o *Orchestrator) RegisterSkill(dir string, opts ...RegisterSkillOption) er
 		}
 	}
 
-	sk, err := llm.NewFromDir(dir, nil, nil)
+	sk, err := llm.New(dir, nil, nil)
 	if err != nil {
 		return err
 	}

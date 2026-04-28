@@ -16,7 +16,7 @@ func defaultOrchestratorSkill() *llm.Skill {
 	if err != nil {
 		panic(fmt.Sprintf("orchestrate: load embedded orchestrator skill filesystem: %v", err))
 	}
-	sk, err := llm.NewFromFS(sub, nil, nil)
+	sk, err := llm.New(sub, nil, nil)
 	if err != nil {
 		panic(fmt.Sprintf("orchestrate: load embedded orchestrator skill: %v", err))
 	}

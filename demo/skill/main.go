@@ -122,7 +122,7 @@ func main() {
 	if err != nil {
 		log.Fatalf("load llm client from env: %v", err)
 	}
-	fmt.Println(bold("Dango skill demo") + dim(" - NewFromDir + Bind + tool loop + persisted session"))
+	fmt.Println(bold("Dango skill demo") + dim(" - New + Bind + tool loop + persisted session"))
 	note("The demo creates a temporary skill workspace, lets the LLM call tools, saves the event log, then restores it for a second run.")
 
 	banner(1, "LLM client", "which model and reasoning settings will drive Skill.Run")
@@ -156,7 +156,7 @@ func main() {
 	if err := os.WriteFile(filepath.Join(dir, "SKILL.md"), []byte(skillMD), 0o644); err != nil {
 		log.Fatalf("write SKILL.md: %v", err)
 	}
-	banner(2, "Skill workspace", "the temporary directory passed to llm.NewFromDir")
+	banner(2, "Skill workspace", "the temporary directory passed to llm.New")
 	field("workspace", dir)
 	field("skill file", filepath.Join(dir, "SKILL.md"))
 	printBlock("SKILL.md prompt body", frontmatterBody(skillMD), dim)
@@ -167,7 +167,7 @@ func main() {
 	field("bash allow additions", formatSlice(bashAllow))
 	field("bash block removals", formatSlice(bashBlock))
 
-	baseSkill, err := llm.NewFromDir(dir, bashAllow, bashBlock)
+	baseSkill, err := llm.New(dir, bashAllow, bashBlock)
 	if err != nil {
 		log.Fatalf("load skill: %v", err)
 	}

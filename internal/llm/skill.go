@@ -8,6 +8,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"reflect"
 	"strings"
 
 	"github.com/adrg/frontmatter"
@@ -38,8 +39,7 @@ const SkillFile = "SKILL.md"
 // and the remaining body becomes [Skill.Instruction], which is used as
 // the system prompt of the conversation.
 //
-// The zero value is not usable; construct instances with [NewFromDir] or
-// [NewFromFS].
+// The zero value is not usable; construct instances with [New].
 type Skill struct {
 	Name        string `yaml:"name" toml:"name" json:"name"`
 	Description string `yaml:"description" toml:"description" json:"description"`
@@ -56,15 +56,41 @@ type Skill struct {
 	conv *Conversation
 }
 
-// NewFromDir reads the [SkillFile] in dir and prepares a Skill using the
-// host filesystem as its skill workspace.
+// New reads [SkillFile] from dir and prepares a lightweight Skill.
 //
 // bashAllow and bashBlock are stored for callers that compose built-in bash
 // tools around the skill. tools is the complete tool set advertised to the
 // model when the skill is bound with [Skill.Bind]. Tool names must be unique
 // and non-empty.
-func NewFromDir(dir string, bashAllow []string, bashBlock []string, tools ...Tool) (*Skill, error) {
-	workspace, err := newWorkspaceRoot(dir)
+//
+// When dir is a host path, New also records that directory's .env file when it
+// exists and exposes the directory as the skill's source workspace. When dir
+// implements [fs.FS], SKILL.md must be at its root.
+//
+// Accepted values are string-like host directory paths and values
+// implementing [fs.FS].
+func New(dir any, bashAllow []string, bashBlock []string, tools ...Tool) (*Skill, error) {
+	if rawFS, ok := any(dir).(fs.FS); ok {
+		if rawFS == nil {
+			return nil, fmt.Errorf("skill: requires a non-nil filesystem")
+		}
+		workspace, err := newTempWorkspaceRoot()
+		if err != nil {
+			return nil, err
+		}
+		sk, err := newFromFS(rawFS, "skill filesystem", workspace, nil, bashAllow, bashBlock, tools...)
+		if err != nil {
+			_ = workspace.cleanup()
+			return nil, err
+		}
+		return sk, nil
+	}
+
+	rawDir := reflect.ValueOf(any(dir))
+	if !rawDir.IsValid() || rawDir.Kind() != reflect.String {
+		return nil, fmt.Errorf("skill: unsupported skill dir type %T", dir)
+	}
+	workspace, err := newWorkspaceRoot(rawDir.String())
 	if err != nil {
 		return nil, err
 	}
@@ -79,28 +105,6 @@ func NewFromDir(dir string, bashAllow []string, bashBlock []string, tools ...Too
 	}
 
 	sk, err := newFromFS(os.DirFS(workspace.SkillRoot()), workspace.SkillRoot(), workspace, envFiles, bashAllow, bashBlock, tools...)
-	if err != nil {
-		_ = workspace.cleanup()
-		return nil, err
-	}
-	return sk, nil
-}
-
-// NewFromFS reads [SkillFile] from fs and prepares a Skill using fs as its
-// skill workspace.
-//
-// It is the filesystem-agnostic counterpart to [NewFromDir] and is intended
-// for cases such as embedded skills that are packaged into the final binary.
-// SKILL.md must be at the root of fs.
-func NewFromFS(fs fs.FS, bashAllow []string, bashBlock []string, tools ...Tool) (*Skill, error) {
-	if fs == nil {
-		return nil, fmt.Errorf("skill: requires a non-nil filesystem")
-	}
-	workspace, err := newTempWorkspaceRoot()
-	if err != nil {
-		return nil, err
-	}
-	sk, err := newFromFS(fs, "skill filesystem", workspace, nil, bashAllow, bashBlock, tools...)
 	if err != nil {
 		_ = workspace.cleanup()
 		return nil, err
@@ -138,13 +142,13 @@ func newFromFS(fs fs.FS, displayDir string, workspace *workspaceRoot, envFiles [
 	return &sk, nil
 }
 
-// Bind returns a fresh runnable copy of s using the provided runtime wiring.
+// Bind returns a runnable copy of s using the provided runtime wiring.
 //
-// Bind is the bridge between [NewFromDir]/[NewFromFS] and [Run]: callers can
-// keep lightweight skills in registries and later bind a chosen LLM client and
-// optional persistent session when they are ready to execute. When client is
-// nil, Bind constructs one with [NewClientFromEnv]; skills loaded from a
-// host directory pass that directory's .env file when it exists.
+// [New] prepares the shared skill configuration: metadata, workspace access,
+// env files, and tool set. Bind clones that configuration into a concrete,
+// runnable instance with its own [Conversation]. When client is nil, Bind
+// constructs one with [NewClientFromEnv]; skills loaded from a host directory
+// pass that directory's .env file when it exists.
 func (s *Skill) Bind(client *Client, cfg *ConversationConfig, sessID *string, sessStores ...SessionStore) (*Skill, error) {
 	if s == nil {
 		return nil, fmt.Errorf("skill: Bind requires a non-nil skill")
@@ -157,11 +161,7 @@ func (s *Skill) Bind(client *Client, cfg *ConversationConfig, sessID *string, se
 		}
 	}
 
-	bound := *s
-	bound.bashAllow = append([]string(nil), s.bashAllow...)
-	bound.bashBlock = append([]string(nil), s.bashBlock...)
-	bound.envFiles = append([]string(nil), s.envFiles...)
-	bound.tools = append([]Tool(nil), s.tools...)
+	bound := s.copy()
 
 	conv, err := NewConversation(client, s.runtimeInstruction(), bound.tools, cfg)
 	if err != nil {
@@ -177,7 +177,7 @@ func (s *Skill) Bind(client *Client, cfg *ConversationConfig, sessID *string, se
 		}
 	}
 	bound.conv = conv
-	return &bound, nil
+	return bound, nil
 }
 
 // WithAccessibleDirs configures the additional directories this skill's
@@ -210,6 +210,7 @@ func (s *Skill) copy() *Skill {
 	bound.bashBlock = append([]string(nil), s.bashBlock...)
 	bound.envFiles = append([]string(nil), s.envFiles...)
 	bound.tools = append([]Tool(nil), s.tools...)
+	bound.conv = nil
 	return &bound
 }
 
