@@ -16,9 +16,9 @@ import (
 
 	"github.com/openai/openai-go/v3"
 	"github.com/openai/openai-go/v3/option"
+	orchestrate "github.com/tsumina/dango/internal/engine"
+	runnerpkg "github.com/tsumina/dango/internal/engine/runner"
 	"github.com/tsumina/dango/internal/llm"
-	"github.com/tsumina/dango/internal/orchestrate"
-	runnerpkg "github.com/tsumina/dango/internal/orchestrate/runner"
 )
 
 // ANSI styling helpers. The demo is intended for terminal use, so we always
