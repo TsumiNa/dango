@@ -11,6 +11,7 @@ import (
 // ReviewRunnerPlan asks the orchestrator-owned skill to review the runner's
 // current polished plan and return an approval decision.
 func (o *Orchestrator) ReviewRunnerPlan(ctx context.Context, id string) (*PlanReview, error) {
+	ctx = o.operationContext(ctx)
 	runner, err := o.Runner(id)
 	if err != nil {
 		return nil, err
@@ -28,6 +29,7 @@ func (o *Orchestrator) ReviewRunnerPlan(ctx context.Context, id string) (*PlanRe
 // AcceptRunnerPlan adopts the reviewed plan for the identified runner and
 // starts execution.
 func (o *Orchestrator) AcceptRunnerPlan(ctx context.Context, id string, plan *CoarsePlan) error {
+	ctx = o.operationContext(ctx)
 	runner, err := o.Runner(id)
 	if err != nil {
 		return err
@@ -62,6 +64,7 @@ func (o *Orchestrator) AcceptRunnerPlan(ctx context.Context, id string, plan *Co
 // RejectRunnerPlan rejects the reviewed plan for the identified runner and
 // returns it to the replanning state.
 func (o *Orchestrator) RejectRunnerPlan(ctx context.Context, id string, reason string) error {
+	ctx = o.operationContext(ctx)
 	runner, err := o.Runner(id)
 	if err != nil {
 		return err
@@ -91,6 +94,7 @@ func (o *Orchestrator) RejectRunnerPlan(ctx context.Context, id string, reason s
 // ReplanRunner replaces the runner's plan and node graph and restarts the
 // polishing phase.
 func (o *Orchestrator) ReplanRunner(ctx context.Context, id string, plan *CoarsePlan) error {
+	ctx = o.operationContext(ctx)
 	runner, err := o.Runner(id)
 	if err != nil {
 		return err
@@ -125,6 +129,7 @@ func (o *Orchestrator) ReplanRunner(ctx context.Context, id string, plan *Coarse
 // CompleteRunner drives the identified runner through its cooperative settle
 // path from executing into report and settled.
 func (o *Orchestrator) CompleteRunner(ctx context.Context, id string) error {
+	ctx = o.operationContext(ctx)
 	runner, err := o.Runner(id)
 	if err != nil {
 		return err

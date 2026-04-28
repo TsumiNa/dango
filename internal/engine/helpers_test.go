@@ -9,7 +9,6 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
-	"sync"
 	"testing"
 	"time"
 
@@ -53,10 +52,8 @@ const (
 
 var ErrRunnerLogNotFound = runnerpkg.ErrRunnerLogNotFound
 
-func resetDefaultOrchestrator(t *testing.T) {
-	t.Helper()
-	defaultOrchestrator = nil
-	defaultOrchestratorOnce = sync.Once{}
+func newOrchestrator(logger *slog.Logger) *Orchestrator {
+	return NewOrchestrator(context.Background(), logger)
 }
 
 func newDiscardLogger() *slog.Logger {

@@ -140,7 +140,7 @@ func main() {
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelWarn}))
 	ctx := context.Background()
 
-	o, cleanup := configureDemoOrchestrator(logger)
+	o, cleanup := configureDemoOrchestrator(ctx, logger)
 	defer cleanup()
 
 	fmt.Println(bold("Dango orchestrator demo") + dim(" — phased runner lifecycle with a single execution slot"))
@@ -237,9 +237,8 @@ func main() {
 	fmt.Println(green(bold("✓ Demo complete.")) + dim(" all three runners settled through the phased lifecycle."))
 }
 
-func configureDemoOrchestrator(logger *slog.Logger) (*orchestrate.Orchestrator, func()) {
-	o := orchestrate.Default()
-	must(o.SetLogger(logger))
+func configureDemoOrchestrator(ctx context.Context, logger *slog.Logger) (*orchestrate.Orchestrator, func()) {
+	o := orchestrate.NewOrchestrator(ctx, logger)
 	must(o.SetMaxRunningRunners(1))
 
 	root, err := os.MkdirTemp("", "dango-orchestrate-demo-")

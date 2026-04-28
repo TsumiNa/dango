@@ -6,23 +6,20 @@ import (
 	"fmt"
 	"log/slog"
 	"sync"
+	"time"
 
 	runnerpkg "github.com/tsumina/dango/internal/engine/runner"
 	"github.com/tsumina/dango/internal/llm"
 )
 
-var (
-	defaultOrchestrator     *Orchestrator
-	defaultOrchestratorOnce sync.Once
-)
-
-// Orchestrator is the singleton runner factory that bridges external user
-// requests to runner assembly.
+// Orchestrator is a runner factory that bridges external user requests to
+// runner assembly.
 //
 // It keeps a registry of lightweight skills loaded through llm.New,
 // initializes its orchestrator-owned skill during startup, and materializes a
 // fresh runner plus its Executor graph for each accepted plan.
 type Orchestrator struct {
+	ctx               context.Context
 	logger            *slog.Logger
 	orchestratorSkill *llm.Skill
 	envClientOnce     sync.Once
@@ -48,22 +45,21 @@ func (o *Orchestrator) resolveEnvClient() (*llm.Client, error) {
 	return o.envClient, o.envClientErr
 }
 
-// Default returns the process-wide Orchestrator singleton.
+// NewOrchestrator constructs a new Orchestrator with the provided lifecycle
+// context and logger.
 //
-// The singleton is always initialized with slog.Default. Callers that need a
-// different logger can update it afterwards through Orchestrator.SetLogger.
-func Default() *Orchestrator {
-	defaultOrchestratorOnce.Do(func() {
-		defaultOrchestrator = newOrchestrator(nil)
-	})
-	return defaultOrchestrator
-}
-
-func newOrchestrator(logger *slog.Logger) *Orchestrator {
+// Passing nil ctx uses context.Background. Passing nil logger uses
+// slog.Default. The returned Orchestrator is independent and does not share
+// global mutable state with other instances.
+func NewOrchestrator(ctx context.Context, logger *slog.Logger) *Orchestrator {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	if logger == nil {
 		logger = slog.Default()
 	}
 	o := &Orchestrator{
+		ctx:              ctx,
 		logger:           logger,
 		skills:           make(map[string]AddSkillConfig),
 		runners:          make(map[string]*runnerpkg.Runner),
@@ -76,6 +72,85 @@ func newOrchestrator(logger *slog.Logger) *Orchestrator {
 	}
 	o.orchestratorSkill = sk
 	return o
+}
+
+func (o *Orchestrator) operationContext(ctx context.Context) context.Context {
+	base := o.ctx
+	if base == nil {
+		base = context.Background()
+	}
+	if ctx == nil {
+		return base
+	}
+	return ctxWithValues(base, ctx)
+}
+
+func ctxWithValues(parent context.Context, child context.Context) context.Context {
+	if child == nil {
+		return parent
+	}
+	return &mergedContext{parent: parent, child: child}
+}
+
+type mergedContext struct {
+	parent context.Context
+	child  context.Context
+	once   sync.Once
+	done   chan struct{}
+}
+
+func (c *mergedContext) Deadline() (time.Time, bool) {
+	parentDeadline, parentOK := c.parent.Deadline()
+	childDeadline, childOK := c.child.Deadline()
+	switch {
+	case parentOK && childOK:
+		if childDeadline.Before(parentDeadline) {
+			return childDeadline, true
+		}
+		return parentDeadline, true
+	case childOK:
+		return childDeadline, true
+	case parentOK:
+		return parentDeadline, true
+	default:
+		return time.Time{}, false
+	}
+}
+
+func (c *mergedContext) Done() <-chan struct{} {
+	parentDone := c.parent.Done()
+	childDone := c.child.Done()
+	if parentDone == nil {
+		return childDone
+	}
+	if childDone == nil {
+		return parentDone
+	}
+	c.once.Do(func() {
+		c.done = make(chan struct{})
+		go func() {
+			select {
+			case <-parentDone:
+			case <-childDone:
+			}
+			close(c.done)
+		}()
+	})
+	return c.done
+}
+
+func (c *mergedContext) Err() error {
+	if err := c.child.Err(); err != nil {
+		return err
+	}
+	return c.parent.Err()
+}
+
+func (c *mergedContext) Value(key any) any {
+	if value := c.child.Value(key); value != nil {
+		return value
+	}
+	return c.parent.Value(key)
 }
 
 func (o *Orchestrator) configuredOrchestratorSkill(sk *llm.Skill) (*llm.Skill, error) {
@@ -375,9 +450,7 @@ func (o *Orchestrator) SubscribeRunner(id string, bufferSize int) (<-chan runner
 // LoadRunnerRecords loads the persisted append-only record stream for the
 // runner identified by id.
 func (o *Orchestrator) LoadRunnerRecords(ctx context.Context, id string) ([]runnerpkg.RunnerRecord, error) {
-	if ctx == nil {
-		ctx = context.Background()
-	}
+	ctx = o.operationContext(ctx)
 	if id == "" {
 		return nil, fmt.Errorf("orchestrate: runner id must not be empty")
 	}
@@ -401,9 +474,7 @@ func (o *Orchestrator) LoadRunnerRecords(ctx context.Context, id string) ([]runn
 // Only pending, failed, or canceled runners may be removed. Running or idle
 // runners are still live and therefore rejected.
 func (o *Orchestrator) RemoveRunner(ctx context.Context, id string) error {
-	if ctx == nil {
-		ctx = context.Background()
-	}
+	ctx = o.operationContext(ctx)
 	if id == "" {
 		return fmt.Errorf("orchestrate: runner id must not be empty")
 	}
@@ -449,6 +520,7 @@ func (o *Orchestrator) RemoveRunner(ctx context.Context, id string) error {
 // StartRunner starts the runner identified by id and begins forwarding
 // its status to query and stream consumers.
 func (o *Orchestrator) StartRunner(ctx context.Context, id string) error {
+	ctx = o.operationContext(ctx)
 	runner, err := o.Runner(id)
 	if err != nil {
 		return err

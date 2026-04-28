@@ -10,9 +10,7 @@ import (
 )
 
 func (o *Orchestrator) submitManagedRunner(ctx context.Context, runner *runnerpkg.Runner, priority RequestPriority) error {
-	if ctx == nil {
-		ctx = context.Background()
-	}
+	ctx = o.operationContext(ctx)
 	if err := ctx.Err(); err != nil {
 		runner.Abort(err)
 		return err
@@ -74,6 +72,7 @@ func (o *Orchestrator) removeQueuedRunner(entry *queuedRunner, canceled bool) ([
 }
 
 func (o *Orchestrator) startManagedRunner(ctx context.Context, runner *runnerpkg.Runner, plan *CoarsePlan) error {
+	ctx = o.operationContext(ctx)
 	id := runner.ID()
 	o.mu.Lock()
 	if entry := o.queuedRunnerByID[id]; entry != nil {
@@ -89,6 +88,7 @@ func (o *Orchestrator) startManagedRunner(ctx context.Context, runner *runnerpkg
 }
 
 func (o *Orchestrator) startManagedRunnerWithoutReservedSlot(ctx context.Context, runner *runnerpkg.Runner, plan *CoarsePlan) error {
+	ctx = o.operationContext(ctx)
 	var err error
 	if plan != nil {
 		err = runner.AcceptPolishedPlan(ctx, plan)
@@ -105,6 +105,7 @@ func (o *Orchestrator) startManagedRunnerWithoutReservedSlot(ctx context.Context
 }
 
 func (o *Orchestrator) startManagedRunnerWithReservedSlot(ctx context.Context, runner *runnerpkg.Runner, plan *CoarsePlan) error {
+	ctx = o.operationContext(ctx)
 	var err error
 	if plan != nil {
 		err = runner.AcceptPolishedPlan(ctx, plan)

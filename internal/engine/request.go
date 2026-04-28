@@ -15,6 +15,7 @@ import (
 // queues it when the configured runner execution limit is full. Query and
 // stream APIs can be used afterwards with the returned RunnerID.
 func (o *Orchestrator) StartRequest(ctx context.Context, req *Request) (coarsePlan *CoarsePlan, rejectReason *RejectReason, err error) {
+	ctx = o.operationContext(ctx)
 	if req == nil {
 		return nil, nil, fmt.Errorf("orchestrate: nil request")
 	}
@@ -44,6 +45,7 @@ func (o *Orchestrator) StartRequest(ctx context.Context, req *Request) (coarsePl
 // runner for them, stores that runner inside the Orchestrator, and returns the
 // plan annotated with the runner ID.
 func (o *Orchestrator) planFromRequest(ctx context.Context, req *Request) (coarsePlan *CoarsePlan, rejectReason *RejectReason, err error) {
+	ctx = o.operationContext(ctx)
 	if req == nil {
 		return nil, nil, fmt.Errorf("orchestrate: nil request")
 	}

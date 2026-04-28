@@ -3,7 +3,6 @@ package engine
 import (
 	"context"
 	"errors"
-	"io"
 	"log/slog"
 	"path/filepath"
 	"testing"
@@ -12,41 +11,37 @@ import (
 	"github.com/tsumina/dango/internal/llm"
 )
 
-func TestDefault_ReturnsSingleton(t *testing.T) {
-	resetDefaultOrchestrator(t)
-	o1 := Default()
-	o2 := Default()
-	if o1 != o2 {
-		t.Fatalf("Default() should return the singleton instance")
+func TestNewOrchestrator_ReturnsIndependentInstances(t *testing.T) {
+	o1 := NewOrchestrator(context.Background(), nil)
+	o2 := NewOrchestrator(context.Background(), nil)
+	if o1 == o2 {
+		t.Fatal("NewOrchestrator() returned the same instance twice")
 	}
 	if o1.logger != slog.Default() {
 		t.Fatalf("logger = %p, want %p", o1.logger, slog.Default())
 	}
 }
 
-func TestSetLogger_ReconfiguresSingletonLogger(t *testing.T) {
-	resetDefaultOrchestrator(t)
-	second := slog.New(slog.NewJSONHandler(io.Discard, nil))
-
-	o := Default()
-	if got := o.logger; got != slog.Default() {
-		t.Fatalf("initial logger = %p, want %p", got, slog.Default())
+func TestNewOrchestrator_UsesProvidedContext(t *testing.T) {
+	baseCtx, cancel := context.WithCancel(context.Background())
+	o := NewOrchestrator(baseCtx, testLogger)
+	ctx := o.operationContext(context.WithValue(context.Background(), testContextKey("key"), "value"))
+	cancel()
+	select {
+	case <-ctx.Done():
+	case <-time.After(time.Second):
+		t.Fatal("operation context did not inherit base cancellation")
 	}
-
-	if err := o.SetLogger(second); err != nil {
-		t.Fatalf("SetLogger: %v", err)
+	if err := ctx.Err(); !errors.Is(err, context.Canceled) {
+		t.Fatalf("ctx.Err() = %v, want %v", err, context.Canceled)
 	}
-	if got := Default(); got != o {
-		t.Fatalf("Default() returned %p, want %p", got, o)
-	}
-	if got := o.logger; got != second {
-		t.Fatalf("reconfigured logger = %p, want %p", got, second)
+	if got := ctx.Value(testContextKey("key")); got != "value" {
+		t.Fatalf("Value(key) = %v, want value", got)
 	}
 }
 
 func TestSetLogger_NilRestoresDefaultLogger(t *testing.T) {
-	resetDefaultOrchestrator(t)
-	o := Default()
+	o := NewOrchestrator(context.Background(), nil)
 	if err := o.SetLogger(newDiscardLogger()); err != nil {
 		t.Fatalf("SetLogger(custom): %v", err)
 	}
@@ -57,6 +52,8 @@ func TestSetLogger_NilRestoresDefaultLogger(t *testing.T) {
 		t.Fatalf("logger after nil reset = %p, want %p", got, slog.Default())
 	}
 }
+
+type testContextKey string
 
 func TestSetLogger_RejectsChangesAfterStartup(t *testing.T) {
 	o := newOrchestrator(testLogger)
