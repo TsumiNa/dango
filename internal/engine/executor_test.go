@@ -1,4 +1,4 @@
-package orchestrate
+package engine
 
 import (
 	"context"
@@ -7,8 +7,8 @@ import (
 	"path/filepath"
 	"testing"
 
+	runnerpkg "github.com/tsumina/dango/internal/engine/runner"
 	"github.com/tsumina/dango/internal/llm"
-	runnerpkg "github.com/tsumina/dango/internal/orchestrate/runner"
 )
 
 func loadTestSkill(t *testing.T) *llm.Skill {

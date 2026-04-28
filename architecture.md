@@ -188,7 +188,7 @@ sequenceDiagram
 
 当前实现里的 `Orchestrator` 不再依赖外部 `planning function`。planning、review、replan 现在都通过同一个 orchestrator-owned skill 完成。这里的重点是先把 orchestrator 级控制流和输入输出 contract 对齐，而不是在这一轮就把所有 skill 内部 prompt/runtime 能力做满：
 
-- 默认 skill 来自编译时 embed 的 `internal/orchestrate/builtin/SKILL.md`，通过 `llm.New` 初始化，并在 `Orchestrator` 实例化时就尝试绑定到当时可用的 env-derived LLM client。
+- 默认 skill 来自编译时 embed 的 `internal/engine/builtin/SKILL.md`，通过 `llm.New` 初始化，并在 `Orchestrator` 实例化时就尝试绑定到当时可用的 env-derived LLM client。
 - 调用方可以在 startup 阶段通过 `SetOrchestratorSkill` 或 `SetOrchestratorSkillDir` 覆盖它。
 - 如果调用方传入的是 lightweight skill，startup 阶段也会按同样的初始化语义优先绑定可用的 orchestrator client。
 - `StartRequest` 会调用 `planFromRequest(ctx, req)`，由 `planWithOrchestratorSkill` 返回 `CoarsePlan` 或 `RejectReason`。

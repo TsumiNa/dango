@@ -1,11 +1,11 @@
-package orchestrate
+package engine
 
 import (
 	"context"
 	"errors"
 	"fmt"
 
-	runnerpkg "github.com/tsumina/dango/internal/orchestrate/runner"
+	runnerpkg "github.com/tsumina/dango/internal/engine/runner"
 )
 
 // ReviewRunnerPlan asks the orchestrator-owned skill to review the runner's

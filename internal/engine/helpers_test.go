@@ -1,4 +1,4 @@
-package orchestrate
+package engine
 
 import (
 	"context"
@@ -15,8 +15,8 @@ import (
 
 	"github.com/openai/openai-go/v3"
 	"github.com/openai/openai-go/v3/option"
+	runnerpkg "github.com/tsumina/dango/internal/engine/runner"
 	"github.com/tsumina/dango/internal/llm"
-	runnerpkg "github.com/tsumina/dango/internal/orchestrate/runner"
 )
 
 var testLogger = slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelError}))

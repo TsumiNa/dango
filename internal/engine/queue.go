@@ -1,4 +1,4 @@
-package orchestrate
+package engine
 
 import (
 	"container/heap"
@@ -6,7 +6,7 @@ import (
 	"errors"
 	"sync"
 
-	runnerpkg "github.com/tsumina/dango/internal/orchestrate/runner"
+	runnerpkg "github.com/tsumina/dango/internal/engine/runner"
 )
 
 func (o *Orchestrator) submitManagedRunner(ctx context.Context, runner *runnerpkg.Runner, priority RequestPriority) error {

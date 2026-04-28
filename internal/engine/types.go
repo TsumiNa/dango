@@ -1,9 +1,9 @@
-package orchestrate
+package engine
 
 import (
 	"errors"
 
-	runnerpkg "github.com/tsumina/dango/internal/orchestrate/runner"
+	runnerpkg "github.com/tsumina/dango/internal/engine/runner"
 )
 
 // ErrRunnerNotFound is returned when an Orchestrator runner lookup misses.

@@ -1,12 +1,12 @@
-package orchestrate
+package engine
 
 import (
 	"context"
 	"fmt"
 	"log/slog"
 
+	runnerpkg "github.com/tsumina/dango/internal/engine/runner"
 	"github.com/tsumina/dango/internal/llm"
-	runnerpkg "github.com/tsumina/dango/internal/orchestrate/runner"
 )
 
 // StartRequest is the outer-facing request entrypoint.

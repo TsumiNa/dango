@@ -1,4 +1,4 @@
-package orchestrate
+package engine
 
 import (
 	"context"
@@ -7,8 +7,8 @@ import (
 	"log/slog"
 	"sync"
 
+	runnerpkg "github.com/tsumina/dango/internal/engine/runner"
 	"github.com/tsumina/dango/internal/llm"
-	runnerpkg "github.com/tsumina/dango/internal/orchestrate/runner"
 )
 
 var (

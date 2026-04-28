@@ -1,10 +1,10 @@
-package orchestrate
+package engine
 
 import (
 	"encoding/json"
 	"fmt"
 
-	runnerpkg "github.com/tsumina/dango/internal/orchestrate/runner"
+	runnerpkg "github.com/tsumina/dango/internal/engine/runner"
 )
 
 type orchestratorSkillSummary struct {
