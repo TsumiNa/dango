@@ -151,7 +151,7 @@ func bindTestPlannerSkill(t *testing.T, outputs ...string) *llm.Skill {
 	if err := os.WriteFile(filepath.Join(dir, llm.SkillFile), []byte(content), 0o644); err != nil {
 		t.Fatalf("write SKILL.md: %v", err)
 	}
-	sk, err := llm.New(dir, nil, nil)
+	sk, err := llm.NewSkill(dir, nil, nil)
 	if err != nil {
 		t.Fatalf("llm.New: %v", err)
 	}

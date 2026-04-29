@@ -18,7 +18,7 @@ func loadTestSkill(t *testing.T) *llm.Skill {
 	if err := os.WriteFile(filepath.Join(dir, llm.SkillFile), []byte(content), 0o644); err != nil {
 		t.Fatalf("write SKILL.md: %v", err)
 	}
-	loaded, err := llm.New(dir, nil, nil)
+	loaded, err := llm.NewSkill(dir, nil, nil)
 	if err != nil {
 		t.Fatalf("llm.New: %v", err)
 	}
@@ -36,7 +36,7 @@ func loadLightweightTestSkill(t *testing.T) *llm.Skill {
 	if err := os.WriteFile(filepath.Join(dir, llm.SkillFile), []byte(content), 0o644); err != nil {
 		t.Fatalf("write SKILL.md: %v", err)
 	}
-	sk, err := llm.New(dir, nil, nil)
+	sk, err := llm.NewSkill(dir, nil, nil)
 	if err != nil {
 		t.Fatalf("llm.New: %v", err)
 	}

@@ -167,7 +167,7 @@ func main() {
 	field("bash allow additions", formatSlice(bashAllow))
 	field("bash block removals", formatSlice(bashBlock))
 
-	baseSkill, err := llm.New(dir, bashAllow, bashBlock)
+	baseSkill, err := llm.NewSkill(dir, bashAllow, bashBlock)
 	if err != nil {
 		log.Fatalf("load skill: %v", err)
 	}

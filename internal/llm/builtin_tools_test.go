@@ -9,7 +9,7 @@ import (
 )
 
 func TestBuiltinToolsReturnsDefaultToolSet(t *testing.T) {
-	skill, err := New(writeSkillDir(t, "---\nname: x\ndescription: d\n---\nbody\n"), nil, nil)
+	skill, err := NewSkill(writeSkillDir(t, "---\nname: x\ndescription: d\n---\nbody\n"), nil, nil)
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -30,7 +30,7 @@ func TestBuiltinToolsReturnsDefaultToolSet(t *testing.T) {
 }
 
 func TestBuiltinToolsAppliesBashAllowAndBlock(t *testing.T) {
-	skill, err := New(writeSkillDir(t, "---\nname: x\ndescription: d\n---\nbody\n"), []string{"helper-bin"}, []string{"curl"})
+	skill, err := NewSkill(writeSkillDir(t, "---\nname: x\ndescription: d\n---\nbody\n"), []string{"helper-bin"}, []string{"curl"})
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -56,7 +56,7 @@ func TestBuiltinToolsAppliesBashAllowAndBlock(t *testing.T) {
 }
 
 func TestBuiltinToolsResolveRelativePathsInSkillTempDir(t *testing.T) {
-	skill, err := New(writeSkillDir(t, "---\nname: x\ndescription: d\n---\nbody\n"), nil, nil)
+	skill, err := NewSkill(writeSkillDir(t, "---\nname: x\ndescription: d\n---\nbody\n"), nil, nil)
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -84,7 +84,7 @@ func TestBuiltinToolsResolveRelativePathsInSkillTempDir(t *testing.T) {
 }
 
 func TestBuiltinToolsAllowAbsoluteSkillRootAndRejectOutside(t *testing.T) {
-	skill, err := New(writeSkillDir(t, "---\nname: x\ndescription: d\n---\nbody\n"), nil, nil)
+	skill, err := NewSkill(writeSkillDir(t, "---\nname: x\ndescription: d\n---\nbody\n"), nil, nil)
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -117,7 +117,7 @@ func TestBuiltinToolsAllowAbsoluteSkillRootAndRejectOutside(t *testing.T) {
 }
 
 func TestBuiltinToolsAllowAccessibleDirs(t *testing.T) {
-	skill, err := New(writeSkillDir(t, "---\nname: x\ndescription: d\n---\nbody\n"), nil, nil)
+	skill, err := NewSkill(writeSkillDir(t, "---\nname: x\ndescription: d\n---\nbody\n"), nil, nil)
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}

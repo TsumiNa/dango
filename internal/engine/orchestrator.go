@@ -170,7 +170,7 @@ func (o *Orchestrator) configuredOrchestratorSkill(sk *llm.Skill) (*llm.Skill, e
 // AddSkillConfig describes one lightweight skill plus the runtime wiring the
 // runner will later pass to [llm.Skill.Bind].
 //
-// Skill must be a lightweight instance created by [llm.New]. AddSkills augments
+// Skill must be a lightweight instance created by [llm.NewSkill]. AddSkills augments
 // it with the built-in tools before placing it in the orchestrator registry.
 // AccessibleDirs is applied through [llm.Skill.WithAccessibleDirs] before the
 // skill is stored. Client and Config are forwarded unchanged to the
@@ -234,7 +234,7 @@ func (o *Orchestrator) SetOrchestratorSkillDir(dir string) error {
 	if dir == "" {
 		return o.SetOrchestratorSkill(nil)
 	}
-	sk, err := llm.New(dir, nil, nil)
+	sk, err := llm.NewSkill(dir, nil, nil)
 	if err != nil {
 		return err
 	}

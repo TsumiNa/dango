@@ -11,7 +11,7 @@ import (
 // The tools use the private temp playground allocated when the Skill is
 // created. Relative paths and shell commands run in that temp directory;
 // absolute paths are accepted only when they stay inside that temp directory
-// or, for [New] skills loaded from a host directory, the source workspace
+// or, for [NewSkill] skills loaded from a host directory, the source workspace
 // root. Directories added with [Skill.WithAccessibleDirs] are also accepted by
 // absolute path.
 func (s *Skill) BuiltinTools() ([]Tool, error) {

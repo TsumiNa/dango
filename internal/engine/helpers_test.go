@@ -87,7 +87,7 @@ func writeTestSkill(t *testing.T, name, description string) string {
 
 func loadTestSkillFromDir(t *testing.T, dir string) *llm.Skill {
 	t.Helper()
-	sk, err := llm.New(dir, nil, nil)
+	sk, err := llm.NewSkill(dir, nil, nil)
 	if err != nil {
 		t.Fatalf("llm.New(%q): %v", dir, err)
 	}

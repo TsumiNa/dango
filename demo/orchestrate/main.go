@@ -256,7 +256,7 @@ func configureDemoOrchestrator(ctx context.Context, logger *slog.Logger) (*orche
 		must(os.MkdirAll(dir, 0o755))
 		content := fmt.Sprintf("---\nname: %s\ndescription: %s\n---\nDemo skill body.\n", spec.name, spec.description)
 		must(os.WriteFile(filepath.Join(dir, llm.SkillFile), []byte(content), 0o644))
-		sk, err := llm.New(dir, nil, nil)
+		sk, err := llm.NewSkill(dir, nil, nil)
 		must(err)
 		must(o.AddSkills(orchestrate.AddSkillConfig{Skill: sk, Client: plannerClient}))
 	}
