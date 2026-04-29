@@ -26,6 +26,49 @@ func TestRunner_StartPolishRequiresPlan(t *testing.T) {
 	}
 }
 
+func TestRunner_StartManagedReviewsExecutesReportsAndSettles(t *testing.T) {
+	plan := &CoarsePlan{
+		Request: "demo",
+		Nodes:   []CoarsePlanNode{{ID: "A", SkillName: "single", TaskDescription: "demo"}},
+	}
+	nodes := map[string]*Node{
+		"A": {
+			Id: "A",
+			Executor: &testExecutor{
+				polish: func(ctx context.Context) (any, error) { return "frag-A", nil },
+				run: func(ctx context.Context, parentOutputs map[string]any) (any, []*Node, error) {
+					return "exec-A", nil, nil
+				},
+				report: func(ctx context.Context, output any) (any, error) {
+					return "sum-" + output.(string), nil
+				},
+			},
+		},
+	}
+	r := New(
+		WithLogger(testLogger),
+		WithPlan(plan, nodes),
+		WithPlannerSkill(bindTestPlannerSkill(t, mustReviewJSON(t, true, ""))),
+		WithSkillSummaries([]SkillSummary{{Name: "single", Description: "Single-step skill."}}),
+		WithPlanNodeBuilder(func(plan *CoarsePlan) (map[string]*Node, error) { return nodes, nil }),
+	)
+
+	if err := r.StartManaged(context.Background()); err != nil {
+		t.Fatalf("StartManaged: %v", err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	if err := r.Wait(ctx); err != nil {
+		t.Fatalf("Wait: %v", err)
+	}
+	if got := r.Phase(); got != PhaseSettled {
+		t.Fatalf("phase = %q, want settled", got)
+	}
+	if got := r.ReportSummaries()["A"]; got != "sum-exec-A" {
+		t.Fatalf("report summary = %v, want sum-exec-A", got)
+	}
+}
+
 func TestRunner_StartPolishCollectsFragmentsAndAwaitsReview(t *testing.T) {
 	plan := &CoarsePlan{Request: "demo"}
 	nodes := map[string]*Node{

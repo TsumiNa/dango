@@ -49,7 +49,7 @@ func newRunSkill(t *testing.T, cfg runSkillConfig) *Skill {
 	if cfg.Dir == "" {
 		cfg.Dir = writeSkillDir(t, "---\nname: run-test\ndescription: d\n---\nsystem\n")
 	}
-	sk, err := New(cfg.Dir, nil, nil, cfg.Tools...)
+	sk, err := NewSkill(cfg.Dir, nil, nil, cfg.Tools...)
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -80,7 +80,7 @@ func TestSkillRejectsDuplicateToolNames(t *testing.T) {
 	a := NewFuncTool("x", "", map[string]any{}, func(context.Context, string) (string, error) { return "", nil })
 	b := NewFuncTool("x", "", map[string]any{}, func(context.Context, string) (string, error) { return "", nil })
 	dir := writeSkillDir(t, "---\nname: x\ndescription: d\n---\n")
-	if _, err := New(dir, nil, nil, a, b); err == nil {
+	if _, err := NewSkill(dir, nil, nil, a, b); err == nil {
 		t.Fatal("expected error for duplicate tool names")
 	}
 }

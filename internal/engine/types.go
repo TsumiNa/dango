@@ -33,6 +33,22 @@ var ErrRunnerNotExecuting = errors.New("orchestrate: runner is not executing")
 // execute but no execution slot is currently available.
 var ErrRunnerExecutionSlotsFull = errors.New("orchestrate: no execution slots available")
 
+// RequestRejectedError reports a planner rejection for a request that could
+// not be converted into a runner.
+type RequestRejectedError struct {
+	Reason *RejectReason
+}
+
+func (e *RequestRejectedError) Error() string {
+	if e == nil || e.Reason == nil {
+		return "orchestrate: request rejected"
+	}
+	if e.Reason.Summary != "" {
+		return "orchestrate: request rejected: " + e.Reason.Summary
+	}
+	return "orchestrate: request rejected"
+}
+
 // CoarsePlan is the orchestrator's high-level task graph before execution
 // starts. It is defined in the runner package and re-exported here so
 // orchestrator callers can refer to planning results without importing the
@@ -72,8 +88,5 @@ type RejectReason struct {
 	MissingSkills []string `json:"missing_skills,omitempty" yaml:"missing_skills,omitempty"`
 }
 
-// PlanReview is the orchestrator-owned review decision for a polished plan.
-type PlanReview struct {
-	Approved bool   `json:"approved" yaml:"approved"`
-	Reason   string `json:"reason,omitempty" yaml:"reason,omitempty"`
-}
+// PlanReview is the planner-owned review decision for a polished plan.
+type PlanReview = runnerpkg.PlanReview

@@ -3,16 +3,13 @@ package engine
 import (
 	"container/heap"
 	"context"
-	"errors"
 	"sync"
 
 	runnerpkg "github.com/tsumina/dango/internal/engine/runner"
 )
 
 func (o *Orchestrator) submitManagedRunner(ctx context.Context, runner *runnerpkg.Runner, priority RequestPriority) error {
-	if ctx == nil {
-		ctx = context.Background()
-	}
+	ctx = o.operationContext(ctx)
 	if err := ctx.Err(); err != nil {
 		runner.Abort(err)
 		return err
@@ -21,8 +18,11 @@ func (o *Orchestrator) submitManagedRunner(ctx context.Context, runner *runnerpk
 	id := runner.ID()
 	o.mu.Lock()
 	if o.maxRunningRunners == 0 || len(o.runningRunnerIDs) < o.maxRunningRunners {
+		if o.maxRunningRunners > 0 {
+			o.runningRunnerIDs[id] = struct{}{}
+		}
 		o.mu.Unlock()
-		return o.startManagedRunnerWithoutReservedSlot(ctx, runner, nil)
+		return o.startManagedRunner(ctx, runner)
 	}
 	entry := &queuedRunner{
 		runner:   runner,
@@ -73,7 +73,8 @@ func (o *Orchestrator) removeQueuedRunner(entry *queuedRunner, canceled bool) ([
 	return toStart, toCancel
 }
 
-func (o *Orchestrator) startManagedRunner(ctx context.Context, runner *runnerpkg.Runner, plan *CoarsePlan) error {
+func (o *Orchestrator) startManagedRunner(ctx context.Context, runner *runnerpkg.Runner) error {
+	ctx = o.operationContext(ctx)
 	id := runner.ID()
 	o.mu.Lock()
 	if entry := o.queuedRunnerByID[id]; entry != nil {
@@ -82,39 +83,8 @@ func (o *Orchestrator) startManagedRunner(ctx context.Context, runner *runnerpkg
 		entry.deactivate()
 	}
 	o.mu.Unlock()
-	if plan != nil {
-		return o.startManagedRunnerWithReservedSlot(ctx, runner, plan)
-	}
-	return o.startManagedRunnerWithoutReservedSlot(ctx, runner, nil)
-}
-
-func (o *Orchestrator) startManagedRunnerWithoutReservedSlot(ctx context.Context, runner *runnerpkg.Runner, plan *CoarsePlan) error {
-	var err error
-	if plan != nil {
-		err = runner.AcceptPolishedPlan(ctx, plan)
-	} else {
-		err = runner.StartPolish(ctx)
-	}
+	err := runner.StartManaged(ctx)
 	if err != nil {
-		if runner.State().Status == runnerpkg.RunnerStatusPending {
-			runner.Abort(err)
-		}
-		return err
-	}
-	return nil
-}
-
-func (o *Orchestrator) startManagedRunnerWithReservedSlot(ctx context.Context, runner *runnerpkg.Runner, plan *CoarsePlan) error {
-	var err error
-	if plan != nil {
-		err = runner.AcceptPolishedPlan(ctx, plan)
-	} else {
-		err = runner.StartPolish(ctx)
-	}
-	if err != nil {
-		if errors.Is(err, runnerpkg.ErrInvalidPhase) {
-			return err
-		}
 		o.handleManagedRunnerStartError(runner, err)
 		return err
 	}
@@ -159,6 +129,9 @@ func (o *Orchestrator) collectQueuedStartsLocked() ([]*queuedRunner, []*queuedRu
 			toCancel = append(toCancel, entry)
 			continue
 		}
+		if o.maxRunningRunners > 0 {
+			o.runningRunnerIDs[entry.runner.ID()] = struct{}{}
+		}
 		toStart = append(toStart, entry)
 	}
 	return toStart, toCancel
@@ -180,7 +153,7 @@ func (o *Orchestrator) finishQueuedDispatch(toStart []*queuedRunner, toCancel []
 		entry.runner.Abort(entry.ctx.Err())
 	}
 	for _, entry := range toStart {
-		_ = o.startManagedRunnerWithoutReservedSlot(entry.ctx, entry.runner, nil)
+		_ = o.startManagedRunner(entry.ctx, entry.runner)
 	}
 }
 

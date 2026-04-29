@@ -22,6 +22,7 @@ import (
 // nodes by dependency readiness. Callers construct a Runner with [New] and
 // any number of [Option]s.
 type Runner struct {
+	ctx    context.Context
 	id     string
 	logger *slog.Logger
 
@@ -29,6 +30,9 @@ type Runner struct {
 	store             RunnerStore
 	plan              *CoarsePlan
 	initialNodes      map[string]*Node
+	plannerSkill      *llm.Skill
+	skillSummaries    []SkillSummary
+	planNodeBuilder   PlanNodeBuilder
 	skillSessionStore llm.SessionStore
 	skillSessionIDs   map[string]string
 	skillSessionMu    sync.Mutex
@@ -39,14 +43,16 @@ type Runner struct {
 	phase   RunnerPhase
 
 	// Lifecycle control.
-	startOnce    sync.Once
-	startErr     error
-	settleOnce   sync.Once
-	done         chan struct{}
-	doneOnce     sync.Once
-	engineErr    error
-	engineErrMu  sync.RWMutex
-	cancelEngine context.CancelFunc
+	managedStartOnce sync.Once
+	managedStartErr  error
+	startOnce        sync.Once
+	startErr         error
+	settleOnce       sync.Once
+	done             chan struct{}
+	doneOnce         sync.Once
+	engineErr        error
+	engineErrMu      sync.RWMutex
+	cancelEngine     context.CancelFunc
 
 	// completedCleanly is flipped to true by [Runner.Complete] to signal
 	// that a subsequent engine cancel should be treated as graceful
@@ -88,6 +94,7 @@ type Runner struct {
 // after [Runner.Start].
 func New(opts ...Option) *Runner {
 	r := &Runner{
+		ctx:               context.Background(),
 		id:                shortuuid.New(),
 		logger:            slog.Default(),
 		state:             RunnerState{Status: RunnerStatusPending},
@@ -109,6 +116,16 @@ func New(opts ...Option) *Runner {
 	}
 	r.snapshot = buildInitialRunnerSnapshot(r.initialNodes)
 	return r
+}
+
+func (r *Runner) runtimeContext(ctx context.Context) context.Context {
+	if ctx != nil {
+		return ctx
+	}
+	if r.ctx != nil {
+		return r.ctx
+	}
+	return context.Background()
 }
 
 // ID returns the stable identifier assigned to this Runner at creation time.
@@ -134,6 +151,13 @@ func (r *Runner) Plan() *CoarsePlan {
 	r.stateMu.RLock()
 	defer r.stateMu.RUnlock()
 	return CloneCoarsePlan(r.plan)
+}
+
+// PlannerSkill returns the planner skill assigned to this runner.
+func (r *Runner) PlannerSkill() *llm.Skill {
+	r.stateMu.RLock()
+	defer r.stateMu.RUnlock()
+	return r.plannerSkill
 }
 
 // Nodes returns the initial node graph supplied via [WithPlan], keyed by
@@ -270,9 +294,7 @@ func (r *Runner) View() *RunnerView {
 // AddNodes queues new nodes to be added to the execution graph. It blocks
 // until the event loop accepts the nodes or ctx is canceled.
 func (r *Runner) AddNodes(ctx context.Context, nodes ...*Node) error {
-	if ctx == nil {
-		ctx = context.Background()
-	}
+	ctx = r.runtimeContext(ctx)
 	select {
 	case r.addNodeCh <- nodes:
 		return nil
@@ -303,6 +325,7 @@ func (r *Runner) GetSnapshot(ctx context.Context) (RunnerSnapshot, error) {
 // already been started, or if queueing initial nodes fails; the engine's
 // ultimate error is retrieved via [Runner.Wait] after the runner settles.
 func (r *Runner) Start(ctx context.Context) error {
+	ctx = r.runtimeContext(ctx)
 	initialNodes, err := r.prepareEngineLaunch(PhaseCreated, nil)
 	if err != nil {
 		return err
@@ -332,9 +355,7 @@ func (r *Runner) prepareEngineLaunch(from RunnerPhase, mutate func()) ([]*Node, 
 // launchEngine spawns the engine goroutine once after the caller has
 // already reserved the transition into [PhaseExecuting].
 func (r *Runner) launchEngine(ctx context.Context, initialNodes []*Node) error {
-	if ctx == nil {
-		ctx = context.Background()
-	}
+	ctx = r.runtimeContext(ctx)
 
 	started := false
 	r.startOnce.Do(func() {
@@ -423,7 +444,7 @@ func (r *Runner) settle(engineErr error) {
 		r.captureEngineErr(runErr)
 		hasPlan := r.Plan() != nil
 		if runErr == nil && hasPlan {
-			r.runReportStage(context.Background())
+			r.runReportStage(r.runtimeContext(context.Background()))
 		}
 		r.transitionPhase(PhaseSettled)
 		r.publishTerminalUpdate(nil)

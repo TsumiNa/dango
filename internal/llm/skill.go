@@ -39,7 +39,7 @@ const SkillFile = "SKILL.md"
 // and the remaining body becomes [Skill.Instruction], which is used as
 // the system prompt of the conversation.
 //
-// The zero value is not usable; construct instances with [New].
+// The zero value is not usable; construct instances with [NewSkill].
 type Skill struct {
 	Name        string `yaml:"name" toml:"name" json:"name"`
 	Description string `yaml:"description" toml:"description" json:"description"`
@@ -56,20 +56,20 @@ type Skill struct {
 	conv *Conversation
 }
 
-// New reads [SkillFile] from dir and prepares a lightweight Skill.
+// NewSkill reads [SkillFile] from dir and prepares a lightweight Skill.
 //
 // bashAllow and bashBlock are stored for callers that compose built-in bash
 // tools around the skill. tools is the complete tool set advertised to the
 // model when the skill is bound with [Skill.Bind]. Tool names must be unique
 // and non-empty.
 //
-// When dir is a host path, New also records that directory's .env file when it
+// When dir is a host path, NewSkill also records that directory's .env file when it
 // exists and exposes the directory as the skill's source workspace. When dir
 // implements [fs.FS], SKILL.md must be at its root.
 //
 // Accepted values are string-like host directory paths and values
 // implementing [fs.FS].
-func New(dir any, bashAllow []string, bashBlock []string, tools ...Tool) (*Skill, error) {
+func NewSkill(dir any, bashAllow []string, bashBlock []string, tools ...Tool) (*Skill, error) {
 	if rawFS, ok := any(dir).(fs.FS); ok {
 		if rawFS == nil {
 			return nil, fmt.Errorf("skill: requires a non-nil filesystem")
@@ -144,7 +144,7 @@ func newFromFS(fs fs.FS, displayDir string, workspace *workspaceRoot, envFiles [
 
 // Bind returns a runnable copy of s using the provided runtime wiring.
 //
-// [New] prepares the shared skill configuration: metadata, workspace access,
+// [NewSkill] prepares the shared skill configuration: metadata, workspace access,
 // env files, and tool set. Bind clones that configuration into a concrete,
 // runnable instance with its own [Conversation]. When client is nil, Bind
 // constructs one with [NewClientFromEnv]; skills loaded from a host directory

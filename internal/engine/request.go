@@ -2,6 +2,7 @@ package engine
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 
@@ -11,41 +12,18 @@ import (
 
 // StartRequest is the outer-facing request entrypoint.
 //
-// It plans and materializes a runner, then either starts it immediately or
-// queues it when the configured runner execution limit is full. Query and
-// stream APIs can be used afterwards with the returned RunnerID.
-func (o *Orchestrator) StartRequest(ctx context.Context, req *Request) (coarsePlan *CoarsePlan, rejectReason *RejectReason, err error) {
+// It plans and materializes a runner, stores it for query and stream APIs,
+// subscribes to its lifecycle updates, and then either starts it immediately
+// or queues it when the configured runner limit is full. StartRequest is
+// non-blocking and returns the runner ID once the runner has been accepted
+// into orchestration.
+func (o *Orchestrator) StartRequest(ctx context.Context, req *Request) (string, error) {
+	ctx = o.operationContext(ctx)
 	if req == nil {
-		return nil, nil, fmt.Errorf("orchestrate: nil request")
+		return "", fmt.Errorf("orchestrate: nil request")
 	}
 	if !req.Priority.valid() {
-		return nil, nil, fmt.Errorf("orchestrate: request priority must be between %d and %d", RequestPriorityDefault, RequestPriorityHighest)
-	}
-	plan, reject, err := o.planFromRequest(ctx, req)
-	if err != nil || reject != nil || plan == nil {
-		return plan, reject, err
-	}
-	runner, err := o.Runner(plan.RunnerID)
-	if err != nil {
-		return nil, nil, err
-	}
-	if err := o.submitManagedRunner(ctx, runner, req.Priority); err != nil {
-		return nil, nil, err
-	}
-	return plan, nil, nil
-}
-
-// planFromRequest asks the orchestrator-owned skill to analyze req against the
-// registered skills.
-//
-// When the planner rejects the request, planFromRequest returns the rejection
-// details without creating a runner. When the planner returns a coarse plan,
-// planFromRequest materializes the plan into Executors and Nodes, creates a new
-// runner for them, stores that runner inside the Orchestrator, and returns the
-// plan annotated with the runner ID.
-func (o *Orchestrator) planFromRequest(ctx context.Context, req *Request) (coarsePlan *CoarsePlan, rejectReason *RejectReason, err error) {
-	if req == nil {
-		return nil, nil, fmt.Errorf("orchestrate: nil request")
+		return "", fmt.Errorf("orchestrate: request priority must be between %d and %d", RequestPriorityDefault, RequestPriorityHighest)
 	}
 
 	o.mu.Lock()
@@ -56,37 +34,63 @@ func (o *Orchestrator) planFromRequest(ctx context.Context, req *Request) (coars
 	skillConfigs := cloneAddSkillConfigs(o.skills)
 	o.mu.Unlock()
 	envClient, envClientErr := o.resolveEnvClient()
-
-	plan, reject, err := planWithOrchestratorSkill(ctx, req, cloneSkillMap(skillConfigs), orchestratorSkill, envClient, envClientErr)
+	runtimeSkill, err := runtimeOrchestrator(orchestratorSkill, envClient, envClientErr)
 	if err != nil {
-		return nil, nil, err
+		if errors.Is(err, errOrchestratorSkillUnconfigured) {
+			return "", &RequestRejectedError{Reason: rejectUnconfiguredPlan(req, cloneSkillMap(skillConfigs), orchestratorSkill)}
+		}
+		return "", err
 	}
-	if plan != nil && reject != nil {
-		return nil, nil, fmt.Errorf("orchestrate: planner returned both a plan and a reject reason")
+
+	skillSummaries := collectSkillSummaries(cloneSkillMap(skillConfigs))
+	plan, reject, err := planWithOrchestrator(ctx, req, skillSummaries, runtimeSkill)
+	if err != nil {
+		return "", err
 	}
 	if reject != nil {
-		return nil, reject, nil
+		return "", &RequestRejectedError{Reason: reject}
 	}
 	if plan == nil {
-		return nil, nil, fmt.Errorf("orchestrate: planner returned neither a plan nor a reject reason")
+		return "", fmt.Errorf("orchestrate: planner returned neither a plan nor a reject reason")
 	}
 
-	runner, err := buildRunner(logger, runnerStore, req, plan, skillConfigs)
+	runner, err := newRunnerFromPlan(ctx, logger, runnerStore, req, plan, skillConfigs, runtimeSkill, skillSummaries)
 	if err != nil {
-		return nil, nil, err
+		return "", err
 	}
-	plan.RunnerID = runner.ID()
+	runnerID := runner.ID()
 
 	o.mu.Lock()
-	o.runners[plan.RunnerID] = runner
+	o.runners[runnerID] = runner
 	o.mu.Unlock()
 
 	go o.watchRunnerDone(runner)
-
-	return plan, nil, nil
+	if err := o.submitManagedRunner(ctx, runner, req.Priority); err != nil {
+		return "", err
+	}
+	return runnerID, nil
 }
 
-func buildRunner(logger *slog.Logger, store runnerpkg.RunnerStore, req *Request, plan *CoarsePlan, skills map[string]AddSkillConfig) (*runnerpkg.Runner, error) {
+func newRunnerFromPlan(ctx context.Context, logger *slog.Logger, store runnerpkg.RunnerStore, req *Request, plan *CoarsePlan, skills map[string]AddSkillConfig, plannerSkill *llm.Skill, skillSummaries []runnerpkg.SkillSummary) (*runnerpkg.Runner, error) {
+	nodes, err := buildPlanNodes(logger, req, plan, skills)
+	if err != nil {
+		return nil, err
+	}
+	return runnerpkg.New(
+		runnerpkg.WithContext(ctx),
+		runnerpkg.WithLogger(logger),
+		runnerpkg.WithStore(store),
+		runnerpkg.WithPlan(plan, nodes),
+		runnerpkg.WithPlannerSkill(plannerSkill),
+		runnerpkg.WithSkillSummaries(skillSummaries),
+		runnerpkg.WithPlanNodeBuilder(func(replanned *runnerpkg.CoarsePlan) (map[string]*runnerpkg.Node, error) {
+			request := &Request{Input: replanned.Request}
+			return buildPlanNodes(logger, request, replanned, skills)
+		}),
+	), nil
+}
+
+func buildPlanNodes(logger *slog.Logger, req *Request, plan *CoarsePlan, skills map[string]AddSkillConfig) (map[string]*runnerpkg.Node, error) {
 	if len(plan.Nodes) == 0 {
 		return nil, fmt.Errorf("orchestrate: coarse plan must contain at least one node")
 	}
@@ -133,11 +137,7 @@ func buildRunner(logger *slog.Logger, store runnerpkg.RunnerStore, req *Request,
 		}
 	}
 
-	return runnerpkg.New(
-		runnerpkg.WithLogger(logger),
-		runnerpkg.WithStore(store),
-		runnerpkg.WithPlan(plan, nodes),
-	), nil
+	return nodes, nil
 }
 
 func cloneAddSkillConfigs(skills map[string]AddSkillConfig) map[string]AddSkillConfig {
@@ -161,9 +161,9 @@ func cloneSkillMap(skills map[string]AddSkillConfig) map[string]*llm.Skill {
 	return copyMap
 }
 
-func rejectUnconfiguredPlan(req *Request, skills map[string]*llm.Skill, orchestratorSkill *llm.Skill) (*CoarsePlan, *RejectReason, error) {
-	return nil, &RejectReason{
+func rejectUnconfiguredPlan(req *Request, skills map[string]*llm.Skill, orchestratorSkill *llm.Skill) *RejectReason {
+	return &RejectReason{
 		Summary:  "task cannot proceed",
 		Analysis: "the orchestrator skill is not bound to an llm client, so the request cannot be planned yet",
-	}, nil
+	}
 }

@@ -3,8 +3,8 @@ package main
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -140,106 +140,54 @@ func main() {
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelWarn}))
 	ctx := context.Background()
 
-	o, cleanup := configureDemoOrchestrator(logger)
+	o, cleanup := configureDemoOrchestrator(ctx, logger)
 	defer cleanup()
 
-	fmt.Println(bold("Dango orchestrator demo") + dim(" — phased runner lifecycle with a single execution slot"))
+	fmt.Println(bold("Dango orchestrator demo") + dim(" — runner-owned lifecycle with a single execution slot"))
 
 	banner(1, "Configure orchestrator",
 		"one execution slot + placeholder skills collect/review/summarize")
 	note("max running runners: " + bold("1"))
-	note("base flow:     " + cyan("gather context → send final draft"))
-	note("replanned (A): " + cyan("gather context → human review → send final draft"))
+	note("flow: " + cyan("plan → polish → review → execute → report → settled"))
 
-	banner(2, "Request A · review → reject → replan",
-		"first plan is rejected and replaced with one that adds a review step")
+	banner(2, "Request A · managed lifecycle",
+		"StartRequest returns immediately; the runner owns review, execution, and report")
 	firstPlan := mustStartRequest(ctx, o, "post this week's engineering update to Slack", orchestrate.RequestPriorityDefault)
 	stopA := mustWatchRunner(o, "A", firstPlan.RunnerID)
 	defer stopA()
-	mustWaitForPhase(o, firstPlan.RunnerID, runnerpkg.PhaseAwaitingReview, 3*time.Second, "A awaiting review")
+	mustWaitForPhase(o, firstPlan.RunnerID, runnerpkg.PhaseSettled, 3*time.Second, "A settled")
 	runnerA := mustRunner(o, firstPlan.RunnerID)
-	printPlan("A initial plan", firstPlan)
-	printValues("A polish fragments", runnerA.PolishFragments())
-
-	must(o.RejectRunnerPlan(ctx, firstPlan.RunnerID, "add an explicit review handoff before delivery"))
-	warnLine("rejected A's plan — reason: " + runnerA.ReplanReason())
-
-	revisedA := revisedPlan(firstPlan.Request)
-	printPlan("A revised plan", revisedA)
-	must(o.ReplanRunner(ctx, firstPlan.RunnerID, revisedA))
-	mustWaitForPhase(o, firstPlan.RunnerID, runnerpkg.PhaseAwaitingReview, 3*time.Second, "A awaiting review after replan")
-	firstGate := make(chan struct{})
-	mustInstallRunnerBehavior(o, firstPlan.RunnerID, "runner-A", firstGate)
-	printValues("A revised polish fragments", runnerA.PolishFragments())
-	okLine("A is polished again and waiting for acceptance")
-
-	banner(3, "Request B · polishes without consuming a slot",
-		"polishing is free — B reaches awaiting_review while A still holds the slot")
-	secondPlan := mustStartRequest(ctx, o, "reply to the customer asking for a delivery ETA", orchestrate.RequestPriorityDefault)
-	stopB := mustWatchRunner(o, "B", secondPlan.RunnerID)
-	defer stopB()
-	mustInstallRunnerBehavior(o, secondPlan.RunnerID, "runner-B", nil)
-	mustWaitForPhase(o, secondPlan.RunnerID, runnerpkg.PhaseAwaitingReview, 3*time.Second, "B awaiting review")
-	runnerB := mustRunner(o, secondPlan.RunnerID)
-	printPlan("B plan", secondPlan)
-	printValues("B polish fragments", runnerB.PolishFragments())
-
-	banner(4, "Accept A — B blocked by execution capacity",
-		"the single execution slot belongs to A; accepting B must fail fast")
-	must(o.AcceptRunnerPlan(ctx, firstPlan.RunnerID, revisedA))
-	mustWaitForPhase(o, firstPlan.RunnerID, runnerpkg.PhaseExecuting, 3*time.Second, "A executing")
-	okLine("A accepted and executing (deliver gated)")
-	err := o.AcceptRunnerPlan(ctx, secondPlan.RunnerID, secondPlan)
-	if !errors.Is(err, orchestrate.ErrRunnerExecutionSlotsFull) {
-		fatalf("AcceptRunnerPlan(B) = %v, want ErrRunnerExecutionSlotsFull", err)
-	}
-	okLine("AcceptRunnerPlan(B) correctly returned " + red(bold("ErrRunnerExecutionSlotsFull")))
-
-	banner(5, "Request C · queued at highest priority",
-		"C is submitted while A executes; it must queue, not start executing")
-	thirdPlan := mustStartRequest(ctx, o, "prepare tomorrow morning's production release checklist", orchestrate.RequestPriorityHighest)
-	stopC := mustWatchRunner(o, "C", thirdPlan.RunnerID)
-	defer stopC()
-	mustInstallRunnerBehavior(o, thirdPlan.RunnerID, "runner-C", nil)
-	thirdView := mustQuery(o, thirdPlan.RunnerID)
-	note(fmt.Sprintf("C right after StartRequest: phase=%s status=%s",
-		colorPhase(thirdView.Phase), colorStatus(thirdView.State.Status)))
-
-	banner(6, "Complete A — queued C drains into awaiting_review",
-		"releasing A's slot lets the queued entry polish immediately")
-	close(firstGate)
-	mustWaitForStatus(o, firstPlan.RunnerID, runnerpkg.RunnerStatusIdle, 3*time.Second, "A idle")
-	must(o.CompleteRunner(ctx, firstPlan.RunnerID))
+	printPlan("A plan", firstPlan)
 	printValues("A report summaries", runnerA.ReportSummaries())
 	printView("A final view", mustQuery(o, firstPlan.RunnerID))
 
-	mustWaitForPhase(o, thirdPlan.RunnerID, runnerpkg.PhaseAwaitingReview, 3*time.Second, "C awaiting review after queue drain")
-	runnerC := mustRunner(o, thirdPlan.RunnerID)
-	printValues("C polish fragments after queue drain", runnerC.PolishFragments())
-	okLine("C has drained from the queue and is awaiting review")
-
-	banner(7, "Accept B · execute · complete", "")
-	must(o.AcceptRunnerPlan(ctx, secondPlan.RunnerID, secondPlan))
-	mustWaitForStatus(o, secondPlan.RunnerID, runnerpkg.RunnerStatusIdle, 3*time.Second, "B idle")
-	must(o.CompleteRunner(ctx, secondPlan.RunnerID))
+	banner(3, "Request B · managed lifecycle", "")
+	secondPlan := mustStartRequest(ctx, o, "reply to the customer asking for a delivery ETA", orchestrate.RequestPriorityDefault)
+	stopB := mustWatchRunner(o, "B", secondPlan.RunnerID)
+	defer stopB()
+	mustWaitForPhase(o, secondPlan.RunnerID, runnerpkg.PhaseSettled, 3*time.Second, "B settled")
+	runnerB := mustRunner(o, secondPlan.RunnerID)
+	printPlan("B plan", secondPlan)
 	printValues("B report summaries", runnerB.ReportSummaries())
 	printView("B final view", mustQuery(o, secondPlan.RunnerID))
 
-	banner(8, "Accept C · execute · complete", "")
-	must(o.AcceptRunnerPlan(ctx, thirdPlan.RunnerID, thirdPlan))
-	mustWaitForStatus(o, thirdPlan.RunnerID, runnerpkg.RunnerStatusIdle, 3*time.Second, "C idle")
-	must(o.CompleteRunner(ctx, thirdPlan.RunnerID))
+	banner(4, "Request C · highest priority", "")
+	thirdPlan := mustStartRequest(ctx, o, "prepare tomorrow morning's production release checklist", orchestrate.RequestPriorityHighest)
+	stopC := mustWatchRunner(o, "C", thirdPlan.RunnerID)
+	defer stopC()
+	mustWaitForPhase(o, thirdPlan.RunnerID, runnerpkg.PhaseSettled, 3*time.Second, "C settled")
+	runnerC := mustRunner(o, thirdPlan.RunnerID)
+	printPlan("C plan", thirdPlan)
 	printValues("C report summaries", runnerC.ReportSummaries())
 	printView("C final view", mustQuery(o, thirdPlan.RunnerID))
 
 	time.Sleep(100 * time.Millisecond)
 	fmt.Println()
-	fmt.Println(green(bold("✓ Demo complete.")) + dim(" all three runners settled through the phased lifecycle."))
+	fmt.Println(green(bold("✓ Demo complete.")) + dim(" all three runners settled through the managed lifecycle."))
 }
 
-func configureDemoOrchestrator(logger *slog.Logger) (*orchestrate.Orchestrator, func()) {
-	o := orchestrate.Default()
-	must(o.SetLogger(logger))
+func configureDemoOrchestrator(ctx context.Context, logger *slog.Logger) (*orchestrate.Orchestrator, func()) {
+	o := orchestrate.NewOrchestrator(ctx, logger)
 	must(o.SetMaxRunningRunners(1))
 
 	root, err := os.MkdirTemp("", "dango-orchestrate-demo-")
@@ -248,13 +196,11 @@ func configureDemoOrchestrator(logger *slog.Logger) (*orchestrate.Orchestrator, 
 	}
 	plannerServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		var req struct {
-			Input string `json:"input"`
-		}
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		input, err := demoPlannerInputFromOpenAIRequest(r.Body)
+		if err != nil {
 			fatalf("decode planner request: %v", err)
 		}
-		plannerRequest, err := demoPlannerRequestFromInput(req.Input)
+		plannerRequest, err := demoPlannerRequestFromInput(input)
 		if err != nil {
 			fatalf("parse planner input: %v", err)
 		}
@@ -310,7 +256,7 @@ func configureDemoOrchestrator(logger *slog.Logger) (*orchestrate.Orchestrator, 
 		must(os.MkdirAll(dir, 0o755))
 		content := fmt.Sprintf("---\nname: %s\ndescription: %s\n---\nDemo skill body.\n", spec.name, spec.description)
 		must(os.WriteFile(filepath.Join(dir, llm.SkillFile), []byte(content), 0o644))
-		sk, err := llm.New(dir, nil, nil)
+		sk, err := llm.NewSkill(dir, nil, nil)
 		must(err)
 		must(o.AddSkills(orchestrate.AddSkillConfig{Skill: sk, Client: plannerClient}))
 	}
@@ -320,7 +266,75 @@ func configureDemoOrchestrator(logger *slog.Logger) (*orchestrate.Orchestrator, 
 	}
 }
 
+func demoPlannerInputFromOpenAIRequest(r io.Reader) (string, error) {
+	var req struct {
+		Input json.RawMessage `json:"input"`
+	}
+	if err := json.NewDecoder(r).Decode(&req); err != nil {
+		return "", err
+	}
+	return demoPlannerInputFromResponsesInput(req.Input)
+}
+
+func demoPlannerInputFromResponsesInput(raw json.RawMessage) (string, error) {
+	if strings.TrimSpace(string(raw)) == "" || strings.TrimSpace(string(raw)) == "null" {
+		return "", fmt.Errorf("missing input")
+	}
+	var text string
+	if err := json.Unmarshal(raw, &text); err == nil {
+		return text, nil
+	}
+
+	var items []struct {
+		Role    string          `json:"role"`
+		Content json.RawMessage `json:"content"`
+		Text    string          `json:"text"`
+	}
+	if err := json.Unmarshal(raw, &items); err != nil {
+		return "", err
+	}
+	for i := len(items) - 1; i >= 0; i-- {
+		if items[i].Role != "" && items[i].Role != "user" {
+			continue
+		}
+		if text, ok := demoPlannerTextFromContent(items[i].Content); ok {
+			return text, nil
+		}
+		if items[i].Text != "" {
+			return items[i].Text, nil
+		}
+	}
+	return "", fmt.Errorf("responses input did not contain user text")
+}
+
+func demoPlannerTextFromContent(raw json.RawMessage) (string, bool) {
+	if strings.TrimSpace(string(raw)) == "" || strings.TrimSpace(string(raw)) == "null" {
+		return "", false
+	}
+	var text string
+	if err := json.Unmarshal(raw, &text); err == nil {
+		return text, true
+	}
+	var parts []struct {
+		Text string `json:"text"`
+	}
+	if err := json.Unmarshal(raw, &parts); err != nil {
+		return "", false
+	}
+	texts := make([]string, 0, len(parts))
+	for _, part := range parts {
+		if part.Text != "" {
+			texts = append(texts, part.Text)
+		}
+	}
+	if len(texts) == 0 {
+		return "", false
+	}
+	return strings.Join(texts, "\n"), true
+}
+
 func demoPlannerRequestFromInput(input string) (*struct {
+	Mode string `json:"mode"`
 	Task string `json:"task"`
 	Data struct {
 		Request string `json:"request"`
@@ -330,6 +344,7 @@ func demoPlannerRequestFromInput(input string) (*struct {
 	} `json:"data"`
 }, error) {
 	var req struct {
+		Mode string `json:"mode"`
 		Task string `json:"task"`
 		Data struct {
 			Request string `json:"request"`
@@ -345,6 +360,7 @@ func demoPlannerRequestFromInput(input string) (*struct {
 }
 
 func demoPlanningOutput(req *struct {
+	Mode string `json:"mode"`
 	Task string `json:"task"`
 	Data struct {
 		Request string `json:"request"`
@@ -353,6 +369,13 @@ func demoPlanningOutput(req *struct {
 		} `json:"skills"`
 	} `json:"data"`
 }) (string, error) {
+	if req.Mode == "review" {
+		buf, err := json.Marshal(map[string]any{"approved": true})
+		if err != nil {
+			return "", err
+		}
+		return string(buf), nil
+	}
 	available := make(map[string]struct{}, len(req.Data.Skills))
 	for _, sk := range req.Data.Skills {
 		available[sk.Name] = struct{}{}
@@ -433,14 +456,18 @@ func missingSkills(skills map[string]*llm.Skill, required ...string) []string {
 }
 
 func mustStartRequest(ctx context.Context, o *orchestrate.Orchestrator, input string, priority orchestrate.RequestPriority) *orchestrate.CoarsePlan {
-	plan, reject, err := o.StartRequest(ctx, &orchestrate.Request{Input: input, Priority: priority})
+	runnerID, err := o.StartRequest(ctx, &orchestrate.Request{Input: input, Priority: priority})
 	if err != nil {
 		fatalf("StartRequest(%q): %v", input, err)
 	}
-	if reject != nil {
-		fatalf("StartRequest(%q) rejected: %+v", input, reject)
+	view, err := o.QueryRunner(runnerID)
+	if err != nil {
+		fatalf("QueryRunner(%q): %v", runnerID, err)
 	}
-	return plan
+	if view.Plan == nil {
+		fatalf("StartRequest(%q) returned runner %q without a plan", input, runnerID)
+	}
+	return view.Plan
 }
 
 func mustRunner(o *orchestrate.Orchestrator, id string) *runnerpkg.Runner {

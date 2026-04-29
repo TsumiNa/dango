@@ -16,6 +16,7 @@ import (
 // valid only while the runner is in [PhaseExecuting]; calls from other
 // phases return [ErrInvalidPhase].
 func (r *Runner) Complete(ctx context.Context) error {
+	ctx = r.runtimeContext(ctx)
 	r.stateMu.RLock()
 	phase := r.phase
 	cancel := r.cancelEngine
@@ -42,9 +43,7 @@ func (r *Runner) Complete(ctx context.Context) error {
 // [PhaseAwaitingReplan] (re-entry after a rejected plan). It requires a
 // plan supplied via [WithPlan].
 func (r *Runner) StartPolish(ctx context.Context) error {
-	if ctx == nil {
-		ctx = context.Background()
-	}
+	ctx = r.runtimeContext(ctx)
 	if err := r.prepareNodeExecutors(r.initialNodes); err != nil {
 		return err
 	}
@@ -120,9 +119,7 @@ func (r *Runner) RejectPolishedPlan(reason string) error {
 // drive it after observing a [RejectPolishedPlan] transition and producing
 // a revised plan.
 func (r *Runner) ReplanWith(ctx context.Context, plan *CoarsePlan, nodes map[string]*Node) error {
-	if ctx == nil {
-		ctx = context.Background()
-	}
+	ctx = r.runtimeContext(ctx)
 	if plan == nil {
 		return ErrPlanRequired
 	}
@@ -161,6 +158,136 @@ func (r *Runner) ReplanWith(ctx context.Context, plan *CoarsePlan, nodes map[str
 	return nil
 }
 
+// StartManaged launches the full runner-owned lifecycle in the background.
+//
+// The runner polishes its plan, reviews the polished fragments with the same
+// planner skill used to create the original plan, replans when review rejects
+// the candidate, executes the accepted graph, and finally runs report before
+// settling. StartManaged is non-blocking; callers observe progress through
+// [Runner.View], [Runner.SubscribeUpdates], and [Runner.Wait].
+func (r *Runner) StartManaged(ctx context.Context) error {
+	ctx = r.runtimeContext(ctx)
+	if err := ctx.Err(); err != nil {
+		r.Abort(err)
+		return err
+	}
+
+	started := false
+	r.managedStartOnce.Do(func() {
+		started = true
+		r.stateMu.RLock()
+		hasPlan := r.plan != nil
+		phase := r.phase
+		r.stateMu.RUnlock()
+		if !hasPlan {
+			r.managedStartErr = ErrPlanRequired
+			return
+		}
+		if phase != PhaseCreated {
+			r.managedStartErr = ErrInvalidPhase
+			return
+		}
+		go r.runManagedLifecycle(ctx)
+	})
+	if !started {
+		return ErrRunnerAlreadyStarted
+	}
+	return r.managedStartErr
+}
+
+func (r *Runner) runManagedLifecycle(ctx context.Context) {
+	if err := r.runManagedLifecycleE(ctx); err != nil {
+		select {
+		case <-r.Done():
+		default:
+			r.Abort(err)
+		}
+	}
+}
+
+func (r *Runner) runManagedLifecycleE(ctx context.Context) error {
+	if err := r.StartPolish(ctx); err != nil {
+		return err
+	}
+	if err := r.waitForPhase(ctx, PhaseAwaitingReview); err != nil {
+		return err
+	}
+	for {
+		review, err := r.reviewPolishedPlan(ctx)
+		if err != nil {
+			return err
+		}
+		if review.Approved {
+			return r.acceptAndComplete(ctx)
+		}
+		reason := review.Reason
+		if reason == "" {
+			reason = "planner review requested replanning"
+		}
+		if err := r.RejectPolishedPlan(reason); err != nil {
+			return err
+		}
+		plan, nodes, err := r.replanPolishedPlan(ctx, reason)
+		if err != nil {
+			return err
+		}
+		if err := r.ReplanWith(ctx, plan, nodes); err != nil {
+			return err
+		}
+		if err := r.waitForPhase(ctx, PhaseAwaitingReview); err != nil {
+			return err
+		}
+	}
+}
+
+func (r *Runner) acceptAndComplete(ctx context.Context) error {
+	events := r.Subscribe(32)
+	if err := r.AcceptPolishedPlan(ctx, r.Plan()); err != nil {
+		return err
+	}
+	for {
+		select {
+		case event := <-events:
+			if event.Type == EventEngineIdle {
+				return r.Complete(ctx)
+			}
+			if event.Type == EventNodeFailed || event.Type == EventEngineStopped {
+				return r.Wait(ctx)
+			}
+		case <-r.Done():
+			return r.Wait(context.Background())
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+}
+
+func (r *Runner) waitForPhase(ctx context.Context, want RunnerPhase) error {
+	if r.Phase() == want {
+		return nil
+	}
+	updates, unsubscribe := r.SubscribeUpdates(16)
+	defer unsubscribe()
+	for {
+		select {
+		case update, ok := <-updates:
+			if !ok {
+				return r.Wait(context.Background())
+			}
+			if update.Phase == want {
+				return nil
+			}
+			if update.Phase == PhaseSettled {
+				return r.Wait(context.Background())
+			}
+		case <-r.Done():
+			return r.Wait(context.Background())
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+}
+
 func (r *Runner) runPolishStage(ctx context.Context, nodes map[string]*Node) {
 	fragments, err := fanOutPolish(ctx, nodes)
 
@@ -179,6 +306,7 @@ func (r *Runner) runPolishStage(ctx context.Context, nodes map[string]*Node) {
 }
 
 func (r *Runner) runReportStage(ctx context.Context) {
+	ctx = r.runtimeContext(ctx)
 	r.transitionPhase(PhaseReport)
 	r.publishUpdate(nil)
 

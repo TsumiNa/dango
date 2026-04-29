@@ -1,6 +1,11 @@
 package runner
 
-import "log/slog"
+import (
+	"context"
+	"log/slog"
+
+	"github.com/tsumina/dango/internal/llm"
+)
 
 // Option configures a [Runner] at construction time.
 //
@@ -8,6 +13,17 @@ import "log/slog"
 // startup-only fields (logger, store, plan) so a Runner becomes immutable
 // with respect to those fields once constructed.
 type Option func(*Runner)
+
+// WithContext sets the base context used by runner-owned lifecycle work when
+// callers do not pass a more specific context.
+func WithContext(ctx context.Context) Option {
+	return func(r *Runner) {
+		if ctx == nil {
+			ctx = context.Background()
+		}
+		r.ctx = ctx
+	}
+}
 
 // WithLogger sets the logger the runner emits engine messages through.
 // Passing nil restores [slog.Default].
@@ -38,5 +54,28 @@ func WithPlan(plan *CoarsePlan, nodes map[string]*Node) Option {
 	return func(r *Runner) {
 		r.plan = CloneCoarsePlan(plan)
 		r.initialNodes = cloneNodeMap(nodes)
+	}
+}
+
+// WithPlannerSkill sets the skill the runner uses for review and replan after
+// the initial plan has been created.
+func WithPlannerSkill(sk *llm.Skill) Option {
+	return func(r *Runner) {
+		r.plannerSkill = sk
+	}
+}
+
+// WithSkillSummaries records the skills available to replanning.
+func WithSkillSummaries(summaries []SkillSummary) Option {
+	return func(r *Runner) {
+		r.skillSummaries = append([]SkillSummary(nil), summaries...)
+	}
+}
+
+// WithPlanNodeBuilder sets the materializer used when the runner replans and
+// needs a fresh node graph for the revised plan.
+func WithPlanNodeBuilder(builder PlanNodeBuilder) Option {
+	return func(r *Runner) {
+		r.planNodeBuilder = builder
 	}
 }
