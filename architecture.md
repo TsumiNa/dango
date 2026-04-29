@@ -1,327 +1,300 @@
 # Orchestrator / Runner / Executor 架构说明
 
-当前这套编排实现由三个明确分层组成。
+这份文档描述 `internal/engine/orchestrator.go`（简称 `or`）、`internal/engine/runner/runner.go`（简称 `ru`）和 `internal/engine/executor.go`（简称 `ex`）之间的调用关系和数据流关系。
 
-但这轮 PR 的直接目标不是一次性把 skill prompt、skill memory/memo 等后续能力全部实装完，而是先把调用流程一步一步拉直：补上缺失的生命周期动作，修正错误的控制边界，并把 `Orchestrator`、`Runner`、`Executor` 之间需要长期稳定的 interface 和 struct 先对齐。这样下一阶段在 skill 内真正落 prompt、补 memory/memo 能力时，底层控制流和数据形状不需要再大改。
+当前设计把三者分成两条正交链路：
 
-从这个角度看，这轮 PR 更像是一个“对齐层”的改造，重点是三件事：
+- 管理调用关系：`or` 对外接受 request，生成 coarse plan，装配并启动 `ru`；`ru` 维护单个 plan 的生命周期并调度多个 `ex`；上层程序只通过 `or` 查询和订阅 request 的处理状态，不需要感知 `ru` 和 `ex`。
+- 数据流关系：skill 间的数据交换统一收敛为带 front matter 的 markdown exchange document。`ru` 只负责搬运、补齐 runner/node 元数据、持久化和转发这些文档，不解释 skill 业务语义。
 
-- 让 request -> plan -> polish -> review -> replan -> execute -> report 这条主链路语义闭合。
-- 把 review / reject / replan / execution-slot 这些之前缺失或不清晰的边界补完整。
-- 把后续 skill runtime 真正依赖的核心接口和数据结构先收敛稳定。
+## 调用关系
 
-在这个前提下，下面的架构图应该理解为“当前代码已经对齐到的调用骨架”，而不是“skill prompt / memo 系统已经完整落地后的最终形态”：
+`or` 是外部控制面，`ru` 是单个 request/plan 的生命周期宿主，`ex` 是单个 node 的执行单元。
 
-- `Orchestrator` 是控制面。它负责请求入口、skill 注册、在实例化时初始化自己的 orchestrator-owned skill（包括尽早绑定可用的 LLM client）、通过该 skill 做 plan / review / replan、runner 装配、execution slot 控制、队列调度，以及 query / subscribe / persistence 入口。
-- `Runner` 是单个 plan 的生命周期宿主。它把 plan 从 `created -> polishing -> awaiting_review -> awaiting_replan -> executing -> report -> settled` 推进下去，并维护更新流、快照、事件、`PolishFragments`、`ReportSummaries`、`ReplanReason` 等运行时状态。
-- `Executor` 是单个 node 的局部执行单元。它实现 `Polish`、`Execute`、`Report` 三个动作，由 Runner 在不同 phase 调用。
+```mermaid
+flowchart TB
+    Caller[User / API / CLI]
 
-换句话说：
+    subgraph OR["or: Orchestrator"]
+        Start[StartRequest]
+        Query[QueryRunner / SubscribeRunner / LoadRunnerRecords]
+        SkillRegistry[Skill Registry\nlightweight skills + AddSkillConfig]
+        OrSkill[Orchestrator Skill\nplan / review / replan]
+        Build[buildPlanNodes / newRunnerFromPlan]
+        Queue[Priority Queue\nmaxRunningRunners]
+        Registry[Runner Registry]
+    end
 
-- `Orchestrator` 决定“这个请求能不能被规划、什么时候开始 polish、什么时候允许进入 executing”，并且从实例化开始就持有一份可直接参与 orchestrator 级决策的 skill。
-- `Runner` 决定“这个 plan 当前在哪个生命周期阶段、节点怎么推进、对外暴露哪些状态与事件”。
-- `Executor` 决定“某一个节点在当前阶段具体返回什么”。
+    subgraph RU["ru: Runner"]
+        Managed[StartManaged]
+        Phases[created -> polishing -> awaiting_review\n-> executing -> report -> settled]
+        Bind[prepareNodeExecutors\nBindForRunner + session reuse]
+        DAG[DAG Engine\nAddNodes + dependency readiness]
+        Snapshot[RunnerView / RunnerUpdate / RunnerSnapshot]
+    end
 
-## 整体分层
+    subgraph EX["ex: Executor(s)"]
+        Polish[Polish]
+        Execute[Execute]
+        Report[Report]
+    end
+
+    Caller -->|StartRequest(req)| Start
+    Caller -->|query / subscribe| Query
+    Start --> OrSkill
+    OrSkill -->|CoarsePlan or RejectReason| Start
+    SkillRegistry --> Build
+    Start --> Build
+    Build -->|Runner + Node graph| Registry
+    Registry --> Queue
+    Queue -->|start when admitted| Managed
+    Managed --> Phases
+    Phases --> Bind
+    Phases -->|polishing| Polish
+    Phases -->|executing| DAG
+    DAG -->|ready node| Execute
+    Phases -->|report| Report
+    Snapshot --> Registry
+    Registry --> Query
+    Query -->|RunnerView / RunnerUpdate| Caller
+```
+
+关键边界：
+
+- `or` 管外部 API、skill 注册、coarse plan 生成、runner 装配、runner registry、query/subscribe、队列和启动准入。
+- `ru` 管单个 plan 的生命周期、executor binding、DAG 调度、dynamic node append、snapshot/update/event、report 汇总和终态。
+- `ex` 管单个 node 在 `Polish`、`Execute`、`Report` 三个阶段的局部工作。
+
+## 数据流关系
+
+`ex` 的默认输出不再是任意 Go 值，而是 markdown exchange document。这个文档可以落库、落本地文件，也方便 human review 和 skill 继续消费。
+
+每个 exchange document 使用 YAML front matter 描述路由和元数据，正文固定分为三段：
+
+- `Memo`：长任务、多阶段任务的自主规划、进度和状态记录。
+- `Reasoning`：human-debuggable 的推理摘要；如果 runtime skill 没有显式写入，`ex` 会尝试从 reasoning turn 补齐。
+- `Handoff`：传递给目标 recipient 的输出、接力建议或请求。
 
 ```mermaid
 flowchart LR
-	User[User / API / CLI] -->|StartRequest / QueryRunner / SubscribeRunner| O[Orchestrator]
+    subgraph Input["Planning Input"]
+        Req[Request]
+        Skills[Skill summaries]
+    end
 
-	subgraph Orchestrator Layer
-		O --> REQ[Request Validation]
-		O --> OS[Orchestrator Skill\nembedded builtin/SKILL.md\nor caller override]
-		O --> SK[Skill Registry\nlightweight skills + AddSkillConfig\nClient / Config / AccessibleDirs]
-		O --> BR[buildRunner]
-		O --> Q[Priority Queue + Execution Slot Control]
-		O --> RM[Runner Registry + Query / Subscribe / Remove]
-		O --> RS[Optional RunnerStore]
-	end
+    subgraph OR["or"]
+        OrSkill[Orchestrator Skill]
+        Plan[CoarsePlan]
+        NodeGraph[Node graph\nNode metadata + Executor]
+    end
 
-	OS -->|plan / review / replan JSON contract| BR
-	SK -->|materialize node executors| BR
-	BR -->|Runner + Node graph| R[Runner]
-	RS --> R
-	RM --> R
+    subgraph RU["ru"]
+        PolishDocs[PolishDocuments\nmap[nodeID]markdown]
+        Outputs[CompletedNodes\nmap[nodeID]markdown]
+        Reports[ReportSummaries\nmap[nodeID]markdown]
+        Store[RunnerStore\nJSONL records]
+        Updates[RunnerUpdate stream]
+    end
 
-	subgraph Runner Layer
-		R --> PH[Phase State Machine]
-		R --> BIND[Runner-owned Skill Bind\nBindForRunner + session reuse]
-		R --> VIEW[RunnerView / RunnerSnapshot]
-		R --> UPD[RunnerUpdate Stream]
-		R --> EVT[RunnerEvent Stream]
-		R --> LIFE[PolishFragments / ReportSummaries / ReplanReason]
-	end
+    subgraph EX["ex"]
+        ExPolish[Polish -> Exchange Markdown]
+        ExRun[Execute(parent markdown) -> Exchange Markdown]
+        ExReport[Report(output markdown) -> Exchange Markdown]
+    end
 
-	subgraph Executor Layer
-		EX1[Executor A]
-		EX2[Executor B]
-		EXN[Executor N]
-	end
+    Req --> OrSkill
+    Skills --> OrSkill
+    OrSkill -->|plan JSON| Plan
+    Plan --> NodeGraph
+    NodeGraph --> ExPolish
 
-	R -->|polish / execute / report by node readiness| EX1
-	R -->|polish / execute / report by node readiness| EX2
-	R -->|polish / execute / report by node readiness| EXN
+    ExPolish -->|kind=dango.exchange\nstage=polish| PolishDocs
+    PolishDocs -->|markdown docs, not runner internals| OrSkill
+    OrSkill -->|review JSON: approved/reason| RUReview{approved?}
+    RUReview -->|false| OrSkill
+    OrSkill -->|replan JSON| Plan
+    RUReview -->|true| ExRun
 
-	EX1 -->|fragment / output / summary| R
-	EX2 -->|fragment / output / summary| R
-	EXN -->|fragment / output / summary| R
+    Outputs -->|parentOutputs by dependency| ExRun
+    ExRun -->|kind=dango.exchange\nstage=execute| Outputs
+    ExRun -->|optional newNodes| NodeGraph
+    Outputs --> Store
+    Outputs --> Updates
 
-	R -->|updates, done, engine idle| O
-	O -->|query result / stream updates| User
+    Outputs --> ExReport
+    ExReport -->|kind=dango.exchange\nstage=report| Reports
+    Reports --> Store
+    Reports --> Updates
 ```
 
-## 调用与信息同步 Workflow
+这里的重点是：`ru` 不需要理解 `Memo`、`Reasoning`、`Handoff` 的业务含义。它只做四件事：
 
-下面这张图描述的是当前实现里已经被拉通的主路径：请求先通过 orchestrator skill 生成 coarse plan，Runner 完成 polish，随后进入 review / reject / replan / accept / execute / report / settled。这里强调的是控制流和数据边界已经对齐，不代表下一阶段要补的 prompt 细化、skill memory/memo 等能力已经全部完成。
+- 接收 `ex` 返回的 exchange markdown。
+- 为 exchange markdown 补齐 `runner_id`、`node_id`、`skill_name`、`task_description` 等元数据。
+- 把 markdown 作为 node output、polish document 或 report summary 继续传递。
+- 在持久化事件时把 exchange markdown 标记为 `data_encoding=markdown`，避免把 human-readable 数据降级成 JSON 字符串。
+
+## Lifecycle Sequence
+
+下面是当前 managed lifecycle 的端到端时序。对外入口只有 `or.StartRequest`；后续 polish、review、replan、execute、report 由 `ru.StartManaged` 推进。
 
 ```mermaid
 sequenceDiagram
     autonumber
     participant C as Caller
-    participant O as Orchestrator
-    participant S as Orchestrator Skill
-    participant R as Runner
-    participant E as Executor(s)
+    participant O as or
+    participant OS as or skill
+    participant R as ru
+    participant E as ex
+    participant ST as RunnerStore
 
     C->>O: StartRequest(ctx, req)
-    O->>O: validate request priority
-    O->>O: planFromRequest(ctx, req)
-    O->>O: snapshot AddSkillConfig registry / runnerStore
-    O->>O: resolveEnvClient() once
-    O->>S: planWithOrchestratorSkill(ctx, req, skill summaries)
-    S-->>O: CoarsePlan or RejectReason
+    O->>O: validate request / lock startup config
+    O->>OS: plan(request, skill summaries)
+    OS-->>O: CoarsePlan or RejectReason
 
-    alt planner rejects
-        O-->>C: RejectReason
-    else planner returns coarse plan
-        O->>O: buildRunner(plan, AddSkillConfig registry)
+    alt rejected
+        O-->>C: RequestRejectedError
+    else planned
+        O->>O: build Node graph + Executor per CoarsePlanNode
+        O->>R: New(... WithPlan, WithPlannerSkill, WithPlanNodeBuilder)
         O->>O: store runner in registry
-        O->>O: watchRunnerDone(runner)
-
-        alt no execution limit or queue has capacity to start polish now
-            O->>R: StartPolish(ctx)
-        else execution limit blocks new starts
-            O->>O: enqueue runner by priority
-            Note over O,R: queued runner does not hold an execution slot
-        end
+        O->>R: StartManaged(ctx) or queue by priority
+        O-->>C: runnerID
     end
 
-    R->>R: prepareNodeExecutors(initial nodes&#59; bind skills and allocate/reuse session ids)
-
-    par polish initial nodes:
+    R->>R: StartPolish
+    R->>R: prepareNodeExecutors(initial nodes)
+    par each initial node
         R->>E: Polish(ctx)
-        E-->>R: planner fragment
-    and polish initial nodes:
-        R->>E: Polish(ctx)
-        E-->>R: planner fragment
+        E-->>R: exchange markdown(stage=polish)
     end
 
-    R->>R: save PolishFragments
-    R-->>C: RunnerUpdate(phase=awaiting_review)
+    R->>OS: review(plan, polish_documents)
+    OS-->>R: PlanReview
 
-    opt caller wants an explicit review decision first
-        C->>O: ReviewRunnerPlan(ctx, runnerID)
-        O->>S: reviewWithOrchestratorSkill(ctx, plan, polishFragments)
-        S-->>O: PlanReview
-        O-->>C: approved / rejected + reason
-    end
-
-    alt plan is rejected
-        C->>O: RejectRunnerPlan(ctx, runnerID, reason)
-        opt reason == ""
-            O->>O: ReviewRunnerPlan(ctx, runnerID)
-            O->>S: reviewWithOrchestratorSkill(...)
-            S-->>O: rejection reason
+    loop until review approved
+        alt rejected
+            R->>R: RejectPolishedPlan(reason)
+            R->>OS: replan(request, currentPlan, reason, polish_documents)
+            OS-->>R: revised CoarsePlan
+            R->>R: ReplanWith(revised plan, rebuilt nodes)
+            R->>E: Polish(ctx)
+            E-->>R: revised exchange markdown(stage=polish)
+            R->>OS: review(...)
+            OS-->>R: PlanReview
+        else approved
+            R->>R: AcceptPolishedPlan(plan)
         end
-        O->>R: RejectPolishedPlan(reason)
-        R-->>C: RunnerUpdate(phase=awaiting_replan)
-
-        alt caller provides revised plan
-            C->>O: ReplanRunner(ctx, runnerID, revisedPlan)
-        else caller asks orchestrator to regenerate
-            C->>O: ReplanRunner(ctx, runnerID, nil)
-            O->>S: replanWithOrchestratorSkill(ctx, request, currentPlan, reason, polishFragments)
-            S-->>O: revised CoarsePlan
-        end
-
-        O->>R: ReplanWith(ctx, revisedPlan, rebuilt nodes)
-        R->>R: prepareNodeExecutors(replanned nodes&#59; bind skills and reuse session ids)
-        R->>E: Polish(ctx) again
-        E-->>R: revised fragments
-        R-->>C: RunnerUpdate(phase=awaiting_review)
-
-    else plan is accepted
-        C->>O: AcceptRunnerPlan(ctx, runnerID, reviewedPlan)
-        O->>O: reserve execution slot
-        O->>R: AcceptPolishedPlan(ctx, reviewedPlan)
-        R->>R: prepareNodeExecutors(executing nodes&#59; rebind before engine launch)
-        R-->>C: RunnerUpdate(phase=executing)
     end
 
-    loop dependency-driven execution
-        R->>E: Execute(ctx, parentOutputs)
-        E-->>R: output, optional newNodes
-        R-->>C: RunnerUpdate(Event + Snapshot)
+    loop dependency-ready nodes
+        R->>E: Execute(ctx, parent exchange markdown)
+        E-->>R: exchange markdown(stage=execute), optional newNodes
+        R->>ST: append NodeCompleted(markdown)
+        R-->>O: RunnerUpdate + Snapshot
     end
 
-    C->>O: CompleteRunner(ctx, runnerID)
-    O->>R: Complete(ctx)
-
-    par report completed nodes
-        R->>E: Report(ctx, output)
-        E-->>R: summary
-        and report completed nodes
-            R->>E: Report(ctx, output)
-            E-->>R: summary
+    R->>R: Complete on EngineIdle
+    par completed nodes
+        R->>E: Report(ctx, execution markdown)
+        E-->>R: exchange markdown(stage=report)
     end
-
-    R->>R: save ReportSummaries
-    R-->>C: terminal RunnerUpdate(phase=settled)
-    O->>O: release execution slot on EngineIdle / Done()
-    O->>O: drain queued runners into StartPolish
+    R->>ST: append terminal records
+    R-->>O: RunnerUpdate(phase=settled)
+    O-->>C: query / stream exposes status through or APIs
 ```
 
-## 三者之间的职责边界
+## Exchange Document Shape
 
-### 1. Orchestrator 是控制面，也是 orchestrator skill 的宿主
+示例：
 
-当前实现里的 `Orchestrator` 不再依赖外部 `planning function`。planning、review、replan 现在都通过同一个 orchestrator-owned skill 完成。这里的重点是先把 orchestrator 级控制流和输入输出 contract 对齐，而不是在这一轮就把所有 skill 内部 prompt/runtime 能力做满：
+```markdown
+---
+kind: dango.exchange
+version: 1
+stage: execute
+runner_id: runner-123
+node_id: summarize
+skill_name: summarizer
+task_description: Summarize the collected findings.
+handoffs:
+  - to: downstream
+    intent: continue
+    summary: Use this summary as downstream context.
+---
 
-- 默认 skill 来自编译时 embed 的 `internal/engine/builtin/SKILL.md`，通过 `llm.New` 初始化，并在 `Orchestrator` 实例化时就尝试绑定到当时可用的 env-derived LLM client。
-- 调用方可以在 startup 阶段通过 `SetOrchestratorSkill` 或 `SetOrchestratorSkillDir` 覆盖它。
-- 如果调用方传入的是 lightweight skill，startup 阶段也会按同样的初始化语义优先绑定可用的 orchestrator client。
-- `StartRequest` 会调用 `planFromRequest(ctx, req)`，由 `planWithOrchestratorSkill` 返回 `CoarsePlan` 或 `RejectReason`。
-- `ReviewRunnerPlan` 会调用 `reviewWithOrchestratorSkill(...)`。
-- `ReplanRunner(ctx, id, nil)` 会调用 `replanWithOrchestratorSkill(...)` 自动生成 revised plan。
+## Memo
 
-除此之外，Orchestrator 还负责：
+Progress and durable task state.
 
-- startup-only 配置：`SetLogger`、`SetOrchestratorSkill`、`SetOrchestratorSkillDir`、`SetRunnerStore`、`SetMaxRunningRunners`。
-- runtime 可变注册表：`AddSkills` / `RemoveSkills`。
-- 把 `CoarsePlanNode` materialize 成 `Runner + Node + Executor` 图。
-- 管理 `runners`、`runningRunnerIDs`、优先级队列和 `watchRunnerDone`。
-- 对外暴露 `QueryRunner`、`SubscribeRunner`、`LoadRunnerRecords`、`RemoveRunner`、`ReviewRunnerPlan`、`AcceptRunnerPlan`、`RejectRunnerPlan`、`ReplanRunner`、`CompleteRunner` 等控制面 API。
+## Reasoning
 
-因此，Orchestrator 最关心的是：
+Human-debuggable reasoning summary.
 
-- 请求是否能被规划。
-- 哪些 runner 可以开始 polish。
-- 哪些 runner 可以占用 executing slot。
-- 外界如何查询和观察 runner。
+## Handoff
 
-### 2. Runner 是 plan 的生命周期宿主
+Recipient-facing output and next-step advice.
+```
 
-`Runner` 是真正承载 plan 生命周期的状态机。它的职责包括：
+当前约定的 recipient / intent：
 
-- 持有 `CoarsePlan`、initial node graph、`RunnerState`、`RunnerPhase`、`RunnerSnapshot`。
-- 在 `StartPolish` 中并发调用所有 node executor 的 `Polish`。
-- 在 `AcceptPolishedPlan` 之后启动执行引擎，按依赖关系调度 `Execute`。
-- 在 `RejectPolishedPlan` 时记录 `ReplanReason` 并进入 `awaiting_replan`。
-- 在 `ReplanWith` 时替换 plan 和 nodes，然后重新进入 `polishing`。
-- 在 `Complete` 后进入 `report`，汇总 `ReportSummaries`，最终进入 `settled`。
+- `to: orchestrator`, `intent: review`：交给 or skill 做 plan review。
+- `to: orchestrator`, `intent: summarize`：交给 or skill 或最终汇总阶段消费。
+- `to: orchestrator`, `intent: rerun_previous`：请求 or skill 评估是否需要让前置 executor 修改参数并重新执行。
+- `to: downstream`, `intent: continue`：交给后续依赖节点作为 parent output。
 
-当前实现里的 phase 含义是：
+## 特殊路径：要求前置 Executor 重跑
 
-- `created`：Runner 刚构建完成，还没开始 polish。
-- `polishing`：并发采集每个节点的 planner fragment。
-- `awaiting_review`：已经拿到 `PolishFragments`，等待 review / accept / reject。
-- `awaiting_replan`：review 被 reject，等待新 plan。
-- `executing`：DAG 引擎正在执行节点。
-- `report`：对已完成节点并发调用 `Executor.Report`。
-- `settled`：生命周期终态。
+常规数据流中，`ru` 不解释 skill 输出，只把 exchange markdown 传给下一阶段。唯一需要跨回控制面的特殊情况是：某个 `ex` 判断前置 `ex` 的参数需要调整并重新执行。
 
-这里要特别区分两套状态：
+这条路径的设计是由 `ex` 在 exchange document 中写出 `to: orchestrator`、`intent: rerun_previous` 的 handoff；orchestrator skill 评估后，通过工具调用进入 `or` 控制面，由 `or` 定位目标 runner 并调用 `ru.AddNodes` 追加修正节点。
 
-- `RunnerPhase` 表示 plan 所处的业务阶段。
-- `RunnerStatus` 表示引擎级运行状态，例如 `pending`、`running`、`idle`、`failed`、`canceled`。
+```mermaid
+flowchart TB
+    EX2[ex: downstream node]
+    Doc[Exchange Markdown\nhandoff: to=orchestrator\nintent=rerun_previous]
+    RU[ru: carries document\nno business interpretation]
+    OS[or skill: evaluates rerun request]
+    Tool[tool call\nrequest_rerun / add_nodes]
+    OR[or: validates runner + skill + plan context]
+    Add[ru.AddNodes]
+    EX1R[replacement / repair ex node]
 
-### 3. Executor 是节点级局部逻辑单元
+    EX2 --> Doc
+    Doc --> RU
+    RU --> OS
+    OS --> Tool
+    Tool --> OR
+    OR --> Add
+    Add --> EX1R
+    EX1R --> RU
+```
 
-每个 `Executor` 只服务一个 node。对 Runner 来说，它只需要实现：
+当前 PR 已落地 exchange document、`rerun_previous` intent 常量和 markdown 数据面；`or` skill 的 tool call 到 `ru.AddNodes` 是下一步控制面接入点。
 
-- `Polish(ctx)`：返回该节点的 planner fragment，供 review / replan 使用。
-- `Execute(ctx, parentOutputs)`：消费依赖节点输出，返回节点主输出，并可动态追加新 nodes。
-- `Report(ctx, output)`：把节点输出转成最终摘要。
+## 持久化和可观察性
 
-当前 `Executor` 还有一个实现细节值得写清：它持有的是 skill 的“运行时绑定逻辑”，而不是只持有一份静态 prompt 文件。也正因为如此，这轮 PR 先把 skill 初始化、绑定边界、client 选择顺序、runner 调用面收敛稳定，后面再继续往 skill prompt / memo 能力上填内容会更自然。
+`RunnerStore` 继续使用 append-only JSONL runner record。变化点是 node output 如果是合法 exchange markdown，会以 `data_encoding=markdown` 存入 `StoredRunnerEvent.DataText`，而不是作为普通 JSON string 存入 `DataJSON`。
 
-- `llm.New` 只负责读取 `SKILL.md`、保存 skill workspace `fs.FS`、bash allow/block 和 tools；它不会创建 LLM client 或 conversation。
-- 每个 skill 在 New 阶段都会拿到独立的临时 playground。内置工具的相对路径和 shell cwd 都落在这个临时目录；绝对路径只允许指向该临时目录、本地目录 skill 的 source root，或用户通过 `Skill.WithAccessibleDirs` 追加的目录，从而把脚本执行区、用户指定的额外访问区和越界保护一起收敛在 `Skill` 的 workspace 设计里。
-- Bind 时会把 workspace 使用说明附加到 runtime instruction：source root 适合作为 skill 自身的工作区，temp playground 适合试错和中间产物，用户追加目录则完全按用户给定意图使用。
-- 注册到 orchestrator 里的通常是这种 lightweight skill，本地目录注册会在 `AddSkills` 阶段把目录内置工具一并放进 skill；`AddSkillConfig` 则同时携带 `Client`、`ConversationConfig` 和 `AccessibleDirs` 这三类运行时绑定输入。
-- 真正运行前，runner 会通过 executor 的 `BindForRunner` 调用 `Skill.Bind(client, conversationConfig, sessionID, stores...)`，并负责填充与复用最后两个 session 参数。
-- executor 自身只保存 `bindClient` / `bindConfig`。如果 `AddSkillConfig.Client` 为空，`Skill.Bind` 会结合 skill 的 `.env` 文件回退到 `NewClientFromEnv(...)`。
-- `Bind` 的 session store 为空时 conversation 只存在于内存中；有 store 时，nil session id 会自动创建新 id，显式 session id 必须已经存在；多个 store 会同时写入同一份 event log。
+```mermaid
+flowchart LR
+    E[ex output\nExchange Markdown] --> R[ru annotateExchangeOutput]
+    R --> S[RunnerSnapshot.CompletedNodes]
+    R --> U[RunnerUpdate.Event.Data]
+    R --> P[RunnerStore JSONL\nDataEncoding=markdown\nDataText=raw markdown]
+    O[or query/subscribe APIs] --> S
+    O --> U
+    O --> P
+    C[Caller] --> O
+```
 
-因此，Executor 不关心全局 queue、slot、review 状态；它只关心“这个 node 在当前阶段应该如何返回 fragment / output / summary”。
+这让同一份数据可以同时满足三种需求：
 
-## 信息是如何同步的
+- 数据库存储：front matter 是稳定 metadata，markdown 正文保留 human-readable 内容。
+- 本地文件存储：exchange document 可以直接落成 `.md`。
+- skill 间传递：后续 skill 可以直接读取 parent output markdown，不需要理解 `ru` 内部结构。
 
-### 自上而下：控制命令
+## 一句话总结
 
-调用方向仍然是：`Caller -> Orchestrator -> Runner -> Executor`。
-
-当前最关键的控制入口包括：
-
-- `StartRequest(ctx, req)`：规划请求、构建 runner，并决定立即 `StartPolish` 还是进入队列。
-- `ReviewRunnerPlan(ctx, id)`：调用 orchestrator skill 返回 review decision。
-- `AcceptRunnerPlan(ctx, id, plan)`：保留 execution slot，然后让 runner 进入 executing。
-- `RejectRunnerPlan(ctx, id, reason)`：把 runner 推回 `awaiting_replan`。
-- `ReplanRunner(ctx, id, plan)`：替换 plan / nodes，并重新 polish；当 `plan == nil` 时会自动调用 orchestrator skill 生成 revised plan。
-- `CompleteRunner(ctx, id)`：协作式结束 executing，进入 report / settled。
-
-### 自下而上：状态与事件回流
-
-信息回流方向是：`Executor -> Runner -> Orchestrator -> Caller`。
-
-当前主要有三层同步面：
-
-- 生命周期状态：`RunnerPhase` + `RunnerState` 组成 `RunnerView`。
-- 流式更新：`Runner.SubscribeUpdates` 产出 `RunnerUpdate`，其中可带 `RunnerEvent`。
-- 生命周期产物：`PolishFragments`、`ReportSummaries`、`ReplanReason` 都保存在 Runner 上，由 Orchestrator 暴露给调用方。
-
-低层 `RunnerEvent` 目前包括：
-
-- `NodeAdded`
-- `NodeStarted`
-- `NodeCompleted`
-- `NodeFailed`
-- `EngineIdle`
-- `EngineStopped`
-
-这些事件会和 snapshot 一起被包装到更高层的 `RunnerUpdate` 里，用于 query / subscribe 消费。
-
-### Orchestrator 如何感知 Runner 已释放 execution slot
-
-execution slot 的边界在当前实现里非常明确：
-
-- `queued` 不占 slot。
-- `polishing` 不占 slot。
-- `awaiting_review` 不占 slot。
-- `awaiting_replan` 不占 slot。
-- 只有 `AcceptRunnerPlan` 成功后进入 `executing` 才占 slot。
-
-Orchestrator 通过 `watchRunnerDone` 感知 slot 释放：
-
-- 它订阅 `RunnerUpdate`，只在看到 runner 进入 `PhaseExecuting` 后开始认为该 runner 占用 slot。
-- 当执行中的 runner 发出 `EventEngineIdle` 时，Orchestrator 会释放 slot。
-- 如果 `Done()` 关闭或 update stream 提前结束，Orchestrator 也会兜底释放 slot。
-- slot 释放后，Orchestrator 会从优先级队列里继续调度下一个 queued runner 进入 `StartPolish`。
-
-这也是当前调度语义里最容易误解、但最关键的地方：
-
-- queue 的限制是“什么时候允许一个 runner 开始进入系统的下一段生命周期”。
-- 真正被限流的资源是 `executing` 阶段，而不是 `awaiting_review` 之前的阶段。
-
-## 当前实现的一句话总结
-
-如果把三者看成一条协作链路：
-
-- `Orchestrator` 负责“用 orchestrator skill 做控制面决策，并管理 runner 的进入与执行资源”。
-- `Runner` 负责“推进单个 plan 的生命周期，并把所有状态与产物汇总成 query / update surface”。
-- `Executor` 负责“完成单个节点在 polish / execute / report 三个阶段的具体工作”。
-
-最准确的理解方式是：`Orchestrator` 驱动 `Runner`，`Runner` 编排多个 `Executor`，而 planning / review / replan 又由 `Orchestrator` 自己持有的 skill 统一完成。
-
-所以这轮 PR 的价值，不是“skill 系统已经全部完工”，而是“下一阶段真正落 skill prompt 和 memo 系统之前，调用骨架、生命周期边界、以及核心 struct/interface 已经先对齐了”。
+`or` 负责对外和控制面，`ru` 负责单个 plan 的生命周期和 DAG 调度，`ex` 负责单个 node 的执行；三者之间的数据面统一使用带 front matter 的 markdown exchange document，让持久化、human review 和 skill handoff 使用同一种格式。
