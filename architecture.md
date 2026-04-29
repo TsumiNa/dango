@@ -12,51 +12,43 @@
 `or` 是外部控制面，`ru` 是单个 request/plan 的生命周期宿主，`ex` 是单个 node 的执行单元。
 
 ```mermaid
-flowchart TB
-    Caller[User / API / CLI]
+sequenceDiagram
+    autonumber
+    participant C as User / API / CLI
+    participant O as or: Orchestrator
+    participant OS as Orchestrator Skill
+    participant SR as Skill Registry
+    participant RR as Runner Registry
+    participant Q as Priority Queue
+    participant R as ru: Runner
+    participant D as DAG Engine
+    participant E as ex: Executor(s)
 
-    subgraph OR["or: Orchestrator"]
-        Start[StartRequest]
-        Query[QueryRunner / SubscribeRunner / LoadRunnerRecords]
-        SkillRegistry[Skill Registry\nlightweight skills + AddSkillConfig]
-        OrSkill[Orchestrator Skill\nplan / review / replan]
-        Build[buildPlanNodes / newRunnerFromPlan]
-        Queue[Priority Queue\nmaxRunningRunners]
-        Registry[Runner Registry]
-    end
-
-    subgraph RU["ru: Runner"]
-        Managed[StartManaged]
-        Phases[created -> polishing -> awaiting_review\n-> executing -> report -> settled]
-        Bind[prepareNodeExecutors\nBindForRunner + session reuse]
-        DAG[DAG Engine\nAddNodes + dependency readiness]
-        Snapshot[RunnerView / RunnerUpdate / RunnerSnapshot]
-    end
-
-    subgraph EX["ex: Executor(s)"]
-        Polish[Polish]
-        Execute[Execute]
-        Report[Report]
-    end
-
-    Caller -->|StartRequest(req)| Start
-    Caller -->|query / subscribe| Query
-    Start --> OrSkill
-    OrSkill -->|CoarsePlan or RejectReason| Start
-    SkillRegistry --> Build
-    Start --> Build
-    Build -->|Runner + Node graph| Registry
-    Registry --> Queue
-    Queue -->|start when admitted| Managed
-    Managed --> Phases
-    Phases --> Bind
-    Phases -->|polishing| Polish
-    Phases -->|executing| DAG
-    DAG -->|ready node| Execute
-    Phases -->|report| Report
-    Snapshot --> Registry
-    Registry --> Query
-    Query -->|RunnerView / RunnerUpdate| Caller
+    C->>O: StartRequest req
+    O->>OS: plan(request, skill summaries)
+    OS-->>O: CoarsePlan or RejectReason
+    O->>SR: resolve lightweight skills + AddSkillConfig
+    SR-->>O: skill configs
+    O->>O: buildPlanNodes / newRunnerFromPlan
+    O->>RR: store Runner + Node graph
+    O->>Q: enqueue by priority
+    Q-->>R: start when admitted
+    R->>R: StartManaged
+    Note over R: created -> polishing -> awaiting_review<br/>-> executing -> report -> settled
+    R->>R: prepareNodeExecutors / BindForRunner + session reuse
+    R->>E: Polish(ctx)
+    E-->>R: polish exchange markdown
+    R->>D: schedule dependency-ready nodes
+    D->>E: Execute(ctx)
+    E-->>D: execution exchange markdown
+    D-->>R: completed node
+    R->>E: Report(ctx)
+    E-->>R: report exchange markdown
+    R-->>RR: RunnerUpdate + Snapshot
+    C->>O: QueryRunner / SubscribeRunner / LoadRunnerRecords
+    O->>RR: lookup runner state
+    RR-->>O: RunnerView / RunnerUpdate
+    O-->>C: runner status and updates
 ```
 
 关键边界：
@@ -76,55 +68,55 @@ flowchart TB
 - `Handoff`：传递给目标 recipient 的输出、接力建议或请求。
 
 ```mermaid
-flowchart LR
-    subgraph Input["Planning Input"]
-        Req[Request]
-        Skills[Skill summaries]
+sequenceDiagram
+    autonumber
+    participant I as Planning Input
+    participant O as or
+    participant OS as Orchestrator Skill
+    participant R as ru
+    participant E as ex
+    participant ST as RunnerStore
+    participant U as RunnerUpdate stream
+
+    I->>O: Request + skill summaries
+    O->>OS: plan(request, skill summaries)
+    OS-->>O: plan JSON / CoarsePlan
+    O->>R: Node graph + Node metadata + Executor
+    R->>E: Polish(ctx)
+    E-->>R: kind=dango.exchange, stage=polish
+    R->>R: save PolishDocuments map[nodeID]markdown
+    R->>OS: review(plan, polish_documents)
+    Note over R,OS: markdown docs, not runner internals
+    OS-->>R: review JSON: approved / reason
+
+    alt review rejected
+        R->>OS: replan(request, currentPlan, reason, polish_documents)
+        OS-->>R: replan JSON / revised CoarsePlan
+        R->>R: ReplanWith(revised plan, rebuilt nodes)
+        R->>E: Polish(ctx)
+        E-->>R: revised polish exchange markdown
+    else review approved
+        R->>R: AcceptPolishedPlan(plan)
     end
 
-    subgraph OR["or"]
-        OrSkill[Orchestrator Skill]
-        Plan[CoarsePlan]
-        NodeGraph[Node graph\nNode metadata + Executor]
+    loop dependency-ready nodes
+        R->>E: Execute(ctx, parent exchange markdown)
+        E-->>R: kind=dango.exchange, stage=execute, optional newNodes
+        R->>R: save CompletedNodes map[nodeID]markdown
+        opt optional newNodes
+            R->>R: append to Node graph
+        end
+        R->>ST: append NodeCompleted(markdown)
+        R-->>U: publish RunnerUpdate
     end
 
-    subgraph RU["ru"]
-        PolishDocs[PolishDocuments\nmap[nodeID]markdown]
-        Outputs[CompletedNodes\nmap[nodeID]markdown]
-        Reports[ReportSummaries\nmap[nodeID]markdown]
-        Store[RunnerStore\nJSONL records]
-        Updates[RunnerUpdate stream]
+    par completed nodes
+        R->>E: Report(ctx, execution markdown)
+        E-->>R: kind=dango.exchange, stage=report
+        R->>R: save ReportSummaries map[nodeID]markdown
+        R->>ST: append report markdown
+        R-->>U: publish RunnerUpdate
     end
-
-    subgraph EX["ex"]
-        ExPolish[Polish -> Exchange Markdown]
-        ExRun[Execute(parent markdown) -> Exchange Markdown]
-        ExReport[Report(output markdown) -> Exchange Markdown]
-    end
-
-    Req --> OrSkill
-    Skills --> OrSkill
-    OrSkill -->|plan JSON| Plan
-    Plan --> NodeGraph
-    NodeGraph --> ExPolish
-
-    ExPolish -->|kind=dango.exchange\nstage=polish| PolishDocs
-    PolishDocs -->|markdown docs, not runner internals| OrSkill
-    OrSkill -->|review JSON: approved/reason| RUReview{approved?}
-    RUReview -->|false| OrSkill
-    OrSkill -->|replan JSON| Plan
-    RUReview -->|true| ExRun
-
-    Outputs -->|parentOutputs by dependency| ExRun
-    ExRun -->|kind=dango.exchange\nstage=execute| Outputs
-    ExRun -->|optional newNodes| NodeGraph
-    Outputs --> Store
-    Outputs --> Updates
-
-    Outputs --> ExReport
-    ExReport -->|kind=dango.exchange\nstage=report| Reports
-    Reports --> Store
-    Reports --> Updates
 ```
 
 这里的重点是：`ru` 不需要理解 `Memo`、`Reasoning`、`Handoff` 的业务含义。它只做四件事：
