@@ -89,6 +89,9 @@ func ctxWithValues(parent context.Context, child context.Context) context.Contex
 	if child == nil {
 		return parent
 	}
+	if merged, ok := child.(*mergedContext); ok && merged.parent == parent {
+		return child
+	}
 	return &mergedContext{parent: parent, child: child}
 }
 
@@ -97,6 +100,8 @@ type mergedContext struct {
 	child  context.Context
 	once   sync.Once
 	done   chan struct{}
+	errMu  sync.Mutex
+	err    error
 }
 
 func (c *mergedContext) Deadline() (time.Time, bool) {
@@ -131,7 +136,9 @@ func (c *mergedContext) Done() <-chan struct{} {
 		go func() {
 			select {
 			case <-parentDone:
+				c.setErr(c.parent.Err())
 			case <-childDone:
+				c.setErr(c.child.Err())
 			}
 			close(c.done)
 		}()
@@ -140,10 +147,38 @@ func (c *mergedContext) Done() <-chan struct{} {
 }
 
 func (c *mergedContext) Err() error {
-	if err := c.child.Err(); err != nil {
+	if err := c.cachedErr(); err != nil {
 		return err
 	}
-	return c.parent.Err()
+	select {
+	case <-c.parent.Done():
+		return c.setErr(c.parent.Err())
+	default:
+	}
+	select {
+	case <-c.child.Done():
+		return c.setErr(c.child.Err())
+	default:
+	}
+	return nil
+}
+
+func (c *mergedContext) cachedErr() error {
+	c.errMu.Lock()
+	defer c.errMu.Unlock()
+	return c.err
+}
+
+func (c *mergedContext) setErr(err error) error {
+	if err == nil {
+		return nil
+	}
+	c.errMu.Lock()
+	defer c.errMu.Unlock()
+	if c.err == nil {
+		c.err = err
+	}
+	return c.err
 }
 
 func (c *mergedContext) Value(key any) any {

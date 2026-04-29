@@ -40,6 +40,39 @@ func TestNewOrchestrator_UsesProvidedContext(t *testing.T) {
 	}
 }
 
+func TestOperationContext_ReturnsAlreadyMergedContext(t *testing.T) {
+	o := NewOrchestrator(context.Background(), testLogger)
+	ctx := o.operationContext(context.WithValue(context.Background(), testContextKey("key"), "value"))
+	if got := o.operationContext(ctx); got != ctx {
+		t.Fatalf("operationContext(already merged) = %T %p, want original %T %p", got, got, ctx, ctx)
+	}
+}
+
+func TestMergedContextErrKeepsFirstCancellationReason(t *testing.T) {
+	parent, cancelParent := context.WithCancel(context.Background())
+	child, cancelChild := context.WithTimeout(context.Background(), 10*time.Millisecond)
+	t.Cleanup(cancelChild)
+
+	ctx := ctxWithValues(parent, child)
+	cancelParent()
+	select {
+	case <-ctx.Done():
+	case <-time.After(time.Second):
+		t.Fatal("merged context did not observe parent cancellation")
+	}
+	if err := ctx.Err(); !errors.Is(err, context.Canceled) {
+		t.Fatalf("Err() after parent cancellation = %v, want %v", err, context.Canceled)
+	}
+	select {
+	case <-child.Done():
+	case <-time.After(time.Second):
+		t.Fatal("child context did not time out")
+	}
+	if err := ctx.Err(); !errors.Is(err, context.Canceled) {
+		t.Fatalf("Err() after later child cancellation = %v, want stable %v", err, context.Canceled)
+	}
+}
+
 func TestSetLogger_NilRestoresDefaultLogger(t *testing.T) {
 	o := NewOrchestrator(context.Background(), nil)
 	if err := o.SetLogger(newDiscardLogger()); err != nil {
