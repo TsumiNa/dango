@@ -113,14 +113,30 @@ func TestExecute_UsesRunEWhenSet(t *testing.T) {
 	}
 }
 
-func TestExecute_NoRunEReturnsZero(t *testing.T) {
+func TestExecute_NoRunEReturnsMarkdownFallback(t *testing.T) {
 	exec, err := NewExecutor(slog.New(slog.NewTextHandler(os.Stderr, nil)), loadLightweightTestSkill(t), &llm.Client{}, nil, &ExecutionPlanner{})
 	if err != nil {
 		t.Fatalf("NewExecutor: %v", err)
 	}
 	out, nodes, err := exec.Execute(context.Background(), nil)
-	if err != nil || out != nil || nodes != nil {
-		t.Errorf("Execute = (%v, %v, %v), want (nil, nil, nil)", out, nodes, err)
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if nodes != nil {
+		t.Fatalf("nodes = %v, want nil", nodes)
+	}
+	doc, err := runnerpkg.ParseExchangeMarkdown(out.(string))
+	if err != nil {
+		t.Fatalf("ParseExchangeMarkdown: %v", err)
+	}
+	if doc.Stage != runnerpkg.ExchangeStageExecute {
+		t.Fatalf("Stage = %q, want execute", doc.Stage)
+	}
+	if doc.SkillName != "t" {
+		t.Fatalf("SkillName = %q, want t", doc.SkillName)
+	}
+	if doc.Handoff == "" {
+		t.Fatal("expected fallback handoff to be populated")
 	}
 }
 
@@ -214,5 +230,61 @@ func TestBindForRunner_ReusesExistingSession(t *testing.T) {
 	}
 	if secondSessionID != firstSessionID {
 		t.Fatalf("session id = %q, want %q", secondSessionID, firstSessionID)
+	}
+}
+
+func TestPolish_ReturnsExchangeMarkdown(t *testing.T) {
+	exec, err := NewExecutor(nil, loadLightweightTestSkill(t), &llm.Client{}, nil, &ExecutionPlanner{
+		id:              "node-1",
+		TaskDescription: "Plan the work.",
+	})
+	if err != nil {
+		t.Fatalf("NewExecutor: %v", err)
+	}
+
+	fragment, err := exec.Polish(context.Background())
+	if err != nil {
+		t.Fatalf("Polish: %v", err)
+	}
+	doc, err := runnerpkg.ParseExchangeMarkdown(fragment.(string))
+	if err != nil {
+		t.Fatalf("ParseExchangeMarkdown: %v", err)
+	}
+	if doc.Stage != runnerpkg.ExchangeStagePolish || doc.NodeID != "node-1" {
+		t.Fatalf("doc metadata = %+v, want polish/node-1", doc)
+	}
+	if len(doc.Handoffs) != 1 || doc.Handoffs[0].To != runnerpkg.ExchangeRecipientOrchestrator {
+		t.Fatalf("handoffs = %+v, want orchestrator", doc.Handoffs)
+	}
+	if doc.Memo == "" || doc.Handoff == "" {
+		t.Fatalf("doc sections not populated: %+v", doc)
+	}
+}
+
+func TestReport_ReturnsExchangeMarkdownFallback(t *testing.T) {
+	exec, err := NewExecutor(nil, loadLightweightTestSkill(t), &llm.Client{}, nil, &ExecutionPlanner{
+		id:              "node-1",
+		TaskDescription: "Report the work.",
+	})
+	if err != nil {
+		t.Fatalf("NewExecutor: %v", err)
+	}
+
+	summary, err := exec.Report(context.Background(), map[string]string{"result": "ok"})
+	if err != nil {
+		t.Fatalf("Report: %v", err)
+	}
+	doc, err := runnerpkg.ParseExchangeMarkdown(summary.(string))
+	if err != nil {
+		t.Fatalf("ParseExchangeMarkdown: %v", err)
+	}
+	if doc.Stage != runnerpkg.ExchangeStageReport {
+		t.Fatalf("Stage = %q, want report", doc.Stage)
+	}
+	if len(doc.Handoffs) != 1 || doc.Handoffs[0].Intent != runnerpkg.ExchangeIntentSummarize {
+		t.Fatalf("handoffs = %+v, want summarize", doc.Handoffs)
+	}
+	if doc.Handoff == "" {
+		t.Fatal("expected report handoff to include output")
 	}
 }

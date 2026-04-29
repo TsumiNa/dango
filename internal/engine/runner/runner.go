@@ -746,8 +746,9 @@ func (r *Runner) runEngine(ctx context.Context) error {
 				return finish(RunnerStatusFailed, err)
 			}
 
-			outputs[res.nodeID] = res.output
-			if err := emitEvent(RunnerEvent{Type: EventNodeCompleted, NodeID: res.nodeID, Data: res.output}); err != nil {
+			output := r.annotateExchangeOutput(n, res.output)
+			outputs[res.nodeID] = output
+			if err := emitEvent(RunnerEvent{Type: EventNodeCompleted, NodeID: res.nodeID, Data: output}); err != nil {
 				return finish(RunnerStatusFailed, err)
 			}
 

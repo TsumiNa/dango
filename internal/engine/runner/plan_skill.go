@@ -18,8 +18,8 @@ type plannerSkillReviewPrompt struct {
 	Task     string `json:"task"`
 	Contract string `json:"contract"`
 	Data     struct {
-		Plan            *CoarsePlan    `json:"plan"`
-		PolishFragments map[string]any `json:"polish_fragments,omitempty"`
+		Plan            *CoarsePlan       `json:"plan"`
+		PolishDocuments map[string]string `json:"polish_documents,omitempty"`
 	} `json:"data"`
 }
 
@@ -28,11 +28,11 @@ type plannerSkillReplanPrompt struct {
 	Task     string `json:"task"`
 	Contract string `json:"contract"`
 	Data     struct {
-		Request         string         `json:"request"`
-		CurrentPlan     *CoarsePlan    `json:"current_plan,omitempty"`
-		ReplanReason    string         `json:"replan_reason,omitempty"`
-		PolishFragments map[string]any `json:"polish_fragments,omitempty"`
-		Skills          []SkillSummary `json:"skills"`
+		Request         string            `json:"request"`
+		CurrentPlan     *CoarsePlan       `json:"current_plan,omitempty"`
+		ReplanReason    string            `json:"replan_reason,omitempty"`
+		PolishDocuments map[string]string `json:"polish_documents,omitempty"`
+		Skills          []SkillSummary    `json:"skills"`
 	} `json:"data"`
 }
 
@@ -89,10 +89,10 @@ func (r *Runner) replanPolishedPlan(ctx context.Context, reason string) (*Coarse
 func marshalPlannerReviewInput(plan *CoarsePlan, polishFragments map[string]any) (string, error) {
 	var payload plannerSkillReviewPrompt
 	payload.Mode = "review"
-	payload.Task = "Review the current plan against the collected polish fragments. Return strict JSON as {\"approved\":true} or {\"approved\":false,\"reason\":\"...\"}."
-	payload.Contract = "If approved is false, reason must explain the replan request briefly and concretely."
+	payload.Task = "Review the current plan against the collected executor markdown documents. Return strict JSON as {\"approved\":true} or {\"approved\":false,\"reason\":\"...\"}."
+	payload.Contract = "Read each markdown document's front matter and Memo/Reasoning/Handoff sections. If approved is false, reason must explain the replan request briefly and concretely."
 	payload.Data.Plan = CloneCoarsePlan(plan)
-	payload.Data.PolishFragments = clonePlannerAnyMap(polishFragments)
+	payload.Data.PolishDocuments = plannerMarkdownDocuments(polishFragments)
 	return marshalPlannerPrompt(payload)
 }
 
@@ -110,12 +110,12 @@ func parsePlannerReviewOutput(raw string) (*PlanReview, error) {
 func marshalPlannerReplanInput(request string, currentPlan *CoarsePlan, reason string, polishFragments map[string]any, skills []SkillSummary) (string, error) {
 	var payload plannerSkillReplanPrompt
 	payload.Mode = "replan"
-	payload.Task = "Rewrite the current plan into the next candidate plan using the rejection reason and the available skills. Return strict JSON as {\"plan\": ...}."
-	payload.Contract = "plan.request must be the original request; plan.nodes[].skill_name must reference an available skill; include only the nodes needed for the revised plan."
+	payload.Task = "Rewrite the current plan into the next candidate plan using the rejection reason, executor markdown documents, and available skills. Return strict JSON as {\"plan\": ...}."
+	payload.Contract = "Read each markdown document's front matter and Memo/Reasoning/Handoff sections. plan.request must be the original request; plan.nodes[].skill_name must reference an available skill; include only the nodes needed for the revised plan."
 	payload.Data.Request = request
 	payload.Data.CurrentPlan = CloneCoarsePlan(currentPlan)
 	payload.Data.ReplanReason = reason
-	payload.Data.PolishFragments = clonePlannerAnyMap(polishFragments)
+	payload.Data.PolishDocuments = plannerMarkdownDocuments(polishFragments)
 	payload.Data.Skills = append([]SkillSummary(nil), skills...)
 	return marshalPlannerPrompt(payload)
 }
@@ -139,13 +139,41 @@ func marshalPlannerPrompt(v any) (string, error) {
 	return string(buf), nil
 }
 
-func clonePlannerAnyMap(in map[string]any) map[string]any {
+func plannerMarkdownDocuments(in map[string]any) map[string]string {
 	if in == nil {
 		return nil
 	}
-	out := make(map[string]any, len(in))
+	out := make(map[string]string, len(in))
 	for k, v := range in {
-		out[k] = v
+		out[k] = plannerMarkdownDocument(v)
 	}
 	return out
+}
+
+func plannerMarkdownDocument(v any) string {
+	switch value := v.(type) {
+	case string:
+		return value
+	case *ExchangeDocument:
+		if value == nil {
+			return ""
+		}
+		raw, err := value.Markdown()
+		if err == nil {
+			return raw
+		}
+		return fmt.Sprintf("%+v", *value)
+	case ExchangeDocument:
+		raw, err := value.Markdown()
+		if err == nil {
+			return raw
+		}
+		return fmt.Sprintf("%+v", value)
+	default:
+		buf, err := json.Marshal(value)
+		if err == nil {
+			return string(buf)
+		}
+		return fmt.Sprintf("%v", value)
+	}
 }

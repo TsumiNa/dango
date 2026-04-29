@@ -11,6 +11,7 @@ require (
 	go.opentelemetry.io/otel v1.43.0
 	go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracehttp v1.43.0
 	go.opentelemetry.io/otel/sdk v1.43.0
+	gopkg.in/yaml.v2 v2.4.0
 	modernc.org/sqlite v1.49.1
 )
 
@@ -23,7 +24,6 @@ require (
 	github.com/tidwall/match v1.2.0 // indirect
 	github.com/tidwall/pretty v1.2.1 // indirect
 	github.com/tidwall/sjson v1.2.5 // indirect
-	gopkg.in/yaml.v2 v2.4.0 // indirect
 	modernc.org/cc/v4 v4.27.3 // indirect
 	modernc.org/ccgo/v4 v4.32.4 // indirect
 	modernc.org/gc/v2 v2.6.5 // indirect

@@ -132,9 +132,9 @@ func (e *Executor) planTask() error {
 	return nil
 }
 
-// Execute runs the task. When [Executor.RunE] is set it is invoked
-// directly; otherwise Execute is currently a no-op placeholder until the
-// real skill-driven execution path is implemented.
+// Execute runs the task. When [Executor.RunE] is set it is invoked directly;
+// otherwise Execute asks the bound runtime skill to return a markdown exchange
+// document and wraps plain-text replies into that document format.
 func (e *Executor) Execute(ctx context.Context, parentOutputs map[string]any) (any, []*runnerpkg.Node, error) {
 	if ctx != nil {
 		if err := ctx.Err(); err != nil {
@@ -161,13 +161,19 @@ func (e *Executor) Execute(ctx context.Context, parentOutputs map[string]any) (a
 		}
 		return output, newNodes, nil
 	}
+	output, err := e.executeExchange(ctx, parentOutputs)
+	if err != nil {
+		e.Status = StatusFailed
+		return nil, nil, err
+	}
+	e.captureResult(output)
 	e.Status = StatusDone
-	return nil, nil, nil
+	return output, nil, nil
 }
 
 // Polish satisfies the runner's polish contract. The default implementation
-// refreshes the planner via [Executor.PolishPlan] and returns a snapshot of
-// the planner as the fragment.
+// refreshes the planner via [Executor.PolishPlan] and returns a markdown
+// exchange document for orchestrator review.
 func (e *Executor) Polish(ctx context.Context) (any, error) {
 	if ctx != nil {
 		if err := ctx.Err(); err != nil {
@@ -182,18 +188,18 @@ func (e *Executor) Polish(ctx context.Context) (any, error) {
 			return nil, err
 		}
 	}
-	return *e.planner, nil
+	return e.polishExchange()
 }
 
 // Report satisfies the runner's report contract. The default implementation
-// passes the execution output through unchanged as the summary.
+// returns a markdown exchange document summarizing the execution output.
 func (e *Executor) Report(ctx context.Context, output any) (any, error) {
 	if ctx != nil {
 		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
 	}
-	return output, nil
+	return e.reportExchange(ctx, output)
 }
 
 func (e *Executor) BindForRunner(sessID *string, sessStores ...llm.SessionStore) (string, error) {

@@ -146,8 +146,10 @@ const (
 
 // Node represents a single unit of work within the Runner's execution graph.
 type Node struct {
-	Id      string  `json:"id" yaml:"id"`
-	Parents []*Node `json:"parents,omitempty" yaml:"parents,omitempty"`
+	Id              string  `json:"id" yaml:"id"`
+	SkillName       string  `json:"skill_name,omitempty" yaml:"skill_name,omitempty"`
+	TaskDescription string  `json:"task_description,omitempty" yaml:"task_description,omitempty"`
+	Parents         []*Node `json:"parents,omitempty" yaml:"parents,omitempty"`
 	// Executor contains the execution logic of the node.
 	Executor Executor `json:"-" yaml:"-"`
 

@@ -123,7 +123,12 @@ func buildPlanNodes(logger *slog.Logger, req *Request, plan *CoarsePlan, skills 
 			return nil, fmt.Errorf("orchestrate: build executor for node %q: %w", step.ID, err)
 		}
 
-		nodes[step.ID] = &runnerpkg.Node{Id: step.ID, Executor: executor}
+		nodes[step.ID] = &runnerpkg.Node{
+			Id:              step.ID,
+			SkillName:       step.SkillName,
+			TaskDescription: planner.TaskDescription,
+			Executor:        executor,
+		}
 	}
 
 	for _, step := range plan.Nodes {

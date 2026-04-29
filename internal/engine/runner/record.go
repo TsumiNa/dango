@@ -81,6 +81,11 @@ func newStoredRunnerEvent(event RunnerEvent) *StoredRunnerEvent {
 		stored.DataText = errValue.Error()
 		return stored
 	}
+	if text, ok := event.Data.(string); ok && IsExchangeMarkdown(text) {
+		stored.DataEncoding = "markdown"
+		stored.DataText = text
+		return stored
+	}
 	raw, err := json.Marshal(event.Data)
 	if err != nil {
 		stored.DataEncoding = "text"
