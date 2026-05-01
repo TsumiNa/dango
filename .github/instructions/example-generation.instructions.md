@@ -30,10 +30,27 @@ Keep `main.go` close to a real client of the system:
 - Load shared configuration, including LLM service settings, through the same
   `.env` path used by the rest of the repo.
 - Configure the orchestrator and register the example's skills.
+- Register skills as skill directories and let the orchestrator/runner/executor
+  bind them into runnable executors with standard skill tools. Do not create
+  example-specific Go function tools in `main.go` for domain work that belongs
+  inside a skill.
 - Submit the user's task through the orchestrator request API.
 - Subscribe to runner updates and stream them until the runner settles.
 - Use the example root's `artifacts/` directory for durable outputs rather than
   temporary directories in the executable path.
+- Stream orchestrator-owned planning progress to stdout when the system API
+  supports it, including compact reasoning/status deltas that explain long LLM
+  waits before a runner exists.
+- Keep terminal runner updates compact: show runner ID, status, phase, counts,
+  event type, node ID, and short error context. Do not print full runner
+  snapshots, full user payloads, node task descriptions, or completed handoff
+  bodies to stdout.
+- Persist full debug streams, raw runner updates, and large snapshots under the
+  example's `artifacts/` directory as machine-readable files such as NDJSON.
+- Emit progress logs to stderr around long synchronous steps such as LLM client
+  loading, planning request submission, runner creation, and runner completion.
+  The user should be able to tell whether a failure happened before a runner
+  stream existed.
 
 Do not put business outcome simulation, hand-built plans, direct skill calls, or
 test assertions in `main.go`. Those belong in tests or skill implementations.
@@ -49,13 +66,22 @@ short `SKILL.md` description.
   handoffs without running execution tools or creating final artifacts.
 - Execution instructions must identify the real local tool, package, API,
   command, or script entrypoint the skill can use to perform the work.
-- If a Python skill is used, give it its own `pyproject.toml` and `uv.lock`.
-  Declare real external dependencies when the skill's purpose would naturally
+- If a Python skill is used, give it its own `pyproject.toml` and uv-managed
+  environment. `uv.lock` may be generated locally for execution but can remain
+  ignored when the repository ignores `examples/**/uv.lock`.
+- Declare real external dependencies when the skill's purpose would naturally
   use them, such as `scikit-learn` for Gaussian process modeling or
   `markdown-pdf` for Markdown-to-PDF rendering. Do not create a local package
   and list it as a dependency just to make `dependencies` non-empty.
 - Dependencies may be empty when the skill genuinely needs only the Python
   standard library.
+- `SKILL.md` must tell the model how to execute Python inside the skill
+  environment, for example `uv run python scripts/name.py` from the skill
+  directory, or the explicit interpreter path `.venv/bin/python` when that is
+  the intended executable.
+- If standard command tools run from a temp playground instead of the skill
+  source directory, also show the equivalent invocation using the source
+  workspace path, such as `uv --directory <source workspace> run python ...`.
 - Put reusable local package/API code in the skill only when it represents a
   meaningful local abstraction, not as ceremony around a script.
 - A fixed script entrypoint is useful for common paths and tests, but the skill

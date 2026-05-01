@@ -121,6 +121,11 @@ func (e *Executor) executionPrompt(parentOutputs map[string]any) string {
 	b.WriteString(e.planner.TaskDescription)
 	b.WriteString("\n\nParent exchange documents:\n")
 	b.WriteString(formatParentOutputs(parentOutputs))
+	if e.planner.ArtifactsDir != "" {
+		b.WriteString("\n\nArtifacts root:\n")
+		b.WriteString(e.planner.ArtifactsDir)
+		b.WriteString("\nUse a skill-specific subdirectory under this root for durable files. Include generated files in exchange front matter resources.\n")
+	}
 	if len(e.accessibleDirs) > 0 {
 		b.WriteString("\n\nAccessible resource directories from parent exchange front matter:\n")
 		for _, dir := range e.accessibleDirs {

@@ -366,6 +366,30 @@ func (o *Orchestrator) AddSkills(cfgs ...AddSkillConfig) error {
 	return nil
 }
 
+// AddSkillFromDirs loads one or more skill directories and registers them with the
+// orchestrator.
+func (o *Orchestrator) AddSkillFromDirs(client *llm.Client, cfg *llm.ConversationConfig, dirs ...string) error {
+	if len(dirs) == 0 {
+		return nil
+	}
+	cfgs := make([]AddSkillConfig, 0, len(dirs))
+	for i, dir := range dirs {
+		if dir == "" {
+			return fmt.Errorf("orchestrate: add skill dir %d must not be empty", i)
+		}
+		sk, err := llm.NewSkill(dir, nil, nil)
+		if err != nil {
+			return err
+		}
+		cfgs = append(cfgs, AddSkillConfig{
+			Skill:  sk,
+			Client: client,
+			Config: cfg,
+		})
+	}
+	return o.AddSkills(cfgs...)
+}
+
 // RemoveSkills deletes one or more registered lightweight skills by name.
 //
 // Like AddSkills, RemoveSkills supports batch updates. The removal is atomic:

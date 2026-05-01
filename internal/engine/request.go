@@ -18,6 +18,16 @@ import (
 // non-blocking and returns the runner ID once the runner has been accepted
 // into orchestration.
 func (o *Orchestrator) StartRequest(ctx context.Context, req *Request) (string, error) {
+	return o.startRequest(ctx, req, nil)
+}
+
+// StartRequestWithProgress is like [Orchestrator.StartRequest], but streams
+// orchestrator-owned planning progress through progress before a runner exists.
+func (o *Orchestrator) StartRequestWithProgress(ctx context.Context, req *Request, progress OrchestratorProgressFunc) (string, error) {
+	return o.startRequest(ctx, req, progress)
+}
+
+func (o *Orchestrator) startRequest(ctx context.Context, req *Request, progress OrchestratorProgressFunc) (string, error) {
 	ctx = o.operationContext(ctx)
 	if req == nil {
 		return "", fmt.Errorf("orchestrate: nil request")
@@ -43,7 +53,7 @@ func (o *Orchestrator) StartRequest(ctx context.Context, req *Request) (string, 
 	}
 
 	skillSummaries := collectSkillSummaries(cloneSkillMap(skillConfigs))
-	plan, reject, err := planWithOrchestrator(ctx, req, skillSummaries, runtimeSkill)
+	plan, reject, err := planWithOrchestrator(ctx, req, skillSummaries, runtimeSkill, progress)
 	if err != nil {
 		return "", err
 	}
@@ -84,7 +94,7 @@ func newRunnerFromPlan(ctx context.Context, logger *slog.Logger, store runnerpkg
 		runnerpkg.WithPlannerSkill(plannerSkill),
 		runnerpkg.WithSkillSummaries(skillSummaries),
 		runnerpkg.WithPlanNodeBuilder(func(replanned *runnerpkg.CoarsePlan) (map[string]*runnerpkg.Node, error) {
-			request := &Request{Input: replanned.Request}
+			request := &Request{Input: replanned.Request, ArtifactsDir: req.ArtifactsDir}
 			return buildPlanNodes(logger, request, replanned, skills)
 		}),
 	), nil
@@ -114,6 +124,7 @@ func buildPlanNodes(logger *slog.Logger, req *Request, plan *CoarsePlan, skills 
 		planner := &ExecutionPlanner{
 			id:              step.ID,
 			TaskDescription: step.TaskDescription,
+			ArtifactsDir:    req.ArtifactsDir,
 		}
 		if planner.TaskDescription == "" {
 			planner.TaskDescription = req.Input

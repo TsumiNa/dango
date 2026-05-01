@@ -369,6 +369,41 @@ func TestAddSkills_LoadsLightweightSkill(t *testing.T) {
 	}
 }
 
+func TestAddSkillDirs_LoadsAndEquipsSkill(t *testing.T) {
+	o := newOrchestrator(testLogger)
+	client := &llm.Client{}
+	cfg := &llm.ConversationConfig{MaxSteps: 7}
+	dir := writeTestSkill(t, "dir-skill", "A skill loaded by directory.")
+
+	if err := o.AddSkillFromDirs(client, cfg, dir); err != nil {
+		t.Fatalf("AddSkillDirs: %v", err)
+	}
+
+	stored := o.skills["dir-skill"]
+	if stored.Skill == nil {
+		t.Fatal("expected dir-skill to be registered")
+	}
+	if stored.Client != client {
+		t.Fatalf("stored client = %p, want %p", stored.Client, client)
+	}
+	if stored.Config == nil || stored.Config.MaxSteps != cfg.MaxSteps {
+		t.Fatalf("stored config = %+v, want MaxSteps=%d", stored.Config, cfg.MaxSteps)
+	}
+	bound, err := stored.Skill.Bind(stored.Client, stored.Config, nil)
+	if err != nil {
+		t.Fatalf("Bind: %v", err)
+	}
+	tools := make(map[string]bool)
+	for _, spec := range bound.Conversation().Tools() {
+		tools[spec.Name] = true
+	}
+	for _, name := range []string{"bash", "read_file", "write_file", "grep", "pwd"} {
+		if !tools[name] {
+			t.Fatalf("runtime tool %q missing from skill tools: %v", name, tools)
+		}
+	}
+}
+
 func TestAddSkills_StoresRuntimeConfig(t *testing.T) {
 	o := newOrchestrator(testLogger)
 	client := &llm.Client{}

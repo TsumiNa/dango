@@ -77,8 +77,9 @@ func (p RequestPriority) valid() bool {
 // Request is the external task description the Orchestrator receives from the
 // caller.
 type Request struct {
-	Input    string          `json:"input" yaml:"input"`
-	Priority RequestPriority `json:"priority,omitempty" yaml:"priority,omitempty"`
+	Input        string          `json:"input" yaml:"input"`
+	Priority     RequestPriority `json:"priority,omitempty" yaml:"priority,omitempty"`
+	ArtifactsDir string          `json:"artifacts_dir,omitempty" yaml:"artifacts_dir,omitempty"`
 }
 
 // RejectReason explains why a request cannot currently be turned into a plan.

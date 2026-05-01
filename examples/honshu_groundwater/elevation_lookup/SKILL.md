@@ -19,6 +19,25 @@ exchange markdown document for the orchestrator that states:
 If the task is only about modeling, PDF rendering, or report formatting, say
 that this skill should not be selected.
 
+## Python environment
+
+Run Python from this skill directory with `uv run python ...`. For the common
+entrypoint, use:
+
+```sh
+uv run python scripts/enrich.py
+```
+
+When invoking from the standard bash command tool, commands run in the temp
+playground, so use the source workspace path from the runtime instructions:
+
+```sh
+uv --directory <source workspace> run python scripts/enrich.py
+```
+
+When a `.venv` has already been created, `.venv/bin/python` is also a usable
+interpreter for ad-hoc glue code in this skill environment.
+
 ## Execution behavior
 
 Use this skill's local uv/Python environment when site coordinates are present.
@@ -31,3 +50,7 @@ the command tool.
 
 Keep the output structured and compact so downstream modeling skills can
 consume it. Return a Dango exchange markdown document.
+
+Use the standard skill command/file tools to run Python or ad-hoc glue code.
+Do not depend on an example entrypoint registering a custom elevation lookup
+tool; this skill owns that behavior.

@@ -25,6 +25,7 @@ const (
 type ExecutionPlanner struct {
 	id              string
 	TaskDescription string `json:"task_description" yaml:"description"`
+	ArtifactsDir    string `json:"artifacts_dir,omitempty" yaml:"artifacts_dir,omitempty"`
 	Reason          string `json:"reason" yaml:"reason"`
 	Solution        string `json:"solution" yaml:"solution"`
 	Version         uint32 `json:"version" yaml:"version"`

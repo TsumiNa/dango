@@ -147,6 +147,24 @@ func TestExecute_NoRunEReturnsMarkdownFallback(t *testing.T) {
 	}
 }
 
+func TestExecutionPromptIncludesArtifactsRoot(t *testing.T) {
+	artifactsDir := t.TempDir()
+	exec, err := NewExecutor(nil, loadLightweightTestSkill(t), &llm.Client{}, nil, &ExecutionPlanner{
+		TaskDescription: "Write durable outputs.",
+		ArtifactsDir:    artifactsDir,
+	})
+	if err != nil {
+		t.Fatalf("NewExecutor: %v", err)
+	}
+	prompt := exec.executionPrompt(nil)
+	if !strings.Contains(prompt, "Artifacts root:") || !strings.Contains(prompt, artifactsDir) {
+		t.Fatalf("execution prompt missing artifacts root %q:\n%s", artifactsDir, prompt)
+	}
+	if !strings.Contains(prompt, "skill-specific subdirectory") || !strings.Contains(prompt, "resources") {
+		t.Fatalf("execution prompt missing artifact handoff guidance:\n%s", prompt)
+	}
+}
+
 func TestExecute_RespectsCanceledContext(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()

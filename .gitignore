@@ -32,7 +32,8 @@ go.work.sum
 .venv/
 __pycache__/
 examples/**/uv.lock
+generated_artifacts
 
 # Editor/IDE
-# .idea/
+.idea/
 .vscode/

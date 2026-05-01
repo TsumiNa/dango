@@ -21,6 +21,25 @@ review that states:
 If elevation values are missing, recommend an upstream elevation enrichment
 step before this skill runs.
 
+## Python environment
+
+Run Python from this skill directory with `uv run python ...` so `scikit-learn`,
+`numpy`, and `matplotlib` are available. For the common entrypoint, use:
+
+```sh
+uv run python scripts/train.py
+```
+
+When invoking from the standard bash command tool, commands run in the temp
+playground, so use the source workspace path from the runtime instructions:
+
+```sh
+uv --directory <source workspace> run python scripts/train.py
+```
+
+When a `.venv` has already been created, `.venv/bin/python` is also a usable
+interpreter for ad-hoc glue code in this skill environment.
+
 ## Execution behavior
 
 Use this skill's local uv/Python environment with `scikit-learn`, `numpy`, and
@@ -36,3 +55,8 @@ for narrative output. Include artifact paths and validation notes in the
 handoff. Return a Dango exchange markdown document whose front matter includes
 `resources` entries for the generated CSV and SVG paths so the runner can make
 their containing directory available to downstream skills.
+
+When the execution prompt includes an artifacts root, create a skill-specific
+subdirectory under that root, or pass that subdirectory as `artifacts_dir` to
+`scripts/train.py`. Do not require the example entrypoint to provide a custom
+tool for this skill.

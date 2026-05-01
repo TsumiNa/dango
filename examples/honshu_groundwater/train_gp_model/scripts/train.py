@@ -4,7 +4,11 @@ import math
 import os
 import re
 import sys
+import tempfile
 import warnings
+
+os.environ.setdefault("MPLCONFIGDIR", os.path.join(tempfile.gettempdir(), "dango-matplotlib-cache"))
+os.makedirs(os.environ["MPLCONFIGDIR"], exist_ok=True)
 
 import matplotlib
 import numpy as np
@@ -15,6 +19,7 @@ from sklearn.metrics import mean_absolute_error
 from sklearn.preprocessing import StandardScaler
 
 matplotlib.use("Agg")
+matplotlib.set_loglevel("error")
 import matplotlib.pyplot as plt
 
 warnings.filterwarnings("ignore", category=ConvergenceWarning)

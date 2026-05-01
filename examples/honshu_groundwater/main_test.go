@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -69,6 +70,48 @@ func TestElevationSkillScriptParsesMessySample(t *testing.T) {
 	}
 	if !foundTokyo {
 		t.Fatal("missing tokyo-west-upland observation")
+	}
+}
+
+func TestSkillScriptCommandRunsThroughStandardBashTool(t *testing.T) {
+	root, err := exampleRoot()
+	if err != nil {
+		t.Fatalf("exampleRoot: %v", err)
+	}
+	sk, err := llm.NewSkill(filepath.Join(root, "elevation_lookup"), nil, nil)
+	if err != nil {
+		t.Fatalf("NewSkill: %v", err)
+	}
+	tools, err := sk.BuiltinTools()
+	if err != nil {
+		t.Fatalf("BuiltinTools: %v", err)
+	}
+	bash := findTool(t, tools, "bash")
+	command, err := skillScriptCommand(filepath.Join(root, "elevation_lookup"), "scripts/enrich.py", map[string]string{
+		"observations_json": embeddedSampleMeasurements,
+	})
+	if err != nil {
+		t.Fatalf("skillScriptCommand: %v", err)
+	}
+	args, err := json.Marshal(map[string]any{
+		"command":         command,
+		"timeout_seconds": 60,
+	})
+	if err != nil {
+		t.Fatalf("marshal bash args: %v", err)
+	}
+	output, err := bash.Execute(context.Background(), string(args))
+	if err != nil {
+		t.Fatalf("bash Execute: %v\n%s", err, output)
+	}
+	var payload struct {
+		ObservationN int `json:"observation_n"`
+	}
+	if err := json.Unmarshal([]byte(output), &payload); err != nil {
+		t.Fatalf("parse bash script output: %v\n%s", err, output)
+	}
+	if payload.ObservationN != 47 {
+		t.Fatalf("observation count = %d, want 47", payload.ObservationN)
 	}
 }
 
@@ -152,15 +195,21 @@ func TestTrainGPSkillScriptBuildsPredictionArtifacts(t *testing.T) {
 }
 
 func TestRunHonshuGroundwaterExampleExecutesNeededSkills(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
 	client := newFakeLLMClient(t)
 	var stream bytes.Buffer
+	var logs bytes.Buffer
+	logger, err := newExampleLogger(&logs, "debug")
+	if err != nil {
+		t.Fatalf("newExampleLogger: %v", err)
+	}
 
 	view, err := runHonshuGroundwaterExample(ctx, exampleConfig{
 		MeasurementsJSON: embeddedSampleMeasurements,
 		ArtifactsDir:     t.TempDir(),
 		Out:              &stream,
+		Logger:           logger,
 		LLMClient:        client,
 	})
 	if err != nil {
@@ -169,11 +218,22 @@ func TestRunHonshuGroundwaterExampleExecutesNeededSkills(t *testing.T) {
 	if view.Phase != runnerpkg.PhaseSettled {
 		t.Fatalf("phase = %q, want settled", view.Phase)
 	}
-	if !strings.Contains(stream.String(), `"runner_id"`) {
+	if !strings.Contains(stream.String(), "or reasoning: Planning with groundwater and elevation skills.") {
+		t.Fatalf("stream missing orchestrator reasoning: %s", stream.String())
+	}
+	if !strings.Contains(stream.String(), "runner_id=") {
 		t.Fatalf("stream missing runner updates: %s", stream.String())
 	}
-	if !strings.Contains(stream.String(), `"phase":"settled"`) {
+	if !strings.Contains(stream.String(), "phase=settled") {
 		t.Fatalf("stream missing settled update: %s", stream.String())
+	}
+	if strings.Contains(stream.String(), "sample after two days of rain") {
+		t.Fatalf("stream leaked raw snapshot payload: %s", stream.String())
+	}
+	for _, want := range []string{"submitting request to orchestrator", "runner created", "runner settled"} {
+		if !strings.Contains(logs.String(), want) {
+			t.Fatalf("logs missing %q:\n%s", want, logs.String())
+		}
 	}
 	if err := ensureNoPDFSkill(view.Plan); err != nil {
 		t.Fatal(err)
@@ -231,17 +291,12 @@ func TestConfigureExampleOrchestratorRegistersAutonomousSkillRuntimes(t *testing
 		t.Fatalf("exampleRoot: %v", err)
 	}
 	client := &llm.Client{}
-	runtime := &exampleRuntime{artifactsDir: t.TempDir(), root: root}
-	o, err := configureExampleOrchestrator(context.Background(), root, runtime, client)
+	o, err := configureExampleOrchestrator(context.Background(), root, client, nil)
 	if err != nil {
 		t.Fatalf("configureExampleOrchestrator: %v", err)
 	}
 
-	for skillName, customTool := range map[string]string{
-		"elevation_lookup": "lookup_elevations",
-		"train_gp_model":   "train_gp_model",
-		"markdown_to_pdf":  "render_markdown_pdf",
-	} {
+	for _, skillName := range []string{"elevation_lookup", "train_gp_model", "markdown_to_pdf"} {
 		sk := o.Skills()[skillName]
 		if sk == nil {
 			t.Fatalf("skill %q was not registered", skillName)
@@ -254,9 +309,14 @@ func TestConfigureExampleOrchestratorRegistersAutonomousSkillRuntimes(t *testing
 		for _, spec := range bound.Conversation().Tools() {
 			tools[spec.Name] = true
 		}
-		for _, name := range []string{customTool, "bash", "read_file", "write_file", "grep", "pwd"} {
+		for _, name := range []string{"bash", "read_file", "write_file", "grep", "pwd"} {
 			if !tools[name] {
 				t.Fatalf("%s missing runtime tool %q: %v", skillName, name, tools)
+			}
+		}
+		for _, name := range []string{"lookup_elevations", "train_gp_model", "render_markdown_pdf"} {
+			if tools[name] {
+				t.Fatalf("%s should not expose example-owned domain tool %q: %v", skillName, name, tools)
 			}
 		}
 		instructions := bound.Conversation().Instructions()
@@ -266,6 +326,59 @@ func TestConfigureExampleOrchestratorRegistersAutonomousSkillRuntimes(t *testing
 			}
 		}
 	}
+}
+
+func TestNewExampleLoggerRejectsInvalidLevel(t *testing.T) {
+	if _, err := newExampleLogger(io.Discard, "verbose"); err == nil {
+		t.Fatal("newExampleLogger accepted invalid log level")
+	}
+}
+
+func TestCompactRunnerUpdateIncludesFailureContext(t *testing.T) {
+	line := compactRunnerUpdate(runnerpkg.RunnerUpdate{
+		RunnerID: "runner-1",
+		State: runnerpkg.RunnerState{
+			Status: runnerpkg.RunnerStatusFailed,
+			Error:  "llm: run exceeded max steps (12) without final response",
+		},
+		Phase: runnerpkg.PhaseSettled,
+		Snapshot: runnerpkg.RunnerSnapshot{
+			CompletedNodes: map[string]any{},
+			PendingNodes:   map[string]int{"train_model": 0},
+		},
+		Event: &runnerpkg.RunnerEvent{
+			Type:   runnerpkg.EventNodeFailed,
+			NodeID: "train_model",
+			Data:   "skill execution loop did not produce final markdown",
+		},
+	})
+	for _, want := range []string{
+		"status=failed",
+		"phase=settled",
+		"error=\"llm: run exceeded max steps (12) without final response\"",
+		"detail=\"skill execution loop did not produce final markdown\"",
+		"event=NodeFailed",
+		"node=train_model",
+	} {
+		if !strings.Contains(line, want) {
+			t.Fatalf("compact line missing %q:\n%s", want, line)
+		}
+	}
+}
+
+func runSkillScript(ctx context.Context, skillDir string, script string, inputJSON string) (string, error) {
+	cmd := exec.CommandContext(ctx, "uv", "run", "--quiet", "python", script)
+	cmd.Dir = skillDir
+	cmd.Env = append(os.Environ(),
+		"UV_CACHE_DIR="+filepath.Join(os.TempDir(), "dango-uv-cache"),
+		"UV_PYTHON_DOWNLOADS=never",
+	)
+	cmd.Stdin = strings.NewReader(inputJSON)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return "", fmt.Errorf("run %s in %s: %w\n%s", script, skillDir, err, strings.TrimSpace(string(output)))
+	}
+	return strings.TrimSpace(string(output)), nil
 }
 
 type trainingResult struct {
@@ -335,8 +448,10 @@ func extractJSONBlock(text string) (string, error) {
 }
 
 type responsesRequest struct {
-	Model string          `json:"model"`
-	Input json.RawMessage `json:"input"`
+	Model        string          `json:"model"`
+	Input        json.RawMessage `json:"input"`
+	Instructions string          `json:"instructions"`
+	Stream       bool            `json:"stream"`
 }
 
 type plannerPrompt struct {
@@ -381,10 +496,22 @@ func serveFakeLLM(w http.ResponseWriter, r *http.Request) {
 	}
 	var prompt plannerPrompt
 	if err := json.Unmarshal([]byte(userText), &prompt); err == nil && prompt.Mode != "" {
+		if req.Stream {
+			serveFakePlannerStream(w, req, prompt)
+			return
+		}
 		serveFakePlanner(w, req, prompt)
 		return
 	}
-	serveFakeSkill(w, req, userText)
+	serveFakeSkill(w, req, userText, req.Instructions)
+}
+
+func serveFakePlannerStream(w http.ResponseWriter, req *responsesRequest, prompt plannerPrompt) {
+	if prompt.Mode != "plan" {
+		respondStreamText(w, req.Model, mustJSON(map[string]any{"approved": true}))
+		return
+	}
+	respondStreamText(w, req.Model, mustJSON(map[string]any{"plan": groundwaterPlan(prompt.Data.Request)}))
 }
 
 func serveFakePlanner(w http.ResponseWriter, req *responsesRequest, prompt plannerPrompt) {
@@ -408,7 +535,7 @@ func serveFakePlanner(w http.ResponseWriter, req *responsesRequest, prompt plann
 	}
 }
 
-func serveFakeSkill(w http.ResponseWriter, req *responsesRequest, userText string) {
+func serveFakeSkill(w http.ResponseWriter, req *responsesRequest, userText string, instructions string) {
 	if strings.HasPrefix(userText, "Polish the assigned task plan") {
 		doc, err := polishExchangeMarkdown(userText)
 		if err != nil {
@@ -439,8 +566,27 @@ func serveFakeSkill(w http.ResponseWriter, req *responsesRequest, userText strin
 
 	switch {
 	case strings.Contains(userText, "Train a GP-style groundwater model"):
-		respondToolCall(w, req.Model, "call_train_gp", "train_gp_model", map[string]any{
+		skillDir, err := sourceWorkspaceFromPrompt(instructions)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		artifactsRoot, err := artifactsRootFromPrompt(userText)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		command, err := skillScriptCommand(skillDir, "scripts/train.py", map[string]string{
 			"parent_exchange": userText,
+			"artifacts_dir":   filepath.Join(artifactsRoot, "train_gp_model"),
+		})
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		respondToolCall(w, req.Model, "call_train_gp", "bash", map[string]any{
+			"command":         command,
+			"timeout_seconds": 120,
 		})
 	case strings.Contains(userText, "enrich every Honshu observation"):
 		raw, err := extractJSONBlock(userText)
@@ -448,14 +594,97 @@ func serveFakeSkill(w http.ResponseWriter, req *responsesRequest, userText strin
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
-		respondToolCall(w, req.Model, "call_lookup_elevation", "lookup_elevations", map[string]any{
+		skillDir, err := sourceWorkspaceFromPrompt(instructions)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		command, err := skillScriptCommand(skillDir, "scripts/enrich.py", map[string]string{
 			"observations_json": raw,
 		})
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		respondToolCall(w, req.Model, "call_lookup_elevation", "bash", map[string]any{
+			"command":         command,
+			"timeout_seconds": 60,
+		})
 	default:
-		respondToolCall(w, req.Model, "call_render_pdf", "render_markdown_pdf", map[string]any{
+		skillDir, err := sourceWorkspaceFromPrompt(instructions)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		command, err := skillScriptCommand(skillDir, "scripts/render.py", map[string]string{
 			"markdown": userText,
 		})
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		respondToolCall(w, req.Model, "call_render_pdf", "bash", map[string]any{
+			"command":         command,
+			"timeout_seconds": 60,
+		})
 	}
+}
+
+func sourceWorkspaceFromPrompt(prompt string) (string, error) {
+	const marker = "- Source workspace: "
+	start := strings.Index(prompt, marker)
+	if start < 0 {
+		return "", fmt.Errorf("prompt does not include source workspace")
+	}
+	rest := prompt[start+len(marker):]
+	end := strings.Index(rest, ". Prefer")
+	if end < 0 {
+		return "", fmt.Errorf("source workspace line is malformed")
+	}
+	return strings.TrimSpace(rest[:end]), nil
+}
+
+func artifactsRootFromPrompt(prompt string) (string, error) {
+	const marker = "Artifacts root:\n"
+	start := strings.Index(prompt, marker)
+	if start < 0 {
+		return "", fmt.Errorf("prompt does not include artifacts root")
+	}
+	rest := prompt[start+len(marker):]
+	line, _, _ := strings.Cut(rest, "\n")
+	root := strings.TrimSpace(line)
+	if root == "" {
+		return "", fmt.Errorf("artifacts root is empty")
+	}
+	return root, nil
+}
+
+func skillScriptCommand(skillDir string, script string, payload any) (string, error) {
+	data, err := json.Marshal(payload)
+	if err != nil {
+		return "", err
+	}
+	return fmt.Sprintf("UV_CACHE_DIR=%s UV_PYTHON_DOWNLOADS=never uv --directory %s run --quiet python %s <<'DANGO_JSON'\n%s\nDANGO_JSON",
+		shellQuote(filepath.Join(os.TempDir(), "dango-uv-cache")),
+		shellQuote(skillDir),
+		shellQuote(script),
+		string(data),
+	), nil
+}
+
+func shellQuote(value string) string {
+	return "'" + strings.ReplaceAll(value, "'", "'\\''") + "'"
+}
+
+func findTool(t *testing.T, tools []llm.Tool, name string) llm.Tool {
+	t.Helper()
+	for _, tool := range tools {
+		if tool.Name() == name {
+			return tool
+		}
+	}
+	t.Fatalf("tool %q not found", name)
+	return nil
 }
 
 func polishExchangeMarkdown(prompt string) (string, error) {
@@ -657,6 +886,50 @@ func respondText(w http.ResponseWriter, model, text string) {
 		"tool_choice":         "auto",
 		"tools":               []any{},
 	})
+}
+
+func respondStreamText(w http.ResponseWriter, model, text string) {
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.WriteHeader(http.StatusOK)
+	flusher, _ := w.(http.Flusher)
+	for _, event := range []string{
+		reasoningDeltaEvent("Planning with groundwater and elevation skills."),
+		textDeltaEvent(text),
+		completedEvent(model, text),
+	} {
+		_, _ = w.Write([]byte(event))
+		if !strings.HasSuffix(event, "\n\n") {
+			_, _ = w.Write([]byte("\n\n"))
+		}
+		if flusher != nil {
+			flusher.Flush()
+		}
+	}
+}
+
+func reasoningDeltaEvent(delta string) string {
+	return fmt.Sprintf(
+		"event: response.reasoning_summary_text.delta\n"+
+			"data: {\"type\":\"response.reasoning_summary_text.delta\",\"delta\":%q,\"item_id\":\"r1\",\"output_index\":0,\"content_index\":0,\"sequence_number\":0}",
+		delta,
+	)
+}
+
+func textDeltaEvent(delta string) string {
+	return fmt.Sprintf(
+		"event: response.output_text.delta\n"+
+			"data: {\"type\":\"response.output_text.delta\",\"delta\":%q,\"item_id\":\"m1\",\"output_index\":0,\"content_index\":0,\"sequence_number\":1}",
+		delta,
+	)
+}
+
+func completedEvent(model, text string) string {
+	data := fmt.Sprintf(
+		`{"type":"response.completed","sequence_number":2,"response":{"id":"resp_stream","object":"response","created_at":0,"model":%q,"status":"completed","output":[{"id":"msg_stream","type":"message","role":"assistant","status":"completed","content":[{"type":"output_text","text":%q,"annotations":[]}]}],"parallel_tool_calls":false,"tool_choice":"auto","tools":[],"usage":{"input_tokens":3,"input_tokens_details":{"cached_tokens":0},"output_tokens":4,"output_tokens_details":{"reasoning_tokens":0},"total_tokens":7}}}`,
+		model,
+		text,
+	)
+	return "event: response.completed\ndata: " + data
 }
 
 func respondToolCall(w http.ResponseWriter, model, callID, name string, args map[string]any) {
