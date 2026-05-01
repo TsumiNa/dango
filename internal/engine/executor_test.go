@@ -2,11 +2,18 @@ package engine
 
 import (
 	"context"
+	"encoding/json"
+	"io"
 	"log/slog"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
+	"github.com/openai/openai-go/v3"
+	"github.com/openai/openai-go/v3/option"
 	runnerpkg "github.com/tsumina/dango/internal/engine/runner"
 	"github.com/tsumina/dango/internal/llm"
 )
@@ -233,6 +240,29 @@ func TestBindForRunner_ReusesExistingSession(t *testing.T) {
 	}
 }
 
+func TestBindForRunnerWithAccessibleDirsConfiguresRuntimeSkill(t *testing.T) {
+	resourceDir := t.TempDir()
+	exec, err := NewExecutor(nil, loadLightweightTestSkill(t), &llm.Client{}, nil, &ExecutionPlanner{})
+	if err != nil {
+		t.Fatalf("NewExecutor: %v", err)
+	}
+	if _, err := exec.BindForRunnerWithAccessibleDirs(nil, []string{resourceDir}); err != nil {
+		t.Fatalf("BindForRunnerWithAccessibleDirs: %v", err)
+	}
+	if exec.runtime == nil {
+		t.Fatal("runtime skill is nil")
+	}
+	if got := exec.accessibleDirs; len(got) != 1 || got[0] != resourceDir {
+		t.Fatalf("executor accessibleDirs = %v, want [%s]", got, resourceDir)
+	}
+	if got := exec.runtime.AccessibleDirs(); len(got) != 1 {
+		t.Fatalf("runtime AccessibleDirs() = %v, want one dir", got)
+	}
+	if instructions := exec.runtime.Conversation().Instructions(); !strings.Contains(instructions, resourceDir) {
+		t.Fatalf("runtime instructions missing resource dir %q:\n%s", resourceDir, instructions)
+	}
+}
+
 func TestPolish_ReturnsExchangeMarkdown(t *testing.T) {
 	exec, err := NewExecutor(nil, loadLightweightTestSkill(t), &llm.Client{}, nil, &ExecutionPlanner{
 		id:              "node-1",
@@ -258,6 +288,81 @@ func TestPolish_ReturnsExchangeMarkdown(t *testing.T) {
 	}
 	if doc.Memo == "" || doc.Handoff == "" {
 		t.Fatalf("doc sections not populated: %+v", doc)
+	}
+}
+
+func TestPolish_UsesRuntimeSkillWhenBound(t *testing.T) {
+	clearLLMEnv(t)
+	polishDoc, err := (runnerpkg.ExchangeDocument{
+		Stage:     runnerpkg.ExchangeStagePolish,
+		Memo:      "Skill-specific polish notes.",
+		Reasoning: "The skill checked its own execution requirements.",
+		Handoff:   "Use the GP package environment after elevation enrichment.",
+	}).Markdown()
+	if err != nil {
+		t.Fatalf("polish doc markdown: %v", err)
+	}
+
+	var requestBody string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		requestBody = string(body)
+		w.Header().Set("Content-Type", "application/json")
+		if err := json.NewEncoder(w).Encode(map[string]any{
+			"id":         "polish-response",
+			"object":     "response",
+			"created_at": 0,
+			"model":      "test-model",
+			"status":     "completed",
+			"output": []map[string]any{{
+				"id":     "polish-message",
+				"type":   "message",
+				"role":   "assistant",
+				"status": "completed",
+				"content": []map[string]any{{
+					"type":        "output_text",
+					"text":        polishDoc,
+					"annotations": []any{},
+				}},
+			}},
+			"parallel_tool_calls": false,
+			"tool_choice":         "auto",
+			"tools":               []any{},
+		}); err != nil {
+			t.Fatalf("write response: %v", err)
+		}
+	}))
+	t.Cleanup(srv.Close)
+	raw := openai.NewClient(option.WithAPIKey("test-key"), option.WithBaseURL(srv.URL+"/"))
+	client, err := llm.NewClient(llm.ClientConfig{Provider: llm.ProviderOpenAI, Model: "test-model", Raw: raw})
+	if err != nil {
+		t.Fatalf("NewClient: %v", err)
+	}
+
+	exec, err := NewExecutor(nil, loadLightweightTestSkill(t), client, nil, &ExecutionPlanner{
+		id:              "node-1",
+		TaskDescription: "Train a GP-style groundwater model.",
+	})
+	if err != nil {
+		t.Fatalf("NewExecutor: %v", err)
+	}
+	if _, err := exec.BindForRunner(nil); err != nil {
+		t.Fatalf("BindForRunner: %v", err)
+	}
+
+	fragment, err := exec.Polish(context.Background())
+	if err != nil {
+		t.Fatalf("Polish: %v", err)
+	}
+	doc, err := runnerpkg.ParseExchangeMarkdown(fragment.(string))
+	if err != nil {
+		t.Fatalf("ParseExchangeMarkdown: %v", err)
+	}
+	if doc.Handoff != "Use the GP package environment after elevation enrichment." {
+		t.Fatalf("handoff = %q, want skill polish output", doc.Handoff)
+	}
+	if !strings.Contains(requestBody, "Polish the assigned task plan before execution") {
+		t.Fatalf("polish request missing polish prompt: %s", requestBody)
 	}
 }
 

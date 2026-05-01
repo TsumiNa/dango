@@ -64,6 +64,17 @@ type ExchangeHandoff struct {
 	Summary string `json:"summary,omitempty" yaml:"summary,omitempty"`
 }
 
+// ExchangeResource describes a file or directory produced by an executor.
+//
+// Runner parses these front matter entries to make resource directories
+// available to downstream executors without needing model reasoning in the
+// runner itself.
+type ExchangeResource struct {
+	Path        string `json:"path" yaml:"path"`
+	Type        string `json:"type,omitempty" yaml:"type,omitempty"`
+	Description string `json:"description,omitempty" yaml:"description,omitempty"`
+}
+
 // ExchangeDocument is the markdown envelope executors use to hand information
 // to the orchestrator and to downstream skills.
 //
@@ -72,15 +83,16 @@ type ExchangeHandoff struct {
 // so long-running state, reasoning traces, and recipient-facing output remain
 // readable to both humans and skills.
 type ExchangeDocument struct {
-	Kind            string            `json:"kind" yaml:"kind"`
-	Version         int               `json:"version" yaml:"version"`
-	Stage           ExchangeStage     `json:"stage" yaml:"stage"`
-	RunnerID        string            `json:"runner_id,omitempty" yaml:"runner_id,omitempty"`
-	NodeID          string            `json:"node_id,omitempty" yaml:"node_id,omitempty"`
-	SkillName       string            `json:"skill_name,omitempty" yaml:"skill_name,omitempty"`
-	TaskDescription string            `json:"task_description,omitempty" yaml:"task_description,omitempty"`
-	CreatedAt       time.Time         `json:"created_at,omitempty" yaml:"created_at,omitempty"`
-	Handoffs        []ExchangeHandoff `json:"handoffs,omitempty" yaml:"handoffs,omitempty"`
+	Kind            string             `json:"kind" yaml:"kind"`
+	Version         int                `json:"version" yaml:"version"`
+	Stage           ExchangeStage      `json:"stage" yaml:"stage"`
+	RunnerID        string             `json:"runner_id,omitempty" yaml:"runner_id,omitempty"`
+	NodeID          string             `json:"node_id,omitempty" yaml:"node_id,omitempty"`
+	SkillName       string             `json:"skill_name,omitempty" yaml:"skill_name,omitempty"`
+	TaskDescription string             `json:"task_description,omitempty" yaml:"task_description,omitempty"`
+	CreatedAt       time.Time          `json:"created_at,omitempty" yaml:"created_at,omitempty"`
+	Handoffs        []ExchangeHandoff  `json:"handoffs,omitempty" yaml:"handoffs,omitempty"`
+	Resources       []ExchangeResource `json:"resources,omitempty" yaml:"resources,omitempty"`
 
 	Memo      string `json:"memo,omitempty" yaml:"-"`
 	Reasoning string `json:"reasoning,omitempty" yaml:"-"`
@@ -100,6 +112,7 @@ func (doc ExchangeDocument) Markdown() (string, error) {
 		TaskDescription: doc.TaskDescription,
 		CreatedAt:       doc.CreatedAt,
 		Handoffs:        doc.Handoffs,
+		Resources:       doc.Resources,
 	})
 	if err != nil {
 		return "", fmt.Errorf("runner: marshal exchange front matter: %w", err)
@@ -144,6 +157,7 @@ func ParseExchangeMarkdown(raw string) (*ExchangeDocument, error) {
 		TaskDescription: meta.TaskDescription,
 		CreatedAt:       meta.CreatedAt,
 		Handoffs:        append([]ExchangeHandoff(nil), meta.Handoffs...),
+		Resources:       append([]ExchangeResource(nil), meta.Resources...),
 		Memo:            sections["memo"],
 		Reasoning:       sections["reasoning"],
 		Handoff:         sections["handoff"],
@@ -172,15 +186,16 @@ func IsExchangeMarkdown(raw string) bool {
 }
 
 type exchangeFrontMatter struct {
-	Kind            string            `yaml:"kind"`
-	Version         int               `yaml:"version"`
-	Stage           ExchangeStage     `yaml:"stage"`
-	RunnerID        string            `yaml:"runner_id,omitempty"`
-	NodeID          string            `yaml:"node_id,omitempty"`
-	SkillName       string            `yaml:"skill_name,omitempty"`
-	TaskDescription string            `yaml:"task_description,omitempty"`
-	CreatedAt       time.Time         `yaml:"created_at,omitempty"`
-	Handoffs        []ExchangeHandoff `yaml:"handoffs,omitempty"`
+	Kind            string             `yaml:"kind"`
+	Version         int                `yaml:"version"`
+	Stage           ExchangeStage      `yaml:"stage"`
+	RunnerID        string             `yaml:"runner_id,omitempty"`
+	NodeID          string             `yaml:"node_id,omitempty"`
+	SkillName       string             `yaml:"skill_name,omitempty"`
+	TaskDescription string             `yaml:"task_description,omitempty"`
+	CreatedAt       time.Time          `yaml:"created_at,omitempty"`
+	Handoffs        []ExchangeHandoff  `yaml:"handoffs,omitempty"`
+	Resources       []ExchangeResource `yaml:"resources,omitempty"`
 }
 
 func withExchangeDefaults(doc ExchangeDocument, defaults ExchangeDocument) ExchangeDocument {
@@ -222,6 +237,9 @@ func withExchangeDefaults(doc ExchangeDocument, defaults ExchangeDocument) Excha
 	}
 	if len(doc.Handoffs) == 0 {
 		doc.Handoffs = append([]ExchangeHandoff(nil), defaults.Handoffs...)
+	}
+	if len(doc.Resources) == 0 {
+		doc.Resources = append([]ExchangeResource(nil), defaults.Resources...)
 	}
 	if doc.Memo == "" {
 		doc.Memo = defaults.Memo

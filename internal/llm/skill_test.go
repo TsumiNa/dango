@@ -376,6 +376,43 @@ func TestWithAccessibleDirsRejectsBoundSkill(t *testing.T) {
 	}
 }
 
+func TestWithAccessibleDirsAndBuiltinToolsPreservesCustomTools(t *testing.T) {
+	loaded, err := NewSkill(writeSkillDir(t, "---\nname: x\ndescription: d\n---\nbody\n"), nil, nil)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	cleanupSkillTemp(t, loaded)
+	custom := NewFuncTool("custom", "custom tool", map[string]any{"type": "object"}, nil)
+	withCustom, err := loaded.WithTools(custom)
+	if err != nil {
+		t.Fatalf("WithTools: %v", err)
+	}
+	extraDir := t.TempDir()
+	withDirs, err := withCustom.WithAccessibleDirsAndBuiltinTools(extraDir)
+	if err != nil {
+		t.Fatalf("WithAccessibleDirsAndBuiltinTools: %v", err)
+	}
+	realExtraDir, err := filepath.EvalSymlinks(extraDir)
+	if err != nil {
+		t.Fatalf("EvalSymlinks(extraDir): %v", err)
+	}
+	if got := withDirs.AccessibleDirs(); len(got) != 1 || got[0] != realExtraDir {
+		t.Fatalf("AccessibleDirs() = %v, want [%s]", got, realExtraDir)
+	}
+	seen := make(map[string]bool)
+	for _, tool := range withDirs.tools {
+		seen[tool.Name()] = true
+	}
+	for _, name := range []string{"custom", "bash", "read_file", "pwd"} {
+		if !seen[name] {
+			t.Fatalf("tool %q missing from rebuilt skill tools: %v", name, seen)
+		}
+	}
+	if got := loaded.AccessibleDirs(); len(got) != 0 {
+		t.Fatalf("source AccessibleDirs() = %v, want none", got)
+	}
+}
+
 func TestWithToolsCopyDoesNotShareAccessibleDirs(t *testing.T) {
 	loaded, err := NewSkill(writeSkillDir(t, "---\nname: x\ndescription: d\n---\nbody\n"), nil, nil)
 	if err != nil {

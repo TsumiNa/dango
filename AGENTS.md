@@ -10,6 +10,7 @@ Current instruction files:
 - `.github/instructions/database-workflow.instructions.md`
 - `.github/instructions/go-file-organization.instructions.md`
 - `.github/instructions/go-docs.instructions.md`
+- `.github/instructions/example-generation.instructions.md`
 - `.github/instructions/in-branch-api-compat.instructions.md`
 - `.github/instructions/minimal-implementation-and-tests.instructions.md`
 - `.github/instructions/repository-doc-boundaries.instructions.md`

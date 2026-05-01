@@ -660,6 +660,9 @@ func (r *Runner) runEngine(ctx context.Context) error {
 		for _, p := range n.Parents {
 			inputs[p.Id] = outputs[p.Id]
 		}
+		if err := r.prepareNodeExecutor(n.Id, n.Executor, exchangeResourceDirsFromOutputs(inputs)); err != nil {
+			return err
+		}
 
 		n.UpdatedAt = time.Now()
 		activeCount++

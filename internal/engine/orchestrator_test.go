@@ -5,6 +5,7 @@ import (
 	"errors"
 	"log/slog"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -267,6 +268,76 @@ func TestQueryRunner_ReturnsRunnerView(t *testing.T) {
 	}
 }
 
+func TestWaitRunner_ReturnsFinalView(t *testing.T) {
+	o := newOrchestrator(testLogger)
+	managedRunner := newManagedQueueTestRunner(t, "wait", func(ctx context.Context, parentOutputs map[string]any) (any, []*Node, error) {
+		return "done", nil, nil
+	})
+	o.mu.Lock()
+	o.runners[managedRunner.ID()] = managedRunner
+	o.mu.Unlock()
+	go o.watchRunnerDone(managedRunner)
+
+	if err := o.StartRunner(context.Background(), managedRunner.ID()); err != nil {
+		t.Fatalf("StartRunner: %v", err)
+	}
+	waitCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	view, err := o.WaitRunner(waitCtx, managedRunner.ID())
+	if err != nil {
+		t.Fatalf("WaitRunner: %v", err)
+	}
+	if view == nil {
+		t.Fatal("WaitRunner view = nil")
+	}
+	if view.Phase != PhaseSettled {
+		t.Fatalf("phase = %q, want settled", view.Phase)
+	}
+	if got := view.Snapshot.CompletedNodes["only"]; got != "done" {
+		t.Fatalf("completed output = %v, want done", got)
+	}
+}
+
+func TestWaitRunner_RejectsUnknownID(t *testing.T) {
+	o := newOrchestrator(testLogger)
+	if _, err := o.WaitRunner(context.Background(), "missing"); !errors.Is(err, ErrRunnerNotFound) {
+		t.Fatalf("WaitRunner err = %v, want ErrRunnerNotFound", err)
+	}
+}
+
+func TestWaitRunner_ReturnsViewWhenContextEndsFirst(t *testing.T) {
+	o := newOrchestrator(testLogger)
+	started := make(chan struct{})
+	release := make(chan struct{})
+	managedRunner := newManagedQueueTestRunner(t, "wait timeout", func(ctx context.Context, parentOutputs map[string]any) (any, []*Node, error) {
+		close(started)
+		<-release
+		return "done", nil, nil
+	})
+	o.mu.Lock()
+	o.runners[managedRunner.ID()] = managedRunner
+	o.mu.Unlock()
+	go o.watchRunnerDone(managedRunner)
+
+	if err := o.StartRunner(context.Background(), managedRunner.ID()); err != nil {
+		t.Fatalf("StartRunner: %v", err)
+	}
+	waitForClosed(t, started, "runner started")
+
+	waitCtx, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
+	defer cancel()
+	view, err := o.WaitRunner(waitCtx, managedRunner.ID())
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("WaitRunner err = %v, want context deadline exceeded", err)
+	}
+	if view == nil || view.RunnerID != managedRunner.ID() {
+		t.Fatalf("WaitRunner view = %+v, want current runner view", view)
+	}
+
+	close(release)
+	waitForRunnerDone(t, managedRunner, "runner done after timeout test")
+}
+
 func TestSubscribeRunner_RejectsUnknownID(t *testing.T) {
 	o := newOrchestrator(testLogger)
 	if _, _, err := o.SubscribeRunner("missing", 4); !errors.Is(err, ErrRunnerNotFound) {
@@ -336,6 +407,39 @@ func TestAddSkills_PreservesAccessibleDirs(t *testing.T) {
 	}
 	if got := loaded.AccessibleDirs(); len(got) != 0 {
 		t.Fatalf("source skill AccessibleDirs() = %v, want none", got)
+	}
+}
+
+func TestAddSkills_EquipsSkillForAutonomousGlueCode(t *testing.T) {
+	o := newOrchestrator(testLogger)
+	extraDir := t.TempDir()
+	loaded := loadTestSkillFromDir(t, writeTestSkill(t, "glue-skill", "Can adapt execution."))
+	mustAddSkills(t, o, AddSkillConfig{Skill: loaded, AccessibleDirs: []string{extraDir}, Client: &llm.Client{}})
+
+	stored := o.skills["glue-skill"]
+	bound, err := stored.Skill.Bind(stored.Client, stored.Config, nil)
+	if err != nil {
+		t.Fatalf("Bind: %v", err)
+	}
+	tools := make(map[string]bool)
+	for _, spec := range bound.Conversation().Tools() {
+		tools[spec.Name] = true
+	}
+	for _, name := range []string{"bash", "read_file", "write_file", "edit_file", "grep", "pwd"} {
+		if !tools[name] {
+			t.Fatalf("runtime tool %q missing from skill tools: %v", name, tools)
+		}
+	}
+	instructions := bound.Conversation().Instructions()
+	for _, want := range []string{
+		"Workspace access:",
+		"Temp playground:",
+		"Relative file paths and shell commands run here",
+		"User-added directories",
+	} {
+		if !strings.Contains(instructions, want) {
+			t.Fatalf("runtime instructions missing %q:\n%s", want, instructions)
+		}
 	}
 }
 

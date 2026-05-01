@@ -59,6 +59,9 @@ type Executor struct {
 	bindClient *llm.Client
 	bindConfig *llm.ConversationConfig
 	runtime    *llm.Skill
+	// accessibleDirs is the resource directory set most recently passed by the
+	// runner for this executor's runtime skill.
+	accessibleDirs []string
 
 	// Result holds the structured outcome of the most recent execution.
 	Result *ExecutionResult
@@ -188,7 +191,7 @@ func (e *Executor) Polish(ctx context.Context) (any, error) {
 			return nil, err
 		}
 	}
-	return e.polishExchange()
+	return e.polishExchange(ctx)
 }
 
 // Report satisfies the runner's report contract. The default implementation
@@ -203,14 +206,32 @@ func (e *Executor) Report(ctx context.Context, output any) (any, error) {
 }
 
 func (e *Executor) BindForRunner(sessID *string, sessStores ...llm.SessionStore) (string, error) {
+	return e.bindForRunner(sessID, nil, sessStores...)
+}
+
+func (e *Executor) BindForRunnerWithAccessibleDirs(sessID *string, accessibleDirs []string, sessStores ...llm.SessionStore) (string, error) {
+	return e.bindForRunner(sessID, accessibleDirs, sessStores...)
+}
+
+func (e *Executor) bindForRunner(sessID *string, accessibleDirs []string, sessStores ...llm.SessionStore) (string, error) {
 	if e.skill == nil {
 		return "", fmt.Errorf("orchestrate: executor requires a non-nil skill")
 	}
-	bound, err := e.skill.Bind(e.bindClient, e.bindConfig, sessID, sessStores...)
+	sk := e.skill
+	if len(accessibleDirs) > 0 {
+		dirs := append(e.skill.AccessibleDirs(), accessibleDirs...)
+		var err error
+		sk, err = e.skill.WithAccessibleDirsAndBuiltinTools(dirs...)
+		if err != nil {
+			return "", err
+		}
+	}
+	bound, err := sk.Bind(e.bindClient, e.bindConfig, sessID, sessStores...)
 	if err != nil {
 		return "", err
 	}
 	e.runtime = bound
+	e.accessibleDirs = append([]string(nil), accessibleDirs...)
 	if conv := bound.Conversation(); conv != nil {
 		return conv.SessionID(), nil
 	}

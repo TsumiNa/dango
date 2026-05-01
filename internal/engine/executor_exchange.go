@@ -13,16 +13,28 @@ import (
 
 const defaultExecutionEffort llm.ReasoningEffort = llm.ReasoningEffortMedium
 
-func (e *Executor) polishExchange() (string, error) {
-	doc := e.exchangeDocument(runnerpkg.ExchangeStagePolish, []runnerpkg.ExchangeHandoff{{
+func (e *Executor) polishExchange(ctx context.Context) (string, error) {
+	defaults := e.exchangeDocument(runnerpkg.ExchangeStagePolish, []runnerpkg.ExchangeHandoff{{
 		To:      runnerpkg.ExchangeRecipientOrchestrator,
 		Intent:  runnerpkg.ExchangeIntentReview,
 		Summary: "Review this executor's refined task plan before execution.",
 	}})
-	doc.Memo = fmt.Sprintf("Task description:\n\n%s\n\nPlanner version: %d", e.planner.TaskDescription, e.planner.Version)
-	doc.Reasoning = e.planner.Reason
-	doc.Handoff = e.planner.Solution
-	return doc.Markdown()
+	defaults.Memo = fmt.Sprintf("Task description:\n\n%s\n\nPlanner version: %d", e.planner.TaskDescription, e.planner.Version)
+	defaults.Reasoning = e.planner.Reason
+	defaults.Handoff = e.planner.Solution
+
+	runtime, ok, err := e.runnableRuntimeSkill()
+	if err != nil {
+		return "", err
+	}
+	if !ok {
+		return defaults.Markdown()
+	}
+	raw, err := runtime.Run(normalizeContext(ctx), e.polishPrompt(), defaultExecutionEffort)
+	if err != nil {
+		return "", err
+	}
+	return normalizeSkillExchange(raw, defaults, runtime)
 }
 
 func (e *Executor) executeExchange(ctx context.Context, parentOutputs map[string]any) (string, error) {
@@ -109,6 +121,32 @@ func (e *Executor) executionPrompt(parentOutputs map[string]any) string {
 	b.WriteString(e.planner.TaskDescription)
 	b.WriteString("\n\nParent exchange documents:\n")
 	b.WriteString(formatParentOutputs(parentOutputs))
+	if len(e.accessibleDirs) > 0 {
+		b.WriteString("\n\nAccessible resource directories from parent exchange front matter:\n")
+		for _, dir := range e.accessibleDirs {
+			b.WriteString("- ")
+			b.WriteString(dir)
+			b.WriteByte('\n')
+		}
+	}
+	return b.String()
+}
+
+func (e *Executor) polishPrompt() string {
+	var b strings.Builder
+	b.WriteString("Polish the assigned task plan before execution.\n\n")
+	b.WriteString("Return exactly one Dango exchange markdown document with YAML front matter. ")
+	b.WriteString("Use the Memo section for readiness notes, Reasoning for a concise feasibility summary, ")
+	b.WriteString("and Handoff for the revised execution approach intended for orchestrator review. ")
+	b.WriteString("Do not run execution tools or create final artifacts during polish.\n\n")
+	b.WriteString("Task:\n")
+	b.WriteString(e.planner.TaskDescription)
+	b.WriteString("\n\nCurrent planner draft:\n")
+	b.WriteString("Reason:\n")
+	b.WriteString(e.planner.Reason)
+	b.WriteString("\n\nSolution:\n")
+	b.WriteString(e.planner.Solution)
+	b.WriteString(fmt.Sprintf("\n\nPlanner version: %d", e.planner.Version))
 	return b.String()
 }
 

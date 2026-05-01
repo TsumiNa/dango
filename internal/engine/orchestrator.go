@@ -205,11 +205,12 @@ func (o *Orchestrator) configuredOrchestratorSkill(sk *llm.Skill) (*llm.Skill, e
 // AddSkillConfig describes one lightweight skill plus the runtime wiring the
 // runner will later pass to [llm.Skill.Bind].
 //
-// Skill must be a lightweight instance created by [llm.NewSkill]. AddSkills augments
-// it with the built-in tools before placing it in the orchestrator registry.
-// AccessibleDirs is applied through [llm.Skill.WithAccessibleDirs] before the
-// skill is stored. Client and Config are forwarded unchanged to the
-// runner-owned bind step.
+// Skill must be a lightweight instance created by [llm.NewSkill]. AddSkills
+// augments it with the built-in command and filesystem tools before placing it
+// in the orchestrator registry. AccessibleDirs is applied while those built-in
+// tools are rebuilt, so runtime skills can inspect upstream resources, write
+// glue code in their playground, and run commands through the runner-owned
+// bind step. Client and Config are forwarded unchanged to that bind step.
 type AddSkillConfig struct {
 	Skill          *llm.Skill
 	AccessibleDirs []string
@@ -273,11 +274,7 @@ func (o *Orchestrator) SetOrchestratorSkillDir(dir string) error {
 	if err != nil {
 		return err
 	}
-	builtinTools, err := sk.BuiltinTools()
-	if err != nil {
-		return err
-	}
-	sk, err = sk.WithTools(builtinTools...)
+	sk, err = sk.WithAccessibleDirsAndBuiltinTools()
 	if err != nil {
 		return err
 	}
@@ -338,15 +335,8 @@ func (o *Orchestrator) AddSkills(cfgs ...AddSkillConfig) error {
 		if cfg.Skill.Conversation() != nil {
 			return fmt.Errorf("orchestrate: add skill config %d requires a lightweight unbound skill", i)
 		}
-		builtinTools, err := cfg.Skill.BuiltinTools()
+		sk, err := cfg.Skill.WithAccessibleDirsAndBuiltinTools(cfg.AccessibleDirs...)
 		if err != nil {
-			return err
-		}
-		sk, err := cfg.Skill.WithTools(builtinTools...)
-		if err != nil {
-			return err
-		}
-		if err := sk.WithAccessibleDirs(cfg.AccessibleDirs...); err != nil {
 			return err
 		}
 		if sk.Name == "" {
@@ -469,6 +459,21 @@ func (o *Orchestrator) QueryRunner(id string) (*runnerpkg.RunnerView, error) {
 		return nil, err
 	}
 	return runner.View(), nil
+}
+
+// WaitRunner blocks until the runner identified by id settles or ctx is
+// canceled, then returns the latest query view.
+//
+// The returned view reflects the runner state at the time WaitRunner returns,
+// even when ctx cancellation caused the wait to end before the runner settled.
+func (o *Orchestrator) WaitRunner(ctx context.Context, id string) (*runnerpkg.RunnerView, error) {
+	ctx = o.operationContext(ctx)
+	runner, err := o.Runner(id)
+	if err != nil {
+		return nil, err
+	}
+	waitErr := runner.Wait(ctx)
+	return runner.View(), waitErr
 }
 
 // SubscribeRunner returns a stream of runner updates plus an unsubscribe
