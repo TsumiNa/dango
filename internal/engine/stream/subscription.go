@@ -34,8 +34,8 @@ type subscribeSettings struct {
 	overflowPolicy OverflowPolicy
 }
 
-// WithReplayFrom replays buffered events whose sequence number is at least
-// sequence before live delivery starts.
+// WithReplayFrom replays buffered or stored events whose sequence number is at
+// least sequence before live delivery starts.
 func WithReplayFrom(sequence uint64) SubscribeOption {
 	return func(settings *subscribeSettings) {
 		settings.replayFrom = sequence
@@ -43,8 +43,8 @@ func WithReplayFrom(sequence uint64) SubscribeOption {
 	}
 }
 
-// WithReplayLast replays the last n buffered events before live delivery
-// starts. The subscription filter still applies to replayed events.
+// WithReplayLast replays the last n buffered or stored events before live
+// delivery starts. The subscription filter still applies to replayed events.
 func WithReplayLast(n int) SubscribeOption {
 	return func(settings *subscribeSettings) {
 		if n < 0 {

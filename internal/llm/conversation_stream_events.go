@@ -29,6 +29,49 @@ func (c *Conversation) emitStreamEvent(ctx context.Context, eventType string, st
 	})
 }
 
+func (c *Conversation) emitResponseCompleted(ctx context.Context, response *Response) {
+	if response == nil {
+		return
+	}
+	delta := map[string]any{
+		"has_text":        response.Text != "",
+		"tool_call_count": len(response.ToolCalls),
+		"usage":           tokenUsageDelta(response.Usage),
+	}
+	if response.Raw != nil {
+		if response.Raw.ID != "" {
+			delta["response_id"] = response.Raw.ID
+		}
+		if response.Raw.Model != "" {
+			delta["model"] = response.Raw.Model
+		}
+	}
+	c.emitStreamEvent(ctx, streampkg.EventStatusCompleted, streampkg.StatusCompleted, delta, map[string]any{"stage": "llm_response"})
+}
+
+func (c *Conversation) emitLLMFailure(ctx context.Context, err error, stage string) {
+	if err == nil {
+		return
+	}
+	metadata := map[string]any(nil)
+	if stage != "" {
+		metadata = map[string]any{"stage": "llm_" + stage}
+	}
+	c.emitStreamEvent(ctx, streampkg.EventStatusFailed, streampkg.StatusFailed, map[string]any{
+		"error": compactErrorText(err.Error()),
+	}, metadata)
+}
+
+func tokenUsageDelta(usage TokenUsage) map[string]any {
+	return map[string]any{
+		"input_tokens":     usage.Input,
+		"cached_tokens":    usage.Cached,
+		"output_tokens":    usage.Output,
+		"reasoning_tokens": usage.Reasoning,
+		"total_tokens":     usage.Total,
+	}
+}
+
 func (c *Conversation) emitTextDelta(ctx context.Context, eventType string, status string, text string) {
 	if text == "" {
 		return

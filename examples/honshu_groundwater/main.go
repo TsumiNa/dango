@@ -104,7 +104,7 @@ func runHonshuGroundwaterExample(ctx context.Context, cfg exampleConfig) (*runne
 	if err := os.MkdirAll(artifactsDir, 0o755); err != nil {
 		return nil, err
 	}
-	streamLog, streamLogPath, err := createArtifactLog(artifactsDir, "stream_events.ndjson")
+	streamLog, streamLogPath, err := createArtifactLog(artifactsDir, "stream_events.jsonl")
 	if err != nil {
 		return nil, err
 	}

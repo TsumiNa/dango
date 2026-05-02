@@ -235,7 +235,7 @@ func TestRunHonshuGroundwaterExampleExecutesNeededSkills(t *testing.T) {
 	if strings.Contains(stream.String(), "sample after two days of rain") {
 		t.Fatalf("stream leaked raw snapshot payload: %s", stream.String())
 	}
-	events := readStreamEvents(t, filepath.Join(artifactsDir, "stream_events.ndjson"))
+	events := readStreamEvents(t, filepath.Join(artifactsDir, "stream_events.jsonl"))
 	if !hasPlannerOutputEvent(events) {
 		t.Fatalf("stream event log missing completed orchestrator planner output")
 	}

@@ -149,9 +149,12 @@ func (s *Stream) Close() {
 	}
 }
 
-// Subscribe attaches a consumer to the stream. By default, live events that
-// would block on a full subscriber channel are dropped for that subscriber;
-// use [WithOverflowPolicy] to request an immediate overflow error instead.
+// Subscribe attaches a consumer to the stream. Replay comes from the in-memory
+// buffer when possible and falls back to the configured store when the
+// requested range is older than the current buffer window. By default, live
+// events that would block on a full subscriber channel are dropped for that
+// subscriber; use [WithOverflowPolicy] to request an immediate overflow error
+// instead.
 func (s *Stream) Subscribe(filter Filter, opts ...SubscribeOption) (*Subscription, error) {
 	settings := subscribeSettings{
 		buffer:         defaultSubscriberBuffer,
@@ -173,7 +176,11 @@ func (s *Stream) Subscribe(filter Filter, opts ...SubscribeOption) (*Subscriptio
 		return nil, ErrClosed
 	}
 	id := s.nextSubID + 1
-	replay := s.replayLocked(filter, settings)
+	replay, err := s.replayLocked(filter, settings)
+	if err != nil {
+		s.mu.Unlock()
+		return nil, err
+	}
 	buffer := settings.buffer
 	if buffer < len(replay) {
 		buffer = len(replay)
@@ -199,28 +206,65 @@ func (s *Stream) Subscribe(filter Filter, opts ...SubscribeOption) (*Subscriptio
 	return sub, nil
 }
 
-func (s *Stream) replayLocked(filter Filter, settings subscribeSettings) []Event {
-	if settings.noReplay || len(s.buffer) == 0 {
-		return nil
+func (s *Stream) replayLocked(filter Filter, settings subscribeSettings) ([]Event, error) {
+	from := s.replayStartLocked(settings)
+	if from == 0 {
+		return nil, nil
 	}
-	from := settings.replayFrom
-	if settings.replayLast > 0 {
-		start := len(s.buffer) - settings.replayLast
-		if start < 0 {
-			start = 0
-		}
-		if seq := s.buffer[start].SequenceNumber; seq > from {
-			from = seq
-		}
+	oldestBuffered := s.oldestBufferedSequenceLocked()
+	if s.store != nil && (oldestBuffered == 0 || from < oldestBuffered) {
+		return s.store.Load(context.Background(), s.scope, from, filter)
 	}
 	var replay []Event
 	for _, event := range s.buffer {
-		if from > 0 && event.SequenceNumber < from {
+		if event.SequenceNumber < from {
 			continue
 		}
 		if filter.Match(event) {
 			replay = append(replay, event)
 		}
 	}
-	return replay
+	return replay, nil
+}
+
+func (s *Stream) replayStartLocked(settings subscribeSettings) uint64 {
+	if settings.noReplay {
+		return 0
+	}
+	if settings.replayFrom == 0 && settings.replayLast == 0 {
+		return s.defaultReplayStartLocked()
+	}
+	from := settings.replayFrom
+	if settings.replayLast > 0 && s.nextSeq > 0 {
+		last := uint64(settings.replayLast)
+		lastFrom := uint64(1)
+		if s.nextSeq >= last {
+			lastFrom = s.nextSeq - last + 1
+		}
+		if lastFrom > from {
+			from = lastFrom
+		}
+	}
+	return from
+}
+
+func (s *Stream) defaultReplayStartLocked() uint64 {
+	if oldest := s.oldestBufferedSequenceLocked(); oldest > 0 {
+		return oldest
+	}
+	if s.bufferLimit == 0 || s.nextSeq == 0 {
+		return 0
+	}
+	limit := uint64(s.bufferLimit)
+	if s.nextSeq > limit {
+		return s.nextSeq - limit + 1
+	}
+	return 1
+}
+
+func (s *Stream) oldestBufferedSequenceLocked() uint64 {
+	if len(s.buffer) == 0 {
+		return 0
+	}
+	return s.buffer[0].SequenceNumber
 }

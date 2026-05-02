@@ -49,9 +49,8 @@ const (
 	EventExecutorReportCompleted  = "executor.report.completed"
 	EventExecutorReportFailed     = "executor.report.failed"
 
-	EventSkillMemoDelta      = "skill.memo.delta"
-	EventArtifactCreated     = "artifact.created"
-	EventPersistenceAppended = "persistence.appended"
+	EventSkillMemoDelta  = "skill.memo.delta"
+	EventArtifactCreated = "artifact.created"
 )
 
 var (

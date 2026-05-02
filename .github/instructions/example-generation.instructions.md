@@ -46,7 +46,7 @@ Keep `main.go` close to a real client of the system:
   snapshots, full user payloads, node task descriptions, or completed handoff
   bodies to stdout.
 - Persist full debug streams, raw runner updates, and large snapshots under the
-  example's `artifacts/` directory as machine-readable files such as NDJSON.
+  example's `artifacts/` directory as machine-readable files such as JSONL.
 - Emit progress logs to stderr around long synchronous steps such as LLM client
   loading, planning request submission, runner creation, and runner completion.
   The user should be able to tell whether a failure happened before a runner

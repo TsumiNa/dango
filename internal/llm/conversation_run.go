@@ -41,6 +41,7 @@ func (c *Conversation) SetMaxSteps(n int) {
 // back to the level configured on the bound [Client].
 func (c *Conversation) Run(ctx context.Context, userInput string, effort ReasoningEffort) (string, error) {
 	if c.client == nil {
+		c.emitLLMFailure(ctx, ErrNoClient, "run")
 		return "", ErrNoClient
 	}
 	budget := c.maxSteps
@@ -56,7 +57,9 @@ func (c *Conversation) Run(ctx context.Context, userInput string, effort Reasoni
 		}
 		if len(resp.ToolCalls) == 0 {
 			if lastErr := c.LastError(); lastErr != nil {
-				return resp.Text, fmt.Errorf("llm: session persistence failed: %w", lastErr)
+				runErr := fmt.Errorf("llm: session persistence failed: %w", lastErr)
+				c.emitLLMFailure(ctx, runErr, "run")
+				return resp.Text, runErr
 			}
 			return resp.Text, nil
 		}
@@ -69,7 +72,9 @@ func (c *Conversation) Run(ctx context.Context, userInput string, effort Reasoni
 			// can recover on the next turn.
 		}
 	}
-	return "", fmt.Errorf("llm: run exceeded max steps (%d) without final response", budget)
+	err := fmt.Errorf("llm: run exceeded max steps (%d) without final response", budget)
+	c.emitLLMFailure(ctx, err, "run")
+	return "", err
 }
 
 // dispatch executes a single function call against the registered

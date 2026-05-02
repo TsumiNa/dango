@@ -258,12 +258,28 @@ func TestConversationRun_MaxStepsExceeded(t *testing.T) {
 	loop := NewFuncTool("loop", "", map[string]any{"type": "object"},
 		func(_ context.Context, _ string) (string, error) { return "again", nil },
 	)
-	conv := mustNewConversation(t, testClient(srv.URL), "sys", []Tool{loop})
+	eventStream := streampkg.New(streampkg.Scope{RequestID: "req_loop"})
+	sub, err := eventStream.Subscribe(streampkg.Filter{EventTypes: []string{streampkg.EventStatusFailed}}, streampkg.WithSubscriberBuffer(4))
+	if err != nil {
+		t.Fatalf("Subscribe: %v", err)
+	}
+	conv := mustNewConversation(t, testClient(srv.URL), "sys", []Tool{loop}, &ConversationConfig{
+		Stream:       eventStream,
+		StreamSource: streampkg.Source{Layer: "skill", ID: "loop_skill"},
+		StreamScope:  streampkg.Scope{NodeID: "node_loop"},
+	})
 	conv.SetMaxSteps(2)
 	if _, err := conv.Run(t.Context(), "go", ""); err == nil {
 		t.Fatal("expected max-steps error")
 	} else if !strings.Contains(err.Error(), "exceeded max steps") {
 		t.Errorf("error = %v, want max-steps message", err)
+	}
+	eventStream.Close()
+	if !hasStreamEvent(collectStreamEvents(t, sub), streampkg.EventStatusFailed, "skill", "node_loop", func(delta map[string]any) bool {
+		errorText, _ := delta["error"].(string)
+		return strings.Contains(errorText, "exceeded max steps")
+	}) {
+		t.Fatalf("missing max-steps failure event")
 	}
 }
 

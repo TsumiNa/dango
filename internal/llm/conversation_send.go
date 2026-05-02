@@ -51,11 +51,13 @@ var ErrNoClient = fmt.Errorf("llm: conversation has no client")
 // request body and leaves the client's default untouched.
 func (c *Conversation) Send(ctx context.Context, effort ReasoningEffort) (*Response, error) {
 	if c.client == nil {
+		c.emitLLMFailure(ctx, ErrNoClient, "send")
 		return nil, ErrNoClient
 	}
 	params := c.buildRequestParams(effort)
 	resp, err := c.client.raw.Responses.New(ctx, params)
 	if err != nil {
+		c.emitLLMFailure(ctx, err, "send")
 		return nil, err
 	}
 	return c.applyResponseOutput(ctx, resp, true), nil
@@ -146,6 +148,7 @@ func (c *Conversation) applyResponseOutput(ctx context.Context, resp *responses.
 	// recordUsage has already fallen back to Trim so the next request
 	// still fits in context.
 	_ = c.recordUsage(ctx, out.Usage)
+	c.emitResponseCompleted(ctx, out)
 	return out
 }
 

@@ -643,6 +643,7 @@ func (r *Runner) runEngine(ctx context.Context) error {
 			if err := emitEvent(RunnerEvent{Type: EventNodeCompleted, NodeID: res.nodeID, Data: output}); err != nil {
 				return finish(RunnerStatusFailed, err)
 			}
+			r.emitExchangeDocumentEvents(ctx, n, output)
 
 			for _, child := range children[res.nodeID] {
 				pendingParents[child.Id]--

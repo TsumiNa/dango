@@ -422,6 +422,8 @@ func (r *Runner) fanOutPolish(ctx context.Context, nodes map[string]*Node) (map[
 			r.emitExecutorStreamEvent(ctx, streampkg.EventExecutorPolishCompleted, streampkg.StatusCompleted, id, node, map[string]any{
 				"stage": "polish",
 			})
+			frag = r.annotateExchangeOutput(node, frag)
+			r.emitExchangeDocumentEvents(ctx, node, frag)
 			mu.Lock()
 			defer mu.Unlock()
 			fragments[id] = frag
@@ -474,6 +476,8 @@ func (r *Runner) fanOutReport(ctx context.Context, nodes map[string]*Node, outpu
 			r.emitExecutorStreamEvent(ctx, streampkg.EventExecutorReportCompleted, streampkg.StatusCompleted, id, node, map[string]any{
 				"stage": "report",
 			})
+			summary = r.annotateExchangeOutput(node, summary)
+			r.emitExchangeDocumentEvents(ctx, node, summary)
 			mu.Lock()
 			defer mu.Unlock()
 			summaries[id] = summary

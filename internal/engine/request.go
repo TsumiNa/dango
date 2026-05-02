@@ -2,6 +2,7 @@ package engine
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -10,6 +11,65 @@ import (
 	streampkg "github.com/tsumina/dango/internal/engine/stream"
 	"github.com/tsumina/dango/internal/llm"
 )
+
+// RequestRejectedError reports a planner rejection for a request that could
+// not be converted into a runner.
+type RequestRejectedError struct {
+	Reason *RejectReason
+}
+
+func (e *RequestRejectedError) Error() string {
+	if e == nil || e.Reason == nil {
+		return "orchestrate: request rejected"
+	}
+	if e.Reason.Summary != "" {
+		return "orchestrate: request rejected: " + e.Reason.Summary
+	}
+	return "orchestrate: request rejected"
+}
+
+// RequestPriority orders queued StartRequest submissions.
+//
+// Valid priorities are the integers 0 through 4 inclusive. The zero value is
+// the default priority, and larger values run first when the Orchestrator is
+// throttling concurrent runner execution.
+type RequestPriority int
+
+const (
+	RequestPriorityDefault RequestPriority = 0
+	RequestPriorityHighest RequestPriority = 4
+)
+
+func (p RequestPriority) valid() bool {
+	return p >= RequestPriorityDefault && p <= RequestPriorityHighest
+}
+
+// Request is the external task description the Orchestrator receives from the
+// caller. It contains only caller-provided input; observation state such as the
+// request stream is returned in [StartRequestResponse].
+type Request struct {
+	Input        string          `json:"input" yaml:"input"`
+	Priority     RequestPriority `json:"priority,omitempty" yaml:"priority,omitempty"`
+	ArtifactsDir string          `json:"artifacts_dir,omitempty" yaml:"artifacts_dir,omitempty"`
+}
+
+// StartRequestResponse is returned by [Orchestrator.StartRequest].
+//
+// Stream is the request-scoped event stream created for this orchestration
+// attempt. RunnerID is populated once planning succeeds and a runner is
+// materialized; it is empty when the request is rejected before runner
+// creation.
+type StartRequestResponse struct {
+	Stream   *streampkg.Stream
+	RunnerID string
+}
+
+// RejectReason explains why a request cannot currently be turned into a plan.
+type RejectReason struct {
+	Summary       string   `json:"summary" yaml:"summary"`
+	Analysis      string   `json:"analysis" yaml:"analysis"`
+	MissingSkills []string `json:"missing_skills,omitempty" yaml:"missing_skills,omitempty"`
+}
 
 // StartRequest is the outer-facing request entrypoint.
 //
@@ -104,6 +164,28 @@ func (o *Orchestrator) StartRequest(ctx context.Context, req Request) (*StartReq
 	}
 	resp.RunnerID = runnerID
 	return resp, nil
+}
+
+func streamSourceOrchestrator() streampkg.Source {
+	return streampkg.Source{Layer: "orchestrator", ID: "orchestrator"}
+}
+
+func emitEngineStreamEvent(ctx context.Context, eventStream *streampkg.Stream, source streampkg.Source, eventType string, status string, delta any, scope streampkg.Scope, metadata map[string]any) {
+	if eventStream == nil {
+		return
+	}
+	raw, err := json.Marshal(delta)
+	if err != nil {
+		raw, _ = json.Marshal(fmt.Sprint(delta))
+	}
+	_ = eventStream.Emit(ctx, streampkg.Event{
+		EventType: eventType,
+		From:      source,
+		Status:    status,
+		Delta:     json.RawMessage(raw),
+		Scope:     scope,
+		Metadata:  metadata,
+	})
 }
 
 func newRunnerFromPlan(ctx context.Context, logger *slog.Logger, store runnerpkg.RunnerStore, req Request, eventStream *streampkg.Stream, plan *CoarsePlan, skills map[string]AddSkillConfig, plannerSkill *llm.Skill, skillSummaries []runnerpkg.SkillSummary) (*runnerpkg.Runner, error) {
