@@ -385,9 +385,12 @@ Initial audit list (non-exhaustive — extend as new instances are found):
   signal mid-task progress to the runner or executor, they must publish a
   stream event rather than mutating shared state or calling back through a
   caller-supplied channel.
-- Orchestrator planning callbacks. Any remaining
-  `StartRequestWithProgress`-style callback path should be retired in favor
-  of an ordinary stream subscription scoped to the request.
+- Orchestrator planning callbacks ✓ retired. `StartRequestWithProgress`,
+  `OrchestratorProgressFunc`, and `OrchestratorProgressEvent` were removed.
+  Provider-side streaming during planning is now opted into by setting
+  `Request.StreamPlanning = true`; live reasoning and text deltas are emitted
+  to `Request.Stream` as `llm.reasoning.delta` and `llm.output.delta` events,
+  and the only way to observe them is to subscribe to the stream.
 
 When migrating, preserve backward semantics by:
 
@@ -530,18 +533,23 @@ Target:
 
 Current state:
 
-- Request planning has a special `StartRequestWithProgress` callback.
-- `StartRequest` creates or accepts a request stream, but that stream no
-  longer selects the provider transport. Non-streaming LLM responses are
-  normalized into engine stream events; provider streaming is used only by the
-  explicit progress path for now.
+- `StartRequest` is the only request entrypoint. It creates or accepts a
+  request-scoped stream and emits planning status, text, and (when opted in)
+  reasoning deltas as compact JSON events.
+- `Request.StreamPlanning bool` opts into provider-side streaming during
+  planning. When true, the planner uses `Conversation.Stream` and emits
+  `llm.reasoning.delta` / `llm.output.delta` events. When false (default),
+  the planner uses non-streaming `Skill.Run` and emits a single
+  `llm.output.delta` plus `status.completed` once planning finishes.
+- Runner creation, runner lifecycle, executor phases, skill events, and
+  conversation deltas all flow into the same request stream. CLI examples
+  subscribe once and render selected events.
 
 Target:
 
-- Orchestrator creates or accepts a request-scoped stream.
-- Planning, runner creation, runner lifecycle, executor phases, skill events,
-  and conversation deltas all flow into that stream.
-- CLI examples subscribe once and render selected events.
+- Done. There is no parallel callback or progress notification for
+  orchestrator-owned planning; subscribing to `Request.Stream` is the only
+  observation path.
 
 ## Migration Plan
 
@@ -625,8 +633,10 @@ Concrete migration units (each a self-contained PR-sized step):
 4. Audit `internal/llm` Conversation, Skill, and tool-dispatcher code for any
    remaining callback fields, signal channels, or sync.Cond patterns and
    convert each to producer-emit / subscriber-consume on the active stream.
-5. Retire `StartRequestWithProgress` in favor of a request-scoped stream
-   subscription created and consumed by the caller.
+5. ✓ Retire `StartRequestWithProgress` in favor of a request-scoped stream
+   subscription created and consumed by the caller. Replaced with a
+   `Request.StreamPlanning bool` opt-in for provider-side streaming during
+   planning; deltas emit only to `Request.Stream`.
 
 Acceptance signal for Phase 7:
 

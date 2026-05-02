@@ -17,18 +17,14 @@ import (
 // subscribes to its lifecycle updates, and then either starts it immediately
 // or queues it when the configured runner limit is full. StartRequest is
 // non-blocking and returns the runner ID once the runner has been accepted
-// into orchestration.
+// into orchestration. To observe planning progress, set [Request.Stream] and
+// subscribe before calling; set [Request.StreamPlanning] to opt into
+// provider-side streaming so reasoning and text deltas appear during planning.
 func (o *Orchestrator) StartRequest(ctx context.Context, req *Request) (string, error) {
-	return o.startRequest(ctx, req, nil)
+	return o.startRequest(ctx, req)
 }
 
-// StartRequestWithProgress is like [Orchestrator.StartRequest], but streams
-// orchestrator-owned planning progress through progress before a runner exists.
-func (o *Orchestrator) StartRequestWithProgress(ctx context.Context, req *Request, progress OrchestratorProgressFunc) (string, error) {
-	return o.startRequest(ctx, req, progress)
-}
-
-func (o *Orchestrator) startRequest(ctx context.Context, req *Request, progress OrchestratorProgressFunc) (string, error) {
+func (o *Orchestrator) startRequest(ctx context.Context, req *Request) (string, error) {
 	ctx = o.operationContext(ctx)
 	if req == nil {
 		return "", fmt.Errorf("orchestrate: nil request")
@@ -67,7 +63,7 @@ func (o *Orchestrator) startRequest(ctx context.Context, req *Request, progress 
 	)
 
 	skillSummaries := collectSkillSummaries(cloneSkillMap(skillConfigs))
-	plan, reject, err := planWithOrchestrator(ctx, req, skillSummaries, runtimeSkill, req.Stream, progress)
+	plan, reject, err := planWithOrchestrator(ctx, req, skillSummaries, runtimeSkill, req.Stream)
 	if err != nil {
 		emitEngineStreamEvent(ctx, req.Stream,
 			streamSourceOrchestrator(),

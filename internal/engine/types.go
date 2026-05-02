@@ -77,11 +77,19 @@ func (p RequestPriority) valid() bool {
 
 // Request is the external task description the Orchestrator receives from the
 // caller.
+//
+// When StreamPlanning is true, orchestrator-owned planning calls the LLM
+// provider's streaming API and emits reasoning/output deltas to Stream as
+// they arrive. When false (the default), planning uses the non-streaming
+// skill run and emits a single completion event. Callers that need live
+// planning progress should set StreamPlanning and subscribe to Stream
+// rather than relying on a callback.
 type Request struct {
-	Input        string            `json:"input" yaml:"input"`
-	Priority     RequestPriority   `json:"priority,omitempty" yaml:"priority,omitempty"`
-	ArtifactsDir string            `json:"artifacts_dir,omitempty" yaml:"artifacts_dir,omitempty"`
-	Stream       *streampkg.Stream `json:"-" yaml:"-"`
+	Input          string            `json:"input" yaml:"input"`
+	Priority       RequestPriority   `json:"priority,omitempty" yaml:"priority,omitempty"`
+	ArtifactsDir   string            `json:"artifacts_dir,omitempty" yaml:"artifacts_dir,omitempty"`
+	Stream         *streampkg.Stream `json:"-" yaml:"-"`
+	StreamPlanning bool              `json:"stream_planning,omitempty" yaml:"stream_planning,omitempty"`
 }
 
 // RejectReason explains why a request cannot currently be turned into a plan.

@@ -118,7 +118,7 @@ func TestStartRequest_BuildsRunnerFromPlanAndReturnsID(t *testing.T) {
 	}
 }
 
-func TestStartRequestWithProgress_StreamsPlannerDeltas(t *testing.T) {
+func TestStartRequest_StreamPlanningEmitsLLMDeltas(t *testing.T) {
 	clearLLMEnv(t)
 	o := newOrchestrator(testLogger)
 	mustAddSkills(t, o, newTestSkillConfig(t, "single", "Single-step runner.", nil))
@@ -134,39 +134,70 @@ func TestStartRequestWithProgress_StreamsPlannerDeltas(t *testing.T) {
 		t.Fatalf("SetOrchestratorSkill(test planner): %v", err)
 	}
 
-	var events []OrchestratorProgressEvent
-	runnerID, err := o.StartRequestWithProgress(context.Background(), &Request{Input: "run a single node"}, func(event OrchestratorProgressEvent) {
-		events = append(events, event)
+	eventStream := streampkg.New(streampkg.Scope{RequestID: "req_stream_planning"})
+	sub, err := eventStream.Subscribe(streampkg.Filter{
+		EventTypes: []string{
+			streampkg.EventLLMReasoningDelta,
+			streampkg.EventLLMOutputDelta,
+			streampkg.EventStatusCompleted,
+		},
+	}, streampkg.WithSubscriberBuffer(64))
+	if err != nil {
+		t.Fatalf("Subscribe: %v", err)
+	}
+	defer sub.Cancel()
+
+	runnerID, err := o.StartRequest(context.Background(), &Request{
+		Input:          "run a single node",
+		Stream:         eventStream,
+		StreamPlanning: true,
 	})
 	if err != nil {
-		t.Fatalf("StartRequestWithProgress: %v", err)
+		t.Fatalf("StartRequest: %v", err)
 	}
 	if runnerID == "" {
 		t.Fatal("runnerID is empty")
 	}
 
-	var sawReasoning bool
-	var sawPlanText bool
-	var sawCompletedStatus bool
-	for _, event := range events {
-		if event.Type == OrchestratorProgressReasoning && event.Delta == "planning stream is active" {
-			sawReasoning = true
+	deadline := time.Now().Add(2 * time.Second)
+	var sawReasoning, sawPlanText, sawCompletedStatus bool
+	for time.Now().Before(deadline) && !(sawReasoning && sawPlanText && sawCompletedStatus) {
+		readCtx, cancel := context.WithTimeout(context.Background(), time.Until(deadline))
+		event, ok, err := sub.Next(readCtx)
+		cancel()
+		if err != nil || !ok {
+			break
 		}
-		if event.Type == OrchestratorProgressText && event.Delta == planOutput {
-			sawPlanText = true
+		if event.From.Layer != "orchestrator" {
+			continue
 		}
-		if event.Type == OrchestratorProgressStatus && event.Message == "orchestrator planning stream completed" {
-			sawCompletedStatus = true
+		var delta string
+		if jsonErr := json.Unmarshal(event.Delta, &delta); jsonErr != nil {
+			continue
+		}
+		switch event.EventType {
+		case streampkg.EventLLMReasoningDelta:
+			if delta == "planning stream is active" {
+				sawReasoning = true
+			}
+		case streampkg.EventLLMOutputDelta:
+			if delta == planOutput {
+				sawPlanText = true
+			}
+		case streampkg.EventStatusCompleted:
+			if delta == "orchestrator planning stream completed" {
+				sawCompletedStatus = true
+			}
 		}
 	}
 	if !sawReasoning {
-		t.Fatalf("missing reasoning progress event: %+v", events)
+		t.Fatal("missing reasoning delta stream event from orchestrator planning")
 	}
 	if !sawPlanText {
-		t.Fatalf("missing planner text progress event: %+v", events)
+		t.Fatal("missing planner text delta stream event from orchestrator planning")
 	}
 	if !sawCompletedStatus {
-		t.Fatalf("missing completed status event: %+v", events)
+		t.Fatal("missing planning-completed status stream event from orchestrator planning")
 	}
 
 	managedRunner, err := o.Runner(runnerID)
