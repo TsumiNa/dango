@@ -41,13 +41,36 @@ func planWithOrchestrator(ctx context.Context, req *Request, skills []runnerpkg.
 	if err != nil {
 		return nil, nil, fmt.Errorf("orchestrate: marshal planner input: %w", err)
 	}
-	if eventStream != nil || progress != nil {
+	if progress != nil {
 		return planWithOrchestratorStream(ctx, prompt, runtimeSkill, eventStream, progress)
 	}
-	raw, err := runtimeSkill.Run(normalizeContext(ctx), prompt, defaultPlanningEffort)
+	return planWithOrchestratorRun(ctx, prompt, runtimeSkill, eventStream)
+}
+
+func planWithOrchestratorRun(ctx context.Context, prompt string, runtimeSkill *llm.Skill, eventStream *streampkg.Stream) (*CoarsePlan, *RejectReason, error) {
+	ctx = normalizeContext(ctx)
+	raw, err := runtimeSkill.Run(ctx, prompt, defaultPlanningEffort)
 	if err != nil {
 		return nil, nil, err
 	}
+	if raw != "" {
+		emitEngineStreamEvent(ctx, eventStream,
+			streamSourceOrchestrator(),
+			streampkg.EventLLMOutputDelta,
+			streampkg.StatusCompleted,
+			raw,
+			streampkg.Scope{},
+			map[string]any{"stage": "planning"},
+		)
+	}
+	emitEngineStreamEvent(ctx, eventStream,
+		streamSourceOrchestrator(),
+		streampkg.EventStatusCompleted,
+		streampkg.StatusCompleted,
+		"orchestrator planning completed",
+		streampkg.Scope{},
+		map[string]any{"stage": "planning"},
+	)
 	return parsePlanningResult(raw)
 }
 

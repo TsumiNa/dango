@@ -192,7 +192,7 @@ func TestStartRequest_EmitsRequestStreamEvents(t *testing.T) {
 			TaskDescription: "Run the only node.",
 		}},
 	})
-	if err := o.SetOrchestratorSkill(bindStreamingTestOrchestratorSkill(t, planOutput, mustReviewJSON(t, true, ""))); err != nil {
+	if err := o.SetOrchestratorSkill(bindTestOrchestratorSkill(t, planOutput, mustReviewJSON(t, true, ""))); err != nil {
 		t.Fatalf("SetOrchestratorSkill(test planner): %v", err)
 	}
 
@@ -217,23 +217,18 @@ func TestStartRequest_EmitsRequestStreamEvents(t *testing.T) {
 	eventStream.Close()
 
 	var (
-		sawReasoning bool
-		sawPlanText  bool
-		sawCreated   bool
-		sawSettled   bool
-		sawNodeDone  bool
-		sawExecutor  bool
+		sawPlanText bool
+		sawCreated  bool
+		sawSettled  bool
+		sawNodeDone bool
+		sawExecutor bool
 	)
 	for event := range sub.Events() {
 		var deltaText string
 		_ = json.Unmarshal(event.Delta, &deltaText)
 		switch event.EventType {
-		case streampkg.EventLLMReasoningDelta:
-			if deltaText == "planning stream is active" {
-				sawReasoning = true
-			}
 		case streampkg.EventLLMOutputDelta:
-			if deltaText == planOutput {
+			if event.From.Layer == "orchestrator" && event.Status == streampkg.StatusCompleted && deltaText == planOutput {
 				sawPlanText = true
 			}
 		case streampkg.EventStatusProgress:
@@ -256,9 +251,9 @@ func TestStartRequest_EmitsRequestStreamEvents(t *testing.T) {
 			}
 		}
 	}
-	if !sawReasoning || !sawPlanText || !sawCreated || !sawSettled || !sawNodeDone || !sawExecutor {
-		t.Fatalf("missing stream events: reasoning=%v text=%v created=%v settled=%v nodeDone=%v executor=%v",
-			sawReasoning, sawPlanText, sawCreated, sawSettled, sawNodeDone, sawExecutor)
+	if !sawPlanText || !sawCreated || !sawSettled || !sawNodeDone || !sawExecutor {
+		t.Fatalf("missing stream events: text=%v created=%v settled=%v nodeDone=%v executor=%v",
+			sawPlanText, sawCreated, sawSettled, sawNodeDone, sawExecutor)
 	}
 }
 
@@ -274,7 +269,7 @@ func TestStartRequest_CreatesReplayableRunnerStream(t *testing.T) {
 			TaskDescription: "Run the only node.",
 		}},
 	})
-	if err := o.SetOrchestratorSkill(bindStreamingTestOrchestratorSkill(t, planOutput, mustReviewJSON(t, true, ""))); err != nil {
+	if err := o.SetOrchestratorSkill(bindTestOrchestratorSkill(t, planOutput, mustReviewJSON(t, true, ""))); err != nil {
 		t.Fatalf("SetOrchestratorSkill(test planner): %v", err)
 	}
 

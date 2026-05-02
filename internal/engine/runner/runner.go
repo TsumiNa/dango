@@ -75,10 +75,6 @@ type Runner struct {
 	updateMu sync.Mutex
 	snapshot RunnerSnapshot
 
-	// phaseSignal receives a token whenever the runner phase changes,
-	// allowing waitForPhase to wake up without subscribing to full updates.
-	phaseSignal chan struct{}
-
 	// Phased-lifecycle bookkeeping: results gathered by the polish and
 	// report stages, and the rejection reason captured when a polished
 	// plan is rejected.
@@ -97,10 +93,12 @@ type Runner struct {
 // as a bare execution engine: callers drive it by invoking [Runner.AddNodes]
 // after [Runner.Start].
 func New(opts ...Option) *Runner {
+	id := shortuuid.New()
 	r := &Runner{
 		ctx:               context.Background(),
-		id:                shortuuid.New(),
+		id:                id,
 		logger:            slog.Default(),
+		eventStream:       streampkg.New(streampkg.Scope{RunnerID: id}),
 		state:             RunnerState{Status: RunnerStatusPending},
 		phase:             PhaseCreated,
 		done:              make(chan struct{}),
@@ -108,7 +106,6 @@ func New(opts ...Option) *Runner {
 		resultCh:          make(chan executionResult),
 		queryCh:           make(chan chan<- RunnerSnapshot),
 		subscribers:       make([]chan<- RunnerEvent, 0),
-		phaseSignal:       make(chan struct{}, 1),
 		skillSessionStore: newMemorySessionStore(),
 		skillSessionIDs:   make(map[string]string),
 	}
@@ -380,14 +377,6 @@ func (r *Runner) transitionPhase(phase RunnerPhase) {
 	r.stateMu.Lock()
 	r.phase = phase
 	r.stateMu.Unlock()
-	r.notifyPhaseChanged()
-}
-
-func (r *Runner) notifyPhaseChanged() {
-	select {
-	case r.phaseSignal <- struct{}{}:
-	default:
-	}
 }
 
 // settle is the single terminal path for the engine goroutine. It runs the
@@ -482,6 +471,7 @@ func (r *Runner) runEngine(ctx context.Context) error {
 	}
 	initialState := r.state
 	r.stateMu.Unlock()
+	r.emitPhaseChangedEvent()
 
 	if err := r.appendRecord(store, &RunnerRecord{Kind: RunnerRecordInit}); err != nil {
 		_, _ = r.transitionState(RunnerStatusFailed, err, true)

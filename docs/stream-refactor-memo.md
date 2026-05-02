@@ -19,6 +19,9 @@ that information crosses layers through ad hoc channels:
 - Executor and skill progress is mostly hidden until a phase completes.
 - Conversation streaming exposes token deltas, but those events are not part of
   the same event system as runner/executor progress.
+- LLM provider streaming and the internal stream bus can be confused: provider
+  streaming is only one possible input transport, while the engine stream is
+  the normalized output channel every caller subscribes to.
 - Persistence and replay are separate mechanisms instead of ordinary stream
   subscribers.
 
@@ -357,14 +360,10 @@ should be replaced by stream subscription.
 
 Initial audit list (non-exhaustive — extend as new instances are found):
 
-- `Runner.phaseSignal` (`internal/engine/runner/runner.go`). Currently a
-  buffered `chan struct{}` consumed only by `waitForPhase`. Should be replaced
-  by subscribing to `runner.phase.changed` events on the runner's own event
-  stream, with a stable filter and replay so the waiter cannot miss a
-  transition that fired before subscription. The current implementation works
-  because every phase change site already emits the stream event via the
-  unified `emitPhaseChangedEvent`, so the stream is already authoritative;
-  the side channel is now redundant complexity.
+- `Runner.phaseSignal` (`internal/engine/runner/runner.go`) ✓ removed.
+  `waitForPhase` now subscribes to `runner.phase.changed` events on the
+  runner's event stream, with a stable runner scope filter and replay so the
+  waiter cannot miss a transition that fired before subscription.
 - `Runner.Subscribe` low-level `RunnerEvent` fan-out
   (`internal/engine/runner/runner.go`). The engine loop broadcasts
   `RunnerEvent`s through a separate slice of channels. The compact stream now
@@ -506,9 +505,11 @@ Current state:
 - Runners emit compact stream events (`runner.phase.changed`,
   `runner.node.started`, `runner.node.completed`, `runner.node.failed`,
   `executor.*`) directly to the request-scoped event stream.
-- Phase change notification for internal managed lifecycle (`waitForPhase`) now
-  uses a lightweight `phaseSignal` channel instead of subscribing to full
-  snapshots.
+- Every runner has a stream. Orchestrator-owned runners use the request-scoped
+  stream; standalone runners use a runner-owned stream created by `New`.
+- Phase change notification for internal managed lifecycle (`waitForPhase`)
+  subscribes to `runner.phase.changed` with replay and no longer uses a
+  parallel `phaseSignal` channel.
 - Snapshot caching (`Runner.View`, `Runner.GetSnapshot`) is kept for query
   use only.
 - `Runner.SubscribeStream` and `Orchestrator.SubscribeRunnerStream` are the
@@ -516,14 +517,19 @@ Current state:
 
 Target:
 
-- Done. Query and stream paths are fully separated.
+- Query and stream paths are fully separated. Remaining runner work is
+  migrating the low-level `Runner.Subscribe` event fan-out and `Done`/`Wait`
+  settle channel onto stream events.
 
 ### Orchestrator
 
 Current state:
 
 - Request planning has a special `StartRequestWithProgress` callback.
-- After runner creation, callers subscribe separately to runner updates.
+- `StartRequest` creates or accepts a request stream, but that stream no
+  longer selects the provider transport. Non-streaming LLM responses are
+  normalized into engine stream events; provider streaming is used only by the
+  explicit progress path for now.
 
 Target:
 
@@ -577,8 +583,8 @@ Target:
 - `emitPhaseChangedEvent` and `emitNodeStreamEvent` replace the old
   `publishStreamUpdate(RunnerUpdate)` path. Stream event emission now reads
   runner state directly instead of going through a snapshot struct.
-- `waitForPhase` replaced with a `phaseSignal chan struct{}` notification
-  channel; no longer subscribes to the update channel.
+- `waitForPhase` no longer subscribes to the removed update channel. It now
+  uses `runner.phase.changed` stream events as of Phase 7 unit 1.
 - Query API (`Runner.View`, `Runner.GetSnapshot`) kept for snapshot access.
 - All existing runner, stream, and orchestrator tests pass.
 
@@ -599,9 +605,9 @@ motivating audit and the canonical pattern.
 
 Concrete migration units (each a self-contained PR-sized step):
 
-1. Replace `Runner.phaseSignal` with a stream subscription to
+1. ✓ Replace `Runner.phaseSignal` with a stream subscription to
    `runner.phase.changed` inside `waitForPhase`. Verify with a test where the
-   subscriber attaches after polish completes and still resolves via replay.
+   subscriber attaches after a phase event and still sees it through replay.
 2. Migrate `forwardEngineEvents` and `acceptAndComplete` off `Runner.Subscribe`
    to a stream subscription scoped to the runner. Remove the low-level
    `Subscribe` channel slice once unused.
@@ -687,19 +693,29 @@ Acceptance signal for Phase 7:
   `Orchestrator.SubscribeRunner` removed with no compatibility wrappers.
   `publishStreamUpdate(RunnerUpdate)` replaced by `emitPhaseChangedEvent()` and
   `emitNodeStreamEvent()` which read runner state directly. `waitForPhase` now
-  uses a lightweight `phaseSignal` channel instead of subscribing to the update
-  channel. Query path (`Runner.View`, `Runner.GetSnapshot`) kept for snapshot
-  access. Stream and query paths are now fully separated.
+  uses `runner.phase.changed` stream events instead of subscribing to the
+  removed update channel. Query path (`Runner.View`, `Runner.GetSnapshot`) kept
+  for snapshot access. Stream and query paths are now fully separated.
 - 2026-05-02: Latent deadlock found and fixed in `Runner.waitForPhase`.
   `StartPolish`, `RejectPolishedPlan`, and `ReplanWith` set `r.phase` directly
   while emitting the stream event but were not signaling the parallel
   `phaseSignal` channel. Worked only because no waiter happened to be listening
-  for those phases. Fixed by inlining `notifyPhaseChanged()` into
-  `emitPhaseChangedEvent()` so every phase publication is also an internal
-  wakeup. This is the canonical motivation for Phase 7: the stream system must
-  become the single sync primitive so this class of "forgot to notify the
-  side channel" bug stops being possible. Audit list and migration steps
-  recorded under "Cross-Layer Synchronization Through Stream" and Phase 7.
+  for those phases. This became the canonical motivation for Phase 7: the stream
+  system must become the single sync primitive so this class of "forgot to
+  notify the side channel" bug stops being possible. Audit list and migration
+  steps recorded under "Cross-Layer Synchronization Through Stream" and
+  Phase 7.
+- 2026-05-02: LLM provider streaming decoupled from the internal engine stream.
+  A request-scoped stream no longer forces orchestrator planning to call the
+  provider streaming API. Normal `StartRequest` uses the non-streaming skill
+  run and emits the final planner text/status into the engine stream;
+  `StartRequestWithProgress` remains the temporary legacy path that opts into
+  provider streaming for live progress callbacks.
+- 2026-05-02: Phase 7 unit 1 complete. `Runner.phaseSignal` and
+  `notifyPhaseChanged()` removed. `Runner.New` now creates a runner-owned
+  stream when no request stream is supplied, `waitForPhase` subscribes to
+  replayable `runner.phase.changed` events, and `runEngine` emits the
+  `PhaseExecuting` stream event after the engine state enters running.
 - Current Honshu example output problem is accepted as the first driver for
   the stream refactor.
 - Prior branch work already reduced `main.go` to skill-directory registration

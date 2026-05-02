@@ -46,9 +46,12 @@ func WithStore(store RunnerStore) Option {
 }
 
 // WithStream attaches a request-scoped output stream for compact lifecycle
-// events. Passing nil leaves stream emission disabled.
+// events. Passing nil keeps the runner-owned stream created by [New].
 func WithStream(eventStream *streampkg.Stream) Option {
 	return func(r *Runner) {
+		if eventStream == nil {
+			return
+		}
 		r.eventStream = eventStream
 	}
 }

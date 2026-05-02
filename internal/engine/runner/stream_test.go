@@ -3,7 +3,6 @@ package runner
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -11,10 +10,34 @@ import (
 	streampkg "github.com/tsumina/dango/internal/engine/stream"
 )
 
-func TestSubscribeStreamRequiresConfiguredStream(t *testing.T) {
+func TestSubscribeStreamReplaysRunnerOwnedPhaseEvents(t *testing.T) {
 	r := New(WithLogger(testLogger))
-	if _, err := r.SubscribeStream(streampkg.Filter{}); !errors.Is(err, ErrStreamNotConfigured) {
-		t.Fatalf("SubscribeStream err = %v, want ErrStreamNotConfigured", err)
+	r.stateMu.Lock()
+	r.phase = PhasePolishing
+	r.stateMu.Unlock()
+	r.emitPhaseChangedEvent()
+
+	sub, err := r.SubscribeStream(streampkg.Filter{EventTypes: []string{streampkg.EventRunnerPhaseChanged}}, streampkg.WithSubscriberBuffer(1))
+	if err != nil {
+		t.Fatalf("SubscribeStream: %v", err)
+	}
+	defer sub.Cancel()
+
+	readCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	event, ok, err := sub.Next(readCtx)
+	if err != nil {
+		t.Fatalf("Next: %v", err)
+	}
+	if !ok {
+		t.Fatal("stream closed before replaying phase event")
+	}
+	var delta map[string]string
+	if err := json.Unmarshal(event.Delta, &delta); err != nil {
+		t.Fatalf("unmarshal delta: %v", err)
+	}
+	if event.Scope.RunnerID != r.ID() || delta["phase"] != string(PhasePolishing) {
+		t.Fatalf("phase event scope=%+v delta=%v, want runner-owned polishing replay", event.Scope, delta)
 	}
 }
 

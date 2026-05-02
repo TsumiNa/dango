@@ -2,6 +2,7 @@ package runner
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"sync"
 
@@ -268,22 +269,56 @@ func (r *Runner) waitForPhase(ctx context.Context, want RunnerPhase) error {
 	if r.Phase() == want {
 		return nil
 	}
+	sub, err := r.SubscribeStream(streampkg.Filter{
+		EventTypes: []string{streampkg.EventRunnerPhaseChanged},
+		Scope:      streampkg.Scope{RunnerID: r.id},
+	}, streampkg.WithSubscriberBuffer(8))
+	if err != nil {
+		return err
+	}
+	defer sub.Cancel()
+	if phase := r.Phase(); phase == want {
+		return nil
+	} else if phase == PhaseSettled {
+		return r.Wait(context.Background())
+	}
+
 	for {
-		select {
-		case <-r.phaseSignal:
-			phase := r.Phase()
-			if phase == want {
-				return nil
-			}
-			if phase == PhaseSettled {
-				return r.Wait(context.Background())
-			}
-		case <-r.Done():
+		event, ok, err := sub.Next(ctx)
+		if err != nil {
+			return err
+		}
+		if !ok {
 			return r.Wait(context.Background())
-		case <-ctx.Done():
-			return ctx.Err()
+		}
+		current := r.Phase()
+		if current == want {
+			return nil
+		}
+		if current == PhaseSettled {
+			return r.Wait(context.Background())
+		}
+		phase, ok := phaseFromStreamEvent(event)
+		if !ok {
+			continue
+		}
+		if phase == want && r.Phase() == want {
+			return nil
+		}
+		if phase == PhaseSettled {
+			return r.Wait(context.Background())
 		}
 	}
+}
+
+func phaseFromStreamEvent(event streampkg.Event) (RunnerPhase, bool) {
+	var delta struct {
+		Phase RunnerPhase `json:"phase"`
+	}
+	if err := json.Unmarshal(event.Delta, &delta); err != nil || delta.Phase == "" {
+		return "", false
+	}
+	return delta.Phase, true
 }
 
 func (r *Runner) runPolishStage(ctx context.Context, nodes map[string]*Node) {

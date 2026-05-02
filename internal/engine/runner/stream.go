@@ -3,34 +3,25 @@ package runner
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"strings"
 
 	streampkg "github.com/tsumina/dango/internal/engine/stream"
 )
 
-// ErrStreamNotConfigured is returned when callers try to subscribe to a runner
-// that was not constructed with an output stream.
-var ErrStreamNotConfigured = errors.New("orchestrate: runner stream not configured")
-
 // SubscribeStream attaches a subscriber to the runner's structured event
 // stream. Replay and filtering are handled by the stream package.
 func (r *Runner) SubscribeStream(filter streampkg.Filter, opts ...streampkg.SubscribeOption) (*streampkg.Subscription, error) {
-	if r.eventStream == nil {
-		return nil, ErrStreamNotConfigured
-	}
 	return r.eventStream.Subscribe(filter, opts...)
 }
 
 // emitPhaseChangedEvent announces that the runner's phase has changed. It
-// wakes any internal waiter (waitForPhase) and, when an output stream is
-// configured, emits a runner.phase.changed event for external subscribers.
+// emits a runner.phase.changed event for internal coordination and external
+// subscribers.
 //
 // All phase transitions must call this so that direct phase assignments stay
-// consistent with the transitionPhase helper for waitForPhase semantics.
+// visible to replaying stream subscribers.
 func (r *Runner) emitPhaseChangedEvent() {
-	r.notifyPhaseChanged()
 	if r.eventStream == nil {
 		return
 	}

@@ -199,6 +199,7 @@ func TestRunHonshuGroundwaterExampleExecutesNeededSkills(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
 	client := newFakeLLMClient(t)
+	artifactsDir := t.TempDir()
 	var stream bytes.Buffer
 	var logs bytes.Buffer
 	logger, err := newExampleLogger(&logs, "debug")
@@ -208,7 +209,7 @@ func TestRunHonshuGroundwaterExampleExecutesNeededSkills(t *testing.T) {
 
 	view, err := runHonshuGroundwaterExample(ctx, exampleConfig{
 		MeasurementsJSON: embeddedSampleMeasurements,
-		ArtifactsDir:     t.TempDir(),
+		ArtifactsDir:     artifactsDir,
 		Out:              &stream,
 		Logger:           logger,
 		LLMClient:        client,
@@ -219,8 +220,11 @@ func TestRunHonshuGroundwaterExampleExecutesNeededSkills(t *testing.T) {
 	if view.Phase != runnerpkg.PhaseSettled {
 		t.Fatalf("phase = %q, want settled", view.Phase)
 	}
-	if !strings.Contains(stream.String(), "or reasoning: Planning with groundwater and elevation skills.") {
-		t.Fatalf("stream missing orchestrator reasoning: %s", stream.String())
+	if !strings.Contains(stream.String(), "or: orchestrator planning started") {
+		t.Fatalf("stream missing orchestrator planning status: %s", stream.String())
+	}
+	if strings.Contains(stream.String(), "or reasoning:") {
+		t.Fatalf("ordinary StartRequest should not force provider streaming reasoning: %s", stream.String())
 	}
 	if !strings.Contains(stream.String(), "runner_id=") {
 		t.Fatalf("stream missing runner updates: %s", stream.String())
@@ -230,6 +234,10 @@ func TestRunHonshuGroundwaterExampleExecutesNeededSkills(t *testing.T) {
 	}
 	if strings.Contains(stream.String(), "sample after two days of rain") {
 		t.Fatalf("stream leaked raw snapshot payload: %s", stream.String())
+	}
+	events := readStreamEvents(t, filepath.Join(artifactsDir, "stream_events.ndjson"))
+	if !hasPlannerOutputEvent(events) {
+		t.Fatalf("stream event log missing completed orchestrator planner output")
 	}
 	for _, want := range []string{"submitting request to orchestrator", "runner created", "runner settled"} {
 		if !strings.Contains(logs.String(), want) {
@@ -284,6 +292,45 @@ func TestResolveExampleLLMClientLoadsEnvFile(t *testing.T) {
 	if got := client.Provider(); got != llm.ProviderOpenAI {
 		t.Fatalf("provider = %q, want openai", got)
 	}
+}
+
+func readStreamEvents(t *testing.T, path string) []streampkg.Event {
+	t.Helper()
+	file, err := os.Open(path)
+	if err != nil {
+		t.Fatalf("open stream events: %v", err)
+	}
+	defer file.Close()
+
+	decoder := json.NewDecoder(file)
+	var events []streampkg.Event
+	for {
+		var event streampkg.Event
+		if err := decoder.Decode(&event); err != nil {
+			if err == io.EOF {
+				break
+			}
+			t.Fatalf("decode stream event: %v", err)
+		}
+		events = append(events, event)
+	}
+	return events
+}
+
+func hasPlannerOutputEvent(events []streampkg.Event) bool {
+	for _, event := range events {
+		if event.EventType != streampkg.EventLLMOutputDelta || event.From.Layer != "orchestrator" || event.Status != streampkg.StatusCompleted {
+			continue
+		}
+		var text string
+		if err := json.Unmarshal(event.Delta, &text); err != nil {
+			continue
+		}
+		if strings.Contains(text, `"plan"`) && strings.Contains(text, "train_gp_model") {
+			return true
+		}
+	}
+	return false
 }
 
 func TestConfigureExampleOrchestratorRegistersAutonomousSkillRuntimes(t *testing.T) {
