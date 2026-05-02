@@ -135,11 +135,7 @@ type resourceRecorderExecutor struct {
 	accessibleDirs []string
 }
 
-func (e *resourceRecorderExecutor) BindForRunner(sessID *string, sessStores ...llm.SessionStore) (string, error) {
-	return "", nil
-}
-
-func (e *resourceRecorderExecutor) BindForRunnerWithAccessibleDirs(sessID *string, accessibleDirs []string, sessStores ...llm.SessionStore) (string, error) {
+func (e *resourceRecorderExecutor) BindForRunner(sessID *string, accessibleDirs []string, sessStores ...llm.SessionStore) (string, error) {
 	e.accessibleDirs = append([]string(nil), accessibleDirs...)
 	return "", nil
 }

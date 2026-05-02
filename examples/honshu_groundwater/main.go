@@ -18,6 +18,7 @@ import (
 	runnerpkg "github.com/tsumina/dango/internal/engine/runner"
 	streampkg "github.com/tsumina/dango/internal/engine/stream"
 	"github.com/tsumina/dango/internal/llm"
+	"github.com/tsumina/dango/internal/streamrender"
 )
 
 //go:embed sample_measurements.json
@@ -31,7 +32,6 @@ type exampleConfig struct {
 	Out              io.Writer
 	Logger           *slog.Logger
 	LLMClient        *llm.Client
-	EnvFiles         []string
 }
 
 func main() {
@@ -104,7 +104,7 @@ func runHonshuGroundwaterExample(ctx context.Context, cfg exampleConfig) (*runne
 	if err := os.MkdirAll(artifactsDir, 0o755); err != nil {
 		return nil, err
 	}
-	streamLog, streamLogPath, err := createArtifactLog(artifactsDir, "stream_events.jsonl")
+	streamLog, streamLogPath, err := createArtifactLog(filepath.Join(artifactsDir, "debug"), "stream_events.jsonl")
 	if err != nil {
 		return nil, err
 	}
@@ -119,19 +119,44 @@ func runHonshuGroundwaterExample(ctx context.Context, cfg exampleConfig) (*runne
 		"measurements_bytes", len(cfg.MeasurementsJSON),
 		"stream_events_log", streamLogPath,
 	)
-	logger.Info("loading llm client")
-	client, err := resolveExampleLLMClient(cfg)
-	if err != nil {
+	orchestrator := orchestrate.NewOrchestrator(ctx, logger)
+	if cfg.LLMClient != nil {
+		logger.Info("using configured llm client",
+			"provider", cfg.LLMClient.Provider(),
+			"model", cfg.LLMClient.Model(),
+			"reasoning_effort", cfg.LLMClient.ReasoningEffort(),
+		)
+		if err := orchestrator.SetClient(cfg.LLMClient); err != nil {
+			return nil, err
+		}
+	}
+	skillDirs := []string{
+		filepath.Join(root, "elevation_lookup"),
+		filepath.Join(root, "train_gp_model"),
+		filepath.Join(root, "markdown_to_pdf"),
+	}
+	for _, dir := range skillDirs {
+		logger.Info("registering skill", "skill_dir", dir)
+	}
+	if err := orchestrator.AddSkillDirs(&llm.ConversationConfig{MaxSteps: 12}, skillDirs...); err != nil {
 		return nil, err
 	}
-	logger.Info("llm client ready",
-		"provider", client.Provider(),
-		"model", client.Model(),
-		"reasoning_effort", client.ReasoningEffort(),
-	)
-	orchestrator, err := configureExampleOrchestrator(ctx, root, client, logger)
-	if err != nil {
-		return nil, err
+	renderCfg := streamrender.DefaultConfig()
+	renderCfg.ExchangeDir = filepath.Join(artifactsDir, "exchanges")
+	renderCfg.HiddenEventTypes = []string{
+		streampkg.EventLLMReasoningDelta,
+		streampkg.EventLLMToolCallStarted,
+		streampkg.EventLLMToolCallDelta,
+		streampkg.EventLLMToolCallCompleted,
+		streampkg.EventLLMToolResultDelta,
+		streampkg.EventToolExecutionStarted,
+		streampkg.EventToolExecutionCompleted,
+		streampkg.EventToolExecutionFailed,
+	}
+	if file, ok := cfg.Out.(*os.File); ok {
+		if info, err := file.Stat(); err == nil {
+			renderCfg.Color = info.Mode()&os.ModeCharDevice != 0
+		}
 	}
 
 	request := buildGroundwaterRequest(cfg.MeasurementsJSON)
@@ -151,7 +176,7 @@ func runHonshuGroundwaterExample(ctx context.Context, cfg exampleConfig) (*runne
 	}
 	eventErrCh := make(chan error, 1)
 	go func() {
-		eventErrCh <- streamExampleEvents(ctx, cfg.Out, streamLog, events)
+		eventErrCh <- streamExampleEvents(ctx, cfg.Out, streamLog, events, renderCfg)
 	}()
 	closeEventStream := func() error {
 		resp.Stream.Close()
@@ -177,51 +202,6 @@ func runHonshuGroundwaterExample(ctx context.Context, cfg exampleConfig) (*runne
 	return view, nil
 }
 
-func resolveExampleLLMClient(cfg exampleConfig) (*llm.Client, error) {
-	if cfg.LLMClient != nil {
-		return cfg.LLMClient, nil
-	}
-	client, err := llm.NewClientFromEnv(cfg.EnvFiles...)
-	if err != nil {
-		return nil, fmt.Errorf("load LLM client from .env: %w", err)
-	}
-	return client, nil
-}
-
-func configureExampleOrchestrator(ctx context.Context, root string, client *llm.Client, logger *slog.Logger) (*orchestrate.Orchestrator, error) {
-	if client == nil {
-		return nil, fmt.Errorf("example requires a non-nil LLM client")
-	}
-	if logger == nil {
-		logger = slog.New(slog.NewTextHandler(io.Discard, nil))
-	}
-	o := orchestrate.NewOrchestrator(ctx, logger)
-
-	logger.Info("configuring orchestrator skill")
-	plannerSkill, err := orchestrate.NewEmbeddedOrchestratorSkill(client, nil, nil)
-	if err != nil {
-		return nil, err
-	}
-	if err := o.SetOrchestratorSkill(plannerSkill); err != nil {
-		return nil, err
-	}
-
-	skillCfg := &llm.ConversationConfig{MaxSteps: 12}
-	skillDirs := []string{
-		filepath.Join(root, "elevation_lookup"),
-		filepath.Join(root, "train_gp_model"),
-		filepath.Join(root, "markdown_to_pdf"),
-	}
-	for _, dir := range skillDirs {
-		logger.Info("registering skill", "skill_dir", dir)
-	}
-	if err := o.AddSkillFromDirs(client, skillCfg, skillDirs...); err != nil {
-		return nil, err
-	}
-
-	return o, nil
-}
-
 func newExampleLogger(out io.Writer, level string) (*slog.Logger, error) {
 	if out == nil {
 		out = io.Discard
@@ -243,6 +223,9 @@ func newExampleLogger(out io.Writer, level string) (*slog.Logger, error) {
 }
 
 func createArtifactLog(artifactsDir string, name string) (*os.File, string, error) {
+	if err := os.MkdirAll(artifactsDir, 0o755); err != nil {
+		return nil, "", err
+	}
 	path := filepath.Join(artifactsDir, name)
 	file, err := os.Create(path)
 	if err != nil {
@@ -257,9 +240,12 @@ func buildGroundwaterRequest(measurements string) string {
 		"\n```"
 }
 
-func streamExampleEvents(ctx context.Context, out io.Writer, raw io.Writer, sub *streampkg.Subscription) error {
-	encoder := json.NewEncoder(raw)
-	var lastLine string
+func streamExampleEvents(ctx context.Context, out io.Writer, raw io.Writer, sub *streampkg.Subscription, renderCfg streamrender.Config) error {
+	var encoder *json.Encoder
+	if raw != nil {
+		encoder = json.NewEncoder(raw)
+	}
+	renderer := streamrender.New(out, renderCfg)
 	for {
 		event, ok, err := sub.Next(ctx)
 		if err != nil {
@@ -268,168 +254,15 @@ func streamExampleEvents(ctx context.Context, out io.Writer, raw io.Writer, sub 
 		if !ok {
 			return nil
 		}
-		if raw != nil {
+		if encoder != nil {
 			if err := encoder.Encode(event); err != nil {
 				return err
 			}
 		}
-		line := compactStreamEvent(event)
-		if line != "" && line != lastLine {
-			if _, err := fmt.Fprintln(out, line); err != nil {
-				return err
-			}
-			lastLine = line
+		if err := renderer.RenderEvent(event); err != nil {
+			return err
 		}
 	}
-}
-
-func compactStreamEvent(event streampkg.Event) string {
-	switch event.EventType {
-	case streampkg.EventLLMReasoningDelta:
-		if event.From.Layer == "orchestrator" {
-			if line := compactTerminalText(deltaString(event)); line != "" {
-				return "or reasoning: " + line
-			}
-		}
-	case streampkg.EventStatusProgress:
-		if event.From.Layer == "orchestrator" {
-			if msg, runnerID := deltaMessageAndRunner(deltaMap(event)); msg != "" {
-				if runnerID != "" {
-					return fmt.Sprintf("or: %s runner_id=%s", msg, runnerID)
-				}
-				return "or: " + msg
-			}
-		}
-	case streampkg.EventStatusStarted:
-		if event.From.Layer == "orchestrator" {
-			if line := compactTerminalText(deltaString(event)); line != "" {
-				return "or: " + line
-			}
-		}
-	case streampkg.EventRunnerPhaseChanged:
-		values := deltaMap(event)
-		phase := stringValue(values["phase"])
-		status := stringValue(values["status"])
-		if phase == "" {
-			phase = "unknown"
-		}
-		return fmt.Sprintf("ru: runner_id=%s status=%s phase=%s", event.Scope.RunnerID, status, phase)
-	case streampkg.EventRunnerNodeStarted, streampkg.EventRunnerNodeCompleted, streampkg.EventRunnerNodeFailed:
-		values := deltaMap(event)
-		nodeID := stringValue(values["node_id"])
-		if nodeID == "" {
-			nodeID = event.Scope.NodeID
-		}
-		eventName := strings.TrimPrefix(event.EventType, "runner.")
-		line := fmt.Sprintf("ru: runner_id=%s status=%s event=%s node=%s", event.Scope.RunnerID, event.Status, eventName, nodeID)
-		if skill := stringValue(event.Metadata["skill_name"]); skill != "" {
-			line += " skill=" + skill
-		}
-		if errText := stringValue(values["error"]); errText != "" {
-			line += fmt.Sprintf(" error=%q", compactTerminalText(errText))
-		}
-		return line
-	case streampkg.EventExecutorPolishStarted, streampkg.EventExecutorPolishCompleted, streampkg.EventExecutorPolishFailed,
-		streampkg.EventExecutorExecuteStarted, streampkg.EventExecutorExecuteCompleted, streampkg.EventExecutorExecuteFailed,
-		streampkg.EventExecutorReportStarted, streampkg.EventExecutorReportCompleted, streampkg.EventExecutorReportFailed:
-		values := deltaMap(event)
-		nodeID := stringValue(values["node_id"])
-		if nodeID == "" {
-			nodeID = event.Scope.NodeID
-		}
-		eventName := strings.TrimPrefix(event.EventType, "executor.")
-		line := fmt.Sprintf("ex: runner_id=%s status=%s event=%s node=%s", event.Scope.RunnerID, event.Status, eventName, nodeID)
-		if skill := stringValue(event.Metadata["skill_name"]); skill != "" {
-			line += " skill=" + skill
-		}
-		if errText := stringValue(values["error"]); errText != "" {
-			line += fmt.Sprintf(" error=%q", compactTerminalText(errText))
-		}
-		return line
-	case streampkg.EventLLMToolCallCompleted:
-		values := deltaMap(event)
-		line := fmt.Sprintf("sk: skill=%s model requested tool=%s call=%s", skillName(event), stringValue(values["name"]), stringValue(values["call_id"]))
-		if args := stringValue(values["arguments"]); args != "" {
-			line += fmt.Sprintf(" args=%q", compactTerminalText(args))
-		}
-		return line
-	case streampkg.EventToolExecutionStarted, streampkg.EventToolExecutionCompleted, streampkg.EventToolExecutionFailed:
-		values := deltaMap(event)
-		eventName := strings.TrimPrefix(event.EventType, "tool.")
-		line := fmt.Sprintf("sk: skill=%s status=%s event=%s tool=%s call=%s",
-			skillName(event), event.Status, eventName, stringValue(values["name"]), stringValue(values["call_id"]))
-		if errText := stringValue(values["error"]); errText != "" {
-			line += fmt.Sprintf(" error=%q", compactTerminalText(errText))
-		}
-		return line
-	case streampkg.EventLLMToolResultDelta:
-		values := deltaMap(event)
-		line := fmt.Sprintf("sk: skill=%s recorded tool result status=%s tool=%s call=%s",
-			skillName(event), event.Status, stringValue(values["name"]), stringValue(values["call_id"]))
-		if errText := stringValue(values["error"]); errText != "" {
-			line += fmt.Sprintf(" error=%q", compactTerminalText(errText))
-		}
-		return line
-	case streampkg.EventStatusFailed:
-		if line := compactTerminalText(deltaString(event)); line != "" {
-			return fmt.Sprintf("%s: failed %q", event.From.Layer, line)
-		}
-	}
-	return ""
-}
-
-func deltaString(event streampkg.Event) string {
-	var text string
-	if err := json.Unmarshal(event.Delta, &text); err == nil {
-		return text
-	}
-	return ""
-}
-
-func deltaMap(event streampkg.Event) map[string]any {
-	var values map[string]any
-	if err := json.Unmarshal(event.Delta, &values); err != nil {
-		return nil
-	}
-	return values
-}
-
-func deltaMessageAndRunner(values map[string]any) (string, string) {
-	if len(values) == 0 {
-		return "", ""
-	}
-	return stringValue(values["message"]), stringValue(values["runner_id"])
-}
-
-func skillName(event streampkg.Event) string {
-	if skill := stringValue(event.Metadata["skill_name"]); skill != "" {
-		return skill
-	}
-	if event.From.ID != "" {
-		return event.From.ID
-	}
-	return "unknown"
-}
-
-func stringValue(value any) string {
-	switch v := value.(type) {
-	case string:
-		return v
-	case fmt.Stringer:
-		return v.String()
-	case nil:
-		return ""
-	default:
-		return fmt.Sprint(v)
-	}
-}
-
-func compactTerminalText(text string) string {
-	text = strings.Join(strings.Fields(text), " ")
-	if len(text) > 240 {
-		text = text[:240] + "..."
-	}
-	return text
 }
 
 func exampleRoot() (string, error) {

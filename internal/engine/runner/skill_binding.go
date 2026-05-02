@@ -10,11 +10,7 @@ import (
 )
 
 type skillBinder interface {
-	BindForRunner(sessID *string, sessStores ...llm.SessionStore) (string, error)
-}
-
-type resourceSkillBinder interface {
-	BindForRunnerWithAccessibleDirs(sessID *string, accessibleDirs []string, sessStores ...llm.SessionStore) (string, error)
+	BindForRunner(sessID *string, accessibleDirs []string, sessStores ...llm.SessionStore) (string, error)
 }
 
 type memorySessionStore struct {
@@ -144,25 +140,11 @@ func (r *Runner) prepareNodeExecutor(id string, executor Executor, accessibleDir
 		sessionID = &existingCopy
 	}
 
-	var (
-		boundSessionID string
-		err            error
-	)
-	if len(accessibleDirs) > 0 {
-		if binder, ok := executor.(resourceSkillBinder); ok {
-			boundSessionID, err = binder.BindForRunnerWithAccessibleDirs(sessionID, accessibleDirs, r.skillSessionStore)
-		} else if binder, ok := executor.(skillBinder); ok {
-			boundSessionID, err = binder.BindForRunner(sessionID, r.skillSessionStore)
-		} else {
-			return nil
-		}
-	} else {
-		binder, ok := executor.(skillBinder)
-		if !ok {
-			return nil
-		}
-		boundSessionID, err = binder.BindForRunner(sessionID, r.skillSessionStore)
+	binder, ok := executor.(skillBinder)
+	if !ok {
+		return nil
 	}
+	boundSessionID, err := binder.BindForRunner(sessionID, accessibleDirs, r.skillSessionStore)
 	if err != nil {
 		return fmt.Errorf("prepare node %q executor: %w", id, err)
 	}

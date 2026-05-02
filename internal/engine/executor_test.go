@@ -213,7 +213,7 @@ func TestBindForRunner_BindsLightweightSkillAndAllocatesSession(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewExecutor: %v", err)
 	}
-	sessionID, err := exec.BindForRunner(nil, store)
+	sessionID, err := exec.BindForRunner(nil, nil, store)
 	if err != nil {
 		t.Fatalf("BindForRunner: %v", err)
 	}
@@ -245,11 +245,11 @@ func TestBindForRunner_ReusesExistingSession(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewExecutor: %v", err)
 	}
-	firstSessionID, err := exec.BindForRunner(nil, store)
+	firstSessionID, err := exec.BindForRunner(nil, nil, store)
 	if err != nil {
 		t.Fatalf("BindForRunner(first): %v", err)
 	}
-	secondSessionID, err := exec.BindForRunner(&firstSessionID, store)
+	secondSessionID, err := exec.BindForRunner(&firstSessionID, nil, store)
 	if err != nil {
 		t.Fatalf("BindForRunner(second): %v", err)
 	}
@@ -258,14 +258,14 @@ func TestBindForRunner_ReusesExistingSession(t *testing.T) {
 	}
 }
 
-func TestBindForRunnerWithAccessibleDirsConfiguresRuntimeSkill(t *testing.T) {
+func TestBindForRunnerConfiguresRuntimeSkillAccessibleDirs(t *testing.T) {
 	resourceDir := t.TempDir()
 	exec, err := NewExecutor(nil, loadLightweightTestSkill(t), &llm.Client{}, nil, &ExecutionPlanner{})
 	if err != nil {
 		t.Fatalf("NewExecutor: %v", err)
 	}
-	if _, err := exec.BindForRunnerWithAccessibleDirs(nil, []string{resourceDir}); err != nil {
-		t.Fatalf("BindForRunnerWithAccessibleDirs: %v", err)
+	if _, err := exec.BindForRunner(nil, []string{resourceDir}); err != nil {
+		t.Fatalf("BindForRunner: %v", err)
 	}
 	if exec.runtime == nil {
 		t.Fatal("runtime skill is nil")
@@ -364,7 +364,7 @@ func TestPolish_UsesRuntimeSkillWhenBound(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewExecutor: %v", err)
 	}
-	if _, err := exec.BindForRunner(nil); err != nil {
+	if _, err := exec.BindForRunner(nil, nil); err != nil {
 		t.Fatalf("BindForRunner: %v", err)
 	}
 

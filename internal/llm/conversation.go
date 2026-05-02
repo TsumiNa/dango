@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"strconv"
+	"strings"
 	"time"
 
 	streampkg "github.com/tsumina/dango/internal/engine/stream"
@@ -140,9 +141,9 @@ type AutoShrinkConfig struct {
 // A nil *ConversationConfig passed to [NewConversation] uses the default
 // conversation settings. Non-zero MaxSteps overrides the request/tool-call
 // loop bound, AutoShrink overrides the default shrinking policy when non-nil,
-// Summarizer enables summary-based compression, and Stream configures compact
-// model/tool progress events for outer orchestration layers. Stream output is
-// observational and independent of session persistence.
+// Summarizer overrides the default local summary compression, and Stream
+// configures compact model/tool progress events for outer orchestration layers.
+// Stream output is observational and independent of session persistence.
 type ConversationConfig struct {
 	MaxSteps       int
 	AutoShrink     *AutoShrinkConfig
@@ -153,9 +154,9 @@ type ConversationConfig struct {
 	StreamMetadata map[string]any
 }
 
-// Summarizer collapses an older slice of turns into a single compact
-// summary string. Implementations are typically backed by an LLM call but
-// can also be deterministic (for example, joining titles for tests).
+// Summarizer collapses an older slice of turns into a single compact summary
+// string. Implementations may be backed by a separate LLM call, but the default
+// [DefaultSummarizerFunc] is deterministic and local.
 //
 // Summarize must be safe to call from inside [Conversation.Send] - in
 // particular, it must not call [Conversation.Send] on the same conversation it
@@ -170,6 +171,76 @@ type SummarizerFunc func(ctx context.Context, turns []Turn) (string, error)
 // Summarize implements [Summarizer].
 func (f SummarizerFunc) Summarize(ctx context.Context, turns []Turn) (string, error) {
 	return f(ctx, turns)
+}
+
+// DefaultSummarizerFunc is the deterministic local summarizer used by new
+// conversations unless callers provide a custom [ConversationConfig.Summarizer]
+// or replace it with [Conversation.SetSummarizer].
+func DefaultSummarizerFunc(ctx context.Context, turns []Turn) (string, error) {
+	const maxSummaryBytes = 2400
+	const maxTurnBytes = 240
+
+	if ctx != nil {
+		if err := ctx.Err(); err != nil {
+			return "", err
+		}
+	}
+	if len(turns) == 0 {
+		return "No earlier conversation turns.", nil
+	}
+
+	var b strings.Builder
+	b.WriteString("Earlier conversation:\n")
+	for _, turn := range turns {
+		if ctx != nil {
+			if err := ctx.Err(); err != nil {
+				return "", err
+			}
+		}
+		line := summarizeTurn(turn, maxTurnBytes)
+		if line == "" {
+			continue
+		}
+		if b.Len()+len(line)+4 > maxSummaryBytes {
+			b.WriteString("- ...")
+			break
+		}
+		b.WriteString("- ")
+		b.WriteString(line)
+		b.WriteByte('\n')
+	}
+	return strings.TrimSpace(b.String()), nil
+}
+
+func summarizeTurn(turn Turn, maxBytes int) string {
+	var text string
+	if turn.Tool != nil {
+		name := turn.Tool.Name
+		if name == "" {
+			name = turn.Tool.CallID
+		}
+		switch turn.Role {
+		case RoleToolCall:
+			text = fmt.Sprintf("tool call %s %s", name, turn.Tool.Arguments)
+		case RoleToolOutput:
+			text = fmt.Sprintf("tool result %s %s", name, turn.Tool.Output)
+			if turn.Tool.Error != "" {
+				text += " error=" + turn.Tool.Error
+			}
+		default:
+			text = turn.Tool.Output
+		}
+	} else {
+		text = turn.Text
+	}
+	text = strings.Join(strings.Fields(text), " ")
+	if text == "" {
+		return ""
+	}
+	if len(text) > maxBytes {
+		text = text[:maxBytes] + "..."
+	}
+	return fmt.Sprintf("%s: %s", turn.Role, text)
 }
 
 // Conversation is the ordered state of a single chat session.
@@ -272,6 +343,7 @@ func NewConversation(client *Client, instructions string, tools []Tool, cfg *Con
 		toolSpecs:    specs,
 		toolByName:   byName,
 		maxSteps:     DefaultMaxSteps,
+		summarizer:   SummarizerFunc(DefaultSummarizerFunc),
 		autoShrink: AutoShrinkConfig{
 			Threshold:         0.85,
 			KeepToolExchanges: 2,
@@ -552,8 +624,9 @@ func (c *Conversation) SetAutoShrink(cfg AutoShrinkConfig) { c.autoShrink = cfg 
 
 // SetSummarizer registers a [Summarizer] used by [Conversation.Compress]
 // and the auto-shrink pass to collapse old history into a summary turn.
-// Passing nil disables summarisation; the auto-shrink pass then falls
-// back to dropping old turns via [Conversation.Trim].
+// Passing nil disables summarisation, including the default local summarizer;
+// the auto-shrink pass then falls back to dropping old turns via
+// [Conversation.Trim].
 func (c *Conversation) SetSummarizer(s Summarizer) { c.summarizer = s }
 
 // conversationJSON is the wire format used by [Conversation.MarshalJSON]
@@ -587,7 +660,9 @@ func (c *Conversation) MarshalJSON() ([]byte, error) {
 // [Conversation.Run] dispatch table until the caller passes the
 // original tools through a fresh [NewConversation] + [Conversation.OpenSession]
 // pair. Defensive copies of slices are stored so later caller
-// mutations do not disturb the restored state.
+// mutations do not disturb the restored state. Custom summarizers are not
+// persisted; restored conversations use [DefaultSummarizerFunc] until callers
+// replace it.
 func (c *Conversation) UnmarshalJSON(data []byte) error {
 	var raw conversationJSON
 	if err := json.Unmarshal(data, &raw); err != nil {
@@ -600,7 +675,7 @@ func (c *Conversation) UnmarshalJSON(data []byte) error {
 	c.turns = append([]Turn(nil), raw.Turns...)
 	c.usage = raw.Usage
 	c.autoShrink = raw.AutoShrink
-	c.summarizer = nil
+	c.summarizer = SummarizerFunc(DefaultSummarizerFunc)
 	return nil
 }
 

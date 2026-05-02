@@ -13,7 +13,7 @@ type bindRecorderExecutor struct {
 	seenSession []string
 }
 
-func (e *bindRecorderExecutor) BindForRunner(sessID *string, sessStores ...llm.SessionStore) (string, error) {
+func (e *bindRecorderExecutor) BindForRunner(sessID *string, accessibleDirs []string, sessStores ...llm.SessionStore) (string, error) {
 	e.calls++
 	if len(sessStores) != 1 || sessStores[0] == nil {
 		return "", context.Canceled

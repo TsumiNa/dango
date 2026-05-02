@@ -2,9 +2,10 @@
 
 Last updated: 2026-05-03
 
-This memo records the current design and remaining work for the stream refactor
-across orchestrator, runner, executor, skill, and conversation code. It is kept
-as a coordination note for this branch rather than a full changelog.
+This memo records the current design, completed milestones, and deferred
+follow-ups for the stream refactor across orchestrator, runner, executor,
+skill, and conversation code. It is kept as a coordination note for this branch
+rather than a full changelog.
 
 ## Purpose
 
@@ -80,8 +81,8 @@ as metadata.
 ### Orchestrator
 
 `StartRequest` is the only request entrypoint. It creates the request-scoped
-stream itself and returns `StartRequestResponse{Stream, RunnerID}`. `Request` is
-a pure input DTO and no longer owns stream configuration.
+stream itself and returns `Response{Stream, RunnerID}`. `Request` is a pure
+input DTO and no longer owns stream configuration.
 
 Orchestrator planning uses a non-streaming skill run, then emits compact
 planning output and status events to the returned stream. There is no parallel
@@ -125,8 +126,7 @@ observability.
 - Stream core package added with event shape, filters, subscriptions, replay,
   merge, writer helpers, optional store append hook, and tests.
 - Provider streaming and engine output streaming were separated.
-- Request stream ownership moved from `Request` to `StartRequest` /
-  `StartRequestResponse`.
+- Request stream ownership moved from `Request` to `StartRequest` / `Response`.
 - Orchestrator planning callbacks and `StartRequestWithProgress` were removed.
 - Runner snapshot broadcast APIs were removed in favor of compact stream events.
 - Runner phase waiting, managed completion, and done/wait signaling now derive
@@ -148,7 +148,10 @@ observability.
   remaining cross-component callback or signal path was found there; remaining
   transport and lifecycle channels are intentional.
 
-## Remaining Planned Work
+## Deferred Follow-Ups
+
+No blocking implementation work remains in this branch. The notes below keep
+the next design choices visible without pulling them into the current PR.
 
 ### Durable Stream Replay
 
@@ -156,10 +159,9 @@ The stream now falls back to `Store.Load` when a subscriber asks for replay
 outside the current in-memory buffer window, and the stream package now ships a
 concrete JSON-backed durable store.
 
-The remaining question here is deployment choice rather than missing plumbing:
-decide whether outer observability should keep using the file-backed store, grow
-a SQLite-backed stream archive, or only instantiate durable stores in specific
-CLI/debug flows.
+The open question here is deployment choice rather than missing plumbing.
+Track that future PR in `docs/stream-persistence-deployment-memo.md`; do not
+enable persistence by default in this branch.
 
 ### Sync Audit Follow-Through
 
@@ -172,20 +174,23 @@ The current audit pass is clean:
 - Remaining `chan struct{}` uses are confined to stream internals, provider
   transport behavior, queue/lifecycle primitives, and tests.
 
-This is now a maintenance rule rather than a blocking migration item: newly
-introduced cross-component notifications should continue to publish stream
-events instead of adding side channels.
+This is a maintenance rule rather than a migration item: newly introduced
+cross-component notifications should continue to publish stream events instead
+of adding side channels.
 
 ### Subscriber Implementations
 
-Keep renderers and archives outside the stream core. Terminal formatting,
-JSONL artifact logs, database sinks, and debug UIs should subscribe to the
-request stream rather than changing producers.
+Keep renderers and archives outside the stream core. The reusable terminal
+renderer now lives in `internal/streamrender`, and the Honshu groundwater
+example uses it while preserving its JSONL artifact log.
+
+Track richer subscriber and debug UI decisions in
+`docs/stream-subscriber-ui-memo.md`.
 
 ## Working Rules For This Branch
 
-- Update this memo only when a design invariant, major milestone, or remaining
-  work item changes.
+- Update this memo only when a design invariant, major milestone, or deferred
+  follow-up changes.
 - Keep `internal/engine/stream` independent of orchestrator, runner, executor,
   skill, and LLM packages.
 - Do not add terminal formatting logic to the stream core.

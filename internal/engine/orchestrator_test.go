@@ -126,6 +126,34 @@ func TestSetOrchestratorSkill_RejectsChangesAfterStartup(t *testing.T) {
 	}
 }
 
+func TestSetClient_BindsDefaultOrchestratorSkill(t *testing.T) {
+	clearLLMEnv(t)
+	o := newOrchestrator(testLogger)
+	client := &llm.Client{}
+	if err := o.SetClient(client); err != nil {
+		t.Fatalf("SetClient: %v", err)
+	}
+	sk := o.OrchestratorSkill()
+	if sk.Client() != client {
+		t.Fatalf("orchestrator skill client = %p, want %p", sk.Client(), client)
+	}
+	resolved, err := o.resolveEnvClient()
+	if err != nil {
+		t.Fatalf("resolveEnvClient: %v", err)
+	}
+	if resolved != client {
+		t.Fatalf("resolved client = %p, want %p", resolved, client)
+	}
+}
+
+func TestSetClient_RejectsChangesAfterStartup(t *testing.T) {
+	o := newOrchestrator(testLogger)
+	mustRejectStartRequest(t, o)
+	if err := o.SetClient(&llm.Client{}); err == nil {
+		t.Fatal("expected SetClient to fail after startup")
+	}
+}
+
 func TestSetOrchestratorSkill_UsesProvidedSkillBeforeStartup(t *testing.T) {
 	clearLLMEnv(t)
 	o := newOrchestrator(testLogger)
@@ -370,7 +398,10 @@ func TestAddSkillDirs_LoadsAndEquipsSkill(t *testing.T) {
 	cfg := &llm.ConversationConfig{MaxSteps: 7}
 	dir := writeTestSkill(t, "dir-skill", "A skill loaded by directory.")
 
-	if err := o.AddSkillFromDirs(client, cfg, dir); err != nil {
+	if err := o.SetClient(client); err != nil {
+		t.Fatalf("SetClient: %v", err)
+	}
+	if err := o.AddSkillDirs(cfg, dir); err != nil {
 		t.Fatalf("AddSkillDirs: %v", err)
 	}
 

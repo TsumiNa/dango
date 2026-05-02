@@ -22,6 +22,7 @@ import (
 	runnerpkg "github.com/tsumina/dango/internal/engine/runner"
 	streampkg "github.com/tsumina/dango/internal/engine/stream"
 	"github.com/tsumina/dango/internal/llm"
+	"github.com/tsumina/dango/internal/streamrender"
 )
 
 func TestElevationSkillScriptParsesMessySample(t *testing.T) {
@@ -235,9 +236,24 @@ func TestRunHonshuGroundwaterExampleExecutesNeededSkills(t *testing.T) {
 	if strings.Contains(stream.String(), "sample after two days of rain") {
 		t.Fatalf("stream leaked raw snapshot payload: %s", stream.String())
 	}
-	events := readStreamEvents(t, filepath.Join(artifactsDir, "stream_events.jsonl"))
+	for _, noisy := range []string{" tool=", "event=tool_result", "total_tokens="} {
+		if strings.Contains(stream.String(), noisy) {
+			t.Fatalf("stream contains low-level noise %q:\n%s", noisy, stream.String())
+		}
+	}
+	if _, err := os.Stat(filepath.Join(artifactsDir, "stream_events.jsonl")); !os.IsNotExist(err) {
+		t.Fatalf("root stream_events.jsonl err = %v, want not exist", err)
+	}
+	events := readStreamEvents(t, filepath.Join(artifactsDir, "debug", "stream_events.jsonl"))
 	if !hasPlannerOutputEvent(events) {
 		t.Fatalf("stream event log missing completed orchestrator planner output")
+	}
+	exchanges, err := filepath.Glob(filepath.Join(artifactsDir, "exchanges", "*.md"))
+	if err != nil {
+		t.Fatalf("glob exchanges: %v", err)
+	}
+	if len(exchanges) == 0 {
+		t.Fatal("expected exchange markdown files under artifacts/exchanges")
 	}
 	for _, want := range []string{"submitting request to orchestrator", "runner created", "runner settled"} {
 		if !strings.Contains(logs.String(), want) {
@@ -273,28 +289,6 @@ func TestRunHonshuGroundwaterExampleExecutesNeededSkills(t *testing.T) {
 	}
 	if !strings.Contains(string(csvData), "predicted_water_level_m_bgl") {
 		t.Fatalf("CSV missing prediction header: %s", string(csvData))
-	}
-}
-
-func TestResolveExampleLLMClientLoadsEnvFile(t *testing.T) {
-	envFile := filepath.Join(t.TempDir(), ".env")
-	if err := os.WriteFile(envFile, []byte("OPENAI_API_KEY=test-key\nMODEL=test-model\n"), 0o600); err != nil {
-		t.Fatalf("write env file: %v", err)
-	}
-
-	client, err := resolveExampleLLMClient(exampleConfig{EnvFiles: []string{envFile}})
-	if err != nil {
-		t.Fatalf("resolveExampleLLMClient: %v", err)
-	}
-	wantModel := os.Getenv("MODEL")
-	if wantModel == "" {
-		wantModel = "test-model"
-	}
-	if got := client.Model(); got != wantModel {
-		t.Fatalf("model = %q, want %q", got, wantModel)
-	}
-	if got := client.Provider(); got != llm.ProviderOpenAI {
-		t.Fatalf("provider = %q, want openai", got)
 	}
 }
 
@@ -337,15 +331,22 @@ func hasPlannerOutputEvent(events []streampkg.Event) bool {
 	return false
 }
 
-func TestConfigureExampleOrchestratorRegistersAutonomousSkillRuntimes(t *testing.T) {
+func TestHonshuOrchestratorRegistersAutonomousSkillRuntimes(t *testing.T) {
 	root, err := exampleRoot()
 	if err != nil {
 		t.Fatalf("exampleRoot: %v", err)
 	}
 	client := &llm.Client{}
-	o, err := configureExampleOrchestrator(context.Background(), root, client, nil)
-	if err != nil {
-		t.Fatalf("configureExampleOrchestrator: %v", err)
+	o := orchestrate.NewOrchestrator(context.Background(), nil)
+	if err := o.SetClient(client); err != nil {
+		t.Fatalf("SetClient: %v", err)
+	}
+	if err := o.AddSkillDirs(&llm.ConversationConfig{MaxSteps: 12},
+		filepath.Join(root, "elevation_lookup"),
+		filepath.Join(root, "train_gp_model"),
+		filepath.Join(root, "markdown_to_pdf"),
+	); err != nil {
+		t.Fatalf("AddSkillDirs: %v", err)
 	}
 
 	for _, skillName := range []string{"elevation_lookup", "train_gp_model", "markdown_to_pdf"} {
@@ -386,8 +387,8 @@ func TestNewExampleLoggerRejectsInvalidLevel(t *testing.T) {
 	}
 }
 
-func TestCompactStreamEventIncludesFailureContext(t *testing.T) {
-	line := compactStreamEvent(streampkg.Event{
+func TestStreamRendererIncludesFailureContext(t *testing.T) {
+	line := exampleRenderLine(streampkg.Event{
 		EventType: streampkg.EventRunnerNodeFailed,
 		From:      streampkg.Source{Layer: "runner", ID: "runner-1"},
 		Status:    streampkg.StatusFailed,
@@ -408,8 +409,8 @@ func TestCompactStreamEventIncludesFailureContext(t *testing.T) {
 	}
 }
 
-func TestCompactStreamEventShowsSettledPhase(t *testing.T) {
-	line := compactStreamEvent(streampkg.Event{
+func TestStreamRendererShowsSettledPhase(t *testing.T) {
+	line := exampleRenderLine(streampkg.Event{
 		EventType: streampkg.EventRunnerPhaseChanged,
 		From:      streampkg.Source{Layer: "runner", ID: "runner-1"},
 		Status:    streampkg.StatusCompleted,
@@ -423,8 +424,8 @@ func TestCompactStreamEventShowsSettledPhase(t *testing.T) {
 	}
 }
 
-func TestCompactStreamEventShowsToolExecution(t *testing.T) {
-	line := compactStreamEvent(streampkg.Event{
+func TestStreamRendererShowsToolExecution(t *testing.T) {
+	line := exampleRenderLine(streampkg.Event{
 		EventType: streampkg.EventToolExecutionStarted,
 		From:      streampkg.Source{Layer: "skill", ID: "train_gp_model"},
 		Status:    streampkg.StatusRunning,
@@ -439,8 +440,8 @@ func TestCompactStreamEventShowsToolExecution(t *testing.T) {
 	}
 }
 
-func TestCompactStreamEventShowsFailedToolExecution(t *testing.T) {
-	line := compactStreamEvent(streampkg.Event{
+func TestStreamRendererShowsFailedToolExecution(t *testing.T) {
+	line := exampleRenderLine(streampkg.Event{
 		EventType: streampkg.EventToolExecutionFailed,
 		From:      streampkg.Source{Layer: "skill", ID: "train_gp_model"},
 		Status:    streampkg.StatusFailed,
@@ -452,6 +453,10 @@ func TestCompactStreamEventShowsFailedToolExecution(t *testing.T) {
 			t.Fatalf("compact line missing %q:\n%s", want, line)
 		}
 	}
+}
+
+func exampleRenderLine(event streampkg.Event) string {
+	return streamrender.New(nil, streamrender.Config{}).FormatEvent(event)
 }
 
 func runSkillScript(ctx context.Context, skillDir string, script string, inputJSON string) (string, error) {

@@ -85,22 +85,17 @@ func (o *Orchestrator) startManagedRunner(ctx context.Context, runner *runnerpkg
 	o.mu.Unlock()
 	err := runner.StartManaged(ctx)
 	if err != nil {
-		o.handleManagedRunnerStartError(runner, err)
+		o.mu.Lock()
+		delete(o.runningRunnerIDs, id)
+		toStart, toCancel := o.collectQueuedStartsLocked()
+		o.mu.Unlock()
+		if runner.State().Status == runnerpkg.RunnerStatusPending {
+			runner.Abort(err)
+		}
+		o.finishQueuedDispatch(toStart, toCancel)
 		return err
 	}
 	return nil
-}
-
-func (o *Orchestrator) handleManagedRunnerStartError(runner *runnerpkg.Runner, runErr error) {
-	id := runner.ID()
-	o.mu.Lock()
-	delete(o.runningRunnerIDs, id)
-	toStart, toCancel := o.collectQueuedStartsLocked()
-	o.mu.Unlock()
-	if runner.State().Status == runnerpkg.RunnerStatusPending {
-		runner.Abort(runErr)
-	}
-	o.finishQueuedDispatch(toStart, toCancel)
 }
 
 func (o *Orchestrator) releaseRunnerExecutionSlot(id string) {

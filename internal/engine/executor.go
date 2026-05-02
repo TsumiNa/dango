@@ -206,15 +206,13 @@ func (e *Executor) Report(ctx context.Context, output any) (any, error) {
 	return e.reportExchange(ctx, output)
 }
 
-func (e *Executor) BindForRunner(sessID *string, sessStores ...llm.SessionStore) (string, error) {
-	return e.bindForRunner(sessID, nil, sessStores...)
-}
-
-func (e *Executor) BindForRunnerWithAccessibleDirs(sessID *string, accessibleDirs []string, sessStores ...llm.SessionStore) (string, error) {
-	return e.bindForRunner(sessID, accessibleDirs, sessStores...)
-}
-
-func (e *Executor) bindForRunner(sessID *string, accessibleDirs []string, sessStores ...llm.SessionStore) (string, error) {
+// BindForRunner binds the executor's skill for a runner-owned session.
+//
+// accessibleDirs extends the skill workspace for this runtime binding, so
+// request artifact roots and upstream exchange resources can be read or written
+// by standard skill tools. The returned string is the bound conversation session
+// id, when session persistence is configured.
+func (e *Executor) BindForRunner(sessID *string, accessibleDirs []string, sessStores ...llm.SessionStore) (string, error) {
 	if e.skill == nil {
 		return "", fmt.Errorf("orchestrate: executor requires a non-nil skill")
 	}

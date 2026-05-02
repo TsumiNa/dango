@@ -75,7 +75,11 @@ func marshalOrchestratorPlanningInput(request string, skills []runnerpkg.SkillSu
 	payload.Contract = "plan.request must be the original request; plan.nodes[].skill_name must reference an available skill; reject must include summary and analysis."
 	payload.Data.Request = request
 	payload.Data.Skills = append([]runnerpkg.SkillSummary(nil), skills...)
-	return marshalOrchestratorPrompt(payload)
+	buf, err := json.Marshal(payload)
+	if err != nil {
+		return "", err
+	}
+	return string(buf), nil
 }
 
 func parseOrchestratorPlanningOutput(raw string) (*runnerpkg.CoarsePlan, *RejectReason, error) {
@@ -90,14 +94,6 @@ func parseOrchestratorPlanningOutput(raw string) (*runnerpkg.CoarsePlan, *Reject
 		return nil, nil, fmt.Errorf("planner returned neither a plan nor a reject reason")
 	}
 	return out.Plan, out.Reject, nil
-}
-
-func marshalOrchestratorPrompt(v any) (string, error) {
-	buf, err := json.Marshal(v)
-	if err != nil {
-		return "", err
-	}
-	return string(buf), nil
 }
 
 func runtimeOrchestrator(sk *llm.Skill, envClient *llm.Client, envClientErr error) (*llm.Skill, error) {

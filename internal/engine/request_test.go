@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -128,6 +129,13 @@ func TestStartRequest_BuildsRunnerFromPlanAndReturnsID(t *testing.T) {
 	}
 	if got := runExecutor.Planner().ArtifactsDir; got != artifactsDir {
 		t.Errorf("run artifacts dir = %q, want %q", got, artifactsDir)
+	}
+	realArtifactsDir, err := filepath.EvalSymlinks(artifactsDir)
+	if err != nil {
+		t.Fatalf("EvalSymlinks(artifactsDir): %v", err)
+	}
+	if got := runExecutor.Skill().AccessibleDirs(); len(got) != 1 || got[0] != realArtifactsDir {
+		t.Fatalf("run skill accessible dirs = %v, want [%s]", got, realArtifactsDir)
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)

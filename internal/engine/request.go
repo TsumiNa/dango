@@ -46,20 +46,20 @@ func (p RequestPriority) valid() bool {
 
 // Request is the external task description the Orchestrator receives from the
 // caller. It contains only caller-provided input; observation state such as the
-// request stream is returned in [StartRequestResponse].
+// request stream is returned in [Response].
 type Request struct {
 	Input        string          `json:"input" yaml:"input"`
 	Priority     RequestPriority `json:"priority,omitempty" yaml:"priority,omitempty"`
 	ArtifactsDir string          `json:"artifacts_dir,omitempty" yaml:"artifacts_dir,omitempty"`
 }
 
-// StartRequestResponse is returned by [Orchestrator.StartRequest].
+// Response is returned by [Orchestrator.StartRequest].
 //
 // Stream is the request-scoped event stream created for this orchestration
 // attempt. RunnerID is populated once planning succeeds and a runner is
 // materialized; it is empty when the request is rejected before runner
 // creation.
-type StartRequestResponse struct {
+type Response struct {
 	Stream   *streampkg.Stream
 	RunnerID string
 }
@@ -80,13 +80,13 @@ type RejectReason struct {
 // ID once the runner has been accepted into orchestration. The stream is
 // replayable, so callers may subscribe after StartRequest returns and still
 // inspect planning events emitted during request startup.
-func (o *Orchestrator) StartRequest(ctx context.Context, req Request) (*StartRequestResponse, error) {
+func (o *Orchestrator) StartRequest(ctx context.Context, req Request) (*Response, error) {
 	ctx = o.operationContext(ctx)
 	if !req.Priority.valid() {
 		return nil, fmt.Errorf("orchestrate: request priority must be between %d and %d", RequestPriorityDefault, RequestPriorityHighest)
 	}
 	eventStream := streampkg.New(streampkg.Scope{})
-	resp := &StartRequestResponse{Stream: eventStream}
+	resp := &Response{Stream: eventStream}
 
 	o.mu.Lock()
 	o.configLocked = true
@@ -237,8 +237,18 @@ func buildPlanNodes(logger *slog.Logger, req Request, eventStream *streampkg.Str
 		if planner.TaskDescription == "" {
 			planner.TaskDescription = req.Input
 		}
+		skill := skillCfg.Skill
+		if req.ArtifactsDir != "" {
+			dirs := append([]string(nil), skillCfg.AccessibleDirs...)
+			dirs = append(dirs, req.ArtifactsDir)
+			var err error
+			skill, err = skill.WithAccessibleDirsAndBuiltinTools(dirs...)
+			if err != nil {
+				return nil, fmt.Errorf("orchestrate: configure artifacts dir for node %q: %w", step.ID, err)
+			}
+		}
 		convCfg := conversationConfigForNode(skillCfg.Config, eventStream, step.ID, step.SkillName)
-		executor, err := NewExecutor(logger, skillCfg.Skill, skillCfg.Client, convCfg, planner)
+		executor, err := NewExecutor(logger, skill, skillCfg.Client, convCfg, planner)
 		if err != nil {
 			return nil, fmt.Errorf("orchestrate: build executor for node %q: %w", step.ID, err)
 		}

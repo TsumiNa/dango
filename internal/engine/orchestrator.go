@@ -73,6 +73,33 @@ func (o *Orchestrator) resolveEnvClient() (*llm.Client, error) {
 	return o.envClient, o.envClientErr
 }
 
+// SetClient configures the default LLM client used by the embedded
+// orchestrator skill and skill directories registered with
+// [Orchestrator.AddSkillDirs].
+//
+// It is intended for tests, examples, and applications that already constructed
+// a client and want the orchestrator to own the remaining binding work. It must
+// be called before the first planning call.
+func (o *Orchestrator) SetClient(client *llm.Client) error {
+	if client == nil {
+		return fmt.Errorf("orchestrate: SetClient requires a non-nil client")
+	}
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	if o.configLocked {
+		return fmt.Errorf("orchestrate: SetClient can only be called during startup")
+	}
+	o.envClientOnce.Do(func() {})
+	o.envClient = client
+	o.envClientErr = nil
+	skill, err := bindOrchestratorSkill(o.orchestratorSkill, client)
+	if err != nil {
+		return err
+	}
+	o.orchestratorSkill = skill
+	return nil
+}
+
 // NewOrchestrator constructs a new Orchestrator with the provided lifecycle
 // context and logger.
 //
@@ -394,12 +421,17 @@ func (o *Orchestrator) AddSkills(cfgs ...AddSkillConfig) error {
 	return nil
 }
 
-// AddSkillFromDirs loads one or more skill directories and registers them with the
+// AddSkillDirs loads one or more skill directories and registers them with the
 // orchestrator.
-func (o *Orchestrator) AddSkillFromDirs(client *llm.Client, cfg *llm.ConversationConfig, dirs ...string) error {
+//
+// When [Orchestrator.SetClient] or the environment has configured a default
+// client, that client is used for these skill runtimes. Otherwise each skill is
+// left to resolve its client from its own environment when the runner binds it.
+func (o *Orchestrator) AddSkillDirs(cfg *llm.ConversationConfig, dirs ...string) error {
 	if len(dirs) == 0 {
 		return nil
 	}
+	client, _ := o.resolveEnvClient()
 	cfgs := make([]AddSkillConfig, 0, len(dirs))
 	for i, dir := range dirs {
 		if dir == "" {
