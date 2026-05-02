@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"strconv"
 	"time"
+
+	streampkg "github.com/tsumina/dango/internal/engine/stream"
 )
 
 // Role classifies the origin of a [Turn] in a [Conversation].
@@ -138,11 +140,17 @@ type AutoShrinkConfig struct {
 // A nil *ConversationConfig passed to [NewConversation] uses the default
 // conversation settings. Non-zero MaxSteps overrides the request/tool-call
 // loop bound, AutoShrink overrides the default shrinking policy when non-nil,
-// and Summarizer enables summary-based compression.
+// Summarizer enables summary-based compression, and Stream configures compact
+// model/tool progress events for outer orchestration layers. Stream output is
+// observational and independent of session persistence.
 type ConversationConfig struct {
-	MaxSteps   int
-	AutoShrink *AutoShrinkConfig
-	Summarizer Summarizer
+	MaxSteps       int
+	AutoShrink     *AutoShrinkConfig
+	Summarizer     Summarizer
+	Stream         *streampkg.Stream
+	StreamSource   streampkg.Source
+	StreamScope    streampkg.Scope
+	StreamMetadata map[string]any
 }
 
 // Summarizer collapses an older slice of turns into a single compact
@@ -192,11 +200,20 @@ type Conversation struct {
 	// treated as [DefaultMaxSteps].
 	maxSteps int
 
+	// Stream output. When configured, model/tool progress is emitted as
+	// compact stream events. Large generated content should be written as
+	// artifacts and referenced from events rather than embedded raw.
+	eventStream   *streampkg.Stream
+	eventSource   streampkg.Source
+	eventScope    streampkg.Scope
+	eventMetadata map[string]any
+
 	// Persistence. stores and sessionID are set by [Conversation.OpenSession];
 	// when stores is empty all mutating methods are pure in-memory updates.
-	// replaying suppresses emission while applying a loaded log so replay does
-	// not feed back into the stores. lastErr captures the most recent emit
-	// failure for [Conversation.LastError].
+	// Session persistence records lifecycle state only; it is not a mirror of
+	// the outward stream. replaying suppresses emission while applying a loaded
+	// log so replay does not feed back into the stores. lastErr captures the
+	// most recent emit failure for [Conversation.LastError].
 	stores    []SessionStore
 	sessionID string
 	replaying bool
@@ -270,6 +287,16 @@ func NewConversation(client *Client, instructions string, tools []Tool, cfg *Con
 		}
 		if cfg.Summarizer != nil {
 			c.summarizer = cfg.Summarizer
+		}
+		if cfg.Stream != nil {
+			source := cfg.StreamSource
+			if source.Layer == "" {
+				source.Layer = "conversation"
+			}
+			c.eventStream = cfg.Stream
+			c.eventSource = source
+			c.eventScope = cfg.StreamScope
+			c.eventMetadata = cloneConversationStreamMetadata(cfg.StreamMetadata)
 		}
 	}
 	return c, nil
@@ -657,6 +684,7 @@ func (c *Conversation) AppendToolOutput(callID, output string, execErr error) {
 	}
 	c.turns = append(c.turns, turn)
 	c.emit(&Event{Kind: EventAppendToolOutput, Turn: &turn})
+	c.emitToolResult(context.Background(), callID, output, execErr)
 }
 
 // Trim drops the oldest turns so that at most keepLastTurns remain. Tool

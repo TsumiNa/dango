@@ -7,6 +7,7 @@ import (
 	"sort"
 
 	runnerpkg "github.com/tsumina/dango/internal/engine/runner"
+	streampkg "github.com/tsumina/dango/internal/engine/stream"
 	"github.com/tsumina/dango/internal/llm"
 )
 
@@ -35,13 +36,13 @@ const (
 	OrchestratorProgressText      = "text_delta"
 )
 
-func planWithOrchestrator(ctx context.Context, req *Request, skills []runnerpkg.SkillSummary, runtimeSkill *llm.Skill, progress OrchestratorProgressFunc) (*CoarsePlan, *RejectReason, error) {
+func planWithOrchestrator(ctx context.Context, req *Request, skills []runnerpkg.SkillSummary, runtimeSkill *llm.Skill, eventStream *streampkg.Stream, progress OrchestratorProgressFunc) (*CoarsePlan, *RejectReason, error) {
 	prompt, err := marshalOrchestratorPlanningInput(req.Input, skills)
 	if err != nil {
 		return nil, nil, fmt.Errorf("orchestrate: marshal planner input: %w", err)
 	}
-	if progress != nil {
-		return planWithOrchestratorStream(ctx, prompt, runtimeSkill, progress)
+	if eventStream != nil || progress != nil {
+		return planWithOrchestratorStream(ctx, prompt, runtimeSkill, eventStream, progress)
 	}
 	raw, err := runtimeSkill.Run(normalizeContext(ctx), prompt, defaultPlanningEffort)
 	if err != nil {
@@ -50,13 +51,13 @@ func planWithOrchestrator(ctx context.Context, req *Request, skills []runnerpkg.
 	return parsePlanningResult(raw)
 }
 
-func planWithOrchestratorStream(ctx context.Context, prompt string, runtimeSkill *llm.Skill, progress OrchestratorProgressFunc) (*CoarsePlan, *RejectReason, error) {
+func planWithOrchestratorStream(ctx context.Context, prompt string, runtimeSkill *llm.Skill, eventStream *streampkg.Stream, progress OrchestratorProgressFunc) (*CoarsePlan, *RejectReason, error) {
 	ctx = normalizeContext(ctx)
 	conv := runtimeSkill.Conversation()
 	if conv == nil {
 		return nil, nil, fmt.Errorf("orchestrate: orchestrator skill is not bound")
 	}
-	progress(OrchestratorProgressEvent{Type: OrchestratorProgressStatus, Message: "orchestrator planning stream started"})
+	emitPlanningProgress(ctx, eventStream, progress, OrchestratorProgressEvent{Type: OrchestratorProgressStatus, Message: "orchestrator planning stream started"})
 	conv.AppendUser(prompt)
 	stream, err := conv.Stream(ctx, defaultPlanningEffort)
 	if err != nil {
@@ -65,21 +66,64 @@ func planWithOrchestratorStream(ctx context.Context, prompt string, runtimeSkill
 	var raw string
 	for event := range stream {
 		if event.Err != nil {
+			emitEngineStreamEvent(ctx, eventStream,
+				streamSourceOrchestrator(),
+				streampkg.EventStatusFailed,
+				streampkg.StatusFailed,
+				event.Err.Error(),
+				streampkg.Scope{},
+				map[string]any{"stage": "planning"},
+			)
 			return nil, nil, event.Err
 		}
 		if event.ReasoningDelta != "" {
-			progress(OrchestratorProgressEvent{Type: OrchestratorProgressReasoning, Delta: event.ReasoningDelta})
+			emitPlanningProgress(ctx, eventStream, progress, OrchestratorProgressEvent{Type: OrchestratorProgressReasoning, Delta: event.ReasoningDelta})
 		}
 		if event.TextDelta != "" {
 			raw += event.TextDelta
-			progress(OrchestratorProgressEvent{Type: OrchestratorProgressText, Delta: event.TextDelta})
+			emitPlanningProgress(ctx, eventStream, progress, OrchestratorProgressEvent{Type: OrchestratorProgressText, Delta: event.TextDelta})
 		}
 	}
 	if raw == "" {
 		raw = lastAssistantText(conv)
 	}
-	progress(OrchestratorProgressEvent{Type: OrchestratorProgressStatus, Message: "orchestrator planning stream completed"})
+	emitPlanningProgress(ctx, eventStream, progress, OrchestratorProgressEvent{Type: OrchestratorProgressStatus, Message: "orchestrator planning stream completed"})
 	return parsePlanningResult(raw)
+}
+
+func emitPlanningProgress(ctx context.Context, eventStream *streampkg.Stream, progress OrchestratorProgressFunc, event OrchestratorProgressEvent) {
+	if progress != nil {
+		progress(event)
+	}
+	switch event.Type {
+	case OrchestratorProgressStatus:
+		emitEngineStreamEvent(ctx, eventStream,
+			streamSourceOrchestrator(),
+			streampkg.EventStatusProgress,
+			streampkg.StatusRunning,
+			event.Message,
+			streampkg.Scope{},
+			map[string]any{"stage": "planning"},
+		)
+	case OrchestratorProgressReasoning:
+		emitEngineStreamEvent(ctx, eventStream,
+			streamSourceOrchestrator(),
+			streampkg.EventLLMReasoningDelta,
+			streampkg.StatusRunning,
+			event.Delta,
+			streampkg.Scope{},
+			map[string]any{"stage": "planning"},
+		)
+	case OrchestratorProgressText:
+		emitEngineStreamEvent(ctx, eventStream,
+			streamSourceOrchestrator(),
+			streampkg.EventLLMOutputDelta,
+			streampkg.StatusRunning,
+			event.Delta,
+			streampkg.Scope{},
+			map[string]any{"stage": "planning"},
+		)
+	}
 }
 
 func parsePlanningResult(raw string) (*CoarsePlan, *RejectReason, error) {

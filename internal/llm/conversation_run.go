@@ -61,7 +61,9 @@ func (c *Conversation) Run(ctx context.Context, userInput string, effort Reasoni
 			return resp.Text, nil
 		}
 		for _, call := range resp.ToolCalls {
+			c.emitToolExecutionStarted(ctx, call)
 			output, execErr := c.dispatch(ctx, call)
+			c.emitToolExecutionFinished(ctx, call, execErr)
 			c.AppendToolOutput(call.CallID, output, execErr)
 			// execErr is surfaced to the model via output so the loop
 			// can recover on the next turn.

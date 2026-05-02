@@ -2,10 +2,12 @@ package engine
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"testing"
 	"time"
 
+	streampkg "github.com/tsumina/dango/internal/engine/stream"
 	"github.com/tsumina/dango/internal/llm"
 )
 
@@ -175,6 +177,88 @@ func TestStartRequestWithProgress_StreamsPlannerDeltas(t *testing.T) {
 	defer cancel()
 	if err := managedRunner.Wait(waitCtx); err != nil {
 		t.Fatalf("runner Wait: %v", err)
+	}
+}
+
+func TestStartRequest_EmitsRequestStreamEvents(t *testing.T) {
+	clearLLMEnv(t)
+	o := newOrchestrator(testLogger)
+	mustAddSkills(t, o, newTestSkillConfig(t, "single", "Single-step runner.", nil))
+	planOutput := mustPlanJSON(t, &CoarsePlan{
+		Request: "run a single node",
+		Nodes: []CoarsePlanNode{{
+			ID:              "only",
+			SkillName:       "single",
+			TaskDescription: "Run the only node.",
+		}},
+	})
+	if err := o.SetOrchestratorSkill(bindStreamingTestOrchestratorSkill(t, planOutput, mustReviewJSON(t, true, ""))); err != nil {
+		t.Fatalf("SetOrchestratorSkill(test planner): %v", err)
+	}
+
+	eventStream := streampkg.New(streampkg.Scope{RequestID: "req_test"})
+	sub, err := eventStream.Subscribe(streampkg.Filter{}, streampkg.WithSubscriberBuffer(64))
+	if err != nil {
+		t.Fatalf("Subscribe: %v", err)
+	}
+	runnerID, err := o.StartRequest(context.Background(), &Request{Input: "run a single node", Stream: eventStream})
+	if err != nil {
+		t.Fatalf("StartRequest: %v", err)
+	}
+	managedRunner, err := o.Runner(runnerID)
+	if err != nil {
+		t.Fatalf("Runner: %v", err)
+	}
+	waitCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	if err := managedRunner.Wait(waitCtx); err != nil {
+		t.Fatalf("runner Wait: %v", err)
+	}
+	eventStream.Close()
+
+	var (
+		sawReasoning bool
+		sawPlanText  bool
+		sawCreated   bool
+		sawSettled   bool
+		sawNodeDone  bool
+		sawExecutor  bool
+	)
+	for event := range sub.Events() {
+		var deltaText string
+		_ = json.Unmarshal(event.Delta, &deltaText)
+		switch event.EventType {
+		case streampkg.EventLLMReasoningDelta:
+			if deltaText == "planning stream is active" {
+				sawReasoning = true
+			}
+		case streampkg.EventLLMOutputDelta:
+			if deltaText == planOutput {
+				sawPlanText = true
+			}
+		case streampkg.EventStatusProgress:
+			if event.From.Layer == "orchestrator" && event.Scope.RunnerID == runnerID {
+				sawCreated = true
+			}
+		case streampkg.EventRunnerPhaseChanged:
+			var delta map[string]string
+			_ = json.Unmarshal(event.Delta, &delta)
+			if event.Scope.RunnerID == runnerID && delta["phase"] == string(PhaseSettled) && delta["status"] == "idle" {
+				sawSettled = true
+			}
+		case streampkg.EventRunnerNodeCompleted:
+			if event.Scope.RunnerID == runnerID && event.Scope.NodeID == "only" {
+				sawNodeDone = true
+			}
+		case streampkg.EventExecutorExecuteCompleted:
+			if event.Scope.RunnerID == runnerID && event.Scope.NodeID == "only" && event.From.Layer == "executor" {
+				sawExecutor = true
+			}
+		}
+	}
+	if !sawReasoning || !sawPlanText || !sawCreated || !sawSettled || !sawNodeDone || !sawExecutor {
+		t.Fatalf("missing stream events: reasoning=%v text=%v created=%v settled=%v nodeDone=%v executor=%v",
+			sawReasoning, sawPlanText, sawCreated, sawSettled, sawNodeDone, sawExecutor)
 	}
 }
 

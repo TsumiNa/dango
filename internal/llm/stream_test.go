@@ -2,12 +2,15 @@ package llm
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
+
+	streampkg "github.com/tsumina/dango/internal/engine/stream"
 )
 
 // sseResponse writes the given event lines as a single SSE payload
@@ -140,6 +143,56 @@ func TestClient_Stream_ForwardsTextDeltas(t *testing.T) {
 	}
 	if conv.Usage().Total == 0 {
 		t.Errorf("usage not recorded after streaming completion")
+	}
+}
+
+func TestClient_Stream_EmitsConfiguredStreamEvents(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		sseResponse(w,
+			textDeltaEvent("Hel"),
+			textDeltaEvent("lo"),
+			completedEvent("Hello", "", ""),
+		)
+	}))
+	t.Cleanup(srv.Close)
+
+	eventStream := streampkg.New(streampkg.Scope{RequestID: "req_stream"})
+	sub, err := eventStream.Subscribe(streampkg.Filter{EventTypes: []string{streampkg.EventLLMOutputDelta}}, streampkg.WithSubscriberBuffer(8))
+	if err != nil {
+		t.Fatalf("Subscribe: %v", err)
+	}
+	c := testClient(srv.URL)
+	conv := mustNewConversation(t, c, "sys", nil, &ConversationConfig{
+		Stream:       eventStream,
+		StreamSource: streampkg.Source{Layer: "skill", ID: "stream_skill"},
+		StreamScope:  streampkg.Scope{NodeID: "node_stream"},
+	})
+	conv.AppendUser("hi")
+
+	ch, err := conv.Stream(t.Context(), "")
+	if err != nil {
+		t.Fatalf("Stream: %v", err)
+	}
+	_ = collect(t, ch, 5*time.Second)
+	eventStream.Close()
+
+	events := collectStreamEvents(t, sub)
+	if len(events) != 2 {
+		t.Fatalf("stream events = %d, want 2: %+v", len(events), events)
+	}
+	var joined string
+	for _, event := range events {
+		if event.From.Layer != "skill" || event.Scope.RequestID != "req_stream" || event.Scope.NodeID != "node_stream" {
+			t.Fatalf("event routing = from %+v scope %+v", event.From, event.Scope)
+		}
+		var delta string
+		if err := json.Unmarshal(event.Delta, &delta); err != nil {
+			t.Fatalf("unmarshal delta: %v", err)
+		}
+		joined += delta
+	}
+	if joined != "Hello" {
+		t.Fatalf("joined stream event text = %q, want Hello", joined)
 	}
 }
 

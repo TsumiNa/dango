@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"sync"
+
+	streampkg "github.com/tsumina/dango/internal/engine/stream"
 )
 
 // Complete signals that the engine has reached its end successfully,
@@ -289,7 +291,7 @@ func (r *Runner) waitForPhase(ctx context.Context, want RunnerPhase) error {
 }
 
 func (r *Runner) runPolishStage(ctx context.Context, nodes map[string]*Node) {
-	fragments, err := fanOutPolish(ctx, nodes)
+	fragments, err := r.fanOutPolish(ctx, nodes)
 
 	r.lifecycleMu.Lock()
 	r.polishFragments = fragments
@@ -314,7 +316,7 @@ func (r *Runner) runReportStage(ctx context.Context) {
 	snapshot := cloneRunnerSnapshot(r.snapshot)
 	r.updateMu.Unlock()
 
-	summaries, err := fanOutReport(ctx, snapshot.NodesData, snapshot.CompletedNodes)
+	summaries, err := r.fanOutReport(ctx, snapshot.NodesData, snapshot.CompletedNodes)
 
 	r.lifecycleMu.Lock()
 	r.reportSummaries = summaries
@@ -326,7 +328,7 @@ func (r *Runner) runReportStage(ctx context.Context) {
 	}
 }
 
-func fanOutPolish(ctx context.Context, nodes map[string]*Node) (map[string]any, error) {
+func (r *Runner) fanOutPolish(ctx context.Context, nodes map[string]*Node) (map[string]any, error) {
 	if len(nodes) == 0 {
 		return map[string]any{}, nil
 	}
@@ -341,19 +343,31 @@ func fanOutPolish(ctx context.Context, nodes map[string]*Node) (map[string]any, 
 			continue
 		}
 		wg.Add(1)
-		go func(id string, executor Executor) {
+		go func(id string, node *Node, executor Executor) {
 			defer wg.Done()
+			r.emitExecutorStreamEvent(ctx, streampkg.EventExecutorPolishStarted, streampkg.StatusRunning, id, node, map[string]any{
+				"stage": "polish",
+			})
 			frag, err := executor.Polish(ctx)
-			mu.Lock()
-			defer mu.Unlock()
 			if err != nil {
+				r.emitExecutorStreamEvent(ctx, streampkg.EventExecutorPolishFailed, streampkg.StatusFailed, id, node, map[string]any{
+					"stage": "polish",
+					"error": compactStreamText(err.Error()),
+				})
+				mu.Lock()
+				defer mu.Unlock()
 				if firstErr == nil {
 					firstErr = fmt.Errorf("polish %s: %w", id, err)
 				}
 				return
 			}
+			r.emitExecutorStreamEvent(ctx, streampkg.EventExecutorPolishCompleted, streampkg.StatusCompleted, id, node, map[string]any{
+				"stage": "polish",
+			})
+			mu.Lock()
+			defer mu.Unlock()
 			fragments[id] = frag
-		}(id, node.Executor)
+		}(id, node, node.Executor)
 	}
 	wg.Wait()
 	if firstErr != nil {
@@ -362,7 +376,7 @@ func fanOutPolish(ctx context.Context, nodes map[string]*Node) (map[string]any, 
 	return fragments, nil
 }
 
-func fanOutReport(ctx context.Context, nodes map[string]*Node, outputs map[string]any) (map[string]any, error) {
+func (r *Runner) fanOutReport(ctx context.Context, nodes map[string]*Node, outputs map[string]any) (map[string]any, error) {
 	if len(outputs) == 0 {
 		return map[string]any{}, nil
 	}
@@ -381,19 +395,31 @@ func fanOutReport(ctx context.Context, nodes map[string]*Node, outputs map[strin
 			continue
 		}
 		wg.Add(1)
-		go func(id string, executor Executor, output any) {
+		go func(id string, node *Node, executor Executor, output any) {
 			defer wg.Done()
+			r.emitExecutorStreamEvent(ctx, streampkg.EventExecutorReportStarted, streampkg.StatusRunning, id, node, map[string]any{
+				"stage": "report",
+			})
 			summary, err := executor.Report(ctx, output)
-			mu.Lock()
-			defer mu.Unlock()
 			if err != nil {
+				r.emitExecutorStreamEvent(ctx, streampkg.EventExecutorReportFailed, streampkg.StatusFailed, id, node, map[string]any{
+					"stage": "report",
+					"error": compactStreamText(err.Error()),
+				})
+				mu.Lock()
+				defer mu.Unlock()
 				if firstErr == nil {
 					firstErr = fmt.Errorf("report %s: %w", id, err)
 				}
 				return
 			}
+			r.emitExecutorStreamEvent(ctx, streampkg.EventExecutorReportCompleted, streampkg.StatusCompleted, id, node, map[string]any{
+				"stage": "report",
+			})
+			mu.Lock()
+			defer mu.Unlock()
 			summaries[id] = summary
-		}(id, node.Executor, output)
+		}(id, node, node.Executor, output)
 	}
 	wg.Wait()
 	if firstErr != nil {

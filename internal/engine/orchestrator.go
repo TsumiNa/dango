@@ -438,6 +438,12 @@ func cloneConversationConfig(cfg *llm.ConversationConfig) *llm.ConversationConfi
 		auto := *cfg.AutoShrink
 		clone.AutoShrink = &auto
 	}
+	if cfg.StreamMetadata != nil {
+		clone.StreamMetadata = make(map[string]any, len(cfg.StreamMetadata))
+		for k, v := range cfg.StreamMetadata {
+			clone.StreamMetadata[k] = v
+		}
+	}
 	return &clone
 }
 

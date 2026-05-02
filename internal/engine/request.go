@@ -7,6 +7,7 @@ import (
 	"log/slog"
 
 	runnerpkg "github.com/tsumina/dango/internal/engine/runner"
+	streampkg "github.com/tsumina/dango/internal/engine/stream"
 	"github.com/tsumina/dango/internal/llm"
 )
 
@@ -51,13 +52,37 @@ func (o *Orchestrator) startRequest(ctx context.Context, req *Request, progress 
 		}
 		return "", err
 	}
+	emitEngineStreamEvent(ctx, req.Stream,
+		streamSourceOrchestrator(),
+		streampkg.EventStatusStarted,
+		streampkg.StatusRunning,
+		"orchestrator planning started",
+		streampkg.Scope{},
+		nil,
+	)
 
 	skillSummaries := collectSkillSummaries(cloneSkillMap(skillConfigs))
-	plan, reject, err := planWithOrchestrator(ctx, req, skillSummaries, runtimeSkill, progress)
+	plan, reject, err := planWithOrchestrator(ctx, req, skillSummaries, runtimeSkill, req.Stream, progress)
 	if err != nil {
+		emitEngineStreamEvent(ctx, req.Stream,
+			streamSourceOrchestrator(),
+			streampkg.EventStatusFailed,
+			streampkg.StatusFailed,
+			err.Error(),
+			streampkg.Scope{},
+			nil,
+		)
 		return "", err
 	}
 	if reject != nil {
+		emitEngineStreamEvent(ctx, req.Stream,
+			streamSourceOrchestrator(),
+			streampkg.EventStatusFailed,
+			streampkg.StatusFailed,
+			reject.Summary,
+			streampkg.Scope{},
+			map[string]any{"reason": reject.Analysis},
+		)
 		return "", &RequestRejectedError{Reason: reject}
 	}
 	if plan == nil {
@@ -69,6 +94,14 @@ func (o *Orchestrator) startRequest(ctx context.Context, req *Request, progress 
 		return "", err
 	}
 	runnerID := runner.ID()
+	emitEngineStreamEvent(ctx, req.Stream,
+		streamSourceOrchestrator(),
+		streampkg.EventStatusProgress,
+		streampkg.StatusRunning,
+		map[string]any{"message": "runner created", "runner_id": runnerID},
+		streampkg.Scope{RunnerID: runnerID},
+		nil,
+	)
 
 	o.mu.Lock()
 	o.runners[runnerID] = runner
@@ -90,11 +123,12 @@ func newRunnerFromPlan(ctx context.Context, logger *slog.Logger, store runnerpkg
 		runnerpkg.WithContext(ctx),
 		runnerpkg.WithLogger(logger),
 		runnerpkg.WithStore(store),
+		runnerpkg.WithStream(req.Stream),
 		runnerpkg.WithPlan(plan, nodes),
 		runnerpkg.WithPlannerSkill(plannerSkill),
 		runnerpkg.WithSkillSummaries(skillSummaries),
 		runnerpkg.WithPlanNodeBuilder(func(replanned *runnerpkg.CoarsePlan) (map[string]*runnerpkg.Node, error) {
-			request := &Request{Input: replanned.Request, ArtifactsDir: req.ArtifactsDir}
+			request := &Request{Input: replanned.Request, ArtifactsDir: req.ArtifactsDir, Stream: req.Stream}
 			return buildPlanNodes(logger, request, replanned, skills)
 		}),
 	), nil
@@ -129,7 +163,8 @@ func buildPlanNodes(logger *slog.Logger, req *Request, plan *CoarsePlan, skills 
 		if planner.TaskDescription == "" {
 			planner.TaskDescription = req.Input
 		}
-		executor, err := NewExecutor(logger, skillCfg.Skill, skillCfg.Client, skillCfg.Config, planner)
+		convCfg := conversationConfigForNode(skillCfg.Config, req.Stream, step.ID, step.SkillName)
+		executor, err := NewExecutor(logger, skillCfg.Skill, skillCfg.Client, convCfg, planner)
 		if err != nil {
 			return nil, fmt.Errorf("orchestrate: build executor for node %q: %w", step.ID, err)
 		}
@@ -154,6 +189,24 @@ func buildPlanNodes(logger *slog.Logger, req *Request, plan *CoarsePlan, skills 
 	}
 
 	return nodes, nil
+}
+
+func conversationConfigForNode(cfg *llm.ConversationConfig, eventStream *streampkg.Stream, nodeID string, skillName string) *llm.ConversationConfig {
+	out := cloneConversationConfig(cfg)
+	if eventStream == nil {
+		return out
+	}
+	if out == nil {
+		out = &llm.ConversationConfig{}
+	}
+	out.Stream = eventStream
+	out.StreamSource = streampkg.Source{Layer: "skill", ID: skillName, ParentID: nodeID}
+	out.StreamScope = streampkg.Scope{NodeID: nodeID}
+	out.StreamMetadata = map[string]any{
+		"node_id":    nodeID,
+		"skill_name": skillName,
+	}
+	return out
 }
 
 func cloneAddSkillConfigs(skills map[string]AddSkillConfig) map[string]AddSkillConfig {

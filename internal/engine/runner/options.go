@@ -4,6 +4,7 @@ import (
 	"context"
 	"log/slog"
 
+	streampkg "github.com/tsumina/dango/internal/engine/stream"
 	"github.com/tsumina/dango/internal/llm"
 )
 
@@ -41,6 +42,14 @@ func WithLogger(logger *slog.Logger) Option {
 func WithStore(store RunnerStore) Option {
 	return func(r *Runner) {
 		r.store = store
+	}
+}
+
+// WithStream attaches a request-scoped output stream for compact lifecycle
+// events. Passing nil leaves stream emission disabled.
+func WithStream(eventStream *streampkg.Stream) Option {
+	return func(r *Runner) {
+		r.eventStream = eventStream
 	}
 }
 

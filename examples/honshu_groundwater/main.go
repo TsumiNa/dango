@@ -16,6 +16,7 @@ import (
 
 	orchestrate "github.com/tsumina/dango/internal/engine"
 	runnerpkg "github.com/tsumina/dango/internal/engine/runner"
+	streampkg "github.com/tsumina/dango/internal/engine/stream"
 	"github.com/tsumina/dango/internal/llm"
 )
 
@@ -103,31 +104,40 @@ func runHonshuGroundwaterExample(ctx context.Context, cfg exampleConfig) (*runne
 	if err := os.MkdirAll(artifactsDir, 0o755); err != nil {
 		return nil, err
 	}
-	orLog, orLogPath, err := createArtifactLog(artifactsDir, "orchestrator_stream.ndjson")
+	streamLog, streamLogPath, err := createArtifactLog(artifactsDir, "stream_events.ndjson")
 	if err != nil {
 		return nil, err
 	}
-	defer orLog.Close()
-	runnerLog, runnerLogPath, err := createArtifactLog(artifactsDir, "runner_updates.ndjson")
+	defer streamLog.Close()
+	eventStream := streampkg.New(streampkg.Scope{RequestID: "honshu_groundwater"})
+	events, err := eventStream.Subscribe(streampkg.Filter{}, streampkg.WithSubscriberBuffer(256))
 	if err != nil {
 		return nil, err
 	}
-	defer runnerLog.Close()
+	eventErrCh := make(chan error, 1)
+	go func() {
+		eventErrCh <- streamExampleEvents(ctx, cfg.Out, streamLog, events)
+	}()
+	closeEventStream := func() error {
+		eventStream.Close()
+		return <-eventErrCh
+	}
 
 	root, err := exampleRoot()
 	if err != nil {
+		_ = closeEventStream()
 		return nil, err
 	}
 	logger.Info("honshu groundwater example starting",
 		"example_root", root,
 		"artifacts_dir", artifactsDir,
 		"measurements_bytes", len(cfg.MeasurementsJSON),
-		"orchestrator_stream_log", orLogPath,
-		"runner_updates_log", runnerLogPath,
+		"stream_events_log", streamLogPath,
 	)
 	logger.Info("loading llm client")
 	client, err := resolveExampleLLMClient(cfg)
 	if err != nil {
+		_ = closeEventStream()
 		return nil, err
 	}
 	logger.Info("llm client ready",
@@ -137,42 +147,39 @@ func runHonshuGroundwaterExample(ctx context.Context, cfg exampleConfig) (*runne
 	)
 	orchestrator, err := configureExampleOrchestrator(ctx, root, client, logger)
 	if err != nil {
+		_ = closeEventStream()
 		return nil, err
 	}
 
 	request := buildGroundwaterRequest(cfg.MeasurementsJSON)
 	logger.Info("submitting request to orchestrator")
-	runnerID, err := orchestrator.StartRequestWithProgress(ctx, &orchestrate.Request{
+	runnerID, err := orchestrator.StartRequest(ctx, &orchestrate.Request{
 		Input:        request,
 		ArtifactsDir: artifactsDir,
-	}, exampleOrchestratorProgress(cfg.Out, logger, orLog))
+		Stream:       eventStream,
+	})
 	if err != nil {
 		logger.Error("request failed before runner stream was available", "err", err)
+		_ = closeEventStream()
 		return nil, fmt.Errorf("start request before runner stream is available: %w", err)
 	}
 	logger.Info("runner created", "runner_id", runnerID)
-	fmt.Fprintf(cfg.Out, "or: runner created runner_id=%s\n", runnerID)
-	updates, unsubscribe, err := orchestrator.SubscribeRunner(runnerID, 64)
-	if err != nil {
-		return nil, err
-	}
-	defer unsubscribe()
-	logger.Info("streaming runner updates", "runner_id", runnerID)
-	if err := streamRunnerUpdates(ctx, cfg.Out, runnerLog, updates); err != nil {
-		logger.Error("runner update stream failed", "runner_id", runnerID, "err", err)
-		return nil, err
-	}
 
 	logger.Info("waiting for runner to settle", "runner_id", runnerID)
 	view, err := orchestrator.WaitRunner(ctx, runnerID)
 	if err != nil {
 		logger.Error("runner wait failed", "runner_id", runnerID, "err", err)
+		_ = closeEventStream()
 		return nil, err
 	}
 	if view == nil || view.Phase != runnerpkg.PhaseSettled {
+		_ = closeEventStream()
 		return nil, fmt.Errorf("runner did not settle: %+v", view)
 	}
 	logger.Info("runner settled", "runner_id", runnerID, "status", view.State.Status, "phase", view.Phase)
+	if err := closeEventStream(); err != nil {
+		return nil, err
+	}
 	return view, nil
 }
 
@@ -250,100 +257,177 @@ func createArtifactLog(artifactsDir string, name string) (*os.File, string, erro
 	return file, path, nil
 }
 
-func exampleOrchestratorProgress(out io.Writer, logger *slog.Logger, raw io.Writer) orchestrate.OrchestratorProgressFunc {
-	encoder := json.NewEncoder(raw)
-	var textBytes int
-	return func(event orchestrate.OrchestratorProgressEvent) {
-		if raw != nil {
-			if err := encoder.Encode(event); err != nil && logger != nil {
-				logger.Error("write orchestrator progress artifact failed", "err", err)
-			}
-		}
-		switch event.Type {
-		case orchestrate.OrchestratorProgressStatus:
-			if logger != nil {
-				logger.Info("orchestrator progress", "message", event.Message)
-			}
-			fmt.Fprintf(out, "or: %s\n", event.Message)
-		case orchestrate.OrchestratorProgressReasoning:
-			if line := compactTerminalText(event.Delta); line != "" {
-				fmt.Fprintf(out, "or reasoning: %s\n", line)
-			}
-		case orchestrate.OrchestratorProgressText:
-			textBytes += len(event.Delta)
-			if logger != nil {
-				logger.Debug("orchestrator plan text received", "bytes", textBytes)
-			}
-		}
-	}
-}
-
 func buildGroundwaterRequest(measurements string) string {
 	return "Use the following messy JSON to build a model that predicts groundwater water level at arbitrary Honshu locations. Save prediction values as CSV for later analysis. Do not make a PDF.\n\n```json\n" +
 		strings.TrimSpace(measurements) +
 		"\n```"
 }
 
-func streamRunnerUpdates(ctx context.Context, out io.Writer, raw io.Writer, updates <-chan runnerpkg.RunnerUpdate) error {
+func streamExampleEvents(ctx context.Context, out io.Writer, raw io.Writer, sub *streampkg.Subscription) error {
 	encoder := json.NewEncoder(raw)
 	var lastLine string
 	for {
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case update, ok := <-updates:
-			if !ok {
-				return nil
+		event, ok, err := sub.Next(ctx)
+		if err != nil {
+			return err
+		}
+		if !ok {
+			return nil
+		}
+		if raw != nil {
+			if err := encoder.Encode(event); err != nil {
+				return err
 			}
-			if raw != nil {
-				if err := encoder.Encode(update); err != nil {
-					return err
-				}
+		}
+		line := compactStreamEvent(event)
+		if line != "" && line != lastLine {
+			if _, err := fmt.Fprintln(out, line); err != nil {
+				return err
 			}
-			line := compactRunnerUpdate(update)
-			if line != "" && line != lastLine {
-				if _, err := fmt.Fprintln(out, line); err != nil {
-					return err
-				}
-				lastLine = line
-			}
+			lastLine = line
 		}
 	}
 }
 
-func compactRunnerUpdate(update runnerpkg.RunnerUpdate) string {
-	event := ""
-	node := ""
-	if update.Event != nil {
-		event = update.Event.Type.String()
-		node = update.Event.NodeID
+func compactStreamEvent(event streampkg.Event) string {
+	switch event.EventType {
+	case streampkg.EventLLMReasoningDelta:
+		if event.From.Layer == "orchestrator" {
+			if line := compactTerminalText(deltaString(event)); line != "" {
+				return "or reasoning: " + line
+			}
+		}
+	case streampkg.EventStatusProgress:
+		if event.From.Layer == "orchestrator" {
+			if msg, runnerID := deltaMessageAndRunner(deltaMap(event)); msg != "" {
+				if runnerID != "" {
+					return fmt.Sprintf("or: %s runner_id=%s", msg, runnerID)
+				}
+				return "or: " + msg
+			}
+		}
+	case streampkg.EventStatusStarted:
+		if event.From.Layer == "orchestrator" {
+			if line := compactTerminalText(deltaString(event)); line != "" {
+				return "or: " + line
+			}
+		}
+	case streampkg.EventRunnerPhaseChanged:
+		values := deltaMap(event)
+		phase := stringValue(values["phase"])
+		status := stringValue(values["status"])
+		if phase == "" {
+			phase = "unknown"
+		}
+		return fmt.Sprintf("ru: runner_id=%s status=%s phase=%s", event.Scope.RunnerID, status, phase)
+	case streampkg.EventRunnerNodeStarted, streampkg.EventRunnerNodeCompleted, streampkg.EventRunnerNodeFailed:
+		values := deltaMap(event)
+		nodeID := stringValue(values["node_id"])
+		if nodeID == "" {
+			nodeID = event.Scope.NodeID
+		}
+		eventName := strings.TrimPrefix(event.EventType, "runner.")
+		line := fmt.Sprintf("ru: runner_id=%s status=%s event=%s node=%s", event.Scope.RunnerID, event.Status, eventName, nodeID)
+		if skill := stringValue(event.Metadata["skill_name"]); skill != "" {
+			line += " skill=" + skill
+		}
+		if errText := stringValue(values["error"]); errText != "" {
+			line += fmt.Sprintf(" error=%q", compactTerminalText(errText))
+		}
+		return line
+	case streampkg.EventExecutorPolishStarted, streampkg.EventExecutorPolishCompleted, streampkg.EventExecutorPolishFailed,
+		streampkg.EventExecutorExecuteStarted, streampkg.EventExecutorExecuteCompleted, streampkg.EventExecutorExecuteFailed,
+		streampkg.EventExecutorReportStarted, streampkg.EventExecutorReportCompleted, streampkg.EventExecutorReportFailed:
+		values := deltaMap(event)
+		nodeID := stringValue(values["node_id"])
+		if nodeID == "" {
+			nodeID = event.Scope.NodeID
+		}
+		eventName := strings.TrimPrefix(event.EventType, "executor.")
+		line := fmt.Sprintf("ex: runner_id=%s status=%s event=%s node=%s", event.Scope.RunnerID, event.Status, eventName, nodeID)
+		if skill := stringValue(event.Metadata["skill_name"]); skill != "" {
+			line += " skill=" + skill
+		}
+		if errText := stringValue(values["error"]); errText != "" {
+			line += fmt.Sprintf(" error=%q", compactTerminalText(errText))
+		}
+		return line
+	case streampkg.EventLLMToolCallCompleted:
+		values := deltaMap(event)
+		line := fmt.Sprintf("sk: skill=%s model requested tool=%s call=%s", skillName(event), stringValue(values["name"]), stringValue(values["call_id"]))
+		if args := stringValue(values["arguments"]); args != "" {
+			line += fmt.Sprintf(" args=%q", compactTerminalText(args))
+		}
+		return line
+	case streampkg.EventToolExecutionStarted, streampkg.EventToolExecutionCompleted, streampkg.EventToolExecutionFailed:
+		values := deltaMap(event)
+		eventName := strings.TrimPrefix(event.EventType, "tool.")
+		line := fmt.Sprintf("sk: skill=%s status=%s event=%s tool=%s call=%s",
+			skillName(event), event.Status, eventName, stringValue(values["name"]), stringValue(values["call_id"]))
+		if errText := stringValue(values["error"]); errText != "" {
+			line += fmt.Sprintf(" error=%q", compactTerminalText(errText))
+		}
+		return line
+	case streampkg.EventLLMToolResultDelta:
+		values := deltaMap(event)
+		line := fmt.Sprintf("sk: skill=%s recorded tool result status=%s tool=%s call=%s",
+			skillName(event), event.Status, stringValue(values["name"]), stringValue(values["call_id"]))
+		if errText := stringValue(values["error"]); errText != "" {
+			line += fmt.Sprintf(" error=%q", compactTerminalText(errText))
+		}
+		return line
+	case streampkg.EventStatusFailed:
+		if line := compactTerminalText(deltaString(event)); line != "" {
+			return fmt.Sprintf("%s: failed %q", event.From.Layer, line)
+		}
 	}
-	pending := 0
-	for _, count := range update.Snapshot.PendingNodes {
-		pending += count
+	return ""
+}
+
+func deltaString(event streampkg.Event) string {
+	var text string
+	if err := json.Unmarshal(event.Delta, &text); err == nil {
+		return text
 	}
-	completed := len(update.Snapshot.CompletedNodes)
-	base := fmt.Sprintf("ru: runner_id=%s status=%s phase=%s active=%d completed=%d pending=%d",
-		update.RunnerID,
-		update.State.Status,
-		update.Phase,
-		update.Snapshot.ActiveCount,
-		completed,
-		pending,
-	)
-	if update.State.Error != "" {
-		base += fmt.Sprintf(" error=%q", compactTerminalText(update.State.Error))
+	return ""
+}
+
+func deltaMap(event streampkg.Event) map[string]any {
+	var values map[string]any
+	if err := json.Unmarshal(event.Delta, &values); err != nil {
+		return nil
 	}
-	if event == "" {
-		return base
+	return values
+}
+
+func deltaMessageAndRunner(values map[string]any) (string, string) {
+	if len(values) == 0 {
+		return "", ""
 	}
-	if update.Event != nil && update.Event.Type == runnerpkg.EventNodeFailed && update.Event.Data != nil {
-		base += fmt.Sprintf(" detail=%q", compactTerminalText(fmt.Sprint(update.Event.Data)))
+	return stringValue(values["message"]), stringValue(values["runner_id"])
+}
+
+func skillName(event streampkg.Event) string {
+	if skill := stringValue(event.Metadata["skill_name"]); skill != "" {
+		return skill
 	}
-	if node != "" {
-		return base + " event=" + event + " node=" + node
+	if event.From.ID != "" {
+		return event.From.ID
 	}
-	return base + " event=" + event
+	return "unknown"
+}
+
+func stringValue(value any) string {
+	switch v := value.(type) {
+	case string:
+		return v
+	case fmt.Stringer:
+		return v.String()
+	case nil:
+		return ""
+	default:
+		return fmt.Sprint(v)
+	}
 }
 
 func compactTerminalText(text string) string {

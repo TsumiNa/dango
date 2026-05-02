@@ -2,10 +2,14 @@ package llm
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+
+	streampkg "github.com/tsumina/dango/internal/engine/stream"
 )
 
 // TestConversationRun_HappyPath drives one tool call then a final
@@ -69,6 +73,171 @@ func TestConversationRun_HappyPath(t *testing.T) {
 		if roles[i] != want[i] {
 			t.Errorf("turn[%d] role = %q, want %q", i, roles[i], want[i])
 		}
+	}
+}
+
+func TestConversationRun_EmitsStreamEvents(t *testing.T) {
+	var responded int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if responded == 0 {
+			responded++
+			_, _ = w.Write([]byte(`{
+				"id":"r1","object":"response","created_at":0,"model":"m","status":"completed",
+				"output":[{
+					"id":"fc","type":"function_call","status":"completed",
+					"call_id":"c1","name":"echo","arguments":"{\"msg\":\"hi\"}"
+				}],
+				"parallel_tool_calls":false,"tool_choice":"auto","tools":[]
+			}`))
+			return
+		}
+		_, _ = w.Write([]byte(`{
+			"id":"r2","object":"response","created_at":0,"model":"m","status":"completed",
+			"output":[{
+				"id":"m1","type":"message","role":"assistant","status":"completed",
+				"content":[{"type":"output_text","text":"final","annotations":[]}]
+			}],
+			"parallel_tool_calls":false,"tool_choice":"auto","tools":[]
+		}`))
+	}))
+	t.Cleanup(srv.Close)
+
+	echo := NewFuncTool("echo", "e", map[string]any{"type": "object"},
+		func(_ context.Context, arguments string) (string, error) {
+			return "tool says ok", nil
+		},
+	)
+	eventStream := streampkg.New(streampkg.Scope{RequestID: "req_1"})
+	sub, err := eventStream.Subscribe(streampkg.Filter{}, streampkg.WithSubscriberBuffer(16))
+	if err != nil {
+		t.Fatalf("Subscribe: %v", err)
+	}
+	conv := mustNewConversation(t, testClient(srv.URL), "sys", []Tool{echo}, &ConversationConfig{
+		Stream:       eventStream,
+		StreamSource: streampkg.Source{Layer: "skill", ID: "echo_skill"},
+		StreamScope:  streampkg.Scope{NodeID: "node_1"},
+		StreamMetadata: map[string]any{
+			"skill_name": "echo_skill",
+		},
+	})
+
+	if _, err := conv.Run(t.Context(), "do it", ""); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	eventStream.Close()
+
+	events := collectStreamEvents(t, sub)
+	if !hasStreamEvent(events, streampkg.EventLLMToolCallCompleted, "skill", "node_1", func(delta map[string]any) bool {
+		args, _ := delta["arguments"].(string)
+		return delta["name"] == "echo" && strings.Contains(args, `"msg":"hi"`)
+	}) {
+		t.Fatalf("missing tool call completed event: %+v", events)
+	}
+	if !hasStreamEvent(events, streampkg.EventLLMToolCallStarted, "skill", "node_1", func(delta map[string]any) bool {
+		return delta["name"] == "echo"
+	}) {
+		t.Fatalf("missing tool call started event: %+v", events)
+	}
+	if !hasStreamEvent(events, streampkg.EventLLMToolResultDelta, "skill", "node_1", func(delta map[string]any) bool {
+		return delta["name"] == "echo" && delta["output"] == "tool says ok"
+	}) {
+		t.Fatalf("missing tool result event: %+v", events)
+	}
+	if !hasStreamEvent(events, streampkg.EventToolExecutionStarted, "skill", "node_1", func(delta map[string]any) bool {
+		return delta["name"] == "echo"
+	}) {
+		t.Fatalf("missing tool execution started event: %+v", events)
+	}
+	if !hasStreamEvent(events, streampkg.EventToolExecutionCompleted, "skill", "node_1", func(delta map[string]any) bool {
+		return delta["name"] == "echo"
+	}) {
+		t.Fatalf("missing tool execution completed event: %+v", events)
+	}
+	var sawOutput bool
+	for _, event := range events {
+		if event.EventType != streampkg.EventLLMOutputDelta {
+			continue
+		}
+		var text string
+		if err := json.Unmarshal(event.Delta, &text); err != nil {
+			t.Fatalf("unmarshal output delta: %v", err)
+		}
+		if text == "final" && event.Scope.RequestID == "req_1" && event.Scope.NodeID == "node_1" {
+			sawOutput = true
+		}
+	}
+	if !sawOutput {
+		t.Fatalf("missing final output event: %+v", events)
+	}
+	if !streamEventOrder(events, streampkg.EventLLMToolCallStarted, streampkg.EventLLMToolCallCompleted, streampkg.EventToolExecutionStarted, streampkg.EventToolExecutionCompleted, streampkg.EventLLMToolResultDelta) {
+		t.Fatalf("tool stream event order is wrong: %+v", events)
+	}
+}
+
+func TestConversationRun_EmitsToolExecutionFailedEvent(t *testing.T) {
+	var responded int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if responded == 0 {
+			responded++
+			_, _ = w.Write([]byte(`{
+				"id":"r1","object":"response","created_at":0,"model":"m","status":"completed",
+				"output":[{
+					"id":"fc","type":"function_call","status":"completed",
+					"call_id":"c1","name":"fail","arguments":"{}"
+				}],
+				"parallel_tool_calls":false,"tool_choice":"auto","tools":[]
+			}`))
+			return
+		}
+		_, _ = w.Write([]byte(`{
+			"id":"r2","object":"response","created_at":0,"model":"m","status":"completed",
+			"output":[{
+				"id":"m1","type":"message","role":"assistant","status":"completed",
+				"content":[{"type":"output_text","text":"recovered","annotations":[]}]
+			}],
+			"parallel_tool_calls":false,"tool_choice":"auto","tools":[]
+		}`))
+	}))
+	t.Cleanup(srv.Close)
+
+	failTool := NewFuncTool("fail", "f", map[string]any{"type": "object"},
+		func(_ context.Context, _ string) (string, error) {
+			return "partial output", errors.New("tool exploded")
+		},
+	)
+	eventStream := streampkg.New(streampkg.Scope{RequestID: "req_fail"})
+	sub, err := eventStream.Subscribe(streampkg.Filter{}, streampkg.WithSubscriberBuffer(16))
+	if err != nil {
+		t.Fatalf("Subscribe: %v", err)
+	}
+	conv := mustNewConversation(t, testClient(srv.URL), "sys", []Tool{failTool}, &ConversationConfig{
+		Stream:       eventStream,
+		StreamSource: streampkg.Source{Layer: "skill", ID: "fail_skill"},
+		StreamScope:  streampkg.Scope{NodeID: "node_fail"},
+	})
+
+	if _, err := conv.Run(t.Context(), "do it", ""); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	eventStream.Close()
+
+	events := collectStreamEvents(t, sub)
+	if !hasStreamEvent(events, streampkg.EventToolExecutionFailed, "skill", "node_fail", func(delta map[string]any) bool {
+		errText, _ := delta["error"].(string)
+		return delta["name"] == "fail" && strings.Contains(errText, "tool exploded")
+	}) {
+		t.Fatalf("missing tool execution failed event: %+v", events)
+	}
+	if !hasStreamEvent(events, streampkg.EventLLMToolResultDelta, "skill", "node_fail", func(delta map[string]any) bool {
+		output, _ := delta["output"].(string)
+		return delta["name"] == "fail" && delta["error"] == "tool exploded" && strings.Contains(output, "partial output")
+	}) {
+		t.Fatalf("missing failed tool result event: %+v", events)
+	}
+	if !streamEventOrder(events, streampkg.EventToolExecutionStarted, streampkg.EventToolExecutionFailed, streampkg.EventLLMToolResultDelta) {
+		t.Fatalf("failed tool stream event order is wrong: %+v", events)
 	}
 }
 
@@ -155,4 +324,45 @@ func TestConversationRun_NilClientReturnsError(t *testing.T) {
 	if _, err := conv.Run(t.Context(), "hi", ""); err == nil {
 		t.Fatal("expected ErrNoClient")
 	}
+}
+
+func collectStreamEvents(t *testing.T, sub *streampkg.Subscription) []streampkg.Event {
+	t.Helper()
+	var events []streampkg.Event
+	for {
+		event, ok, err := sub.Next(t.Context())
+		if err != nil {
+			t.Fatalf("Next: %v", err)
+		}
+		if !ok {
+			return events
+		}
+		events = append(events, event)
+	}
+}
+
+func hasStreamEvent(events []streampkg.Event, eventType string, layer string, nodeID string, match func(map[string]any) bool) bool {
+	for _, event := range events {
+		if event.EventType != eventType || event.From.Layer != layer || event.Scope.NodeID != nodeID {
+			continue
+		}
+		var delta map[string]any
+		if err := json.Unmarshal(event.Delta, &delta); err != nil {
+			continue
+		}
+		if match(delta) {
+			return true
+		}
+	}
+	return false
+}
+
+func streamEventOrder(events []streampkg.Event, eventTypes ...string) bool {
+	next := 0
+	for _, event := range events {
+		if next < len(eventTypes) && event.EventType == eventTypes[next] {
+			next++
+		}
+	}
+	return next == len(eventTypes)
 }

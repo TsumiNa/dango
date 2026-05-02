@@ -20,6 +20,7 @@ import (
 	"github.com/openai/openai-go/v3/option"
 	orchestrate "github.com/tsumina/dango/internal/engine"
 	runnerpkg "github.com/tsumina/dango/internal/engine/runner"
+	streampkg "github.com/tsumina/dango/internal/engine/stream"
 	"github.com/tsumina/dango/internal/llm"
 )
 
@@ -334,32 +335,68 @@ func TestNewExampleLoggerRejectsInvalidLevel(t *testing.T) {
 	}
 }
 
-func TestCompactRunnerUpdateIncludesFailureContext(t *testing.T) {
-	line := compactRunnerUpdate(runnerpkg.RunnerUpdate{
-		RunnerID: "runner-1",
-		State: runnerpkg.RunnerState{
-			Status: runnerpkg.RunnerStatusFailed,
-			Error:  "llm: run exceeded max steps (12) without final response",
-		},
-		Phase: runnerpkg.PhaseSettled,
-		Snapshot: runnerpkg.RunnerSnapshot{
-			CompletedNodes: map[string]any{},
-			PendingNodes:   map[string]int{"train_model": 0},
-		},
-		Event: &runnerpkg.RunnerEvent{
-			Type:   runnerpkg.EventNodeFailed,
-			NodeID: "train_model",
-			Data:   "skill execution loop did not produce final markdown",
-		},
+func TestCompactStreamEventIncludesFailureContext(t *testing.T) {
+	line := compactStreamEvent(streampkg.Event{
+		EventType: streampkg.EventRunnerNodeFailed,
+		From:      streampkg.Source{Layer: "runner", ID: "runner-1"},
+		Status:    streampkg.StatusFailed,
+		Scope:     streampkg.Scope{RunnerID: "runner-1", NodeID: "train_model"},
+		Delta:     json.RawMessage(`{"event":"NodeFailed","node_id":"train_model","error":"skill execution loop did not produce final markdown"}`),
+		Metadata:  map[string]any{"skill_name": "train_gp_model"},
 	})
 	for _, want := range []string{
 		"status=failed",
-		"phase=settled",
-		"error=\"llm: run exceeded max steps (12) without final response\"",
-		"detail=\"skill execution loop did not produce final markdown\"",
-		"event=NodeFailed",
+		"error=\"skill execution loop did not produce final markdown\"",
+		"event=node.failed",
 		"node=train_model",
+		"skill=train_gp_model",
 	} {
+		if !strings.Contains(line, want) {
+			t.Fatalf("compact line missing %q:\n%s", want, line)
+		}
+	}
+}
+
+func TestCompactStreamEventShowsSettledPhase(t *testing.T) {
+	line := compactStreamEvent(streampkg.Event{
+		EventType: streampkg.EventRunnerPhaseChanged,
+		From:      streampkg.Source{Layer: "runner", ID: "runner-1"},
+		Status:    streampkg.StatusCompleted,
+		Scope:     streampkg.Scope{RunnerID: "runner-1"},
+		Delta:     json.RawMessage(`{"phase":"settled","status":"idle"}`),
+	})
+	for _, want := range []string{"runner_id=runner-1", "status=idle", "phase=settled"} {
+		if !strings.Contains(line, want) {
+			t.Fatalf("compact line missing %q:\n%s", want, line)
+		}
+	}
+}
+
+func TestCompactStreamEventShowsToolExecution(t *testing.T) {
+	line := compactStreamEvent(streampkg.Event{
+		EventType: streampkg.EventToolExecutionStarted,
+		From:      streampkg.Source{Layer: "skill", ID: "train_gp_model"},
+		Status:    streampkg.StatusRunning,
+		Scope:     streampkg.Scope{NodeID: "train_model"},
+		Delta:     json.RawMessage(`{"call_id":"call_1","name":"bash"}`),
+		Metadata:  map[string]any{"skill_name": "train_gp_model"},
+	})
+	for _, want := range []string{"sk:", "skill=train_gp_model", "status=running", "event=execution.started", "tool=bash", "call=call_1"} {
+		if !strings.Contains(line, want) {
+			t.Fatalf("compact line missing %q:\n%s", want, line)
+		}
+	}
+}
+
+func TestCompactStreamEventShowsFailedToolExecution(t *testing.T) {
+	line := compactStreamEvent(streampkg.Event{
+		EventType: streampkg.EventToolExecutionFailed,
+		From:      streampkg.Source{Layer: "skill", ID: "train_gp_model"},
+		Status:    streampkg.StatusFailed,
+		Scope:     streampkg.Scope{NodeID: "train_model"},
+		Delta:     json.RawMessage(`{"call_id":"call_1","name":"bash","error":"exit status 1"}`),
+	})
+	for _, want := range []string{"skill=train_gp_model", "status=failed", "event=execution.failed", "tool=bash", "error=\"exit status 1\""} {
 		if !strings.Contains(line, want) {
 			t.Fatalf("compact line missing %q:\n%s", want, line)
 		}

@@ -4,6 +4,7 @@ import (
 	"errors"
 
 	runnerpkg "github.com/tsumina/dango/internal/engine/runner"
+	streampkg "github.com/tsumina/dango/internal/engine/stream"
 )
 
 // ErrRunnerNotFound is returned when an Orchestrator runner lookup misses.
@@ -77,9 +78,10 @@ func (p RequestPriority) valid() bool {
 // Request is the external task description the Orchestrator receives from the
 // caller.
 type Request struct {
-	Input        string          `json:"input" yaml:"input"`
-	Priority     RequestPriority `json:"priority,omitempty" yaml:"priority,omitempty"`
-	ArtifactsDir string          `json:"artifacts_dir,omitempty" yaml:"artifacts_dir,omitempty"`
+	Input        string            `json:"input" yaml:"input"`
+	Priority     RequestPriority   `json:"priority,omitempty" yaml:"priority,omitempty"`
+	ArtifactsDir string            `json:"artifacts_dir,omitempty" yaml:"artifacts_dir,omitempty"`
+	Stream       *streampkg.Stream `json:"-" yaml:"-"`
 }
 
 // RejectReason explains why a request cannot currently be turned into a plan.

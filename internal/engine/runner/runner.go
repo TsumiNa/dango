@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/lithammer/shortuuid/v4"
+	streampkg "github.com/tsumina/dango/internal/engine/stream"
 	"github.com/tsumina/dango/internal/llm"
 )
 
@@ -28,6 +29,7 @@ type Runner struct {
 
 	// Startup configuration set once via Options.
 	store             RunnerStore
+	eventStream       *streampkg.Stream
 	plan              *CoarsePlan
 	initialNodes      map[string]*Node
 	plannerSkill      *llm.Skill
@@ -501,6 +503,7 @@ func (r *Runner) publishUpdate(event *RunnerEvent) {
 		}
 	}
 	r.updateMu.Unlock()
+	r.publishStreamUpdate(update)
 }
 
 func (r *Runner) publishTerminalUpdate(event *RunnerEvent) {
@@ -529,6 +532,7 @@ func (r *Runner) publishTerminalUpdate(event *RunnerEvent) {
 		delete(r.updateSubscribers, id)
 	}
 	r.updateMu.Unlock()
+	r.publishStreamUpdate(update)
 }
 
 func (r *Runner) currentSnapshot(event *RunnerEvent) RunnerSnapshot {
@@ -676,7 +680,20 @@ func (r *Runner) runEngine(ctx context.Context) error {
 		}
 
 		go func() {
+			r.emitExecutorStreamEvent(ctx, streampkg.EventExecutorExecuteStarted, streampkg.StatusRunning, n.Id, n, map[string]any{
+				"stage": "execute",
+			})
 			out, dynNodes, err := n.Executor.Execute(ctx, inputs)
+			if err != nil {
+				r.emitExecutorStreamEvent(ctx, streampkg.EventExecutorExecuteFailed, streampkg.StatusFailed, n.Id, n, map[string]any{
+					"stage": "execute",
+					"error": compactStreamText(err.Error()),
+				})
+			} else {
+				r.emitExecutorStreamEvent(ctx, streampkg.EventExecutorExecuteCompleted, streampkg.StatusCompleted, n.Id, n, map[string]any{
+					"stage": "execute",
+				})
+			}
 			select {
 			case <-ctx.Done():
 			case r.resultCh <- executionResult{nodeID: n.Id, output: out, newNodes: dynNodes, err: err}:

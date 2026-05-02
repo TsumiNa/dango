@@ -5,6 +5,7 @@ import (
 	"fmt"
 
 	"github.com/openai/openai-go/v3/responses"
+	streampkg "github.com/tsumina/dango/internal/engine/stream"
 )
 
 // StreamCategory is a bitmask selecting which kinds of incremental
@@ -153,6 +154,7 @@ func (c *Conversation) Stream(ctx context.Context, effort ReasoningEffort) (<-ch
 				if evt.Delta == "" || !categories.Has(StreamText) {
 					continue
 				}
+				c.emitTextDelta(ctx, streampkg.EventLLMOutputDelta, streampkg.StatusRunning, evt.Delta)
 				select {
 				case out <- StreamEvent{TextDelta: evt.Delta}:
 				case <-ctx.Done():
@@ -169,6 +171,7 @@ func (c *Conversation) Stream(ctx context.Context, effort ReasoningEffort) (<-ch
 				if evt.Delta == "" || !categories.Has(StreamReasoning) {
 					continue
 				}
+				c.emitTextDelta(ctx, streampkg.EventLLMReasoningDelta, streampkg.StatusRunning, evt.Delta)
 				select {
 				case out <- StreamEvent{ReasoningDelta: evt.Delta}:
 				case <-ctx.Done():
@@ -181,14 +184,17 @@ func (c *Conversation) Stream(ctx context.Context, effort ReasoningEffort) (<-ch
 				// Surface terminal failure events as an Err event so
 				// the consumer does not treat a silently-closed
 				// channel as success.
+				err := fmt.Errorf("llm: stream %s", evt.Type)
+				c.emitStreamEvent(ctx, streampkg.EventStatusFailed, streampkg.StatusFailed, err.Error(), nil)
 				select {
-				case out <- StreamEvent{Err: fmt.Errorf("llm: stream %s", evt.Type)}:
+				case out <- StreamEvent{Err: err}:
 				case <-ctx.Done():
 				}
 				return
 			}
 		}
 		if err := stream.Err(); err != nil {
+			c.emitStreamEvent(ctx, streampkg.EventStatusFailed, streampkg.StatusFailed, err.Error(), nil)
 			select {
 			case out <- StreamEvent{Err: err}:
 			case <-ctx.Done():
@@ -206,14 +212,16 @@ func (c *Conversation) Stream(ctx context.Context, effort ReasoningEffort) (<-ch
 			// surface as an Err so consumers do not mistake an
 			// interrupted stream for success.
 			if ctx.Err() == nil {
+				err := fmt.Errorf("llm: stream ended without response.completed")
+				c.emitStreamEvent(ctx, streampkg.EventStatusFailed, streampkg.StatusFailed, err.Error(), nil)
 				select {
-				case out <- StreamEvent{Err: fmt.Errorf("llm: stream ended without response.completed")}:
+				case out <- StreamEvent{Err: err}:
 				case <-ctx.Done():
 				}
 			}
 			return
 		}
-		c.applyResponseOutput(ctx, completed)
+		c.applyResponseOutput(ctx, completed, false)
 	}()
 
 	return out, nil
