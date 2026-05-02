@@ -62,7 +62,7 @@ func (r *Runner) StartPolish(ctx context.Context) error {
 	r.phase = PhasePolishing
 	r.stateMu.Unlock()
 
-	r.publishUpdate(nil)
+	r.emitPhaseChangedEvent()
 	go r.runPolishStage(ctx, nodes)
 	return nil
 }
@@ -110,7 +110,7 @@ func (r *Runner) RejectPolishedPlan(reason string) error {
 	r.replanReason = reason
 	r.lifecycleMu.Unlock()
 
-	r.publishUpdate(nil)
+	r.emitPhaseChangedEvent()
 	return nil
 }
 
@@ -155,7 +155,7 @@ func (r *Runner) ReplanWith(ctx context.Context, plan *CoarsePlan, nodes map[str
 	r.replanReason = ""
 	r.lifecycleMu.Unlock()
 
-	r.publishUpdate(nil)
+	r.emitPhaseChangedEvent()
 	go r.runPolishStage(ctx, cloneNodeMap(clonedNodes))
 	return nil
 }
@@ -166,7 +166,7 @@ func (r *Runner) ReplanWith(ctx context.Context, plan *CoarsePlan, nodes map[str
 // planner skill used to create the original plan, replans when review rejects
 // the candidate, executes the accepted graph, and finally runs report before
 // settling. StartManaged is non-blocking; callers observe progress through
-// [Runner.View], [Runner.SubscribeUpdates], and [Runner.Wait].
+// [Runner.View], [Runner.SubscribeStream], and [Runner.Wait].
 func (r *Runner) StartManaged(ctx context.Context) error {
 	ctx = r.runtimeContext(ctx)
 	if err := ctx.Err(); err != nil {
@@ -268,18 +268,14 @@ func (r *Runner) waitForPhase(ctx context.Context, want RunnerPhase) error {
 	if r.Phase() == want {
 		return nil
 	}
-	updates, unsubscribe := r.SubscribeUpdates(16)
-	defer unsubscribe()
 	for {
 		select {
-		case update, ok := <-updates:
-			if !ok {
-				return r.Wait(context.Background())
-			}
-			if update.Phase == want {
+		case <-r.phaseSignal:
+			phase := r.Phase()
+			if phase == want {
 				return nil
 			}
-			if update.Phase == PhaseSettled {
+			if phase == PhaseSettled {
 				return r.Wait(context.Background())
 			}
 		case <-r.Done():
@@ -304,13 +300,13 @@ func (r *Runner) runPolishStage(ctx context.Context, nodes map[string]*Node) {
 	}
 
 	r.transitionPhase(PhaseAwaitingReview)
-	r.publishUpdate(nil)
+	r.emitPhaseChangedEvent()
 }
 
 func (r *Runner) runReportStage(ctx context.Context) {
 	ctx = r.runtimeContext(ctx)
 	r.transitionPhase(PhaseReport)
-	r.publishUpdate(nil)
+	r.emitPhaseChangedEvent()
 
 	r.updateMu.Lock()
 	snapshot := cloneRunnerSnapshot(r.snapshot)

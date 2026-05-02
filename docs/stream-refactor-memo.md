@@ -292,6 +292,129 @@ other durable data should be written as artifacts and represented in stream
 events by compact metadata or `artifact.created` references. Receivers can then
 decide whether to load those artifacts.
 
+## Cross-Layer Synchronization Through Stream
+
+The stream system must become the **single mechanism** for any cross-layer
+information transfer that needs more than a value return. Every notification,
+progress update, lifecycle transition, and state change that another component
+might observe should flow through the stream rather than through ad hoc
+channels, sync.Cond patterns, or one-off signal channels.
+
+### Why this is a core invariant
+
+The 2026-05-02 audit found a latent deadlock in `Runner.waitForPhase`. The
+runner had a `phaseSignal chan struct{}` separate from the stream, and three
+phase-assignment sites (`StartPolish`, `RejectPolishedPlan`, `ReplanWith`) only
+emitted the stream event but forgot to send to `phaseSignal`. The current code
+worked only because no waiter happened to be listening for those phases. Any
+future caller of `waitForPhase(PhasePolishing)` would block forever.
+
+This is the canonical failure mode of parallel notification mechanisms: a
+producer must remember to update every channel, and silently drops bugs are
+indistinguishable from "no one was listening." A stream-first model removes the
+class entirely — there is one place to publish, one place to subscribe, and
+the mechanism takes care of fan-out, ordering, replay, and late attach.
+
+### Required pattern
+
+Every internal coordination point follows the same shape:
+
+1. **Producer emits** a structured event with a stable `event_type`, current
+   `status`, and the `delta` describing the change. The event must be self-
+   contained: a subscriber receiving only this event must be able to decide
+   what to do without consulting other side channels.
+2. **Subscriber subscribes** with a filter and the appropriate replay option
+   so it never misses a state it cares about, even if it attaches late.
+3. **Subscriber analyzes** each event (event type, status, scope, metadata)
+   and decides whether to act, ignore, or wait for more.
+4. **Subscriber responds** by acting locally, optionally publishing a
+   follow-up event of its own. It does not call back into the producer through
+   a hidden channel.
+
+This pattern collapses to "subscribe → analyze → respond" and naturally
+supports both blocking consumers (`Subscription.Next(ctx)`) and non-blocking
+consumers (select over `Subscription.Events()` with other channels).
+
+### Race-avoidance properties
+
+- A late subscriber receives replay from the stream buffer or store, so there
+  is no "missed the signal" window.
+- Sequence numbers are assigned at the producer; subscribers see a strictly
+  ordered view even when the producer emits from multiple goroutines.
+- Filters live at the subscription boundary, not at emission time, so adding
+  a new subscriber cannot break existing ones.
+- Subscriber buffers are bounded with explicit drop/error policy, so a slow
+  consumer cannot deadlock the producer.
+- The producer never inspects "is anyone listening?" before emitting, so
+  there is no observer-presence race.
+
+### Audit task: migrate ad hoc sync mechanisms onto the stream
+
+Every parallel agent picking up this branch must, when touching code that
+needs cross-goroutine or cross-layer coordination, prefer the stream. When
+encountering an existing ad hoc channel or signal, evaluate whether it
+should be replaced by stream subscription.
+
+Initial audit list (non-exhaustive — extend as new instances are found):
+
+- `Runner.phaseSignal` (`internal/engine/runner/runner.go`). Currently a
+  buffered `chan struct{}` consumed only by `waitForPhase`. Should be replaced
+  by subscribing to `runner.phase.changed` events on the runner's own event
+  stream, with a stable filter and replay so the waiter cannot miss a
+  transition that fired before subscription. The current implementation works
+  because every phase change site already emits the stream event via the
+  unified `emitPhaseChangedEvent`, so the stream is already authoritative;
+  the side channel is now redundant complexity.
+- `Runner.Subscribe` low-level `RunnerEvent` fan-out
+  (`internal/engine/runner/runner.go`). The engine loop broadcasts
+  `RunnerEvent`s through a separate slice of channels. The compact stream now
+  carries equivalent information with stronger guarantees (ordering, replay,
+  filtering, multi-subscriber buffer policy). Internal consumers
+  (`forwardEngineEvents`, `acceptAndComplete`) should migrate to a stream
+  subscription scoped to the runner's own events, after which the low-level
+  `Subscribe` can be removed.
+- `Runner.Done()` settle channel. Equivalent to a single `runner.settled`
+  stream event with terminal status. Internal callers like `Wait` and
+  `acceptAndComplete` could read it from a one-shot subscription. The
+  external `Done()` API can be kept as a thin convenience over a subscription
+  if external callers need a `<-chan struct{}` shape.
+- Conversation lifecycle hooks. As Conversation events are unified, any
+  remaining hand-rolled callback (e.g. provider-replay state mutation
+  notifications) should publish onto the stream and have its consumers
+  subscribe rather than receive through a closure.
+- Skill memo / progress / playground notifications. When skills want to
+  signal mid-task progress to the runner or executor, they must publish a
+  stream event rather than mutating shared state or calling back through a
+  caller-supplied channel.
+- Orchestrator planning callbacks. Any remaining
+  `StartRequestWithProgress`-style callback path should be retired in favor
+  of an ordinary stream subscription scoped to the request.
+
+When migrating, preserve backward semantics by:
+
+1. First adding the stream event at the producer, with a sequence number and
+   stable scope.
+2. Then converting one consumer at a time to a subscription, verifying the
+   replay window is large enough that late subscribers cannot miss the
+   relevant transition.
+3. Removing the ad hoc channel only after every consumer has migrated.
+4. Adding a focused `*_test.go` case that fails if a new subscriber attaches
+   after the relevant event has fired and does not see it via replay.
+
+### Hard rules
+
+- Do not introduce new `chan struct{}` notifications, `sync.Cond` waiters,
+  or one-off callback fields for cross-component sync. Publish a stream
+  event and have the consumer subscribe.
+- Do not assume a subscriber is present at the moment of emission. Use
+  replay or persistence so late subscribers see the same history.
+- Do not bypass the sequence number / scope / event_type contract by
+  smuggling state through `metadata` or shared maps. If a piece of state is
+  load-bearing for a subscriber, it must appear in `delta` or be derivable
+  from the event family.
+- Do not let producers block on subscriber buffers. Bounded buffers with
+  drop/error policy are mandatory.
+
 ## Persistence Boundaries
 
 There are two different persistence needs and they should stay separate:
@@ -378,15 +501,22 @@ Target:
 
 Current state:
 
-- Runner publishes `RunnerUpdate` with full snapshots.
-- Subscribers can receive too much implementation detail.
+- `RunnerUpdate`, `Runner.SubscribeUpdates`, and `Orchestrator.SubscribeRunner`
+  have been removed. The snapshot-bearing update channel no longer exists.
+- Runners emit compact stream events (`runner.phase.changed`,
+  `runner.node.started`, `runner.node.completed`, `runner.node.failed`,
+  `executor.*`) directly to the request-scoped event stream.
+- Phase change notification for internal managed lifecycle (`waitForPhase`) now
+  uses a lightweight `phaseSignal` channel instead of subscribing to full
+  snapshots.
+- Snapshot caching (`Runner.View`, `Runner.GetSnapshot`) is kept for query
+  use only.
+- `Runner.SubscribeStream` and `Orchestrator.SubscribeRunnerStream` are the
+  only external subscription APIs.
 
 Target:
 
-- Runner emits compact lifecycle events.
-- Full snapshots become query/persistence data, not the default stream payload.
-- Runner update API can be replaced or implemented as a subscriber/adapter
-  over stream events during migration.
+- Done. Query and stream paths are fully separated.
 
 ### Orchestrator
 
@@ -440,11 +570,17 @@ Target:
 - Ensure artifacts and exchange markdown remain final outputs, while progress
   is streamed separately.
 
-### Phase 5: Runner Update Replacement
+### Phase 5: Runner Update Replacement ✓
 
-- Convert `RunnerUpdate` consumers to stream subscribers.
-- Keep query APIs for current snapshots.
-- Move raw snapshot persistence behind explicit store/query paths.
+- `RunnerUpdate`, `Runner.SubscribeUpdates`, `Orchestrator.SubscribeRunner`
+  removed. No compatibility wrappers added.
+- `emitPhaseChangedEvent` and `emitNodeStreamEvent` replace the old
+  `publishStreamUpdate(RunnerUpdate)` path. Stream event emission now reads
+  runner state directly instead of going through a snapshot struct.
+- `waitForPhase` replaced with a `phaseSignal chan struct{}` notification
+  channel; no longer subscribes to the update channel.
+- Query API (`Runner.View`, `Runner.GetSnapshot`) kept for snapshot access.
+- All existing runner, stream, and orchestrator tests pass.
 
 ### Phase 6: Persistence and Replay
 
@@ -453,6 +589,39 @@ Target:
   connect it to stream append/replay if the subscribed event family is
   intentionally limited to conversation state mutations.
 - Add catch-up subscription tests.
+
+### Phase 7: Ad Hoc Sync Audit and Migration
+
+Goal: eliminate every parallel notification mechanism and let the stream be
+the single coordination primitive for cross-goroutine and cross-layer state
+transfer. See "Cross-Layer Synchronization Through Stream" above for the
+motivating audit and the canonical pattern.
+
+Concrete migration units (each a self-contained PR-sized step):
+
+1. Replace `Runner.phaseSignal` with a stream subscription to
+   `runner.phase.changed` inside `waitForPhase`. Verify with a test where the
+   subscriber attaches after polish completes and still resolves via replay.
+2. Migrate `forwardEngineEvents` and `acceptAndComplete` off `Runner.Subscribe`
+   to a stream subscription scoped to the runner. Remove the low-level
+   `Subscribe` channel slice once unused.
+3. Convert `Runner.Done()` and `Runner.Wait()` into thin wrappers over a
+   one-shot `runner.settled` stream subscription. External `<-chan struct{}`
+   shape may be preserved at the wrapper if callers need it.
+4. Audit `internal/llm` Conversation, Skill, and tool-dispatcher code for any
+   remaining callback fields, signal channels, or sync.Cond patterns and
+   convert each to producer-emit / subscriber-consume on the active stream.
+5. Retire `StartRequestWithProgress` in favor of a request-scoped stream
+   subscription created and consumed by the caller.
+
+Acceptance signal for Phase 7:
+
+- `grep` for `chan struct{}`, `sync.Cond`, and bespoke `Subscribe*` methods in
+  `internal/engine` and `internal/llm` returns only stream-package internals
+  and well-justified low-level primitives.
+- Adding a new subscriber type requires no producer changes.
+- A late subscriber attaching after a state transition can still observe and
+  react to that transition through replay.
 
 ## Open Design Questions
 
@@ -508,6 +677,29 @@ Target:
   lifecycle state logs for skill conversation resume/trim/replay, not blanket
   request-stream archives. Outer callers that need archival output should
   subscribe to the request stream themselves.
+- 2026-05-02: Runner stream subscription layer started. `StartRequest` now
+  creates a request stream when callers do not provide one, `Runner` exposes
+  `SubscribeStream`, `Orchestrator` exposes `SubscribeRunnerStream`, and the
+  orchestrate demo watches compact stream events instead of `RunnerUpdate`
+  snapshots. `RunnerUpdate` remains available for query/snapshot observers
+  during migration.
+- 2026-05-02: Phase 5 complete. `RunnerUpdate`, `Runner.SubscribeUpdates`, and
+  `Orchestrator.SubscribeRunner` removed with no compatibility wrappers.
+  `publishStreamUpdate(RunnerUpdate)` replaced by `emitPhaseChangedEvent()` and
+  `emitNodeStreamEvent()` which read runner state directly. `waitForPhase` now
+  uses a lightweight `phaseSignal` channel instead of subscribing to the update
+  channel. Query path (`Runner.View`, `Runner.GetSnapshot`) kept for snapshot
+  access. Stream and query paths are now fully separated.
+- 2026-05-02: Latent deadlock found and fixed in `Runner.waitForPhase`.
+  `StartPolish`, `RejectPolishedPlan`, and `ReplanWith` set `r.phase` directly
+  while emitting the stream event but were not signaling the parallel
+  `phaseSignal` channel. Worked only because no waiter happened to be listening
+  for those phases. Fixed by inlining `notifyPhaseChanged()` into
+  `emitPhaseChangedEvent()` so every phase publication is also an internal
+  wakeup. This is the canonical motivation for Phase 7: the stream system must
+  become the single sync primitive so this class of "forgot to notify the
+  side channel" bug stops being possible. Audit list and migration steps
+  recorded under "Cross-Layer Synchronization Through Stream" and Phase 7.
 - Current Honshu example output problem is accepted as the first driver for
   the stream refactor.
 - Prior branch work already reduced `main.go` to skill-directory registration
@@ -525,3 +717,14 @@ Target:
 - Add focused tests next to each changed source file.
 - Keep event payloads compact by default; link to artifacts or persisted
   resources for large data.
+- **Stream is the only sync primitive for cross-component coordination.** Do
+  not add new `chan struct{}` signals, sync.Cond waiters, or callback fields
+  for state notifications. Publish a stream event and have consumers
+  subscribe. See "Cross-Layer Synchronization Through Stream" for the full
+  rationale and the audit list. When you find an existing ad hoc mechanism in
+  code you are touching, prefer to migrate it onto the stream rather than
+  paper over it with another channel.
+- Every cross-component notification must follow "subscribe → analyze →
+  respond." The producer never inspects observer presence; the subscriber
+  decides blocking vs non-blocking via `Subscription.Next` or
+  `Subscription.Events`.

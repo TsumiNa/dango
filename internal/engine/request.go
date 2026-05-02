@@ -36,6 +36,11 @@ func (o *Orchestrator) startRequest(ctx context.Context, req *Request, progress 
 	if !req.Priority.valid() {
 		return "", fmt.Errorf("orchestrate: request priority must be between %d and %d", RequestPriorityDefault, RequestPriorityHighest)
 	}
+	if req.Stream == nil {
+		copyReq := *req
+		copyReq.Stream = streampkg.New(streampkg.Scope{})
+		req = &copyReq
+	}
 
 	o.mu.Lock()
 	o.configLocked = true

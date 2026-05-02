@@ -9,6 +9,7 @@ import (
 	"time"
 
 	runnerpkg "github.com/tsumina/dango/internal/engine/runner"
+	streampkg "github.com/tsumina/dango/internal/engine/stream"
 	"github.com/tsumina/dango/internal/llm"
 )
 
@@ -506,15 +507,15 @@ func (o *Orchestrator) WaitRunner(ctx context.Context, id string) (*runnerpkg.Ru
 	return runner.View(), waitErr
 }
 
-// SubscribeRunner returns a stream of runner updates plus an unsubscribe
-// function that stops further delivery.
-func (o *Orchestrator) SubscribeRunner(id string, bufferSize int) (<-chan runnerpkg.RunnerUpdate, func(), error) {
+// SubscribeRunnerStream subscribes to the compact structured event stream for
+// runner id. Late subscribers receive replay according to the stream
+// subscription options.
+func (o *Orchestrator) SubscribeRunnerStream(id string, filter streampkg.Filter, opts ...streampkg.SubscribeOption) (*streampkg.Subscription, error) {
 	runner, err := o.Runner(id)
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
-	ch, unsubscribe := runner.SubscribeUpdates(bufferSize)
-	return ch, unsubscribe, nil
+	return runner.SubscribeStream(filter, opts...)
 }
 
 // LoadRunnerRecords loads the persisted append-only record stream for the
@@ -601,23 +602,6 @@ func (o *Orchestrator) StartRunner(ctx context.Context, id string) error {
 // watchRunnerDone releases the runner's execution slot when its managed
 // lifecycle settles.
 func (o *Orchestrator) watchRunnerDone(runner *runnerpkg.Runner) {
-	updates, unsubscribe := runner.SubscribeUpdates(16)
-	defer unsubscribe()
-	done := runner.Done()
-	for {
-		select {
-		case <-done:
-			o.releaseRunnerExecutionSlot(runner.ID())
-			return
-		case update, ok := <-updates:
-			if !ok {
-				o.releaseRunnerExecutionSlot(runner.ID())
-				return
-			}
-			if update.Phase == runnerpkg.PhaseSettled {
-				o.releaseRunnerExecutionSlot(runner.ID())
-				return
-			}
-		}
-	}
+	<-runner.Done()
+	o.releaseRunnerExecutionSlot(runner.ID())
 }

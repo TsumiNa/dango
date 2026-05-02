@@ -3,51 +3,82 @@ package runner
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 
 	streampkg "github.com/tsumina/dango/internal/engine/stream"
 )
 
-func (r *Runner) publishStreamUpdate(update RunnerUpdate) {
+// ErrStreamNotConfigured is returned when callers try to subscribe to a runner
+// that was not constructed with an output stream.
+var ErrStreamNotConfigured = errors.New("orchestrate: runner stream not configured")
+
+// SubscribeStream attaches a subscriber to the runner's structured event
+// stream. Replay and filtering are handled by the stream package.
+func (r *Runner) SubscribeStream(filter streampkg.Filter, opts ...streampkg.SubscribeOption) (*streampkg.Subscription, error) {
+	if r.eventStream == nil {
+		return nil, ErrStreamNotConfigured
+	}
+	return r.eventStream.Subscribe(filter, opts...)
+}
+
+// emitPhaseChangedEvent announces that the runner's phase has changed. It
+// wakes any internal waiter (waitForPhase) and, when an output stream is
+// configured, emits a runner.phase.changed event for external subscribers.
+//
+// All phase transitions must call this so that direct phase assignments stay
+// consistent with the transitionPhase helper for waitForPhase semantics.
+func (r *Runner) emitPhaseChangedEvent() {
+	r.notifyPhaseChanged()
 	if r.eventStream == nil {
 		return
 	}
-	if update.Event == nil {
-		r.emitStreamEvent(context.Background(),
-			streampkg.EventRunnerPhaseChanged,
-			runnerStreamStatus(update.State.Status),
-			map[string]any{
-				"phase":  update.Phase,
-				"status": update.State.Status,
-			},
-			streampkg.Scope{RunnerID: r.id},
-			nil,
-		)
+	state := r.State()
+	phase := r.Phase()
+	r.emitStreamEvent(context.Background(),
+		streampkg.EventRunnerPhaseChanged,
+		runnerStreamStatus(state.Status),
+		map[string]any{
+			"phase":  phase,
+			"status": state.Status,
+		},
+		streampkg.Scope{RunnerID: r.id},
+		nil,
+	)
+}
+
+// emitNodeStreamEvent emits the structured stream event that corresponds to a
+// low-level RunnerEvent from the engine loop.
+func (r *Runner) emitNodeStreamEvent(event *RunnerEvent) {
+	if r.eventStream == nil {
 		return
 	}
-
-	eventType, status, ok := runnerEventStreamType(update)
+	if event == nil {
+		return
+	}
+	state := r.State()
+	eventType, status, ok := runnerEventStreamType(event.Type, state.Status)
 	if !ok {
 		return
 	}
 	delta := map[string]any{
-		"event": update.Event.Type.String(),
+		"event": event.Type.String(),
 	}
 	scope := streampkg.Scope{RunnerID: r.id}
-	if update.Event.NodeID != "" {
-		scope.NodeID = update.Event.NodeID
-		delta["node_id"] = update.Event.NodeID
+	if event.NodeID != "" {
+		scope.NodeID = event.NodeID
+		delta["node_id"] = event.NodeID
 	}
-	if update.Event.Type == EventNodeFailed && update.Event.Data != nil {
-		delta["error"] = compactStreamText(fmt.Sprint(update.Event.Data))
+	if event.Type == EventNodeFailed && event.Data != nil {
+		delta["error"] = compactStreamText(fmt.Sprint(event.Data))
 	}
-	metadata := runnerEventMetadata(update)
+	metadata := r.nodeEventMetadata(event)
 	r.emitStreamEvent(context.Background(), eventType, status, delta, scope, metadata)
 }
 
-func runnerEventStreamType(update RunnerUpdate) (string, string, bool) {
-	switch update.Event.Type {
+func runnerEventStreamType(eventType EventType, status RunnerStatus) (string, string, bool) {
+	switch eventType {
 	case EventNodeAdded:
 		return streampkg.EventRunnerNodeAdded, streampkg.StatusPending, true
 	case EventNodeStarted:
@@ -59,25 +90,27 @@ func runnerEventStreamType(update RunnerUpdate) (string, string, bool) {
 	case EventEngineIdle:
 		return streampkg.EventStatusProgress, streampkg.StatusCompleted, true
 	case EventEngineStopped:
-		return streampkg.EventStatusProgress, runnerStreamStatus(update.State.Status), true
+		return streampkg.EventStatusProgress, runnerStreamStatus(status), true
 	default:
 		return "", "", false
 	}
 }
 
-func runnerEventMetadata(update RunnerUpdate) map[string]any {
+func (r *Runner) nodeEventMetadata(event *RunnerEvent) map[string]any {
+	phase := r.Phase()
 	metadata := map[string]any{
-		"runner_id": update.RunnerID,
-		"phase":     update.Phase,
+		"runner_id": r.id,
+		"phase":     phase,
 	}
-	if update.Event == nil || update.Event.NodeID == "" {
+	if event == nil || event.NodeID == "" {
 		return metadata
 	}
-	metadata["node_id"] = update.Event.NodeID
-	if node := update.Snapshot.NodesData[update.Event.NodeID]; node != nil {
-		if node.SkillName != "" {
-			metadata["skill_name"] = node.SkillName
-		}
+	metadata["node_id"] = event.NodeID
+	r.updateMu.Lock()
+	node := r.snapshot.NodesData[event.NodeID]
+	r.updateMu.Unlock()
+	if node != nil && node.SkillName != "" {
+		metadata["skill_name"] = node.SkillName
 	}
 	return metadata
 }

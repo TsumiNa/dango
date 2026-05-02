@@ -15,6 +15,7 @@ import (
 
 	"github.com/openai/openai-go/v3"
 	"github.com/openai/openai-go/v3/option"
+	streampkg "github.com/tsumina/dango/internal/engine/stream"
 	runnerpkg "github.com/tsumina/dango/internal/engine/runner"
 	"github.com/tsumina/dango/internal/llm"
 )
@@ -26,7 +27,6 @@ type EventType = runnerpkg.EventType
 type RunnerEvent = runnerpkg.RunnerEvent
 type RunnerRecord = runnerpkg.RunnerRecord
 type RunnerView = runnerpkg.RunnerView
-type RunnerUpdate = runnerpkg.RunnerUpdate
 type RunnerPhase = runnerpkg.RunnerPhase
 
 const (
@@ -405,37 +405,20 @@ func waitForRunnerEvent(t *testing.T, ch <-chan runnerpkg.RunnerEvent, want runn
 	}
 }
 
-func waitForRunnerUpdate(t *testing.T, ch <-chan RunnerUpdate, predicate func(RunnerUpdate) bool, label string) RunnerUpdate {
+func waitForStreamEvent(t *testing.T, sub *streampkg.Subscription, eventType string, label string) streampkg.Event {
 	t.Helper()
-	timer := time.NewTimer(2 * time.Second)
-	defer timer.Stop()
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
 	for {
-		select {
-		case <-timer.C:
-			t.Fatalf("timed out waiting for runner update: %s", label)
-		case update, ok := <-ch:
-			if !ok {
-				t.Fatalf("runner update stream closed while waiting for %s", label)
-			}
-			if predicate(update) {
-				return update
-			}
+		ev, ok, err := sub.Next(ctx)
+		if err != nil {
+			t.Fatalf("stream error waiting for %s (%s): %v", eventType, label, err)
 		}
-	}
-}
-
-func waitForRunnerUpdateClosed(t *testing.T, ch <-chan RunnerUpdate, label string) {
-	t.Helper()
-	timer := time.NewTimer(2 * time.Second)
-	defer timer.Stop()
-	for {
-		select {
-		case _, ok := <-ch:
-			if !ok {
-				return
-			}
-		case <-timer.C:
-			t.Fatalf("timed out waiting for runner update stream to close: %s", label)
+		if !ok {
+			t.Fatalf("stream closed while waiting for %s (%s)", eventType, label)
+		}
+		if ev.EventType == eventType {
+			return ev
 		}
 	}
 }

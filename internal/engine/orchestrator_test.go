@@ -10,6 +10,8 @@ import (
 	"time"
 
 	"github.com/tsumina/dango/internal/llm"
+	streampkg "github.com/tsumina/dango/internal/engine/stream"
+	runnerpkg "github.com/tsumina/dango/internal/engine/runner"
 )
 
 func TestNewOrchestrator_ReturnsIndependentInstances(t *testing.T) {
@@ -338,12 +340,6 @@ func TestWaitRunner_ReturnsViewWhenContextEndsFirst(t *testing.T) {
 	waitForRunnerDone(t, managedRunner, "runner done after timeout test")
 }
 
-func TestSubscribeRunner_RejectsUnknownID(t *testing.T) {
-	o := newOrchestrator(testLogger)
-	if _, _, err := o.SubscribeRunner("missing", 4); !errors.Is(err, ErrRunnerNotFound) {
-		t.Fatalf("SubscribeRunner err = %v, want ErrRunnerNotFound", err)
-	}
-}
 
 func TestAddSkills_LoadsLightweightSkill(t *testing.T) {
 	o := newOrchestrator(testLogger)
@@ -560,28 +556,47 @@ func TestStartRunner_ForwardsStreamAndQueryState(t *testing.T) {
 	o := newOrchestrator(testLogger)
 	started := make(chan struct{})
 	release := make(chan struct{})
-	managedRunner := newManagedQueueTestRunner(t, "stream", func(ctx context.Context, parentOutputs map[string]any) (any, []*Node, error) {
-		close(started)
-		<-release
-		return "done", nil, nil
-	})
+
+	// Build the runner with an event stream so SubscribeRunnerStream works.
+	eventStream := streampkg.New(streampkg.Scope{})
+	plan := &CoarsePlan{
+		Request: "stream",
+		Nodes:   []CoarsePlanNode{{ID: "only", SkillName: "single", TaskDescription: "stream"}},
+	}
+	nodes := map[string]*runnerpkg.Node{
+		"only": {
+			Id: "only",
+			Executor: &stubRunnerExecutor{
+				polish:  func(ctx context.Context) (any, error) { return "stream polish", nil },
+				execute: func(ctx context.Context, parentOutputs map[string]any) (any, []*runnerpkg.Node, error) {
+					close(started)
+					<-release
+					return "done", nil, nil
+				},
+				report: func(ctx context.Context, output any) (any, error) { return output, nil },
+			},
+		},
+	}
+	managedRunner := runnerpkg.New(
+		runnerpkg.WithContext(context.Background()),
+		runnerpkg.WithLogger(testLogger),
+		runnerpkg.WithPlan(plan, nodes),
+		runnerpkg.WithPlannerSkill(bindTestOrchestratorSkill(t, mustReviewJSON(t, true, ""))),
+		runnerpkg.WithSkillSummaries([]runnerpkg.SkillSummary{{Name: "single", Description: "Single test skill."}}),
+		runnerpkg.WithPlanNodeBuilder(func(plan *runnerpkg.CoarsePlan) (map[string]*runnerpkg.Node, error) { return nodes, nil }),
+		runnerpkg.WithStream(eventStream),
+	)
+
 	o.mu.Lock()
 	o.runners[managedRunner.ID()] = managedRunner
 	o.mu.Unlock()
 	go o.watchRunnerDone(managedRunner)
 
-	updates, unsubscribe, err := o.SubscribeRunner(managedRunner.ID(), 32)
+	sub, err := o.SubscribeRunnerStream(managedRunner.ID(), streampkg.Filter{}, streampkg.WithReplayLast(64), streampkg.WithSubscriberBuffer(64))
 	if err != nil {
-		t.Fatalf("SubscribeRunner: %v", err)
+		t.Fatalf("SubscribeRunnerStream: %v", err)
 	}
-	defer unsubscribe()
-
-	initial := waitForRunnerUpdate(t, updates, func(update RunnerUpdate) bool {
-		return update.Event == nil
-	}, "initial update")
-	if initial.State.Status != RunnerStatusPending {
-		t.Fatalf("initial state = %q, want pending", initial.State.Status)
-	}
+	defer sub.Cancel()
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -594,12 +609,8 @@ func TestStartRunner_ForwardsStreamAndQueryState(t *testing.T) {
 		t.Fatal("timed out waiting for runner to start")
 	}
 
-	startedUpdate := waitForRunnerUpdate(t, updates, func(update RunnerUpdate) bool {
-		return update.Event != nil && update.Event.Type == EventNodeStarted
-	}, "node started")
-	if startedUpdate.State.Status != RunnerStatusRunning {
-		t.Fatalf("state after node started = %q, want running", startedUpdate.State.Status)
-	}
+	// Wait for runner.node.started stream event.
+	waitForStreamEvent(t, sub, streampkg.EventRunnerNodeStarted, "node started")
 
 	view, err := o.QueryRunner(managedRunner.ID())
 	if err != nil {
@@ -622,7 +633,6 @@ func TestStartRunner_ForwardsStreamAndQueryState(t *testing.T) {
 	if finalView.Phase != PhaseSettled {
 		t.Fatalf("final queried phase = %q, want settled", finalView.Phase)
 	}
-	waitForRunnerUpdateClosed(t, updates, "settled terminal update")
 }
 
 func TestLoadRunnerRecords_LoadsPersistedLog(t *testing.T) {

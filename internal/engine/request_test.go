@@ -262,6 +262,79 @@ func TestStartRequest_EmitsRequestStreamEvents(t *testing.T) {
 	}
 }
 
+func TestStartRequest_CreatesReplayableRunnerStream(t *testing.T) {
+	clearLLMEnv(t)
+	o := newOrchestrator(testLogger)
+	mustAddSkills(t, o, newTestSkillConfig(t, "single", "Single-step runner.", nil))
+	planOutput := mustPlanJSON(t, &CoarsePlan{
+		Request: "run a single node",
+		Nodes: []CoarsePlanNode{{
+			ID:              "only",
+			SkillName:       "single",
+			TaskDescription: "Run the only node.",
+		}},
+	})
+	if err := o.SetOrchestratorSkill(bindStreamingTestOrchestratorSkill(t, planOutput, mustReviewJSON(t, true, ""))); err != nil {
+		t.Fatalf("SetOrchestratorSkill(test planner): %v", err)
+	}
+
+	runnerID, err := o.StartRequest(context.Background(), &Request{Input: "run a single node"})
+	if err != nil {
+		t.Fatalf("StartRequest: %v", err)
+	}
+	managedRunner, err := o.Runner(runnerID)
+	if err != nil {
+		t.Fatalf("Runner: %v", err)
+	}
+	waitCtx, cancelWait := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancelWait()
+	if err := managedRunner.Wait(waitCtx); err != nil {
+		t.Fatalf("runner Wait: %v", err)
+	}
+
+	sub, err := o.SubscribeRunnerStream(runnerID, streampkg.Filter{}, streampkg.WithSubscriberBuffer(64))
+	if err != nil {
+		t.Fatalf("SubscribeRunnerStream: %v", err)
+	}
+	defer sub.Cancel()
+
+	var sawCreated, sawSettled, sawNodeDone bool
+	readCtx, cancelRead := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancelRead()
+	for !(sawCreated && sawSettled && sawNodeDone) {
+		event, ok, err := sub.Next(readCtx)
+		if err != nil {
+			t.Fatalf("Next: %v", err)
+		}
+		if !ok {
+			t.Fatal("stream closed before replaying expected events")
+		}
+		switch event.EventType {
+		case streampkg.EventStatusProgress:
+			if event.From.Layer == "orchestrator" && event.Scope.RunnerID == runnerID {
+				sawCreated = true
+			}
+		case streampkg.EventRunnerPhaseChanged:
+			var delta map[string]string
+			_ = json.Unmarshal(event.Delta, &delta)
+			if event.Scope.RunnerID == runnerID && delta["phase"] == string(PhaseSettled) {
+				sawSettled = true
+			}
+		case streampkg.EventRunnerNodeCompleted:
+			if event.Scope.RunnerID == runnerID && event.Scope.NodeID == "only" {
+				sawNodeDone = true
+			}
+		}
+	}
+}
+
+func TestSubscribeRunnerStream_RejectsUnknownID(t *testing.T) {
+	o := newOrchestrator(testLogger)
+	if _, err := o.SubscribeRunnerStream("missing", streampkg.Filter{}); !errors.Is(err, ErrRunnerNotFound) {
+		t.Fatalf("SubscribeRunnerStream err = %v, want ErrRunnerNotFound", err)
+	}
+}
+
 func TestStartRequest_ErrorsWhenPlanUsesUnknownSkill(t *testing.T) {
 	o := newOrchestrator(testLogger)
 	if err := o.SetOrchestratorSkill(bindTestOrchestratorSkill(t, mustPlanJSON(t, &CoarsePlan{

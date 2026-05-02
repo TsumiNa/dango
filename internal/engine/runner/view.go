@@ -9,16 +9,6 @@ type RunnerView struct {
 	Snapshot RunnerSnapshot `json:"snapshot" yaml:"snapshot"`
 }
 
-// RunnerUpdate is the stream-facing update [Runner.SubscribeUpdates]
-// delivers to observers as the runner changes state.
-type RunnerUpdate struct {
-	RunnerID string         `json:"runner_id" yaml:"runner_id"`
-	State    RunnerState    `json:"state" yaml:"state"`
-	Phase    RunnerPhase    `json:"phase" yaml:"phase"`
-	Snapshot RunnerSnapshot `json:"snapshot" yaml:"snapshot"`
-	Event    *RunnerEvent   `json:"event,omitempty" yaml:"event,omitempty"`
-}
-
 func buildInitialRunnerSnapshot(nodes map[string]*Node) RunnerSnapshot {
 	snapshot := RunnerSnapshot{
 		CompletedNodes: make(map[string]any),

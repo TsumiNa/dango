@@ -18,10 +18,11 @@ import (
 // surfaces.
 //
 // Runner absorbs the historical ManagedRunner role: it owns the plan, the
-// materialized node graph, a subscriber set for high-level updates, a Done
-// signal for settle-detection, and the engine event loop that dispatches
-// nodes by dependency readiness. Callers construct a Runner with [New] and
-// any number of [Option]s.
+// materialized node graph, the engine event loop that dispatches nodes by
+// dependency readiness, a Done signal for settle-detection, and an optional
+// structured output stream that publishes lifecycle and node events to
+// external subscribers via [Runner.SubscribeStream]. Callers construct a
+// Runner with [New] and any number of [Option]s.
 type Runner struct {
 	ctx    context.Context
 	id     string
@@ -70,12 +71,13 @@ type Runner struct {
 	subMutex    sync.RWMutex
 	subscribers []chan<- RunnerEvent
 
-	// High-level managed update subscribers (RunnerUpdate stream).
-	updateMu          sync.Mutex
-	snapshot          RunnerSnapshot
-	stoppedEventSeen  bool
-	nextSubscriberID  uint64
-	updateSubscribers map[uint64]chan RunnerUpdate
+	// Snapshot cache used by View and stream event emission.
+	updateMu sync.Mutex
+	snapshot RunnerSnapshot
+
+	// phaseSignal receives a token whenever the runner phase changes,
+	// allowing waitForPhase to wake up without subscribing to full updates.
+	phaseSignal chan struct{}
 
 	// Phased-lifecycle bookkeeping: results gathered by the polish and
 	// report stages, and the rejection reason captured when a polished
@@ -106,7 +108,7 @@ func New(opts ...Option) *Runner {
 		resultCh:          make(chan executionResult),
 		queryCh:           make(chan chan<- RunnerSnapshot),
 		subscribers:       make([]chan<- RunnerEvent, 0),
-		updateSubscribers: make(map[uint64]chan RunnerUpdate),
+		phaseSignal:       make(chan struct{}, 1),
 		skillSessionStore: newMemorySessionStore(),
 		skillSessionIDs:   make(map[string]string),
 	}
@@ -234,50 +236,6 @@ func (r *Runner) Subscribe(bufferSize int) <-chan RunnerEvent {
 	return ch
 }
 
-// SubscribeUpdates returns a channel that receives high-level
-// [RunnerUpdate]s and an unsubscribe function.
-//
-// The first delivery is the current snapshot. If the runner is already in a
-// terminal phase at subscription time, the snapshot is delivered and the
-// channel is closed immediately.
-func (r *Runner) SubscribeUpdates(bufferSize int) (<-chan RunnerUpdate, func()) {
-	if bufferSize < 1 {
-		bufferSize = 1
-	}
-	ch := make(chan RunnerUpdate, bufferSize)
-	state := r.State()
-	phase := r.Phase()
-
-	r.updateMu.Lock()
-	update := RunnerUpdate{
-		RunnerID: r.id,
-		State:    state,
-		Phase:    phase,
-		Snapshot: cloneRunnerSnapshot(r.snapshot),
-	}
-	if IsTerminal(state) {
-		ch <- update
-		close(ch)
-		r.updateMu.Unlock()
-		return ch, func() {}
-	}
-	id := r.nextSubscriberID
-	r.nextSubscriberID++
-	r.updateSubscribers[id] = ch
-	ch <- update
-	r.updateMu.Unlock()
-
-	unsubscribe := func() {
-		r.updateMu.Lock()
-		defer r.updateMu.Unlock()
-		if sub := r.updateSubscribers[id]; sub != nil {
-			delete(r.updateSubscribers, id)
-			close(sub)
-		}
-	}
-	return ch, unsubscribe
-}
-
 // View returns a point-in-time snapshot of the runner suitable for query
 // APIs.
 func (r *Runner) View() *RunnerView {
@@ -389,9 +347,9 @@ func (r *Runner) launchEngine(ctx context.Context, initialNodes []*Node) error {
 	return r.startErr
 }
 
-// Abort marks the runner terminal without running the engine, publishing a
-// final update and closing managed subscribers. It replaces the historical
-// FinishBeforeStart entry point.
+// Abort marks the runner terminal without running the engine, emits a final
+// runner.phase.changed stream event, and closes the Done channel so any
+// waiters unblock. It replaces the historical FinishBeforeStart entry point.
 func (r *Runner) Abort(runErr error) {
 	status := RunnerStatusFailed
 	if errors.Is(runErr, context.Canceled) || errors.Is(runErr, context.DeadlineExceeded) {
@@ -414,7 +372,7 @@ func (r *Runner) Abort(runErr error) {
 	r.stateMu.Unlock()
 
 	r.captureEngineErr(runErr)
-	r.publishTerminalUpdate(nil)
+	r.emitPhaseChangedEvent()
 	r.markDone()
 }
 
@@ -422,6 +380,14 @@ func (r *Runner) transitionPhase(phase RunnerPhase) {
 	r.stateMu.Lock()
 	r.phase = phase
 	r.stateMu.Unlock()
+	r.notifyPhaseChanged()
+}
+
+func (r *Runner) notifyPhaseChanged() {
+	select {
+	case r.phaseSignal <- struct{}{}:
+	default:
+	}
 }
 
 // settle is the single terminal path for the engine goroutine. It runs the
@@ -449,7 +415,7 @@ func (r *Runner) settle(engineErr error) {
 			r.runReportStage(r.runtimeContext(context.Background()))
 		}
 		r.transitionPhase(PhaseSettled)
-		r.publishTerminalUpdate(nil)
+		r.emitPhaseChangedEvent()
 		r.markDone()
 	})
 }
@@ -472,93 +438,31 @@ func (r *Runner) captureEngineErr(err error) {
 func (r *Runner) forwardEngineEvents(events <-chan RunnerEvent) {
 	for ev := range events {
 		event := ev
-		r.publishUpdate(&event)
+		r.syncSnapshot(&event)
+		r.emitNodeStreamEvent(&event)
 		if event.Type == EventEngineStopped {
 			return
 		}
 	}
 }
 
-func (r *Runner) publishUpdate(event *RunnerEvent) {
-	state := r.State()
-	phase := r.Phase()
-	snapshot := r.currentSnapshot(event)
-	update := RunnerUpdate{
-		RunnerID: r.id,
-		State:    state,
-		Phase:    phase,
-		Snapshot: snapshot,
-		Event:    event,
-	}
-
-	r.updateMu.Lock()
-	r.snapshot = cloneRunnerSnapshot(snapshot)
-	if event != nil && event.Type == EventEngineStopped {
-		r.stoppedEventSeen = true
-	}
-	for _, ch := range r.updateSubscribers {
-		select {
-		case ch <- update:
-		default:
-		}
-	}
-	r.updateMu.Unlock()
-	r.publishStreamUpdate(update)
-}
-
-func (r *Runner) publishTerminalUpdate(event *RunnerEvent) {
-	state := r.State()
-	phase := r.Phase()
-	snapshot := r.currentSnapshot(event)
-	update := RunnerUpdate{
-		RunnerID: r.id,
-		State:    state,
-		Phase:    phase,
-		Snapshot: snapshot,
-		Event:    event,
-	}
-
-	r.updateMu.Lock()
-	r.snapshot = cloneRunnerSnapshot(snapshot)
-	if event != nil && event.Type == EventEngineStopped {
-		r.stoppedEventSeen = true
-	}
-	for id, ch := range r.updateSubscribers {
-		select {
-		case ch <- update:
-		default:
-		}
-		close(ch)
-		delete(r.updateSubscribers, id)
-	}
-	r.updateMu.Unlock()
-	r.publishStreamUpdate(update)
-}
-
-func (r *Runner) currentSnapshot(event *RunnerEvent) RunnerSnapshot {
+// syncSnapshot refreshes the cached snapshot from the engine query channel
+// for live node events. It is a no-op for nil events and EventEngineStopped,
+// since by then the engine has already written the final snapshot via
+// runEngine.finish.
+func (r *Runner) syncSnapshot(event *RunnerEvent) {
 	if event == nil || event.Type == EventEngineStopped {
-		r.updateMu.Lock()
-		defer r.updateMu.Unlock()
-		return cloneRunnerSnapshot(r.snapshot)
+		return
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
 	defer cancel()
-	snapshot, err := r.GetSnapshot(ctx)
+	live, err := r.GetSnapshot(ctx)
 	if err != nil {
-		r.updateMu.Lock()
-		defer r.updateMu.Unlock()
-		return cloneRunnerSnapshot(r.snapshot)
+		return
 	}
-	return snapshot
-}
-
-func (r *Runner) closeUpdateSubscribers() {
 	r.updateMu.Lock()
-	defer r.updateMu.Unlock()
-	for id, ch := range r.updateSubscribers {
-		close(ch)
-		delete(r.updateSubscribers, id)
-	}
+	r.snapshot = cloneRunnerSnapshot(live)
+	r.updateMu.Unlock()
 }
 
 // runEngine is the blocking event loop that drives node execution. It is

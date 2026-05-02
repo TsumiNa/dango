@@ -18,6 +18,7 @@ import (
 	"github.com/openai/openai-go/v3/option"
 	orchestrate "github.com/tsumina/dango/internal/engine"
 	runnerpkg "github.com/tsumina/dango/internal/engine/runner"
+	streampkg "github.com/tsumina/dango/internal/engine/stream"
 	"github.com/tsumina/dango/internal/llm"
 )
 
@@ -487,46 +488,166 @@ func mustQuery(o *orchestrate.Orchestrator, id string) *runnerpkg.RunnerView {
 }
 
 func mustWatchRunner(o *orchestrate.Orchestrator, label, id string) func() {
-	updates, unsubscribe, err := o.SubscribeRunner(id, 32)
+	filter := streampkg.Filter{
+		EventTypes: []string{
+			streampkg.EventStatusProgress,
+			streampkg.EventStatusFailed,
+		},
+		Prefixes: []string{"runner.", "executor.", "tool."},
+	}
+	sub, err := o.SubscribeRunnerStream(id, filter, streampkg.WithReplayLast(64), streampkg.WithSubscriberBuffer(64))
 	if err != nil {
-		fatalf("SubscribeRunner(%q): %v", id, err)
+		fatalf("SubscribeRunnerStream(%q): %v", id, err)
 	}
 	tag := runnerTag(label)
+	done := make(chan struct{})
 	go func() {
-		var lastPhase runnerpkg.RunnerPhase
-		var lastStatus runnerpkg.RunnerStatus
-		for update := range updates {
-			if update.Event == nil && update.Phase == lastPhase && update.State.Status == lastStatus {
+		defer close(done)
+		var lastLine string
+		for {
+			event, ok, err := sub.Next(context.Background())
+			if err != nil || !ok {
+				return
+			}
+			line := formatDemoStreamEvent(event)
+			if line == "" || line == lastLine {
 				continue
 			}
-			lastPhase = update.Phase
-			lastStatus = update.State.Status
-			phase := colorPhase(update.Phase)
-			status := colorStatus(update.State.Status)
-			if update.Event == nil {
-				fmt.Printf("    %s %s%s  %s%s\n",
-					tag,
-					dim("phase="), phase,
-					dim("status="), status)
-				continue
+			lastLine = line
+			fmt.Printf("    %s %s\n", tag, line)
+			if isSettledStreamEvent(event) {
+				return
 			}
-			event := colorEvent(update.Event.Type.String())
-			node := update.Event.NodeID
-			if node == "" {
-				node = "-"
-			}
-			fmt.Printf("    %s %s%s  %s%s  %s%s  %s%s  %s%v\n",
-				tag,
-				dim("phase="), phase,
-				dim("status="), status,
-				dim("event="), event,
-				dim("node="), bold(node),
-				dim("data="), update.Event.Data,
-			)
 		}
-		fmt.Printf("    %s %s\n", tag, dim("stream closed"))
 	}()
-	return unsubscribe
+	return func() {
+		sub.Cancel()
+		select {
+		case <-done:
+		case <-time.After(100 * time.Millisecond):
+		}
+	}
+}
+
+func formatDemoStreamEvent(event streampkg.Event) string {
+	values := streamDeltaMap(event)
+	switch event.EventType {
+	case streampkg.EventRunnerPhaseChanged:
+		phase := runnerpkg.RunnerPhase(stringValue(values["phase"]))
+		status := runnerpkg.RunnerStatus(stringValue(values["status"]))
+		return fmt.Sprintf("%s%s  %s%s",
+			dim("phase="), colorPhase(phase),
+			dim("status="), colorStatus(status))
+	case streampkg.EventRunnerNodeAdded, streampkg.EventRunnerNodeStarted, streampkg.EventRunnerNodeCompleted, streampkg.EventRunnerNodeFailed:
+		eventName := strings.TrimPrefix(event.EventType, "runner.")
+		return fmt.Sprintf("%s%s  %s%s  %s%s  %s%s",
+			dim("status="), colorStreamStatus(event.Status),
+			dim("event="), colorEvent(eventName),
+			dim("node="), bold(streamNodeID(event, values)),
+			dim("skill="), streamSkillName(event))
+	case streampkg.EventExecutorPolishStarted, streampkg.EventExecutorPolishCompleted, streampkg.EventExecutorPolishFailed,
+		streampkg.EventExecutorExecuteStarted, streampkg.EventExecutorExecuteCompleted, streampkg.EventExecutorExecuteFailed,
+		streampkg.EventExecutorReportStarted, streampkg.EventExecutorReportCompleted, streampkg.EventExecutorReportFailed:
+		eventName := strings.TrimPrefix(event.EventType, "executor.")
+		return fmt.Sprintf("%s%s  %s%s  %s%s  %s%s",
+			dim("status="), colorStreamStatus(event.Status),
+			dim("event="), colorEvent(eventName),
+			dim("node="), bold(streamNodeID(event, values)),
+			dim("skill="), streamSkillName(event))
+	case streampkg.EventToolExecutionStarted, streampkg.EventToolExecutionCompleted, streampkg.EventToolExecutionFailed:
+		eventName := strings.TrimPrefix(event.EventType, "tool.")
+		return fmt.Sprintf("%s%s  %s%s  %s%s",
+			dim("status="), colorStreamStatus(event.Status),
+			dim("event="), colorEvent(eventName),
+			dim("tool="), bold(stringValue(values["name"])))
+	case streampkg.EventStatusProgress:
+		msg := stringValue(values["message"])
+		if msg == "" {
+			return ""
+		}
+		return dim("or=") + msg
+	case streampkg.EventStatusFailed:
+		return red("failed") + " " + compactStreamText(streamDeltaString(event))
+	default:
+		return ""
+	}
+}
+
+func isSettledStreamEvent(event streampkg.Event) bool {
+	if event.EventType != streampkg.EventRunnerPhaseChanged {
+		return false
+	}
+	values := streamDeltaMap(event)
+	return stringValue(values["phase"]) == string(runnerpkg.PhaseSettled)
+}
+
+func colorStreamStatus(status string) string {
+	switch status {
+	case streampkg.StatusRunning:
+		return cyan(status)
+	case streampkg.StatusCompleted:
+		return green(status)
+	case streampkg.StatusFailed:
+		return red(status)
+	case streampkg.StatusPending:
+		return dim(status)
+	default:
+		return status
+	}
+}
+
+func streamNodeID(event streampkg.Event, values map[string]any) string {
+	if nodeID := stringValue(values["node_id"]); nodeID != "" {
+		return nodeID
+	}
+	if event.Scope.NodeID != "" {
+		return event.Scope.NodeID
+	}
+	return "-"
+}
+
+func streamSkillName(event streampkg.Event) string {
+	if skill := stringValue(event.Metadata["skill_name"]); skill != "" {
+		return skill
+	}
+	return "-"
+}
+
+func streamDeltaMap(event streampkg.Event) map[string]any {
+	var values map[string]any
+	if err := json.Unmarshal(event.Delta, &values); err != nil {
+		return nil
+	}
+	return values
+}
+
+func streamDeltaString(event streampkg.Event) string {
+	var text string
+	if err := json.Unmarshal(event.Delta, &text); err == nil {
+		return text
+	}
+	return ""
+}
+
+func stringValue(value any) string {
+	switch v := value.(type) {
+	case string:
+		return v
+	case fmt.Stringer:
+		return v.String()
+	case nil:
+		return ""
+	default:
+		return fmt.Sprint(v)
+	}
+}
+
+func compactStreamText(text string) string {
+	text = strings.Join(strings.Fields(text), " ")
+	if len(text) > 160 {
+		return text[:160] + "..."
+	}
+	return text
 }
 
 func mustInstallRunnerBehavior(o *orchestrate.Orchestrator, runnerID string, label string, deliverGate <-chan struct{}) {
