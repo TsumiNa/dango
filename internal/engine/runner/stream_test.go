@@ -41,6 +41,30 @@ func TestSubscribeStreamReplaysRunnerOwnedPhaseEvents(t *testing.T) {
 	}
 }
 
+func TestRunnerDoneClosesViaStreamSettleEvent(t *testing.T) {
+	r := New(WithLogger(testLogger))
+
+	select {
+	case <-r.Done():
+		t.Fatal("Done channel closed before settle")
+	case <-time.After(20 * time.Millisecond):
+	}
+
+	r.Abort(context.Canceled)
+
+	select {
+	case <-r.Done():
+	case <-time.After(2 * time.Second):
+		t.Fatal("Done channel did not close after Abort settle event")
+	}
+
+	waitCtx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	if err := r.Wait(waitCtx); err == nil {
+		t.Fatal("Wait returned nil, want canceled engine error")
+	}
+}
+
 func TestRunnerEmitsCompactStreamEvents(t *testing.T) {
 	eventStream := streampkg.New(streampkg.Scope{RequestID: "req_runner"})
 	sub, err := eventStream.Subscribe(streampkg.Filter{EventTypes: []string{streampkg.EventRunnerNodeCompleted}}, streampkg.WithSubscriberBuffer(8))

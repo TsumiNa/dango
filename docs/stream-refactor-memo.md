@@ -370,11 +370,13 @@ Initial audit list (non-exhaustive — extend as new instances are found):
   through a separate subscriber slice. Each internal event now refreshes the
   cached snapshot and emits the compact stream event directly. Managed lifecycle
   consumers such as `acceptAndComplete` subscribe to the runner stream.
-- `Runner.Done()` settle channel. Equivalent to a single `runner.settled`
-  stream event with terminal status. Internal callers like `Wait` could read it
-  from a one-shot subscription. The external `Done()` API can be kept as a thin
-  convenience over a subscription if external callers need a `<-chan struct{}`
-  shape.
+- `Runner.Done()` settle channel ✓ migrated. The runner now starts a single
+  settle-observer goroutine in `New` that subscribes to its own
+  `runner.phase.changed` events and closes `r.done` exactly once when phase
+  reaches `PhaseSettled`. `Abort` and `settle` no longer call a separate
+  `markDone` — emitting the stream event is the only settle notification path,
+  and `r.done` is now a derivative of the stream rather than a parallel
+  mechanism. The external `Done()` / `Wait()` API shape is preserved.
 - Conversation lifecycle hooks. As Conversation events are unified, any
   remaining hand-rolled callback (e.g. provider-replay state mutation
   notifications) should publish onto the stream and have its consumers
@@ -512,11 +514,17 @@ Current state:
   use only.
 - `Runner.SubscribeStream` and `Orchestrator.SubscribeRunnerStream` are the
   only external subscription APIs.
+- `Runner.Done()` / `Runner.Wait()` are thin convenience wrappers over a
+  single internal settle-observer goroutine that subscribes to
+  `runner.phase.changed` and closes `r.done` when phase reaches Settled.
+  `Abort` and `settle` only emit the stream event; there is no separate
+  `markDone` path.
 
 Target:
 
-- Query and stream paths are fully separated. Remaining runner work is
-  migrating `Done`/`Wait` settle notification onto stream events.
+- Done. Stream is the single source of truth for every runner-level
+  notification (phase, node lifecycle, settle). Snapshot/query path remains
+  separate by design.
 
 ### Orchestrator
 
@@ -608,9 +616,12 @@ Concrete migration units (each a self-contained PR-sized step):
 2. ✓ Migrate `forwardEngineEvents` and `acceptAndComplete` off `Runner.Subscribe`
    to a stream subscription scoped to the runner. Remove the low-level
    `Subscribe` channel slice once unused.
-3. Convert `Runner.Done()` and `Runner.Wait()` into thin wrappers over a
-   one-shot `runner.settled` stream subscription. External `<-chan struct{}`
-   shape may be preserved at the wrapper if callers need it.
+3. ✓ Convert `Runner.Done()` and `Runner.Wait()` into thin wrappers over a
+   one-shot phase-change stream subscription. A single settle-observer
+   goroutine started in `New` is the only thing that closes `r.done`,
+   reacting to a `runner.phase.changed{phase: Settled}` stream event. `Abort`
+   and `settle` no longer mark done explicitly. External `<-chan struct{}`
+   shape preserved.
 4. Audit `internal/llm` Conversation, Skill, and tool-dispatcher code for any
    remaining callback fields, signal channels, or sync.Cond patterns and
    convert each to producer-emit / subscriber-consume on the active stream.
@@ -720,6 +731,14 @@ Acceptance signal for Phase 7:
   `EventRunnerNodeFailed` stream events instead of reading a bespoke
   `RunnerEvent` channel. Runner tests were updated to observe
   `Runner.SubscribeStream`.
+- 2026-05-02: Phase 7 unit 3 complete. `Runner.Done()` and `Runner.Wait()` no
+  longer have a parallel `markDone` notification path. A single settle-observer
+  goroutine started in `Runner.New` subscribes to `runner.phase.changed`
+  events on the runner's own stream and closes `r.done` once when phase
+  reaches `PhaseSettled`. `Abort` and `settle` only emit the stream event —
+  the observer is the sole closer of the Done channel. The
+  external `Done()` / `Wait()` API shape is preserved; tests in
+  `stream_test.go` cover the contract.
 - Current Honshu example output problem is accepted as the first driver for
   the stream refactor.
 - Prior branch work already reduced `main.go` to skill-directory registration

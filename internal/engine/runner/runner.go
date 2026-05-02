@@ -52,7 +52,6 @@ type Runner struct {
 	startErr         error
 	settleOnce       sync.Once
 	done             chan struct{}
-	doneOnce         sync.Once
 	engineErr        error
 	engineErrMu      sync.RWMutex
 	cancelEngine     context.CancelFunc
@@ -111,6 +110,7 @@ func New(opts ...Option) *Runner {
 		r.plan.RunnerID = r.id
 	}
 	r.snapshot = buildInitialRunnerSnapshot(r.initialNodes)
+	r.startSettleObserver()
 	return r
 }
 
@@ -325,9 +325,11 @@ func (r *Runner) launchEngine(ctx context.Context, initialNodes []*Node) error {
 	return r.startErr
 }
 
-// Abort marks the runner terminal without running the engine, emits a final
-// runner.phase.changed stream event, and closes the Done channel so any
-// waiters unblock. It replaces the historical FinishBeforeStart entry point.
+// Abort marks the runner terminal without running the engine and emits a
+// final runner.phase.changed stream event. The settle observer goroutine
+// (started in [New]) reacts to that event by closing the Done channel so any
+// waiters unblock. Abort replaces the historical FinishBeforeStart entry
+// point.
 func (r *Runner) Abort(runErr error) {
 	status := RunnerStatusFailed
 	if errors.Is(runErr, context.Canceled) || errors.Is(runErr, context.DeadlineExceeded) {
@@ -351,7 +353,6 @@ func (r *Runner) Abort(runErr error) {
 
 	r.captureEngineErr(runErr)
 	r.emitPhaseChangedEvent()
-	r.markDone()
 }
 
 func (r *Runner) transitionPhase(phase RunnerPhase) {
@@ -386,12 +387,46 @@ func (r *Runner) settle(engineErr error) {
 		}
 		r.transitionPhase(PhaseSettled)
 		r.emitPhaseChangedEvent()
-		r.markDone()
 	})
 }
 
-func (r *Runner) markDone() {
-	r.doneOnce.Do(func() { close(r.done) })
+// startSettleObserver subscribes to the runner's own phase-change stream and
+// closes [Runner.done] when the runner transitions into [PhaseSettled]. It is
+// the only closer of the Done channel — both [Runner.Done] and
+// [Runner.Wait] consume the closed-channel signal it produces, while the
+// stream itself is the canonical source of truth.
+//
+// The observer goroutine exits when the runner settles (closing done) or when
+// [Runner.ctx] is canceled. Runners constructed but never started or aborted
+// leak the goroutine the same way the previous design leaked an open done
+// channel; pass a cancelable context via [WithContext] to bound the lifetime.
+func (r *Runner) startSettleObserver() {
+	sub, err := r.eventStream.Subscribe(streampkg.Filter{
+		EventTypes: []string{streampkg.EventRunnerPhaseChanged},
+		Scope:      streampkg.Scope{RunnerID: r.id},
+	}, streampkg.WithSubscriberBuffer(32))
+	if err != nil {
+		// eventStream is always non-nil after New, so Subscribe failing is a
+		// programming error in the stream package, not a runtime concern.
+		panic("runner: settle observer subscribe failed: " + err.Error())
+	}
+	go func() {
+		defer sub.Cancel()
+		if r.Phase() == PhaseSettled {
+			close(r.done)
+			return
+		}
+		for {
+			_, ok, err := sub.Next(r.ctx)
+			if err != nil || !ok {
+				return
+			}
+			if r.Phase() == PhaseSettled {
+				close(r.done)
+				return
+			}
+		}
+	}()
 }
 
 func (r *Runner) captureEngineErr(err error) {
