@@ -387,10 +387,11 @@ Initial audit list (non-exhaustive — extend as new instances are found):
   caller-supplied channel.
 - Orchestrator planning callbacks ✓ retired. `StartRequestWithProgress`,
   `OrchestratorProgressFunc`, and `OrchestratorProgressEvent` were removed.
-  Provider-side streaming during planning is now opted into by setting
-  `Request.StreamPlanning = true`; live reasoning and text deltas are emitted
-  to `Request.Stream` as `llm.reasoning.delta` and `llm.output.delta` events,
-  and the only way to observe them is to subscribe to the stream.
+  `StartRequest` now creates the request stream itself and returns it in
+  `StartRequestResponse`; `Request` is a pure input DTO and no longer carries
+  stream ownership or provider-streaming options. Orchestrator planning uses
+  the non-streaming skill run and emits replayable planning output/status
+  events to the returned stream.
 
 When migrating, preserve backward semantics by:
 
@@ -533,14 +534,14 @@ Target:
 
 Current state:
 
-- `StartRequest` is the only request entrypoint. It creates or accepts a
-  request-scoped stream and emits planning status, text, and (when opted in)
-  reasoning deltas as compact JSON events.
-- `Request.StreamPlanning bool` opts into provider-side streaming during
-  planning. When true, the planner uses `Conversation.Stream` and emits
-  `llm.reasoning.delta` / `llm.output.delta` events. When false (default),
-  the planner uses non-streaming `Skill.Run` and emits a single
-  `llm.output.delta` plus `status.completed` once planning finishes.
+- `StartRequest` is the only request entrypoint. It creates a request-scoped
+  stream, returns it in `StartRequestResponse`, and emits planning status/text
+  as compact replayable JSON events.
+- `Request` no longer owns stream configuration. `Request.Stream` and
+  `Request.StreamPlanning` were removed so request input cannot accidentally
+  carry output-channel lifecycle state. Orchestrator planning uses
+  non-streaming `Skill.Run` and emits a single `llm.output.delta` plus
+  `status.completed` once planning finishes.
 - Runner creation, runner lifecycle, executor phases, skill events, and
   conversation deltas all flow into the same request stream. CLI examples
   subscribe once and render selected events.
@@ -548,8 +549,8 @@ Current state:
 Target:
 
 - Done. There is no parallel callback or progress notification for
-  orchestrator-owned planning; subscribing to `Request.Stream` is the only
-  observation path.
+  orchestrator-owned planning; subscribing to `StartRequestResponse.Stream` is
+  the only observation path.
 
 ## Migration Plan
 
@@ -574,7 +575,8 @@ Target:
 ### Phase 3: Orchestrator Request Stream
 
 - Add request-scoped stream creation.
-- Let `Request` carry an optional request-scoped stream.
+- Return the request-scoped stream from `StartRequest` rather than storing it
+  on `Request`.
 - Emit orchestrator planning status, reasoning deltas, text deltas, and runner
   creation events into that stream.
 - Attach the same stream to the runner so runner lifecycle and node events can
@@ -634,9 +636,9 @@ Concrete migration units (each a self-contained PR-sized step):
    remaining callback fields, signal channels, or sync.Cond patterns and
    convert each to producer-emit / subscriber-consume on the active stream.
 5. ✓ Retire `StartRequestWithProgress` in favor of a request-scoped stream
-   subscription created and consumed by the caller. Replaced with a
-   `Request.StreamPlanning bool` opt-in for provider-side streaming during
-   planning; deltas emit only to `Request.Stream`.
+  returned by `StartRequest`. `Request.Stream` and `Request.StreamPlanning`
+  were removed; planning output/status deltas emit only to the returned
+  request stream.
 
 Acceptance signal for Phase 7:
 
@@ -674,12 +676,11 @@ Acceptance signal for Phase 7:
   shape, source/scope structs, filters, multi-subscriber delivery,
   cancellation-safe subscriptions, bounded in-memory replay, writer helpers,
   optional store append hook, and focused tests.
-- 2026-05-02: Request/runner stream integration started. `engine.Request` can
-  now carry a request-scoped stream; orchestrator planning deltas and runner
-  lifecycle/node events publish compact JSON events to it. The Honshu example
-  now subscribes once to that stream and saves raw events to
-  `artifacts/stream_events.ndjson` instead of separately consuming planner
-  callbacks and full runner snapshots.
+- 2026-05-02: Request/runner stream integration started. Orchestrator planning
+  deltas and runner lifecycle/node events publish compact JSON events to a
+  request-scoped stream. The Honshu example subscribes once to that stream and
+  saves raw events to `artifacts/stream_events.ndjson` instead of separately
+  consuming planner callbacks and full runner snapshots.
 - 2026-05-02: Executor phase events added for polish, execute, and report
   stages. They are emitted by the runner with source layer `executor`, node and
   skill metadata, and compact status/error deltas. Skill/conversation internals
@@ -701,11 +702,10 @@ Acceptance signal for Phase 7:
   lifecycle state logs for skill conversation resume/trim/replay, not blanket
   request-stream archives. Outer callers that need archival output should
   subscribe to the request stream themselves.
-- 2026-05-02: Runner stream subscription layer started. `StartRequest` now
-  creates a request stream when callers do not provide one, `Runner` exposes
-  `SubscribeStream`, `Orchestrator` exposes `SubscribeRunnerStream`, and the
-  orchestrate demo watches compact stream events instead of `RunnerUpdate`
-  snapshots.
+- 2026-05-02: Runner stream subscription layer started. `StartRequest` creates
+  a request stream, `Runner` exposes `SubscribeStream`, `Orchestrator` exposes
+  `SubscribeRunnerStream`, and the orchestrate demo watches compact stream
+  events instead of `RunnerUpdate` snapshots.
 - 2026-05-02: Phase 5 complete. `RunnerUpdate`, `Runner.SubscribeUpdates`, and
   `Orchestrator.SubscribeRunner` removed with no compatibility wrappers.
   `publishStreamUpdate(RunnerUpdate)` replaced by `emitPhaseChangedEvent()` and
@@ -724,10 +724,12 @@ Acceptance signal for Phase 7:
   Phase 7.
 - 2026-05-02: LLM provider streaming decoupled from the internal engine stream.
   A request-scoped stream no longer forces orchestrator planning to call the
-  provider streaming API. Normal `StartRequest` uses the non-streaming skill
-  run and emits the final planner text/status into the engine stream;
-  `StartRequestWithProgress` remains the temporary legacy path that opts into
-  provider streaming for live progress callbacks.
+  provider streaming API. `StartRequest` uses the non-streaming skill run and
+  emits the final planner text/status into the engine stream.
+- 2026-05-03: Request stream ownership moved out of `Request`. `StartRequest`
+  now creates the stream itself and returns
+  `StartRequestResponse{Stream, RunnerID}`. `Request.Stream` and
+  `Request.StreamPlanning` were removed.
 - 2026-05-02: Phase 7 unit 1 complete. `Runner.phaseSignal` and
   `notifyPhaseChanged()` removed. `Runner.New` now creates a runner-owned
   stream when no request stream is supplied, `waitForPhase` subscribes to

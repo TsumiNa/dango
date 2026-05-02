@@ -9,9 +9,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/tsumina/dango/internal/llm"
-	streampkg "github.com/tsumina/dango/internal/engine/stream"
 	runnerpkg "github.com/tsumina/dango/internal/engine/runner"
+	streampkg "github.com/tsumina/dango/internal/engine/stream"
+	"github.com/tsumina/dango/internal/llm"
 )
 
 func TestNewOrchestrator_ReturnsIndependentInstances(t *testing.T) {
@@ -340,7 +340,6 @@ func TestWaitRunner_ReturnsViewWhenContextEndsFirst(t *testing.T) {
 	waitForRunnerDone(t, managedRunner, "runner done after timeout test")
 }
 
-
 func TestAddSkills_LoadsLightweightSkill(t *testing.T) {
 	o := newOrchestrator(testLogger)
 	dir := writeTestSkill(t, "test-skill", "A skill for orchestrator test.")
@@ -567,7 +566,7 @@ func TestStartRunner_ForwardsStreamAndQueryState(t *testing.T) {
 		"only": {
 			Id: "only",
 			Executor: &stubRunnerExecutor{
-				polish:  func(ctx context.Context) (any, error) { return "stream polish", nil },
+				polish: func(ctx context.Context) (any, error) { return "stream polish", nil },
 				execute: func(ctx context.Context, parentOutputs map[string]any) (any, []*runnerpkg.Node, error) {
 					close(started)
 					<-release
@@ -652,10 +651,11 @@ func TestLoadRunnerRecords_LoadsPersistedLog(t *testing.T) {
 	}), mustReviewJSON(t, true, ""))); err != nil {
 		t.Fatalf("SetOrchestratorSkill: %v", err)
 	}
-	runnerID, err := o.StartRequest(context.Background(), &Request{Input: "run a single node"})
+	resp, err := o.StartRequest(context.Background(), Request{Input: "run a single node"})
 	if err != nil {
 		t.Fatalf("StartRequest: %v", err)
 	}
+	runnerID := resp.RunnerID
 	managedRunner, err := o.Runner(runnerID)
 	if err != nil {
 		t.Fatalf("Runner: %v", err)

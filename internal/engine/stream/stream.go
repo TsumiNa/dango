@@ -149,10 +149,13 @@ func (s *Stream) Close() {
 	}
 }
 
-// Subscribe attaches a consumer to the stream.
+// Subscribe attaches a consumer to the stream. By default, live events that
+// would block on a full subscriber channel are dropped for that subscriber;
+// use [WithOverflowPolicy] to request an immediate overflow error instead.
 func (s *Stream) Subscribe(filter Filter, opts ...SubscribeOption) (*Subscription, error) {
 	settings := subscribeSettings{
-		buffer: defaultSubscriberBuffer,
+		buffer:         defaultSubscriberBuffer,
+		overflowPolicy: OverflowDropNewest,
 	}
 	for _, opt := range opts {
 		opt(&settings)
@@ -176,11 +179,12 @@ func (s *Stream) Subscribe(filter Filter, opts ...SubscribeOption) (*Subscriptio
 		buffer = len(replay)
 	}
 	sub := &Subscription{
-		id:     id,
-		stream: s,
-		filter: filter,
-		events: make(chan Event, buffer),
-		done:   make(chan struct{}),
+		id:             id,
+		stream:         s,
+		filter:         filter,
+		events:         make(chan Event, buffer),
+		done:           make(chan struct{}),
+		overflowPolicy: settings.overflowPolicy,
 	}
 	s.nextSubID = id
 	s.subscribers[id] = sub

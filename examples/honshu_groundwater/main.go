@@ -109,23 +109,8 @@ func runHonshuGroundwaterExample(ctx context.Context, cfg exampleConfig) (*runne
 		return nil, err
 	}
 	defer streamLog.Close()
-	eventStream := streampkg.New(streampkg.Scope{RequestID: "honshu_groundwater"})
-	events, err := eventStream.Subscribe(streampkg.Filter{}, streampkg.WithSubscriberBuffer(256))
-	if err != nil {
-		return nil, err
-	}
-	eventErrCh := make(chan error, 1)
-	go func() {
-		eventErrCh <- streamExampleEvents(ctx, cfg.Out, streamLog, events)
-	}()
-	closeEventStream := func() error {
-		eventStream.Close()
-		return <-eventErrCh
-	}
-
 	root, err := exampleRoot()
 	if err != nil {
-		_ = closeEventStream()
 		return nil, err
 	}
 	logger.Info("honshu groundwater example starting",
@@ -137,7 +122,6 @@ func runHonshuGroundwaterExample(ctx context.Context, cfg exampleConfig) (*runne
 	logger.Info("loading llm client")
 	client, err := resolveExampleLLMClient(cfg)
 	if err != nil {
-		_ = closeEventStream()
 		return nil, err
 	}
 	logger.Info("llm client ready",
@@ -147,21 +131,31 @@ func runHonshuGroundwaterExample(ctx context.Context, cfg exampleConfig) (*runne
 	)
 	orchestrator, err := configureExampleOrchestrator(ctx, root, client, logger)
 	if err != nil {
-		_ = closeEventStream()
 		return nil, err
 	}
 
 	request := buildGroundwaterRequest(cfg.MeasurementsJSON)
 	logger.Info("submitting request to orchestrator")
-	runnerID, err := orchestrator.StartRequest(ctx, &orchestrate.Request{
+	resp, err := orchestrator.StartRequest(ctx, orchestrate.Request{
 		Input:        request,
 		ArtifactsDir: artifactsDir,
-		Stream:       eventStream,
 	})
 	if err != nil {
 		logger.Error("request failed before runner stream was available", "err", err)
-		_ = closeEventStream()
 		return nil, fmt.Errorf("start request before runner stream is available: %w", err)
+	}
+	runnerID := resp.RunnerID
+	events, err := resp.Stream.Subscribe(streampkg.Filter{}, streampkg.WithSubscriberBuffer(256))
+	if err != nil {
+		return nil, err
+	}
+	eventErrCh := make(chan error, 1)
+	go func() {
+		eventErrCh <- streamExampleEvents(ctx, cfg.Out, streamLog, events)
+	}()
+	closeEventStream := func() error {
+		resp.Stream.Close()
+		return <-eventErrCh
 	}
 	logger.Info("runner created", "runner_id", runnerID)
 

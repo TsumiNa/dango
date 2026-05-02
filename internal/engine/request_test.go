@@ -13,7 +13,7 @@ import (
 
 func TestStartRequest_ReturnsRejectedErrorWithoutPlanner(t *testing.T) {
 	o := newOrchestrator(testLogger)
-	_, err := o.StartRequest(context.Background(), &Request{Input: "summarize this repository"})
+	_, err := o.StartRequest(context.Background(), Request{Input: "summarize this repository"})
 	var rejected *RequestRejectedError
 	if !errors.As(err, &rejected) {
 		t.Fatalf("StartRequest err = %v, want RequestRejectedError", err)
@@ -53,12 +53,16 @@ func TestStartRequest_BuildsRunnerFromPlanAndReturnsID(t *testing.T) {
 	}
 
 	artifactsDir := t.TempDir()
-	runnerID, err := o.StartRequest(context.Background(), &Request{Input: "build a report", ArtifactsDir: artifactsDir})
+	resp, err := o.StartRequest(context.Background(), Request{Input: "build a report", ArtifactsDir: artifactsDir})
 	if err != nil {
 		t.Fatalf("StartRequest: %v", err)
 	}
+	runnerID := resp.RunnerID
 	if runnerID == "" {
 		t.Fatal("runnerID is empty")
+	}
+	if resp.Stream == nil {
+		t.Fatal("response stream is nil")
 	}
 
 	managedRunner := o.Runners()[runnerID]
@@ -118,7 +122,7 @@ func TestStartRequest_BuildsRunnerFromPlanAndReturnsID(t *testing.T) {
 	}
 }
 
-func TestStartRequest_StreamPlanningEmitsLLMDeltas(t *testing.T) {
+func TestStartRequest_ReturnsReplayableRequestStream(t *testing.T) {
 	clearLLMEnv(t)
 	o := newOrchestrator(testLogger)
 	mustAddSkills(t, o, newTestSkillConfig(t, "single", "Single-step runner.", nil))
@@ -130,14 +134,23 @@ func TestStartRequest_StreamPlanningEmitsLLMDeltas(t *testing.T) {
 			TaskDescription: "Run the only node.",
 		}},
 	})
-	if err := o.SetOrchestratorSkill(bindStreamingTestOrchestratorSkill(t, planOutput, mustReviewJSON(t, true, ""))); err != nil {
+	if err := o.SetOrchestratorSkill(bindTestOrchestratorSkill(t, planOutput, mustReviewJSON(t, true, ""))); err != nil {
 		t.Fatalf("SetOrchestratorSkill(test planner): %v", err)
 	}
 
-	eventStream := streampkg.New(streampkg.Scope{RequestID: "req_stream_planning"})
-	sub, err := eventStream.Subscribe(streampkg.Filter{
+	resp, err := o.StartRequest(context.Background(), Request{Input: "run a single node"})
+	if err != nil {
+		t.Fatalf("StartRequest: %v", err)
+	}
+	if resp == nil || resp.Stream == nil {
+		t.Fatal("StartRequest response stream is nil")
+	}
+	if resp.RunnerID == "" {
+		t.Fatal("runnerID is empty")
+	}
+
+	sub, err := resp.Stream.Subscribe(streampkg.Filter{
 		EventTypes: []string{
-			streampkg.EventLLMReasoningDelta,
 			streampkg.EventLLMOutputDelta,
 			streampkg.EventStatusCompleted,
 		},
@@ -147,21 +160,9 @@ func TestStartRequest_StreamPlanningEmitsLLMDeltas(t *testing.T) {
 	}
 	defer sub.Cancel()
 
-	runnerID, err := o.StartRequest(context.Background(), &Request{
-		Input:          "run a single node",
-		Stream:         eventStream,
-		StreamPlanning: true,
-	})
-	if err != nil {
-		t.Fatalf("StartRequest: %v", err)
-	}
-	if runnerID == "" {
-		t.Fatal("runnerID is empty")
-	}
-
 	deadline := time.Now().Add(2 * time.Second)
-	var sawReasoning, sawPlanText, sawCompletedStatus bool
-	for time.Now().Before(deadline) && !(sawReasoning && sawPlanText && sawCompletedStatus) {
+	var sawPlanText, sawCompletedStatus bool
+	for time.Now().Before(deadline) && !(sawPlanText && sawCompletedStatus) {
 		readCtx, cancel := context.WithTimeout(context.Background(), time.Until(deadline))
 		event, ok, err := sub.Next(readCtx)
 		cancel()
@@ -176,22 +177,15 @@ func TestStartRequest_StreamPlanningEmitsLLMDeltas(t *testing.T) {
 			continue
 		}
 		switch event.EventType {
-		case streampkg.EventLLMReasoningDelta:
-			if delta == "planning stream is active" {
-				sawReasoning = true
-			}
 		case streampkg.EventLLMOutputDelta:
 			if delta == planOutput {
 				sawPlanText = true
 			}
 		case streampkg.EventStatusCompleted:
-			if delta == "orchestrator planning stream completed" {
+			if delta == "orchestrator planning completed" {
 				sawCompletedStatus = true
 			}
 		}
-	}
-	if !sawReasoning {
-		t.Fatal("missing reasoning delta stream event from orchestrator planning")
 	}
 	if !sawPlanText {
 		t.Fatal("missing planner text delta stream event from orchestrator planning")
@@ -200,7 +194,7 @@ func TestStartRequest_StreamPlanningEmitsLLMDeltas(t *testing.T) {
 		t.Fatal("missing planning-completed status stream event from orchestrator planning")
 	}
 
-	managedRunner, err := o.Runner(runnerID)
+	managedRunner, err := o.Runner(resp.RunnerID)
 	if err != nil {
 		t.Fatalf("Runner: %v", err)
 	}
@@ -227,14 +221,17 @@ func TestStartRequest_EmitsRequestStreamEvents(t *testing.T) {
 		t.Fatalf("SetOrchestratorSkill(test planner): %v", err)
 	}
 
-	eventStream := streampkg.New(streampkg.Scope{RequestID: "req_test"})
-	sub, err := eventStream.Subscribe(streampkg.Filter{}, streampkg.WithSubscriberBuffer(64))
-	if err != nil {
-		t.Fatalf("Subscribe: %v", err)
-	}
-	runnerID, err := o.StartRequest(context.Background(), &Request{Input: "run a single node", Stream: eventStream})
+	resp, err := o.StartRequest(context.Background(), Request{Input: "run a single node"})
 	if err != nil {
 		t.Fatalf("StartRequest: %v", err)
+	}
+	if resp == nil || resp.Stream == nil {
+		t.Fatal("StartRequest response stream is nil")
+	}
+	runnerID := resp.RunnerID
+	sub, err := resp.Stream.Subscribe(streampkg.Filter{}, streampkg.WithSubscriberBuffer(64))
+	if err != nil {
+		t.Fatalf("Subscribe: %v", err)
 	}
 	managedRunner, err := o.Runner(runnerID)
 	if err != nil {
@@ -245,7 +242,7 @@ func TestStartRequest_EmitsRequestStreamEvents(t *testing.T) {
 	if err := managedRunner.Wait(waitCtx); err != nil {
 		t.Fatalf("runner Wait: %v", err)
 	}
-	eventStream.Close()
+	resp.Stream.Close()
 
 	var (
 		sawPlanText bool
@@ -304,10 +301,11 @@ func TestStartRequest_CreatesReplayableRunnerStream(t *testing.T) {
 		t.Fatalf("SetOrchestratorSkill(test planner): %v", err)
 	}
 
-	runnerID, err := o.StartRequest(context.Background(), &Request{Input: "run a single node"})
+	resp, err := o.StartRequest(context.Background(), Request{Input: "run a single node"})
 	if err != nil {
 		t.Fatalf("StartRequest: %v", err)
 	}
+	runnerID := resp.RunnerID
 	managedRunner, err := o.Runner(runnerID)
 	if err != nil {
 		t.Fatalf("Runner: %v", err)
@@ -370,12 +368,12 @@ func TestStartRequest_ErrorsWhenPlanUsesUnknownSkill(t *testing.T) {
 		t.Fatalf("SetOrchestratorSkill(test planner): %v", err)
 	}
 
-	runnerID, err := o.StartRequest(context.Background(), &Request{Input: "process images"})
+	resp, err := o.StartRequest(context.Background(), Request{Input: "process images"})
 	if err == nil {
 		t.Fatal("expected error when the plan references an unknown skill")
 	}
-	if runnerID != "" {
-		t.Fatalf("runnerID = %q, want empty", runnerID)
+	if resp != nil && resp.RunnerID != "" {
+		t.Fatalf("runnerID = %q, want empty", resp.RunnerID)
 	}
 	if len(o.Runners()) != 0 {
 		t.Fatalf("expected no runners to be stored when plan assembly fails")
@@ -397,12 +395,12 @@ func TestStartRequest_RejectsPriorityOutsideRange(t *testing.T) {
 	}
 
 	for _, priority := range []RequestPriority{-1, RequestPriorityHighest + 1} {
-		runnerID, err := o.StartRequest(context.Background(), &Request{Input: "run now", Priority: priority})
+		resp, err := o.StartRequest(context.Background(), Request{Input: "run now", Priority: priority})
 		if err == nil {
 			t.Fatalf("expected StartRequest to reject priority %d", priority)
 		}
-		if runnerID != "" {
-			t.Fatalf("expected empty runnerID for invalid priority %d, got %q", priority, runnerID)
+		if resp != nil {
+			t.Fatalf("expected nil response for invalid priority %d, got %+v", priority, resp)
 		}
 		if len(o.Runners()) != 0 {
 			t.Fatalf("expected no runners to be created for invalid priority %d", priority)

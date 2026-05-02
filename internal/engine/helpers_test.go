@@ -350,10 +350,11 @@ func mustPlanSingleNodeRunnerWithOutputs(t *testing.T, o *Orchestrator, outputs 
 	if err := o.SetOrchestratorSkill(bindTestOrchestratorSkill(t, outputs...)); err != nil {
 		t.Fatalf("SetOrchestratorSkill: %v", err)
 	}
-	runnerID, err := o.StartRequest(context.Background(), &Request{Input: "run a single node"})
+	resp, err := o.StartRequest(context.Background(), Request{Input: "run a single node"})
 	if err != nil {
 		t.Fatalf("StartRequest: %v", err)
 	}
+	runnerID := resp.RunnerID
 	managedRunner, ok := o.Runners()[runnerID]
 	if !ok || managedRunner == nil {
 		t.Fatalf("expected runner %q to be stored", runnerID)
@@ -367,7 +368,7 @@ func mustPlanSingleNodeRunnerWithOutputs(t *testing.T, o *Orchestrator, outputs 
 
 func mustRejectStartRequest(t *testing.T, o *Orchestrator) *RejectReason {
 	t.Helper()
-	_, err := o.StartRequest(context.Background(), &Request{Input: "summarize this repository"})
+	_, err := o.StartRequest(context.Background(), Request{Input: "summarize this repository"})
 	var rejected *RequestRejectedError
 	if !errors.As(err, &rejected) {
 		t.Fatalf("StartRequest rejection err = %v, want RequestRejectedError", err)

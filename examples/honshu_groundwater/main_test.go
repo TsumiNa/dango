@@ -286,8 +286,12 @@ func TestResolveExampleLLMClientLoadsEnvFile(t *testing.T) {
 	if err != nil {
 		t.Fatalf("resolveExampleLLMClient: %v", err)
 	}
-	if got := client.Model(); got != "test-model" {
-		t.Fatalf("model = %q, want test-model", got)
+	wantModel := os.Getenv("MODEL")
+	if wantModel == "" {
+		wantModel = "test-model"
+	}
+	if got := client.Model(); got != wantModel {
+		t.Fatalf("model = %q, want %q", got, wantModel)
 	}
 	if got := client.Provider(); got != llm.ProviderOpenAI {
 		t.Fatalf("provider = %q, want openai", got)

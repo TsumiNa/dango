@@ -76,20 +76,23 @@ func (p RequestPriority) valid() bool {
 }
 
 // Request is the external task description the Orchestrator receives from the
-// caller.
-//
-// When StreamPlanning is true, orchestrator-owned planning calls the LLM
-// provider's streaming API and emits reasoning/output deltas to Stream as
-// they arrive. When false (the default), planning uses the non-streaming
-// skill run and emits a single completion event. Callers that need live
-// planning progress should set StreamPlanning and subscribe to Stream
-// rather than relying on a callback.
+// caller. It contains only caller-provided input; observation state such as the
+// request stream is returned in [StartRequestResponse].
 type Request struct {
-	Input          string            `json:"input" yaml:"input"`
-	Priority       RequestPriority   `json:"priority,omitempty" yaml:"priority,omitempty"`
-	ArtifactsDir   string            `json:"artifacts_dir,omitempty" yaml:"artifacts_dir,omitempty"`
-	Stream         *streampkg.Stream `json:"-" yaml:"-"`
-	StreamPlanning bool              `json:"stream_planning,omitempty" yaml:"stream_planning,omitempty"`
+	Input        string          `json:"input" yaml:"input"`
+	Priority     RequestPriority `json:"priority,omitempty" yaml:"priority,omitempty"`
+	ArtifactsDir string          `json:"artifacts_dir,omitempty" yaml:"artifacts_dir,omitempty"`
+}
+
+// StartRequestResponse is returned by [Orchestrator.StartRequest].
+//
+// Stream is the request-scoped event stream created for this orchestration
+// attempt. RunnerID is populated once planning succeeds and a runner is
+// materialized; it is empty when the request is rejected before runner
+// creation.
+type StartRequestResponse struct {
+	Stream   *streampkg.Stream
+	RunnerID string
 }
 
 // RejectReason explains why a request cannot currently be turned into a plan.

@@ -457,10 +457,11 @@ func missingSkills(skills map[string]*llm.Skill, required ...string) []string {
 }
 
 func mustStartRequest(ctx context.Context, o *orchestrate.Orchestrator, input string, priority orchestrate.RequestPriority) *orchestrate.CoarsePlan {
-	runnerID, err := o.StartRequest(ctx, &orchestrate.Request{Input: input, Priority: priority})
+	resp, err := o.StartRequest(ctx, orchestrate.Request{Input: input, Priority: priority})
 	if err != nil {
 		fatalf("StartRequest(%q): %v", input, err)
 	}
+	runnerID := resp.RunnerID
 	view, err := o.QueryRunner(runnerID)
 	if err != nil {
 		fatalf("QueryRunner(%q): %v", runnerID, err)

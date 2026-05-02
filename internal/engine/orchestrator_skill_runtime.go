@@ -17,13 +17,10 @@ const (
 
 var errOrchestratorSkillUnconfigured = errors.New("orchestrate: orchestrator skill has no runnable llm client")
 
-func planWithOrchestrator(ctx context.Context, req *Request, skills []runnerpkg.SkillSummary, runtimeSkill *llm.Skill, eventStream *streampkg.Stream) (*CoarsePlan, *RejectReason, error) {
+func planWithOrchestrator(ctx context.Context, req Request, skills []runnerpkg.SkillSummary, runtimeSkill *llm.Skill, eventStream *streampkg.Stream) (*CoarsePlan, *RejectReason, error) {
 	prompt, err := marshalOrchestratorPlanningInput(req.Input, skills)
 	if err != nil {
 		return nil, nil, fmt.Errorf("orchestrate: marshal planner input: %w", err)
-	}
-	if req.StreamPlanning {
-		return planWithOrchestratorStream(ctx, prompt, runtimeSkill, eventStream)
 	}
 	return planWithOrchestratorRun(ctx, prompt, runtimeSkill, eventStream)
 }
@@ -55,94 +52,12 @@ func planWithOrchestratorRun(ctx context.Context, prompt string, runtimeSkill *l
 	return parsePlanningResult(raw)
 }
 
-func planWithOrchestratorStream(ctx context.Context, prompt string, runtimeSkill *llm.Skill, eventStream *streampkg.Stream) (*CoarsePlan, *RejectReason, error) {
-	ctx = normalizeContext(ctx)
-	conv := runtimeSkill.Conversation()
-	if conv == nil {
-		return nil, nil, fmt.Errorf("orchestrate: orchestrator skill is not bound")
-	}
-	planningMeta := map[string]any{"stage": "planning"}
-	emitEngineStreamEvent(ctx, eventStream,
-		streamSourceOrchestrator(),
-		streampkg.EventStatusProgress,
-		streampkg.StatusRunning,
-		"orchestrator planning stream started",
-		streampkg.Scope{},
-		planningMeta,
-	)
-	conv.AppendUser(prompt)
-	stream, err := conv.Stream(ctx, defaultPlanningEffort)
-	if err != nil {
-		return nil, nil, err
-	}
-	var raw string
-	for event := range stream {
-		if event.Err != nil {
-			emitEngineStreamEvent(ctx, eventStream,
-				streamSourceOrchestrator(),
-				streampkg.EventStatusFailed,
-				streampkg.StatusFailed,
-				event.Err.Error(),
-				streampkg.Scope{},
-				planningMeta,
-			)
-			return nil, nil, event.Err
-		}
-		if event.ReasoningDelta != "" {
-			emitEngineStreamEvent(ctx, eventStream,
-				streamSourceOrchestrator(),
-				streampkg.EventLLMReasoningDelta,
-				streampkg.StatusRunning,
-				event.ReasoningDelta,
-				streampkg.Scope{},
-				planningMeta,
-			)
-		}
-		if event.TextDelta != "" {
-			raw += event.TextDelta
-			emitEngineStreamEvent(ctx, eventStream,
-				streamSourceOrchestrator(),
-				streampkg.EventLLMOutputDelta,
-				streampkg.StatusRunning,
-				event.TextDelta,
-				streampkg.Scope{},
-				planningMeta,
-			)
-		}
-	}
-	if raw == "" {
-		raw = lastAssistantText(conv)
-	}
-	emitEngineStreamEvent(ctx, eventStream,
-		streamSourceOrchestrator(),
-		streampkg.EventStatusCompleted,
-		streampkg.StatusCompleted,
-		"orchestrator planning stream completed",
-		streampkg.Scope{},
-		planningMeta,
-	)
-	return parsePlanningResult(raw)
-}
-
 func parsePlanningResult(raw string) (*CoarsePlan, *RejectReason, error) {
 	plan, reject, err := parseOrchestratorPlanningOutput(raw)
 	if err != nil {
 		return nil, nil, fmt.Errorf("orchestrate: %w", err)
 	}
 	return plan, reject, nil
-}
-
-func lastAssistantText(conv *llm.Conversation) string {
-	if conv == nil {
-		return ""
-	}
-	turns := conv.Turns()
-	for i := len(turns) - 1; i >= 0; i-- {
-		if turns[i].Role == llm.RoleAssistant && turns[i].Text != "" {
-			return turns[i].Text
-		}
-	}
-	return ""
 }
 
 func runtimeOrchestrator(sk *llm.Skill, envClient *llm.Client, envClientErr error) (*llm.Skill, error) {

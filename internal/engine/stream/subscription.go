@@ -2,17 +2,36 @@ package stream
 
 import (
 	"context"
+	"errors"
 	"sync"
 )
+
+// OverflowPolicy controls what happens when a subscriber cannot accept an
+// event immediately.
+type OverflowPolicy string
+
+const (
+	// OverflowDropNewest drops the event for the slow subscriber and lets the
+	// producer continue.
+	OverflowDropNewest OverflowPolicy = "drop_newest"
+
+	// OverflowError returns [ErrSubscriberOverflow] to the producer.
+	OverflowError OverflowPolicy = "error"
+)
+
+// ErrSubscriberOverflow is returned when a subscriber configured with
+// [OverflowError] cannot accept an event without blocking the producer.
+var ErrSubscriberOverflow = errors.New("stream: subscriber buffer full")
 
 // SubscribeOption customizes one subscription.
 type SubscribeOption func(*subscribeSettings)
 
 type subscribeSettings struct {
-	replayFrom uint64
-	replayLast int
-	noReplay   bool
-	buffer     int
+	replayFrom     uint64
+	replayLast     int
+	noReplay       bool
+	buffer         int
+	overflowPolicy OverflowPolicy
 }
 
 // WithReplayFrom replays buffered events whose sequence number is at least
@@ -50,14 +69,24 @@ func WithSubscriberBuffer(n int) SubscribeOption {
 	}
 }
 
+// WithOverflowPolicy sets the delivery policy for live events when the
+// subscriber channel is full. Unknown policies fall back to dropping the new
+// event.
+func WithOverflowPolicy(policy OverflowPolicy) SubscribeOption {
+	return func(settings *subscribeSettings) {
+		settings.overflowPolicy = policy
+	}
+}
+
 // Subscription receives events from a stream until cancelled or until the
 // stream closes.
 type Subscription struct {
-	id     uint64
-	stream *Stream
-	filter Filter
-	events chan Event
-	done   chan struct{}
+	id             uint64
+	stream         *Stream
+	filter         Filter
+	events         chan Event
+	done           chan struct{}
+	overflowPolicy OverflowPolicy
 
 	doneOnce   sync.Once
 	eventsOnce sync.Once
@@ -111,6 +140,11 @@ func (sub *Subscription) send(ctx context.Context, event Event) error {
 		return nil
 	case <-ctx.Done():
 		return ctx.Err()
+	default:
+		if sub.overflowPolicy == OverflowError {
+			return ErrSubscriberOverflow
+		}
+		return nil
 	}
 }
 

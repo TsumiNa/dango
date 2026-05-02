@@ -16,27 +16,17 @@ import (
 // It plans and materializes a runner, stores it for query and stream APIs,
 // subscribes to its lifecycle updates, and then either starts it immediately
 // or queues it when the configured runner limit is full. StartRequest is
-// non-blocking and returns the runner ID once the runner has been accepted
-// into orchestration. To observe planning progress, set [Request.Stream] and
-// subscribe before calling; set [Request.StreamPlanning] to opt into
-// provider-side streaming so reasoning and text deltas appear during planning.
-func (o *Orchestrator) StartRequest(ctx context.Context, req *Request) (string, error) {
-	return o.startRequest(ctx, req)
-}
-
-func (o *Orchestrator) startRequest(ctx context.Context, req *Request) (string, error) {
+// non-blocking and returns a response containing the request stream and runner
+// ID once the runner has been accepted into orchestration. The stream is
+// replayable, so callers may subscribe after StartRequest returns and still
+// inspect planning events emitted during request startup.
+func (o *Orchestrator) StartRequest(ctx context.Context, req Request) (*StartRequestResponse, error) {
 	ctx = o.operationContext(ctx)
-	if req == nil {
-		return "", fmt.Errorf("orchestrate: nil request")
-	}
 	if !req.Priority.valid() {
-		return "", fmt.Errorf("orchestrate: request priority must be between %d and %d", RequestPriorityDefault, RequestPriorityHighest)
+		return nil, fmt.Errorf("orchestrate: request priority must be between %d and %d", RequestPriorityDefault, RequestPriorityHighest)
 	}
-	if req.Stream == nil {
-		copyReq := *req
-		copyReq.Stream = streampkg.New(streampkg.Scope{})
-		req = &copyReq
-	}
+	eventStream := streampkg.New(streampkg.Scope{})
+	resp := &StartRequestResponse{Stream: eventStream}
 
 	o.mu.Lock()
 	o.configLocked = true
@@ -49,11 +39,11 @@ func (o *Orchestrator) startRequest(ctx context.Context, req *Request) (string, 
 	runtimeSkill, err := runtimeOrchestrator(orchestratorSkill, envClient, envClientErr)
 	if err != nil {
 		if errors.Is(err, errOrchestratorSkillUnconfigured) {
-			return "", &RequestRejectedError{Reason: rejectUnconfiguredPlan(req, cloneSkillMap(skillConfigs), orchestratorSkill)}
+			return resp, &RequestRejectedError{Reason: rejectUnconfiguredPlan(&req, cloneSkillMap(skillConfigs), orchestratorSkill)}
 		}
-		return "", err
+		return resp, err
 	}
-	emitEngineStreamEvent(ctx, req.Stream,
+	emitEngineStreamEvent(ctx, eventStream,
 		streamSourceOrchestrator(),
 		streampkg.EventStatusStarted,
 		streampkg.StatusRunning,
@@ -63,9 +53,9 @@ func (o *Orchestrator) startRequest(ctx context.Context, req *Request) (string, 
 	)
 
 	skillSummaries := collectSkillSummaries(cloneSkillMap(skillConfigs))
-	plan, reject, err := planWithOrchestrator(ctx, req, skillSummaries, runtimeSkill, req.Stream)
+	plan, reject, err := planWithOrchestrator(ctx, req, skillSummaries, runtimeSkill, eventStream)
 	if err != nil {
-		emitEngineStreamEvent(ctx, req.Stream,
+		emitEngineStreamEvent(ctx, eventStream,
 			streamSourceOrchestrator(),
 			streampkg.EventStatusFailed,
 			streampkg.StatusFailed,
@@ -73,10 +63,10 @@ func (o *Orchestrator) startRequest(ctx context.Context, req *Request) (string, 
 			streampkg.Scope{},
 			nil,
 		)
-		return "", err
+		return resp, err
 	}
 	if reject != nil {
-		emitEngineStreamEvent(ctx, req.Stream,
+		emitEngineStreamEvent(ctx, eventStream,
 			streamSourceOrchestrator(),
 			streampkg.EventStatusFailed,
 			streampkg.StatusFailed,
@@ -84,18 +74,18 @@ func (o *Orchestrator) startRequest(ctx context.Context, req *Request) (string, 
 			streampkg.Scope{},
 			map[string]any{"reason": reject.Analysis},
 		)
-		return "", &RequestRejectedError{Reason: reject}
+		return resp, &RequestRejectedError{Reason: reject}
 	}
 	if plan == nil {
-		return "", fmt.Errorf("orchestrate: planner returned neither a plan nor a reject reason")
+		return resp, fmt.Errorf("orchestrate: planner returned neither a plan nor a reject reason")
 	}
 
-	runner, err := newRunnerFromPlan(ctx, logger, runnerStore, req, plan, skillConfigs, runtimeSkill, skillSummaries)
+	runner, err := newRunnerFromPlan(ctx, logger, runnerStore, req, eventStream, plan, skillConfigs, runtimeSkill, skillSummaries)
 	if err != nil {
-		return "", err
+		return resp, err
 	}
 	runnerID := runner.ID()
-	emitEngineStreamEvent(ctx, req.Stream,
+	emitEngineStreamEvent(ctx, eventStream,
 		streamSourceOrchestrator(),
 		streampkg.EventStatusProgress,
 		streampkg.StatusRunning,
@@ -110,13 +100,14 @@ func (o *Orchestrator) startRequest(ctx context.Context, req *Request) (string, 
 
 	go o.watchRunnerDone(runner)
 	if err := o.submitManagedRunner(ctx, runner, req.Priority); err != nil {
-		return "", err
+		return resp, err
 	}
-	return runnerID, nil
+	resp.RunnerID = runnerID
+	return resp, nil
 }
 
-func newRunnerFromPlan(ctx context.Context, logger *slog.Logger, store runnerpkg.RunnerStore, req *Request, plan *CoarsePlan, skills map[string]AddSkillConfig, plannerSkill *llm.Skill, skillSummaries []runnerpkg.SkillSummary) (*runnerpkg.Runner, error) {
-	nodes, err := buildPlanNodes(logger, req, plan, skills)
+func newRunnerFromPlan(ctx context.Context, logger *slog.Logger, store runnerpkg.RunnerStore, req Request, eventStream *streampkg.Stream, plan *CoarsePlan, skills map[string]AddSkillConfig, plannerSkill *llm.Skill, skillSummaries []runnerpkg.SkillSummary) (*runnerpkg.Runner, error) {
+	nodes, err := buildPlanNodes(logger, req, eventStream, plan, skills)
 	if err != nil {
 		return nil, err
 	}
@@ -124,18 +115,18 @@ func newRunnerFromPlan(ctx context.Context, logger *slog.Logger, store runnerpkg
 		runnerpkg.WithContext(ctx),
 		runnerpkg.WithLogger(logger),
 		runnerpkg.WithStore(store),
-		runnerpkg.WithStream(req.Stream),
+		runnerpkg.WithStream(eventStream),
 		runnerpkg.WithPlan(plan, nodes),
 		runnerpkg.WithPlannerSkill(plannerSkill),
 		runnerpkg.WithSkillSummaries(skillSummaries),
 		runnerpkg.WithPlanNodeBuilder(func(replanned *runnerpkg.CoarsePlan) (map[string]*runnerpkg.Node, error) {
-			request := &Request{Input: replanned.Request, ArtifactsDir: req.ArtifactsDir, Stream: req.Stream}
-			return buildPlanNodes(logger, request, replanned, skills)
+			request := Request{Input: replanned.Request, ArtifactsDir: req.ArtifactsDir}
+			return buildPlanNodes(logger, request, eventStream, replanned, skills)
 		}),
 	), nil
 }
 
-func buildPlanNodes(logger *slog.Logger, req *Request, plan *CoarsePlan, skills map[string]AddSkillConfig) (map[string]*runnerpkg.Node, error) {
+func buildPlanNodes(logger *slog.Logger, req Request, eventStream *streampkg.Stream, plan *CoarsePlan, skills map[string]AddSkillConfig) (map[string]*runnerpkg.Node, error) {
 	if len(plan.Nodes) == 0 {
 		return nil, fmt.Errorf("orchestrate: coarse plan must contain at least one node")
 	}
@@ -164,7 +155,7 @@ func buildPlanNodes(logger *slog.Logger, req *Request, plan *CoarsePlan, skills 
 		if planner.TaskDescription == "" {
 			planner.TaskDescription = req.Input
 		}
-		convCfg := conversationConfigForNode(skillCfg.Config, req.Stream, step.ID, step.SkillName)
+		convCfg := conversationConfigForNode(skillCfg.Config, eventStream, step.ID, step.SkillName)
 		executor, err := NewExecutor(logger, skillCfg.Skill, skillCfg.Client, convCfg, planner)
 		if err != nil {
 			return nil, fmt.Errorf("orchestrate: build executor for node %q: %w", step.ID, err)

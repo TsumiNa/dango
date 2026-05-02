@@ -103,7 +103,7 @@ func TestSubscriptionCancelStopsDelivery(t *testing.T) {
 	}
 }
 
-func TestSubscriptionCancelUnblocksSlowDelivery(t *testing.T) {
+func TestSubscriptionSlowConsumerDoesNotBlockEmit(t *testing.T) {
 	s := New(Scope{})
 	t.Cleanup(s.Close)
 
@@ -111,6 +111,7 @@ func TestSubscriptionCancelUnblocksSlowDelivery(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Subscribe: %v", err)
 	}
+	defer sub.Cancel()
 
 	errCh := make(chan error, 1)
 	go func() {
@@ -122,8 +123,6 @@ func TestSubscriptionCancelUnblocksSlowDelivery(t *testing.T) {
 		})
 	}()
 
-	sub.Cancel()
-
 	select {
 	case err := <-errCh:
 		if err != nil {
@@ -131,6 +130,27 @@ func TestSubscriptionCancelUnblocksSlowDelivery(t *testing.T) {
 		}
 	case <-time.After(time.Second):
 		t.Fatal("Emit did not unblock after subscription cancel")
+	}
+}
+
+func TestSubscriptionOverflowErrorPolicy(t *testing.T) {
+	s := New(Scope{})
+	t.Cleanup(s.Close)
+
+	sub, err := s.Subscribe(Filter{}, WithSubscriberBuffer(0), WithOverflowPolicy(OverflowError))
+	if err != nil {
+		t.Fatalf("Subscribe: %v", err)
+	}
+	defer sub.Cancel()
+
+	err = s.Emit(context.Background(), Event{
+		EventType: EventStatusProgress,
+		From:      Source{Layer: "runner"},
+		Status:    StatusRunning,
+		Delta:     json.RawMessage(`"blocked"`),
+	})
+	if !errors.Is(err, ErrSubscriberOverflow) {
+		t.Fatalf("Emit err = %v, want ErrSubscriberOverflow", err)
 	}
 }
 
