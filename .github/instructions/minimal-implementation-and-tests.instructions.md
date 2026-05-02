@@ -15,8 +15,22 @@ Use the most direct code structure that satisfies the described requirement.
 - Do not split a single concrete implementation into multiple layers "for future flexibility".
 - Inline a value or short helper when extracting it would only be used once and would not improve readability.
 - Prefer concrete types and direct function calls over abstract types and dispatch when there is one real implementation today.
+- Do not split a single-use operation into a public/private wrapper pair or a chain of one-off helper functions just to make individual functions shorter or easier to unit test. If the helper has no independent semantic role, no second caller, and no meaningful name beyond restating the caller, keep the logic in the caller.
+- Prefer writing one cohesive function for one cohesive behavior. Extract a helper only when it names a distinct concept, removes meaningful duplication, isolates a genuinely complex sub-step, or is reused by multiple call sites.
 
 If you find yourself adding a layer "in case we need to swap it later", stop and use the concrete form instead.
+If you find yourself creating a function that only forwards to another function with nearly the same name, inline it unless there is a concrete lifecycle, validation, locking, instrumentation, or API-boundary reason for the wrapper.
+
+### Go Type Placement
+
+When writing or refactoring Go, place types near the behavior that gives them meaning instead of collecting them in a package-wide `types.go` by default.
+
+- Keep a primary type with its constructor, exported API, methods, and tightly coupled supporting types in the same cohesive source file.
+- Put request/response/config/result structs next to the function or component that consumes and returns them when they belong to one workflow.
+- Keep small private helper types next to the function or method that uses them unless they are reused across multiple files.
+- Avoid catch-all `types.go` files that mix unrelated errors, aliases, request DTOs, state enums, and result structs while other files also define their own local types. This split makes ownership unclear and forces readers to jump between files.
+- Use a package-level `types.go` only when the package has a small, stable vocabulary of shared domain types that is genuinely used across the package and is clearer together than colocated with one implementation file. If only some types are shared, move the feature-specific ones back beside their behavior.
+- Do not move a type into `types.go` just because it is exported. Exported types should still live with their main behavior when that behavior is localized.
 
 ## 2. Minimal Scope Expansion
 
