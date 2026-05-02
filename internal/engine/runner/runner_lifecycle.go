@@ -244,23 +244,33 @@ func (r *Runner) runManagedLifecycleE(ctx context.Context) error {
 }
 
 func (r *Runner) acceptAndComplete(ctx context.Context) error {
-	events := r.Subscribe(32)
+	sub, err := r.SubscribeStream(streampkg.Filter{
+		EventTypes: []string{
+			streampkg.EventStatusProgress,
+			streampkg.EventRunnerNodeFailed,
+		},
+		Scope: streampkg.Scope{RunnerID: r.id},
+	}, streampkg.WithSubscriberBuffer(32))
+	if err != nil {
+		return err
+	}
+	defer sub.Cancel()
 	if err := r.AcceptPolishedPlan(ctx, r.Plan()); err != nil {
 		return err
 	}
 	for {
-		select {
-		case event := <-events:
-			if event.Type == EventEngineIdle {
-				return r.Complete(ctx)
-			}
-			if event.Type == EventNodeFailed || event.Type == EventEngineStopped {
-				return r.Wait(ctx)
-			}
-		case <-r.Done():
+		event, ok, err := sub.Next(ctx)
+		if err != nil {
+			return err
+		}
+		if !ok {
 			return r.Wait(context.Background())
-		case <-ctx.Done():
-			return ctx.Err()
+		}
+		if runnerStreamEventMatches(event, EventEngineIdle, "") {
+			return r.Complete(ctx)
+		}
+		if event.EventType == streampkg.EventRunnerNodeFailed || runnerStreamEventMatches(event, EventEngineStopped, "") {
+			return r.Wait(ctx)
 		}
 	}
 }
@@ -319,6 +329,23 @@ func phaseFromStreamEvent(event streampkg.Event) (RunnerPhase, bool) {
 		return "", false
 	}
 	return delta.Phase, true
+}
+
+func runnerStreamEventMatches(event streampkg.Event, want EventType, nodeID string) bool {
+	var delta struct {
+		Event  string `json:"event"`
+		NodeID string `json:"node_id"`
+	}
+	if err := json.Unmarshal(event.Delta, &delta); err != nil {
+		return false
+	}
+	if delta.Event != want.String() {
+		return false
+	}
+	if nodeID == "" {
+		return true
+	}
+	return delta.NodeID == nodeID || event.Scope.NodeID == nodeID
 }
 
 func (r *Runner) runPolishStage(ctx context.Context, nodes map[string]*Node) {

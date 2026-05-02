@@ -39,8 +39,8 @@ func (r *Runner) emitPhaseChangedEvent() {
 	)
 }
 
-// emitNodeStreamEvent emits the structured stream event that corresponds to a
-// low-level RunnerEvent from the engine loop.
+// emitNodeStreamEvent emits the structured stream event that corresponds to an
+// internal RunnerEvent from the engine loop.
 func (r *Runner) emitNodeStreamEvent(event *RunnerEvent) {
 	if r.eventStream == nil {
 		return

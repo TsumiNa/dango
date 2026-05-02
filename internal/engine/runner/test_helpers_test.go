@@ -15,6 +15,7 @@ import (
 
 	"github.com/openai/openai-go/v3"
 	"github.com/openai/openai-go/v3/option"
+	streampkg "github.com/tsumina/dango/internal/engine/stream"
 	"github.com/tsumina/dango/internal/llm"
 )
 
@@ -56,19 +57,39 @@ func mustNewRunnerStore(t *testing.T, dir string) *JSONRunnerStore {
 	return store
 }
 
-func waitForRunnerEvent(t *testing.T, ch <-chan RunnerEvent, want EventType, nodeID string) RunnerEvent {
+func waitForRunnerEvent(t *testing.T, r *Runner, want EventType, nodeID string) streampkg.Event {
 	t.Helper()
-	timer := time.NewTimer(2 * time.Second)
-	defer timer.Stop()
+	eventType, _, ok := runnerEventStreamType(want, r.State().Status)
+	if !ok {
+		t.Fatalf("runner event %s has no stream event type", want.String())
+	}
+	filter := streampkg.Filter{
+		EventTypes: []string{eventType},
+		Scope:      streampkg.Scope{RunnerID: r.ID()},
+	}
+	if nodeID != "" {
+		filter.Scope.NodeID = nodeID
+	}
+	sub, err := r.SubscribeStream(filter, streampkg.WithSubscriberBuffer(16))
+	if err != nil {
+		t.Fatalf("SubscribeStream: %v", err)
+	}
+	defer sub.Cancel()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
 	for {
-		select {
-		case <-timer.C:
-			t.Fatalf("timed out waiting for event %s/%s", want.String(), nodeID)
-		case ev := <-ch:
-			if ev.Type == want && ev.NodeID == nodeID {
-				return ev
-			}
+		event, ok, err := sub.Next(ctx)
+		if err != nil {
+			t.Fatalf("stream error waiting for event %s/%s: %v", want.String(), nodeID, err)
 		}
+		if !ok {
+			t.Fatalf("stream closed waiting for event %s/%s", want.String(), nodeID)
+		}
+		if !runnerStreamEventMatches(event, want, nodeID) {
+			continue
+		}
+		return event
 	}
 }
 

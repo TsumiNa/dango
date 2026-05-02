@@ -161,14 +161,13 @@ func TestRunner_AcceptPolishedPlanRunsEngineAndReports(t *testing.T) {
 		time.Sleep(10 * time.Millisecond)
 	}
 
-	events := r.Subscribe(16)
 	acceptedPlan := &CoarsePlan{Request: "reviewed-plan"}
 	if err := r.AcceptPolishedPlan(context.Background(), acceptedPlan); err != nil {
 		t.Fatalf("AcceptPolishedPlan: %v", err)
 	}
 
 	// Wait until engine reports idle, then Complete to run Report.
-	waitForRunnerEvent(t, events, EventEngineIdle, "")
+	waitForRunnerEvent(t, r, EventEngineIdle, "")
 
 	if err := r.Complete(context.Background()); err != nil {
 		t.Fatalf("Complete: %v", err)
@@ -327,9 +326,8 @@ func TestRunner_AcceptRejectConcurrentSingleWinner(t *testing.T) {
 		close(release)
 		return
 	}
-	events := r.Subscribe(16)
 	close(release)
-	waitForRunnerEvent(t, events, EventEngineIdle, "")
+	waitForRunnerEvent(t, r, EventEngineIdle, "")
 	if err := r.Complete(context.Background()); err != nil {
 		t.Fatalf("Complete: %v", err)
 	}
@@ -374,11 +372,10 @@ func TestRunner_ReportIncludesDynamicNodes(t *testing.T) {
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
-	events := r.Subscribe(16)
 	if err := r.AcceptPolishedPlan(context.Background(), &CoarsePlan{Request: "accepted"}); err != nil {
 		t.Fatalf("AcceptPolishedPlan: %v", err)
 	}
-	waitForRunnerEvent(t, events, EventEngineIdle, "")
+	waitForRunnerEvent(t, r, EventEngineIdle, "")
 	if err := r.Complete(context.Background()); err != nil {
 		t.Fatalf("Complete: %v", err)
 	}

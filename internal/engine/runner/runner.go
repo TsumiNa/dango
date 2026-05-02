@@ -19,10 +19,10 @@ import (
 //
 // Runner absorbs the historical ManagedRunner role: it owns the plan, the
 // materialized node graph, the engine event loop that dispatches nodes by
-// dependency readiness, a Done signal for settle-detection, and an optional
-// structured output stream that publishes lifecycle and node events to
-// external subscribers via [Runner.SubscribeStream]. Callers construct a
-// Runner with [New] and any number of [Option]s.
+// dependency readiness, a Done signal for settle-detection, and a structured
+// output stream that publishes lifecycle and node events via
+// [Runner.SubscribeStream]. Callers construct a Runner with [New] and any
+// number of [Option]s.
 type Runner struct {
 	ctx    context.Context
 	id     string
@@ -67,10 +67,6 @@ type Runner struct {
 	resultCh  chan executionResult
 	queryCh   chan chan<- RunnerSnapshot
 
-	// Low-level event subscribers (RunnerEvent stream).
-	subMutex    sync.RWMutex
-	subscribers []chan<- RunnerEvent
-
 	// Snapshot cache used by View and stream event emission.
 	updateMu sync.Mutex
 	snapshot RunnerSnapshot
@@ -105,7 +101,6 @@ func New(opts ...Option) *Runner {
 		addNodeCh:         make(chan []*Node, 1),
 		resultCh:          make(chan executionResult),
 		queryCh:           make(chan chan<- RunnerSnapshot),
-		subscribers:       make([]chan<- RunnerEvent, 0),
 		skillSessionStore: newMemorySessionStore(),
 		skillSessionIDs:   make(map[string]string),
 	}
@@ -222,17 +217,6 @@ func (r *Runner) Wait(ctx context.Context) error {
 	}
 }
 
-// Subscribe returns a channel that receives low-level [RunnerEvent]s from
-// the engine event loop. The returned channel remains open for the lifetime
-// of the runner; callers are responsible for draining or discarding.
-func (r *Runner) Subscribe(bufferSize int) <-chan RunnerEvent {
-	ch := make(chan RunnerEvent, bufferSize)
-	r.subMutex.Lock()
-	defer r.subMutex.Unlock()
-	r.subscribers = append(r.subscribers, ch)
-	return ch
-}
-
 // View returns a point-in-time snapshot of the runner suitable for query
 // APIs.
 func (r *Runner) View() *RunnerView {
@@ -321,9 +305,6 @@ func (r *Runner) launchEngine(ctx context.Context, initialNodes []*Node) error {
 		runCtx, cancel := context.WithCancel(ctx)
 		r.cancelEngine = cancel
 
-		events := r.Subscribe(64)
-
-		go r.forwardEngineEvents(events)
 		go func() {
 			err := r.runEngine(runCtx)
 			r.settle(err)
@@ -424,36 +405,6 @@ func (r *Runner) captureEngineErr(err error) {
 	r.engineErrMu.Unlock()
 }
 
-func (r *Runner) forwardEngineEvents(events <-chan RunnerEvent) {
-	for ev := range events {
-		event := ev
-		r.syncSnapshot(&event)
-		r.emitNodeStreamEvent(&event)
-		if event.Type == EventEngineStopped {
-			return
-		}
-	}
-}
-
-// syncSnapshot refreshes the cached snapshot from the engine query channel
-// for live node events. It is a no-op for nil events and EventEngineStopped,
-// since by then the engine has already written the final snapshot via
-// runEngine.finish.
-func (r *Runner) syncSnapshot(event *RunnerEvent) {
-	if event == nil || event.Type == EventEngineStopped {
-		return
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
-	defer cancel()
-	live, err := r.GetSnapshot(ctx)
-	if err != nil {
-		return
-	}
-	r.updateMu.Lock()
-	r.snapshot = cloneRunnerSnapshot(live)
-	r.updateMu.Unlock()
-}
-
 // runEngine is the blocking event loop that drives node execution. It is
 // invoked once by [Runner.Start] in a background goroutine.
 func (r *Runner) runEngine(ctx context.Context) error {
@@ -493,25 +444,6 @@ func (r *Runner) runEngine(ctx context.Context) error {
 	children := make(map[string][]*Node)
 	activeCount := 0
 
-	broadcast := func(event RunnerEvent) {
-		r.subMutex.RLock()
-		defer r.subMutex.RUnlock()
-		for _, ch := range r.subscribers {
-			select {
-			case ch <- event:
-			default:
-			}
-		}
-	}
-
-	emitEvent := func(event RunnerEvent) error {
-		if err := r.appendRecord(store, &RunnerRecord{Kind: RunnerRecordEvent, Event: newStoredRunnerEvent(event)}); err != nil {
-			return err
-		}
-		broadcast(event)
-		return nil
-	}
-
 	buildRuntimeSnapshot := func() RunnerSnapshot {
 		snapshot := RunnerSnapshot{
 			CompletedNodes: make(map[string]any, len(outputs)),
@@ -537,6 +469,17 @@ func (r *Runner) runEngine(ctx context.Context) error {
 			snapshot.GraphEdges[parentID] = childIDs
 		}
 		return snapshot
+	}
+
+	emitEvent := func(event RunnerEvent) error {
+		if err := r.appendRecord(store, &RunnerRecord{Kind: RunnerRecordEvent, Event: newStoredRunnerEvent(event)}); err != nil {
+			return err
+		}
+		r.updateMu.Lock()
+		r.snapshot = cloneRunnerSnapshot(buildRuntimeSnapshot())
+		r.updateMu.Unlock()
+		r.emitNodeStreamEvent(&event)
+		return nil
 	}
 
 	finish := func(status RunnerStatus, runErr error) error {

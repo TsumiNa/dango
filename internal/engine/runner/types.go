@@ -23,7 +23,8 @@ type Executor interface {
 	Report(ctx context.Context, output any) (summary any, err error)
 }
 
-// EventType defines the lifecycle events published by the runner.
+// EventType defines internal engine lifecycle events persisted by the runner
+// and normalized into compact stream events.
 type EventType uint8
 
 const (
@@ -54,7 +55,7 @@ func (e EventType) String() string {
 	}
 }
 
-// RunnerEvent represents a notification regarding graph execution states.
+// RunnerEvent represents an internal graph execution state change.
 type RunnerEvent struct {
 	Type   EventType
 	NodeID string

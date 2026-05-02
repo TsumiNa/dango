@@ -15,16 +15,14 @@ import (
 
 	"github.com/openai/openai-go/v3"
 	"github.com/openai/openai-go/v3/option"
-	streampkg "github.com/tsumina/dango/internal/engine/stream"
 	runnerpkg "github.com/tsumina/dango/internal/engine/runner"
+	streampkg "github.com/tsumina/dango/internal/engine/stream"
 	"github.com/tsumina/dango/internal/llm"
 )
 
 var testLogger = slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelError}))
 
 type Node = runnerpkg.Node
-type EventType = runnerpkg.EventType
-type RunnerEvent = runnerpkg.RunnerEvent
 type RunnerRecord = runnerpkg.RunnerRecord
 type RunnerView = runnerpkg.RunnerView
 type RunnerPhase = runnerpkg.RunnerPhase
@@ -387,22 +385,6 @@ func mustNewRunnerStore(t *testing.T, dir string) *runnerpkg.JSONRunnerStore {
 		t.Fatalf("NewJSONRunnerStore: %v", err)
 	}
 	return store
-}
-
-func waitForRunnerEvent(t *testing.T, ch <-chan runnerpkg.RunnerEvent, want runnerpkg.EventType, nodeID string) runnerpkg.RunnerEvent {
-	t.Helper()
-	timer := time.NewTimer(2 * time.Second)
-	defer timer.Stop()
-	for {
-		select {
-		case <-timer.C:
-			t.Fatalf("timed out waiting for event %s/%s", want.String(), nodeID)
-		case ev := <-ch:
-			if ev.Type == want && ev.NodeID == nodeID {
-				return ev
-			}
-		}
-	}
 }
 
 func waitForStreamEvent(t *testing.T, sub *streampkg.Subscription, eventType string, label string) streampkg.Event {

@@ -308,9 +308,9 @@ channels, sync.Cond patterns, or one-off signal channels.
 The 2026-05-02 audit found a latent deadlock in `Runner.waitForPhase`. The
 runner had a `phaseSignal chan struct{}` separate from the stream, and three
 phase-assignment sites (`StartPolish`, `RejectPolishedPlan`, `ReplanWith`) only
-emitted the stream event but forgot to send to `phaseSignal`. The current code
+emitted the stream event but forgot to send to `phaseSignal`. That version
 worked only because no waiter happened to be listening for those phases. Any
-future caller of `waitForPhase(PhasePolishing)` would block forever.
+future caller of `waitForPhase(PhasePolishing)` would have blocked forever.
 
 This is the canonical failure mode of parallel notification mechanisms: a
 producer must remember to update every channel, and silently drops bugs are
@@ -365,18 +365,16 @@ Initial audit list (non-exhaustive — extend as new instances are found):
   runner's event stream, with a stable runner scope filter and replay so the
   waiter cannot miss a transition that fired before subscription.
 - `Runner.Subscribe` low-level `RunnerEvent` fan-out
-  (`internal/engine/runner/runner.go`). The engine loop broadcasts
-  `RunnerEvent`s through a separate slice of channels. The compact stream now
-  carries equivalent information with stronger guarantees (ordering, replay,
-  filtering, multi-subscriber buffer policy). Internal consumers
-  (`forwardEngineEvents`, `acceptAndComplete`) should migrate to a stream
-  subscription scoped to the runner's own events, after which the low-level
-  `Subscribe` can be removed.
+  (`internal/engine/runner/runner.go`) ✓ removed. The engine loop still uses
+  `RunnerEvent` internally for persistence records, but no longer broadcasts it
+  through a separate subscriber slice. Each internal event now refreshes the
+  cached snapshot and emits the compact stream event directly. Managed lifecycle
+  consumers such as `acceptAndComplete` subscribe to the runner stream.
 - `Runner.Done()` settle channel. Equivalent to a single `runner.settled`
-  stream event with terminal status. Internal callers like `Wait` and
-  `acceptAndComplete` could read it from a one-shot subscription. The
-  external `Done()` API can be kept as a thin convenience over a subscription
-  if external callers need a `<-chan struct{}` shape.
+  stream event with terminal status. Internal callers like `Wait` could read it
+  from a one-shot subscription. The external `Done()` API can be kept as a thin
+  convenience over a subscription if external callers need a `<-chan struct{}`
+  shape.
 - Conversation lifecycle hooks. As Conversation events are unified, any
   remaining hand-rolled callback (e.g. provider-replay state mutation
   notifications) should publish onto the stream and have its consumers
@@ -518,8 +516,7 @@ Current state:
 Target:
 
 - Query and stream paths are fully separated. Remaining runner work is
-  migrating the low-level `Runner.Subscribe` event fan-out and `Done`/`Wait`
-  settle channel onto stream events.
+  migrating `Done`/`Wait` settle notification onto stream events.
 
 ### Orchestrator
 
@@ -608,7 +605,7 @@ Concrete migration units (each a self-contained PR-sized step):
 1. ✓ Replace `Runner.phaseSignal` with a stream subscription to
    `runner.phase.changed` inside `waitForPhase`. Verify with a test where the
    subscriber attaches after a phase event and still sees it through replay.
-2. Migrate `forwardEngineEvents` and `acceptAndComplete` off `Runner.Subscribe`
+2. ✓ Migrate `forwardEngineEvents` and `acceptAndComplete` off `Runner.Subscribe`
    to a stream subscription scoped to the runner. Remove the low-level
    `Subscribe` channel slice once unused.
 3. Convert `Runner.Done()` and `Runner.Wait()` into thin wrappers over a
@@ -687,8 +684,7 @@ Acceptance signal for Phase 7:
   creates a request stream when callers do not provide one, `Runner` exposes
   `SubscribeStream`, `Orchestrator` exposes `SubscribeRunnerStream`, and the
   orchestrate demo watches compact stream events instead of `RunnerUpdate`
-  snapshots. `RunnerUpdate` remains available for query/snapshot observers
-  during migration.
+  snapshots.
 - 2026-05-02: Phase 5 complete. `RunnerUpdate`, `Runner.SubscribeUpdates`, and
   `Orchestrator.SubscribeRunner` removed with no compatibility wrappers.
   `publishStreamUpdate(RunnerUpdate)` replaced by `emitPhaseChangedEvent()` and
@@ -716,6 +712,14 @@ Acceptance signal for Phase 7:
   stream when no request stream is supplied, `waitForPhase` subscribes to
   replayable `runner.phase.changed` events, and `runEngine` emits the
   `PhaseExecuting` stream event after the engine state enters running.
+- 2026-05-02: Phase 7 unit 2 complete. `Runner.Subscribe`, the low-level
+  subscriber slice, and `forwardEngineEvents` were removed. The engine loop now
+  updates the cached snapshot and emits compact stream events from the same
+  internal event append path that persists `RunnerEvent` records.
+  `acceptAndComplete` now subscribes to `EventStatusProgress` /
+  `EventRunnerNodeFailed` stream events instead of reading a bespoke
+  `RunnerEvent` channel. Runner tests were updated to observe
+  `Runner.SubscribeStream`.
 - Current Honshu example output problem is accepted as the first driver for
   the stream refactor.
 - Prior branch work already reduced `main.go` to skill-directory registration

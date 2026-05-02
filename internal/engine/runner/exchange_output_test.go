@@ -90,11 +90,10 @@ func TestRunnerPassesParentExchangeResourceDirsToChildBinder(t *testing.T) {
 	if err := r.Start(context.Background()); err != nil {
 		t.Fatalf("Start: %v", err)
 	}
-	events := r.Subscribe(16)
 	if err := r.AddNodes(context.Background(), parent, childNode); err != nil {
 		t.Fatalf("AddNodes: %v", err)
 	}
-	waitForRunnerEvent(t, events, EventEngineIdle, "")
+	waitForRunnerEvent(t, r, EventEngineIdle, "")
 	if err := r.Complete(context.Background()); err != nil {
 		t.Fatalf("Complete: %v", err)
 	}
