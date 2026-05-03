@@ -157,7 +157,7 @@ func TestClient_Stream_EmitsConfiguredStreamEvents(t *testing.T) {
 	t.Cleanup(srv.Close)
 
 	c := testClient(srv.URL)
-	conv := mustNewConversation(t, c, "sys", nil, &ConversationConfig{
+	conv := mustNewConversation(t, c, "sys", nil, ConversationConfig{
 		StreamEvents: true,
 		StreamSource: streampkg.Source{Layer: "skill", ID: "stream_skill"},
 		StreamScope:  streampkg.Scope{RequestID: "req_stream", NodeID: "node_stream"},

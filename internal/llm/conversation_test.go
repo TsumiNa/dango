@@ -8,9 +8,9 @@ import (
 	"testing"
 )
 
-func mustNewConversation(t testing.TB, client *Client, instructions string, tools []Tool, cfg ...*ConversationConfig) *Conversation {
+func mustNewConversation(t testing.TB, client *Client, instructions string, tools []Tool, cfg ...ConversationConfig) *Conversation {
 	t.Helper()
-	var config *ConversationConfig
+	config := DefaultConversationConfig()
 	if len(cfg) > 0 {
 		config = cfg[0]
 	}
@@ -32,7 +32,7 @@ func TestNewConversationRejectsInvalidTools(t *testing.T) {
 		{name: "duplicate name", tools: []Tool{valid, NewFuncTool("valid", "", nil, nil)}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			if _, err := NewConversation(nil, "sys", tc.tools, nil); err == nil {
+			if _, err := NewConversation(nil, "sys", tc.tools, DefaultConversationConfig()); err == nil {
 				t.Fatal("NewConversation returned nil error")
 			}
 		})
@@ -42,7 +42,7 @@ func TestNewConversationRejectsInvalidTools(t *testing.T) {
 func TestNewConversationAppliesConfig(t *testing.T) {
 	shrinker := AutoShrinkConfig{ContextWindow: 100, Threshold: 0.5, KeepToolExchanges: 1, KeepTurns: 2}
 	summarizer := SummarizerFunc(func(context.Context, []Turn) (string, error) { return "summary", nil })
-	conv := mustNewConversation(t, nil, "sys", nil, &ConversationConfig{
+	conv := mustNewConversation(t, nil, "sys", nil, ConversationConfig{
 		MaxSteps:   3,
 		AutoShrink: &shrinker,
 		Summarizer: summarizer,

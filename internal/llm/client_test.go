@@ -2,12 +2,14 @@ package llm
 
 import (
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/openai/openai-go/v3"
@@ -244,6 +246,69 @@ func TestClient_Respond(t *testing.T) {
 	}
 }
 
+func TestClientRespondAllowsConcurrentRequests(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{
+			"id": "resp_1",
+			"object": "response",
+			"created_at": 0,
+			"model": "test-model",
+			"status": "completed",
+			"output": [
+				{
+					"id": "msg_1",
+					"type": "message",
+					"role": "assistant",
+					"status": "completed",
+					"content": [
+						{"type": "output_text", "text": "ok", "annotations": []}
+					]
+				}
+			],
+			"parallel_tool_calls": false,
+			"tool_choice": "auto",
+			"tools": []
+		}`))
+	}))
+	t.Cleanup(srv.Close)
+
+	c := &Client{
+		provider: ProviderOpenAI,
+		model:    "test-model",
+		raw: openai.NewClient(
+			option.WithAPIKey("test-key"),
+			option.WithBaseURL(srv.URL+"/"),
+		),
+	}
+
+	const goroutines = 16
+	start := make(chan struct{})
+	errCh := make(chan error, goroutines)
+	var wg sync.WaitGroup
+	wg.Add(goroutines)
+	for range goroutines {
+		go func() {
+			defer wg.Done()
+			<-start
+			out, err := c.Respond(t.Context(), "hi")
+			if err != nil {
+				errCh <- err
+				return
+			}
+			if out != "ok" {
+				errCh <- fmt.Errorf("Respond() = %q, want ok", out)
+			}
+		}()
+	}
+	close(start)
+	wg.Wait()
+	close(errCh)
+	for err := range errCh {
+		t.Error(err)
+	}
+}
+
 // clearProviderEnv wipes the environment variables that NewClientFromEnv and
 // detectProvider consult, isolating tests from the developer's real shell
 // environment (including any .env file loaded via godotenv.Load).
@@ -432,18 +497,21 @@ func testClient(baseURL string) *Client {
 func TestNewClient_Config(t *testing.T) {
 	raw := openai.NewClient(option.WithAPIKey("k"))
 	cases := []struct {
-		name    string
-		cfg     ClientConfig
-		wantErr bool
+		name     string
+		provider Provider
+		model    string
+		raw      openai.Client
+		cfg      ClientConfig
+		wantErr  bool
 	}{
-		{"missing provider", ClientConfig{Model: "m", Raw: raw}, true},
-		{"missing model", ClientConfig{Provider: ProviderOpenAI, Raw: raw}, true},
-		{"missing raw", ClientConfig{Provider: ProviderOpenAI, Model: "m"}, true},
-		{"ok", ClientConfig{Provider: ProviderOpenAI, Model: "m", Raw: raw, ReasoningEffort: ReasoningEffortHigh}, false},
+		{"missing provider", "", "m", raw, DefaultClientConfig(), true},
+		{"missing model", ProviderOpenAI, "", raw, DefaultClientConfig(), true},
+		{"missing raw", ProviderOpenAI, "m", openai.Client{}, DefaultClientConfig(), true},
+		{"ok", ProviderOpenAI, "m", raw, ClientConfig{ReasoningEffort: ReasoningEffortHigh}, false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			c, err := NewClient(tc.cfg)
+			c, err := NewClient(tc.provider, tc.model, tc.raw, tc.cfg)
 			if tc.wantErr {
 				if err == nil {
 					t.Fatal("expected error")
@@ -453,7 +521,7 @@ func TestNewClient_Config(t *testing.T) {
 			if err != nil {
 				t.Fatalf("unexpected error: %v", err)
 			}
-			if c.Provider() != tc.cfg.Provider || c.Model() != tc.cfg.Model {
+			if c.Provider() != tc.provider || c.Model() != tc.model {
 				t.Errorf("provider/model = %s/%s", c.Provider(), c.Model())
 			}
 			if c.ReasoningEffort() != tc.cfg.ReasoningEffort {
@@ -482,15 +550,11 @@ func TestClient_ReasoningEffortInRequest(t *testing.T) {
 	t.Cleanup(srv.Close)
 
 	mk := func(effort ReasoningEffort) *Client {
-		c, err := NewClient(ClientConfig{
-			Provider: ProviderOpenAI,
-			Model:    "test-model",
-			Raw: openai.NewClient(
-				option.WithAPIKey("test-key"),
-				option.WithBaseURL(srv.URL+"/"),
-			),
-			ReasoningEffort: effort,
-		})
+		raw := openai.NewClient(
+			option.WithAPIKey("test-key"),
+			option.WithBaseURL(srv.URL+"/"),
+		)
+		c, err := NewClient(ProviderOpenAI, "test-model", raw, ClientConfig{ReasoningEffort: effort})
 		if err != nil {
 			t.Fatalf("NewClient: %v", err)
 		}
@@ -566,15 +630,11 @@ func TestConversation_SendEffortOverride(t *testing.T) {
 	t.Cleanup(srv.Close)
 
 	mk := func(effort ReasoningEffort) *Client {
-		c, err := NewClient(ClientConfig{
-			Provider: ProviderOpenAI,
-			Model:    "test-model",
-			Raw: openai.NewClient(
-				option.WithAPIKey("test-key"),
-				option.WithBaseURL(srv.URL+"/"),
-			),
-			ReasoningEffort: effort,
-		})
+		raw := openai.NewClient(
+			option.WithAPIKey("test-key"),
+			option.WithBaseURL(srv.URL+"/"),
+		)
+		c, err := NewClient(ProviderOpenAI, "test-model", raw, ClientConfig{ReasoningEffort: effort})
 		if err != nil {
 			t.Fatalf("NewClient: %v", err)
 		}

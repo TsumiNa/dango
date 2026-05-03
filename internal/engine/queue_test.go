@@ -138,15 +138,14 @@ func newManagedQueueTestRunner(t *testing.T, request string, run func(context.Co
 			},
 		},
 	}
-	return runnerpkg.NewWithSetup(runnerpkg.Setup{
-		Context:         context.Background(),
-		Logger:          testLogger,
-		Plan:            plan,
-		Nodes:           nodes,
-		PlannerSkill:    bindTestOrchestratorSkill(t, mustReviewJSON(t, true, "")),
-		SkillSummaries:  []runnerpkg.SkillSummary{{Name: "single", Description: "Single test skill."}},
-		PlanNodeBuilder: func(plan *runnerpkg.CoarsePlan) (map[string]*runnerpkg.Node, error) { return nodes, nil },
-	})
+	return runnerpkg.New(
+		runnerpkg.WithContext(context.Background()),
+		runnerpkg.WithLogger(testLogger),
+		runnerpkg.WithInitialPlan(plan, nodes),
+		runnerpkg.WithPlannerSkill(bindTestOrchestratorSkill(t, mustReviewJSON(t, true, ""))),
+		runnerpkg.WithSkillSummaries([]runnerpkg.SkillSummary{{Name: "single", Description: "Single test skill."}}),
+		runnerpkg.WithPlanNodeBuilder(func(plan *runnerpkg.CoarsePlan) (map[string]*runnerpkg.Node, error) { return nodes, nil }),
+	)
 }
 
 func submitQueueTestRunner(t *testing.T, o *Orchestrator, ctx context.Context, runner *runnerpkg.Runner, priority RequestPriority) {

@@ -29,7 +29,7 @@ func TestConversationSend_EmitsCompletionEvent(t *testing.T) {
 	}))
 	t.Cleanup(srv.Close)
 
-	conv := mustNewConversation(t, testClient(srv.URL), "sys", nil, &ConversationConfig{
+	conv := mustNewConversation(t, testClient(srv.URL), "sys", nil, ConversationConfig{
 		StreamEvents: true,
 		StreamSource: streampkg.Source{Layer: "skill", ID: "send_skill"},
 		StreamScope:  streampkg.Scope{RequestID: "req_send", NodeID: "node_send"},
@@ -71,7 +71,7 @@ func TestConversationSend_EmitsFailureEvent(t *testing.T) {
 	}))
 	t.Cleanup(srv.Close)
 
-	conv := mustNewConversation(t, testClient(srv.URL), "sys", nil, &ConversationConfig{
+	conv := mustNewConversation(t, testClient(srv.URL), "sys", nil, ConversationConfig{
 		StreamEvents: true,
 		StreamSource: streampkg.Source{Layer: "skill", ID: "send_skill"},
 		StreamScope:  streampkg.Scope{RequestID: "req_send_fail", NodeID: "node_send"},

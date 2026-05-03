@@ -85,7 +85,7 @@ func (o *Orchestrator) StartRequest(ctx context.Context, req Request) (*Response
 	if !req.Priority.valid() {
 		return nil, fmt.Errorf("orchestrate: request priority must be between %d and %d", RequestPriorityDefault, RequestPriorityHighest)
 	}
-	requestStream := streampkg.New(streampkg.Scope{})
+	requestStream := streampkg.New(streampkg.Scope{}, streampkg.DefaultConfig())
 	resp := &Response{Stream: requestStream}
 	var streamMerges []*streampkg.Merge
 	cleanupMerges := true
@@ -100,7 +100,7 @@ func (o *Orchestrator) StartRequest(ctx context.Context, req Request) (*Response
 	logger := o.logger
 	orchestratorSkill := o.orchestratorSkill
 	runnerStore := o.runnerStore
-	skillConfigs := cloneAddSkillConfigs(o.skills)
+	skillConfigs := cloneSkillRegistrations(o.skills)
 	o.mu.Unlock()
 	envClient, envClientErr := o.resolveEnvClient()
 	planningSkill, err := runtimeOrchestrator(orchestratorSkill, envClient, envClientErr, planningConversationConfig())
@@ -234,27 +234,26 @@ func stopStreamMerges(merges []*streampkg.Merge) {
 	}
 }
 
-func newRunnerFromPlan(ctx context.Context, logger *slog.Logger, store runnerpkg.RunnerStore, req Request, plan *CoarsePlan, skills map[string]AddSkillConfig, plannerSkill *llm.Skill, skillSummaries []runnerpkg.SkillSummary) (*runnerpkg.Runner, error) {
+func newRunnerFromPlan(ctx context.Context, logger *slog.Logger, store runnerpkg.RunnerStore, req Request, plan *CoarsePlan, skills map[string]SkillRegistration, plannerSkill *llm.Skill, skillSummaries []runnerpkg.SkillSummary) (*runnerpkg.Runner, error) {
 	nodes, err := buildPlanNodes(logger, req, plan, skills)
 	if err != nil {
 		return nil, err
 	}
-	return runnerpkg.NewWithSetup(runnerpkg.Setup{
-		Context:        ctx,
-		Logger:         logger,
-		Store:          store,
-		Plan:           plan,
-		Nodes:          nodes,
-		PlannerSkill:   plannerSkill,
-		SkillSummaries: skillSummaries,
-		PlanNodeBuilder: func(replanned *runnerpkg.CoarsePlan) (map[string]*runnerpkg.Node, error) {
+	return runnerpkg.New(
+		runnerpkg.WithContext(ctx),
+		runnerpkg.WithLogger(logger),
+		runnerpkg.WithStore(store),
+		runnerpkg.WithInitialPlan(plan, nodes),
+		runnerpkg.WithPlannerSkill(plannerSkill),
+		runnerpkg.WithSkillSummaries(skillSummaries),
+		runnerpkg.WithPlanNodeBuilder(func(replanned *runnerpkg.CoarsePlan) (map[string]*runnerpkg.Node, error) {
 			request := Request{Input: replanned.Request, ArtifactsDir: req.ArtifactsDir}
 			return buildPlanNodes(logger, request, replanned, skills)
-		},
-	}), nil
+		}),
+	), nil
 }
 
-func buildPlanNodes(logger *slog.Logger, req Request, plan *CoarsePlan, skills map[string]AddSkillConfig) (map[string]*runnerpkg.Node, error) {
+func buildPlanNodes(logger *slog.Logger, req Request, plan *CoarsePlan, skills map[string]SkillRegistration) (map[string]*runnerpkg.Node, error) {
 	if len(plan.Nodes) == 0 {
 		return nil, fmt.Errorf("orchestrate: coarse plan must contain at least one node")
 	}
@@ -289,13 +288,13 @@ func buildPlanNodes(logger *slog.Logger, req Request, plan *CoarsePlan, skills m
 			dirs := append([]string(nil), skillCfg.AccessibleDirs...)
 			dirs = append(dirs, req.ArtifactsDir)
 			var err error
-			skill, err = skill.WithAccessibleDirsAndBuiltinTools(dirs...)
+			skill, err = skill.SetAccessibleDirsAndBuiltinTools(dirs...)
 			if err != nil {
 				return nil, fmt.Errorf("orchestrate: configure artifacts dir for node %q: %w", step.ID, err)
 			}
 		}
 		convCfg := conversationConfigForNode(skillCfg.Config, step.ID, step.SkillName)
-		executor, err := NewExecutor(logger, skill, skillCfg.Client, convCfg, planner)
+		executor, err := NewExecutor(skill, planner, convCfg, WithExecutorLogger(logger), WithExecutorClient(skillCfg.Client))
 		if err != nil {
 			return nil, fmt.Errorf("orchestrate: build executor for node %q: %w", step.ID, err)
 		}
@@ -322,11 +321,8 @@ func buildPlanNodes(logger *slog.Logger, req Request, plan *CoarsePlan, skills m
 	return nodes, nil
 }
 
-func conversationConfigForNode(cfg *llm.ConversationConfig, nodeID string, skillName string) *llm.ConversationConfig {
+func conversationConfigForNode(cfg llm.ConversationConfig, nodeID string, skillName string) llm.ConversationConfig {
 	out := cloneConversationConfig(cfg)
-	if out == nil {
-		out = &llm.ConversationConfig{}
-	}
 	out.StreamEvents = true
 	out.StreamSource = streampkg.Source{Layer: "skill", ID: skillName, ParentID: nodeID}
 	out.StreamScope = streampkg.Scope{NodeID: nodeID}
@@ -337,10 +333,10 @@ func conversationConfigForNode(cfg *llm.ConversationConfig, nodeID string, skill
 	return out
 }
 
-func cloneAddSkillConfigs(skills map[string]AddSkillConfig) map[string]AddSkillConfig {
-	copyMap := make(map[string]AddSkillConfig, len(skills))
+func cloneSkillRegistrations(skills map[string]SkillRegistration) map[string]SkillRegistration {
+	copyMap := make(map[string]SkillRegistration, len(skills))
 	for name, cfg := range skills {
-		copyMap[name] = AddSkillConfig{
+		copyMap[name] = SkillRegistration{
 			Skill:          cfg.Skill,
 			AccessibleDirs: append([]string(nil), cfg.AccessibleDirs...),
 			Client:         cfg.Client,
@@ -350,7 +346,7 @@ func cloneAddSkillConfigs(skills map[string]AddSkillConfig) map[string]AddSkillC
 	return copyMap
 }
 
-func cloneSkillMap(skills map[string]AddSkillConfig) map[string]*llm.Skill {
+func cloneSkillMap(skills map[string]SkillRegistration) map[string]*llm.Skill {
 	copyMap := make(map[string]*llm.Skill, len(skills))
 	for name, cfg := range skills {
 		copyMap[name] = cfg.Skill

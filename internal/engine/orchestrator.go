@@ -31,12 +31,43 @@ type Orchestrator struct {
 	configLocked      bool
 	runnerStore       runnerpkg.RunnerStore
 	maxRunningRunners int
-	skills            map[string]AddSkillConfig
+	skills            map[string]SkillRegistration
 	runners           map[string]*runnerpkg.Runner
 	runningRunnerIDs  map[string]struct{}
 	queuedRunnerByID  map[string]*queuedRunner
 	queuedRunners     runnerStartQueue
 	nextQueueOrder    uint64
+}
+
+// OrchestratorOption adjusts a constructed [Orchestrator] before it is returned.
+type OrchestratorOption func(*Orchestrator)
+
+// WithOrchestratorContext installs ctx as the Orchestrator's base lifecycle
+// context.
+//
+// The Orchestrator keeps a reference to ctx and observes its cancellation when
+// deriving operation contexts. A nil context is ignored. The caller remains
+// responsible for canceling ctx when the surrounding service should stop.
+func WithOrchestratorContext(ctx context.Context) OrchestratorOption {
+	return func(o *Orchestrator) {
+		if ctx != nil {
+			o.ctx = ctx
+		}
+	}
+}
+
+// WithOrchestratorLogger installs logger as the Orchestrator's lifecycle
+// logger.
+//
+// The Orchestrator keeps a reference to logger. slog.Logger values are safe for
+// concurrent use; callers that wrap a handler with additional mutable state are
+// responsible for that handler's synchronization.
+func WithOrchestratorLogger(logger *slog.Logger) OrchestratorOption {
+	return func(o *Orchestrator) {
+		if logger != nil {
+			o.logger = logger
+		}
+	}
 }
 
 // ErrRunnerNotFound is returned when an Orchestrator runner lookup misses.
@@ -79,7 +110,10 @@ func (o *Orchestrator) resolveEnvClient() (*llm.Client, error) {
 //
 // It is intended for tests, examples, and applications that already constructed
 // a client and want the orchestrator to own the remaining binding work. It must
-// be called before the first planning call.
+// be called before the first planning call. The Orchestrator may share client
+// across concurrent runner work; [llm.Client] is safe for concurrent request
+// use, but callers must not mutate it or its raw SDK client while work is in
+// flight.
 func (o *Orchestrator) SetClient(client *llm.Client) error {
 	if client == nil {
 		return fmt.Errorf("orchestrate: SetClient requires a non-nil client")
@@ -100,26 +134,24 @@ func (o *Orchestrator) SetClient(client *llm.Client) error {
 	return nil
 }
 
-// NewOrchestrator constructs a new Orchestrator with the provided lifecycle
-// context and logger.
+// NewOrchestrator constructs a new Orchestrator.
 //
-// Passing nil ctx uses context.Background. Passing nil logger uses
-// slog.Default. The returned Orchestrator is independent and does not share
-// global mutable state with other instances.
-func NewOrchestrator(ctx context.Context, logger *slog.Logger) *Orchestrator {
-	if ctx == nil {
-		ctx = context.Background()
-	}
-	if logger == nil {
-		logger = slog.Default()
-	}
+// The returned Orchestrator is independent and does not share global mutable
+// state with other instances. Options can install startup dependencies such as
+// a service context or logger.
+func NewOrchestrator(opts ...OrchestratorOption) *Orchestrator {
 	o := &Orchestrator{
-		ctx:              ctx,
-		logger:           logger,
-		skills:           make(map[string]AddSkillConfig),
+		ctx:              context.Background(),
+		logger:           slog.Default(),
+		skills:           make(map[string]SkillRegistration),
 		runners:          make(map[string]*runnerpkg.Runner),
 		runningRunnerIDs: make(map[string]struct{}),
 		queuedRunnerByID: make(map[string]*queuedRunner),
+	}
+	for _, opt := range opts {
+		if opt != nil {
+			opt(o)
+		}
 	}
 	sk, err := o.configuredOrchestratorSkill(defaultOrchestratorSkill())
 	if err != nil {
@@ -257,7 +289,7 @@ func (o *Orchestrator) configuredOrchestratorSkill(sk *llm.Skill) (*llm.Skill, e
 	return bindOrchestratorSkill(sk, client)
 }
 
-// AddSkillConfig describes one lightweight skill plus the runtime wiring the
+// SkillRegistration describes one lightweight skill plus the runtime wiring the
 // runner will later pass to [llm.Skill.Bind].
 //
 // Skill must be a lightweight instance created by [llm.NewSkill]. AddSkills
@@ -266,11 +298,11 @@ func (o *Orchestrator) configuredOrchestratorSkill(sk *llm.Skill) (*llm.Skill, e
 // tools are rebuilt, so runtime skills can inspect upstream resources, write
 // glue code in their playground, and run commands through the runner-owned
 // bind step. Client and Config are forwarded unchanged to that bind step.
-type AddSkillConfig struct {
+type SkillRegistration struct {
 	Skill          *llm.Skill
 	AccessibleDirs []string
 	Client         *llm.Client
-	Config         *llm.ConversationConfig
+	Config         llm.ConversationConfig
 }
 
 // SetLogger replaces the Orchestrator logger.
@@ -325,11 +357,11 @@ func (o *Orchestrator) SetOrchestratorSkillDir(dir string) error {
 	if dir == "" {
 		return o.SetOrchestratorSkill(nil)
 	}
-	sk, err := llm.NewSkill(dir, nil, nil)
+	sk, err := llm.NewSkill(dir, llm.DefaultSkillConfig())
 	if err != nil {
 		return err
 	}
-	sk, err = sk.WithAccessibleDirsAndBuiltinTools()
+	sk, err = sk.SetAccessibleDirsAndBuiltinTools()
 	if err != nil {
 		return err
 	}
@@ -378,11 +410,11 @@ func (o *Orchestrator) SetMaxRunningRunners(limit int) error {
 // configuration that runner-owned execution will later pass into
 // [llm.Skill.Bind]. AddSkills augments each skill with the built-in tools but
 // does not bind it yet.
-func (o *Orchestrator) AddSkills(cfgs ...AddSkillConfig) error {
+func (o *Orchestrator) AddSkills(cfgs ...SkillRegistration) error {
 	if len(cfgs) == 0 {
 		return nil
 	}
-	prepared := make(map[string]AddSkillConfig, len(cfgs))
+	prepared := make(map[string]SkillRegistration, len(cfgs))
 	for i, cfg := range cfgs {
 		if cfg.Skill == nil {
 			return fmt.Errorf("orchestrate: add skill config %d requires a non-nil skill", i)
@@ -390,7 +422,7 @@ func (o *Orchestrator) AddSkills(cfgs ...AddSkillConfig) error {
 		if cfg.Skill.Conversation() != nil {
 			return fmt.Errorf("orchestrate: add skill config %d requires a lightweight unbound skill", i)
 		}
-		sk, err := cfg.Skill.WithAccessibleDirsAndBuiltinTools(cfg.AccessibleDirs...)
+		sk, err := cfg.Skill.SetAccessibleDirsAndBuiltinTools(cfg.AccessibleDirs...)
 		if err != nil {
 			return err
 		}
@@ -400,7 +432,7 @@ func (o *Orchestrator) AddSkills(cfgs ...AddSkillConfig) error {
 		if _, exists := prepared[sk.Name]; exists {
 			return fmt.Errorf("orchestrate: skill %q already provided in AddSkills", sk.Name)
 		}
-		prepared[sk.Name] = AddSkillConfig{
+		prepared[sk.Name] = SkillRegistration{
 			Skill:          sk,
 			AccessibleDirs: append([]string(nil), cfg.AccessibleDirs...),
 			Client:         cfg.Client,
@@ -427,21 +459,21 @@ func (o *Orchestrator) AddSkills(cfgs ...AddSkillConfig) error {
 // When [Orchestrator.SetClient] or the environment has configured a default
 // client, that client is used for these skill runtimes. Otherwise each skill is
 // left to resolve its client from its own environment when the runner binds it.
-func (o *Orchestrator) AddSkillDirs(cfg *llm.ConversationConfig, dirs ...string) error {
+func (o *Orchestrator) AddSkillDirs(cfg llm.ConversationConfig, dirs ...string) error {
 	if len(dirs) == 0 {
 		return nil
 	}
 	client, _ := o.resolveEnvClient()
-	cfgs := make([]AddSkillConfig, 0, len(dirs))
+	cfgs := make([]SkillRegistration, 0, len(dirs))
 	for i, dir := range dirs {
 		if dir == "" {
 			return fmt.Errorf("orchestrate: add skill dir %d must not be empty", i)
 		}
-		sk, err := llm.NewSkill(dir, nil, nil)
+		sk, err := llm.NewSkill(dir, llm.DefaultSkillConfig())
 		if err != nil {
 			return err
 		}
-		cfgs = append(cfgs, AddSkillConfig{
+		cfgs = append(cfgs, SkillRegistration{
 			Skill:  sk,
 			Client: client,
 			Config: cfg,
@@ -489,11 +521,8 @@ func (o *Orchestrator) Skills() map[string]*llm.Skill {
 	return cloneSkillMap(o.skills)
 }
 
-func cloneConversationConfig(cfg *llm.ConversationConfig) *llm.ConversationConfig {
-	if cfg == nil {
-		return nil
-	}
-	clone := *cfg
+func cloneConversationConfig(cfg llm.ConversationConfig) llm.ConversationConfig {
+	clone := cfg
 	if cfg.AutoShrink != nil {
 		auto := *cfg.AutoShrink
 		clone.AutoShrink = &auto
@@ -504,7 +533,7 @@ func cloneConversationConfig(cfg *llm.ConversationConfig) *llm.ConversationConfi
 			clone.StreamMetadata[k] = v
 		}
 	}
-	return &clone
+	return clone
 }
 
 // OrchestratorSkill returns the startup-initialized skill reserved for

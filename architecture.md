@@ -31,8 +31,8 @@ sequenceDiagram
     OS-->>O: strict JSON CoarsePlan or RejectReason
     O-->>S: planning reasoning / output / status
     O-->>S: planning exchange markdown
-    O->>SR: resolve lightweight skills + AddSkillConfig
-    SR-->>O: skill configs
+    O->>SR: resolve lightweight skills + SkillRegistration
+    SR-->>O: skill registrations
     O->>O: buildPlanNodes / newRunnerFromPlan
     O->>RR: store Runner + Node graph
     O->>Q: enqueue by priority
@@ -61,6 +61,7 @@ sequenceDiagram
 - `or` 管外部 API、skill 注册、coarse plan 生成、runner 装配、runner registry、query/subscribe、队列和启动准入。
 - `ru` 管单个 plan 的生命周期、executor binding、DAG 调度、dynamic node append、snapshot/update/event、report 汇总和终态。
 - `ex` 管单个 node 在 `Polish`、`Execute`、`Report` 三个阶段的局部工作。
+- stream ownership 由被调用模块负责：`StartRequest` 创建 request-scoped stream；runner、conversation 等模块根据自己的配置创建并返回/暴露自己的 stream；上层只通过 `MergeFrom` 汇总，不把预先创建好的 stream 注入给下层。
 
 ## 数据流关系
 
@@ -162,7 +163,7 @@ sequenceDiagram
         O-->>C: RequestRejectedError
     else planned
         O->>O: build Node graph + Executor per CoarsePlanNode
-        O->>R: NewWithSetup(Setup{Plan, Nodes, PlannerSkill, PlanNodeBuilder})
+        O->>R: runner.New(WithInitialPlan, WithPlannerSkill, WithSkillSummaries, WithPlanNodeBuilder)
         O->>O: store runner in registry
         O->>R: StartManaged(ctx) or queue by priority
         O-->>C: Response{runnerID, stream}

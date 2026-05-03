@@ -119,7 +119,7 @@ func runHonshuGroundwaterExample(ctx context.Context, cfg exampleConfig) (*runne
 		"measurements_bytes", len(cfg.MeasurementsJSON),
 		"stream_events_log", streamLogPath,
 	)
-	orchestrator := orchestrate.NewOrchestrator(ctx, logger)
+	orchestrator := orchestrate.NewOrchestrator(orchestrate.WithOrchestratorContext(ctx), orchestrate.WithOrchestratorLogger(logger))
 	if cfg.LLMClient != nil {
 		logger.Info("using configured llm client",
 			"provider", cfg.LLMClient.Provider(),
@@ -138,7 +138,7 @@ func runHonshuGroundwaterExample(ctx context.Context, cfg exampleConfig) (*runne
 	for _, dir := range skillDirs {
 		logger.Info("registering skill", "skill_dir", dir)
 	}
-	if err := orchestrator.AddSkillDirs(&llm.ConversationConfig{MaxSteps: 32}, skillDirs...); err != nil {
+	if err := orchestrator.AddSkillDirs(llm.ConversationConfig{MaxSteps: 32}, skillDirs...); err != nil {
 		return nil, err
 	}
 	renderCfg := streamrender.DefaultConfig()

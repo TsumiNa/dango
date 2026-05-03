@@ -71,7 +71,7 @@ func (c *Config) BindFlags(fs flagBinder) {
 // annotates the returned logger with the service=dango field. When cfg.File is
 // set, New also returns a closer for the opened log file, and the caller is
 // responsible for closing it.
-func New(cfg Config, stderr io.Writer) (*slog.Logger, io.Closer, error) {
+func New(stderr io.Writer, cfg Config) (*slog.Logger, io.Closer, error) {
 	writer := io.Writer(stderr)
 	if writer == nil {
 		writer = io.Discard

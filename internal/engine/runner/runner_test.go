@@ -211,7 +211,7 @@ func TestRunnerSetupPlanSeedsInitialNodes(t *testing.T) {
 		Request: "seed test",
 		Nodes:   []CoarsePlanNode{{ID: "A", SkillName: "noop", TaskDescription: "only"}},
 	}
-	r := NewWithSetup(Setup{Logger: testLogger, Plan: plan, Nodes: map[string]*Node{"A": nodeA}})
+	r := New(WithLogger(testLogger), WithInitialPlan(plan, map[string]*Node{"A": nodeA}))
 
 	if got := r.Plan(); got == nil || got.RunnerID != r.ID() {
 		t.Fatalf("Plan().RunnerID = %v, want %q", got, r.ID())

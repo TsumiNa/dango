@@ -52,7 +52,7 @@ const (
 var ErrRunnerLogNotFound = runnerpkg.ErrRunnerLogNotFound
 
 func newOrchestrator(logger *slog.Logger) *Orchestrator {
-	return NewOrchestrator(context.Background(), logger)
+	return NewOrchestrator(WithOrchestratorContext(context.Background()), WithOrchestratorLogger(logger))
 }
 
 func newDiscardLogger() *slog.Logger {
@@ -85,25 +85,25 @@ func writeTestSkill(t *testing.T, name, description string) string {
 
 func loadTestSkillFromDir(t *testing.T, dir string) *llm.Skill {
 	t.Helper()
-	sk, err := llm.NewSkill(dir, nil, nil)
+	sk, err := llm.NewSkill(dir, llm.DefaultSkillConfig())
 	if err != nil {
 		t.Fatalf("llm.New(%q): %v", dir, err)
 	}
 	return sk
 }
 
-func newTestSkillConfig(t *testing.T, name, description string, client *llm.Client) AddSkillConfig {
+func newTestSkillRegistration(t *testing.T, name, description string, client *llm.Client) SkillRegistration {
 	t.Helper()
 	if client == nil {
 		client = &llm.Client{}
 	}
-	return AddSkillConfig{
+	return SkillRegistration{
 		Skill:  loadTestSkillFromDir(t, writeTestSkill(t, name, description)),
 		Client: client,
 	}
 }
 
-func mustAddSkills(t *testing.T, o *Orchestrator, cfgs ...AddSkillConfig) {
+func mustAddSkills(t *testing.T, o *Orchestrator, cfgs ...SkillRegistration) {
 	t.Helper()
 	if err := o.AddSkills(cfgs...); err != nil {
 		t.Fatalf("AddSkills: %v", err)
@@ -231,11 +231,11 @@ func bindTestOrchestratorSkillWithReasoning(t *testing.T, reasoning string, outp
 	}))
 	t.Cleanup(srv.Close)
 	raw := openai.NewClient(option.WithAPIKey("test-key"), option.WithBaseURL(srv.URL+"/"))
-	client, err := llm.NewClient(llm.ClientConfig{Provider: llm.ProviderOpenAI, Model: "test-model", Raw: raw})
+	client, err := llm.NewClient(llm.ProviderOpenAI, "test-model", raw, llm.DefaultClientConfig())
 	if err != nil {
 		t.Fatalf("NewClient: %v", err)
 	}
-	bound, err := defaultOrchestratorSkill().Bind(client, nil, nil)
+	bound, err := defaultOrchestratorSkill().Bind(client, llm.DefaultConversationConfig())
 	if err != nil {
 		t.Fatalf("Bind(default orchestrator skill): %v", err)
 	}
@@ -354,11 +354,11 @@ func bindStreamingTestOrchestratorSkill(t *testing.T, streamOutput string, nonSt
 	}))
 	t.Cleanup(srv.Close)
 	raw := openai.NewClient(option.WithAPIKey("test-key"), option.WithBaseURL(srv.URL+"/"))
-	client, err := llm.NewClient(llm.ClientConfig{Provider: llm.ProviderOpenAI, Model: "test-model", Raw: raw})
+	client, err := llm.NewClient(llm.ProviderOpenAI, "test-model", raw, llm.DefaultClientConfig())
 	if err != nil {
 		t.Fatalf("NewClient: %v", err)
 	}
-	bound, err := defaultOrchestratorSkill().Bind(client, nil, nil)
+	bound, err := defaultOrchestratorSkill().Bind(client, llm.DefaultConversationConfig())
 	if err != nil {
 		t.Fatalf("Bind(default orchestrator skill): %v", err)
 	}
@@ -416,7 +416,7 @@ func mustPlanSingleNodeRunner(t *testing.T, o *Orchestrator) (*CoarsePlan, *runn
 
 func mustPlanSingleNodeRunnerWithOutputs(t *testing.T, o *Orchestrator, outputs ...string) (*CoarsePlan, *runnerpkg.Runner) {
 	t.Helper()
-	mustAddSkills(t, o, newTestSkillConfig(t, "single", "Single-step runner.", nil))
+	mustAddSkills(t, o, newTestSkillRegistration(t, "single", "Single-step runner.", nil))
 	if len(outputs) == 0 {
 		outputs = []string{mustPlanJSON(t, &CoarsePlan{
 			Request: "run a single node",

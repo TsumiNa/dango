@@ -22,11 +22,11 @@ import (
 var testLogger = slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelError}))
 
 func newTestRunner() *Runner {
-	return NewWithSetup(Setup{Logger: testLogger})
+	return New(WithLogger(testLogger))
 }
 
 func newTestRunnerForPlan(plan *CoarsePlan, nodes map[string]*Node) *Runner {
-	return NewWithSetup(Setup{Logger: testLogger, Plan: plan, Nodes: nodes})
+	return New(WithLogger(testLogger), WithInitialPlan(plan, nodes))
 }
 
 type testExecutor struct {
@@ -180,16 +180,16 @@ func bindTestPlannerSkill(t *testing.T, outputs ...string) *llm.Skill {
 	if err := os.WriteFile(filepath.Join(dir, llm.SkillFile), []byte(content), 0o644); err != nil {
 		t.Fatalf("write SKILL.md: %v", err)
 	}
-	sk, err := llm.NewSkill(dir, nil, nil)
+	sk, err := llm.NewSkill(dir, llm.DefaultSkillConfig())
 	if err != nil {
 		t.Fatalf("llm.New: %v", err)
 	}
 	raw := openai.NewClient(option.WithAPIKey("test-key"), option.WithBaseURL(srv.URL+"/"))
-	client, err := llm.NewClient(llm.ClientConfig{Provider: llm.ProviderOpenAI, Model: "test-model", Raw: raw})
+	client, err := llm.NewClient(llm.ProviderOpenAI, "test-model", raw, llm.DefaultClientConfig())
 	if err != nil {
 		t.Fatalf("NewClient: %v", err)
 	}
-	bound, err := sk.Bind(client, nil, nil)
+	bound, err := sk.Bind(client, llm.DefaultConversationConfig())
 	if err != nil {
 		t.Fatalf("Bind(planner): %v", err)
 	}

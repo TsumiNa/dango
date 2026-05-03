@@ -7,9 +7,9 @@ import (
 )
 
 func TestStreamMergeFromCombinesMultipleUpstreams(t *testing.T) {
-	parent := New(Scope{RequestID: "req_1"})
-	childA := New(Scope{NodeID: "node_a"})
-	childB := New(Scope{NodeID: "node_b"})
+	parent := New(Scope{RequestID: "req_1"}, DefaultConfig())
+	childA := New(Scope{NodeID: "node_a"}, DefaultConfig())
+	childB := New(Scope{NodeID: "node_b"}, DefaultConfig())
 	t.Cleanup(parent.Close)
 	t.Cleanup(childA.Close)
 	t.Cleanup(childB.Close)
@@ -73,8 +73,8 @@ func TestStreamMergeFromCombinesMultipleUpstreams(t *testing.T) {
 }
 
 func TestStreamMergeFromFiltersAndReplaysUpstream(t *testing.T) {
-	parent := New(Scope{})
-	child := New(Scope{})
+	parent := New(Scope{}, DefaultConfig())
+	child := New(Scope{}, DefaultConfig())
 	t.Cleanup(parent.Close)
 	t.Cleanup(child.Close)
 
@@ -116,7 +116,7 @@ func TestStreamMergeFromFiltersAndReplaysUpstream(t *testing.T) {
 }
 
 func TestStreamMergeFromRejectsInvalidSources(t *testing.T) {
-	s := New(Scope{})
+	s := New(Scope{}, DefaultConfig())
 	t.Cleanup(s.Close)
 	if _, err := s.MergeFrom(t.Context(), nil, Filter{}); !errors.Is(err, ErrInvalidMerge) {
 		t.Fatalf("MergeFrom nil err = %v, want ErrInvalidMerge", err)

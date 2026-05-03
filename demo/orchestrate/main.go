@@ -188,7 +188,7 @@ func main() {
 }
 
 func configureDemoOrchestrator(ctx context.Context, logger *slog.Logger) (*orchestrate.Orchestrator, func()) {
-	o := orchestrate.NewOrchestrator(ctx, logger)
+	o := orchestrate.NewOrchestrator(orchestrate.WithOrchestratorContext(ctx), orchestrate.WithOrchestratorLogger(logger))
 	must(o.SetMaxRunningRunners(1))
 
 	root, err := os.MkdirTemp("", "dango-orchestrate-demo-")
@@ -236,11 +236,11 @@ func configureDemoOrchestrator(ctx context.Context, logger *slog.Logger) (*orche
 		_, _ = w.Write(payload)
 	}))
 	raw := openai.NewClient(option.WithAPIKey("demo-key"), option.WithBaseURL(plannerServer.URL+"/"))
-	plannerClient, err := llm.NewClient(llm.ClientConfig{Provider: llm.ProviderOpenAI, Model: "demo-planner", Raw: raw})
+	plannerClient, err := llm.NewClient(llm.ProviderOpenAI, "demo-planner", raw, llm.DefaultClientConfig())
 	if err != nil {
 		fatalf("NewClient(demo planner): %v", err)
 	}
-	boundPlanner, err := orchestrate.NewEmbeddedOrchestratorSkill(plannerClient, nil, nil)
+	boundPlanner, err := orchestrate.NewEmbeddedOrchestratorSkill(plannerClient, llm.DefaultConversationConfig())
 	if err != nil {
 		fatalf("bind demo orchestrator skill: %v", err)
 	}
@@ -257,9 +257,9 @@ func configureDemoOrchestrator(ctx context.Context, logger *slog.Logger) (*orche
 		must(os.MkdirAll(dir, 0o755))
 		content := fmt.Sprintf("---\nname: %s\ndescription: %s\n---\nDemo skill body.\n", spec.name, spec.description)
 		must(os.WriteFile(filepath.Join(dir, llm.SkillFile), []byte(content), 0o644))
-		sk, err := llm.NewSkill(dir, nil, nil)
+		sk, err := llm.NewSkill(dir, llm.DefaultSkillConfig())
 		must(err)
-		must(o.AddSkills(orchestrate.AddSkillConfig{Skill: sk, Client: plannerClient}))
+		must(o.AddSkills(orchestrate.SkillRegistration{Skill: sk, Client: plannerClient}))
 	}
 	return o, func() {
 		plannerServer.Close()

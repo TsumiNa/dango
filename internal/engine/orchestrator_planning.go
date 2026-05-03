@@ -114,7 +114,7 @@ func parseOrchestratorPlanningOutput(raw string) (*runnerpkg.CoarsePlan, *Reject
 	return out.Plan, out.Reject, nil
 }
 
-func runtimeOrchestrator(sk *llm.Skill, envClient *llm.Client, envClientErr error, cfg *llm.ConversationConfig) (*llm.Skill, error) {
+func runtimeOrchestrator(sk *llm.Skill, envClient *llm.Client, envClientErr error, cfg llm.ConversationConfig) (*llm.Skill, error) {
 	if sk == nil {
 		return nil, errOrchestratorSkillUnconfigured
 	}
@@ -128,33 +128,28 @@ func runtimeOrchestrator(sk *llm.Skill, envClient *llm.Client, envClientErr erro
 }
 
 func bindOrchestratorSkill(sk *llm.Skill, client *llm.Client) (*llm.Skill, error) {
-	return bindOrchestratorSkillWithConfig(sk, client, nil)
+	return bindOrchestratorSkillWithConfig(sk, client, llm.ConversationConfig{})
 }
 
-func bindOrchestratorSkillWithConfig(sk *llm.Skill, client *llm.Client, cfg *llm.ConversationConfig) (*llm.Skill, error) {
-	if sk.Client() == client && sk.Conversation() != nil {
-		if cfg == nil {
-			return sk, nil
-		}
-	}
-	return sk.Bind(client, cfg, nil)
+func bindOrchestratorSkillWithConfig(sk *llm.Skill, client *llm.Client, cfg llm.ConversationConfig) (*llm.Skill, error) {
+	return sk.Bind(client, cfg)
 }
 
-func planningConversationConfig() *llm.ConversationConfig {
-	return &llm.ConversationConfig{
-		StreamEvents: true,
-		StreamSource: streamSourceOrchestrator(),
-		StreamMetadata: map[string]any{
-			"stage": "planning",
-		},
+func planningConversationConfig() llm.ConversationConfig {
+	cfg := llm.DefaultConversationConfig()
+	cfg.StreamEvents = true
+	cfg.StreamSource = streamSourceOrchestrator()
+	cfg.StreamMetadata = map[string]any{
+		"stage": "planning",
 	}
+	return cfg
 }
 
-func runnerPlannerConversationConfig() *llm.ConversationConfig {
-	return &llm.ConversationConfig{
-		StreamEvents: true,
-		StreamSource: streamSourceOrchestrator(),
-	}
+func runnerPlannerConversationConfig() llm.ConversationConfig {
+	cfg := llm.DefaultConversationConfig()
+	cfg.StreamEvents = true
+	cfg.StreamSource = streamSourceOrchestrator()
+	return cfg
 }
 
 func collectSkillSummaries(skills map[string]*llm.Skill) []runnerpkg.SkillSummary {

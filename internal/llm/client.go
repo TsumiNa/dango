@@ -59,8 +59,11 @@ func (p Provider) baseURL() string {
 // Client is an LLM client bound to a specific provider and orchestration model.
 //
 // The zero value is not usable; construct one with [NewClient] or
-// [NewClientFromEnv]. Client is safe for concurrent use by multiple
-// goroutines.
+// [NewClientFromEnv]. Client is safe for concurrent request use by multiple
+// goroutines after construction. Treat Client and the SDK value returned by
+// [Client.Raw] as immutable while requests are in flight; callers that install
+// custom HTTP clients, transports, middleware, or other externally owned state
+// remain responsible for those values' concurrency safety.
 type Client struct {
 	provider         Provider
 	model            string
@@ -77,6 +80,10 @@ func (c *Client) Provider() Provider { return c.provider }
 func (c *Client) Model() string { return c.model }
 
 // Raw exposes the underlying OpenAI SDK client for advanced use cases.
+//
+// The returned pointer aliases Client's internal SDK client. It may be used to
+// issue additional requests, but callers must not mutate its public fields while
+// this Client may be used concurrently.
 func (c *Client) Raw() *openai.Client { return &c.raw }
 
 // ReasoningEffort returns the reasoning-effort level applied to every
@@ -132,23 +139,9 @@ var ErrNoAPIKey = errors.New("llm: no supported API key found (OPENAI_API_KEY, O
 // ErrNoModel is returned when MODEL is not set.
 var ErrNoModel = errors.New("llm: MODEL environment variable is not set")
 
-// ClientConfig carries all the knobs used to construct a [Client]. New
-// extension points (for example per-client timeouts, temperature
-// defaults, or observability hooks) should be added as additional
-// fields on this struct rather than as positional arguments on
-// [NewClient], so call sites continue to compile when the set grows.
-//
-// Provider and Model are required. Raw is required when the caller
-// already holds a preconfigured SDK client (common in tests); when Raw
-// is the zero value, [NewClient] returns an error - use
-// [NewClientFromEnv] for the env-driven construction path.
+// ClientConfig controls optional behaviour for a [Client] constructed from
+// explicit provider, model, and SDK client inputs.
 type ClientConfig struct {
-	// Provider identifies the upstream service.
-	Provider Provider
-	// Model is the orchestration model identifier.
-	Model string
-	// Raw is the preconfigured OpenAI SDK client to wrap.
-	Raw openai.Client
 	// ReasoningEffort, when non-empty, is forwarded on every request
 	// so reasoning-capable models think at the requested level.
 	ReasoningEffort ReasoningEffort
@@ -171,26 +164,31 @@ type ClientConfig struct {
 	StreamCategories StreamCategory
 }
 
-// NewClient wraps an already-constructed openai SDK client using cfg.
+// DefaultClientConfig returns the default optional behaviour for [NewClient].
+func DefaultClientConfig() ClientConfig {
+	return ClientConfig{}
+}
+
+// NewClient wraps an already-constructed openai SDK client.
 //
 // NewClient is useful when callers need to supply a pre-configured SDK
 // client (for example, to route requests through a custom HTTP
-// transport or a test server). Required fields are validated and an
+// transport or a test server). Required inputs are validated and an
 // error is returned when any of them is missing.
-func NewClient(cfg ClientConfig) (*Client, error) {
-	if cfg.Provider == "" {
+func NewClient(provider Provider, model string, raw openai.Client, cfg ClientConfig) (*Client, error) {
+	if provider == "" {
 		return nil, fmt.Errorf("llm: NewClient requires a provider")
 	}
-	if cfg.Model == "" {
+	if model == "" {
 		return nil, fmt.Errorf("llm: NewClient requires a model")
 	}
-	if reflect.DeepEqual(cfg.Raw, openai.Client{}) {
+	if reflect.DeepEqual(raw, openai.Client{}) {
 		return nil, fmt.Errorf("llm: NewClient requires a configured Raw SDK client")
 	}
 	return &Client{
-		provider:         cfg.Provider,
-		model:            cfg.Model,
-		raw:              cfg.Raw,
+		provider:         provider,
+		model:            model,
+		raw:              raw,
 		reasoningEffort:  cfg.ReasoningEffort,
 		replayReasoning:  cfg.ReplayReasoning,
 		streamCategories: resolveStreamCategories(cfg.StreamCategories),
@@ -230,14 +228,10 @@ func NewClientFromEnv(filenames ...string) (*Client, error) {
 		opts = append(opts, option.WithBaseURL(base))
 	}
 
-	return &Client{
-		provider:         provider,
-		model:            model,
-		raw:              openai.NewClient(opts...),
-		reasoningEffort:  lookupReasoningEffort(lookup),
-		replayReasoning:  lookupReplayReasoning(lookup),
-		streamCategories: resolveStreamCategories(0),
-	}, nil
+	cfg := DefaultClientConfig()
+	cfg.ReasoningEffort = lookupReasoningEffort(lookup)
+	cfg.ReplayReasoning = lookupReplayReasoning(lookup)
+	return NewClient(provider, model, openai.NewClient(opts...), cfg)
 }
 
 func lookupReasoningEffort(lookup func(string) (string, bool)) ReasoningEffort {

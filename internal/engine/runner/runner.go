@@ -21,8 +21,8 @@ import (
 // materialized node graph, the engine event loop that dispatches nodes by
 // dependency readiness, a Done signal for settle-detection, and a structured
 // output stream that publishes lifecycle and node events via
-// [Runner.SubscribeStream]. Callers construct a bare Runner with [New] or
-// provide startup dependencies through [NewWithSetup].
+// [Runner.SubscribeStream]. Callers construct a bare Runner with [New] and can
+// provide startup dependencies through options such as [WithInitialPlan].
 type Runner struct {
 	ctx    context.Context
 	id     string
@@ -81,37 +81,15 @@ type Runner struct {
 	replanReason    string
 }
 
-// New constructs a bare Runner with default startup inputs. Callers drive it by
-// invoking [Runner.AddNodes] after [Runner.Start].
-func New() *Runner {
-	return NewWithSetup(Setup{})
-}
-
-// NewWithSetup constructs a Runner from explicit startup inputs. When setup
-// includes a [CoarsePlan] and materialized nodes, [Runner.Start] auto-adds the
-// provided nodes to the execution engine and [Runner.View] surfaces the plan to
-// observers.
-func NewWithSetup(setup Setup) *Runner {
+// New constructs a Runner. Callers can provide options to install startup
+// dependencies such as a logger, persistence store, or initial plan.
+func New(opts ...Option) *Runner {
 	id := shortuuid.New()
-	ctx := setup.Context
-	if ctx == nil {
-		ctx = context.Background()
-	}
-	logger := setup.Logger
-	if logger == nil {
-		logger = slog.Default()
-	}
 	r := &Runner{
-		ctx:               ctx,
+		ctx:               context.Background(),
 		id:                id,
-		logger:            logger,
-		store:             setup.Store,
-		eventStream:       streampkg.New(streampkg.Scope{RunnerID: id}),
-		plan:              CloneCoarsePlan(setup.Plan),
-		initialNodes:      cloneNodeMap(setup.Nodes),
-		plannerSkill:      setup.PlannerSkill,
-		skillSummaries:    append([]SkillSummary(nil), setup.SkillSummaries...),
-		planNodeBuilder:   setup.PlanNodeBuilder,
+		logger:            slog.Default(),
+		eventStream:       streampkg.New(streampkg.Scope{RunnerID: id}, streampkg.DefaultConfig()),
 		state:             RunnerState{Status: RunnerStatusPending},
 		phase:             PhaseCreated,
 		done:              make(chan struct{}),
@@ -120,6 +98,11 @@ func NewWithSetup(setup Setup) *Runner {
 		queryCh:           make(chan chan<- RunnerSnapshot),
 		skillSessionStore: newMemorySessionStore(),
 		skillSessionIDs:   make(map[string]string),
+	}
+	for _, opt := range opts {
+		if opt != nil {
+			opt(r)
+		}
 	}
 	if r.plan != nil && r.plan.RunnerID == "" {
 		r.plan.RunnerID = r.id

@@ -135,16 +135,27 @@ type AutoShrinkConfig struct {
 	KeepTurns         int
 }
 
+// DefaultAutoShrinkConfig returns the default automatic conversation trimming
+// policy. ContextWindow remains zero, so shrinking stays disabled until callers
+// provide a model-specific context window.
+func DefaultAutoShrinkConfig() AutoShrinkConfig {
+	return AutoShrinkConfig{
+		Threshold:         0.85,
+		KeepToolExchanges: 2,
+		KeepTurns:         10,
+	}
+}
+
 // ConversationConfig configures optional runtime behaviour for a
 // [Conversation].
 //
-// A nil *ConversationConfig passed to [NewConversation] uses the default
-// conversation settings. Non-zero MaxSteps overrides the request/tool-call
-// loop bound, AutoShrink overrides the default shrinking policy when non-nil,
-// Summarizer overrides the default local summary compression, and StreamEvents
-// asks NewConversation to create a conversation-owned event stream for compact
-// model/tool progress events. Stream output is observational and independent
-// of session persistence.
+// The zero value uses the same defaults as [DefaultConversationConfig].
+// Non-zero MaxSteps overrides the request/tool-call loop bound, AutoShrink
+// overrides the default shrinking policy when non-nil, Summarizer overrides the
+// default local summary compression, and StreamEvents asks NewConversation to
+// create a conversation-owned event stream for compact model/tool progress
+// events. Stream output is observational and independent of session
+// persistence.
 type ConversationConfig struct {
 	MaxSteps       int
 	AutoShrink     *AutoShrinkConfig
@@ -153,6 +164,17 @@ type ConversationConfig struct {
 	StreamSource   streampkg.Source
 	StreamScope    streampkg.Scope
 	StreamMetadata map[string]any
+}
+
+// DefaultConversationConfig returns the default optional behaviour for
+// [NewConversation].
+func DefaultConversationConfig() ConversationConfig {
+	autoShrink := DefaultAutoShrinkConfig()
+	return ConversationConfig{
+		MaxSteps:   DefaultMaxSteps,
+		AutoShrink: &autoShrink,
+		Summarizer: SummarizerFunc(DefaultSummarizerFunc),
+	}
 }
 
 // Summarizer collapses an older slice of turns into a single compact summary
@@ -314,9 +336,9 @@ const DefaultMaxSteps = 20
 // Instructions and the derived tool schema form the cache-stable
 // prefix and are treated as immutable for the life of the
 // conversation. NewConversation builds a private copy of both so
-// later mutations by the caller do not disturb the cache key. cfg may be nil
-// to use the default max-step and auto-shrink settings.
-func NewConversation(client *Client, instructions string, tools []Tool, cfg *ConversationConfig) (*Conversation, error) {
+// later mutations by the caller do not disturb the cache key. cfg's zero value
+// uses the default max-step and auto-shrink settings.
+func NewConversation(client *Client, instructions string, tools []Tool, cfg ConversationConfig) (*Conversation, error) {
 	specs := make([]ToolSpec, len(tools))
 	byName := make(map[string]Tool, len(tools))
 	for i, t := range tools {
@@ -337,42 +359,48 @@ func NewConversation(client *Client, instructions string, tools []Tool, cfg *Con
 		}
 		byName[name] = t
 	}
+	resolved := resolveConversationConfig(cfg)
 	c := &Conversation{
 		client:       client,
 		instructions: instructions,
 		tools:        append([]Tool(nil), tools...),
 		toolSpecs:    specs,
 		toolByName:   byName,
-		maxSteps:     DefaultMaxSteps,
-		summarizer:   SummarizerFunc(DefaultSummarizerFunc),
-		autoShrink: AutoShrinkConfig{
-			Threshold:         0.85,
-			KeepToolExchanges: 2,
-			KeepTurns:         10,
-		},
+		maxSteps:     resolved.MaxSteps,
+		summarizer:   resolved.Summarizer,
+		autoShrink:   *resolved.AutoShrink,
 	}
-	if cfg != nil {
-		if cfg.MaxSteps > 0 {
-			c.maxSteps = cfg.MaxSteps
+	if resolved.StreamEvents {
+		source := resolved.StreamSource
+		if source.Layer == "" {
+			source.Layer = "conversation"
 		}
-		if cfg.AutoShrink != nil {
-			c.autoShrink = *cfg.AutoShrink
-		}
-		if cfg.Summarizer != nil {
-			c.summarizer = cfg.Summarizer
-		}
-		if cfg.StreamEvents {
-			source := cfg.StreamSource
-			if source.Layer == "" {
-				source.Layer = "conversation"
-			}
-			c.eventStream = streampkg.New(cfg.StreamScope)
-			c.eventSource = source
-			c.eventScope = cfg.StreamScope
-			c.eventMetadata = cloneConversationStreamMetadata(cfg.StreamMetadata)
-		}
+		c.eventStream = streampkg.New(resolved.StreamScope, streampkg.DefaultConfig())
+		c.eventSource = source
+		c.eventScope = resolved.StreamScope
+		c.eventMetadata = cloneConversationStreamMetadata(resolved.StreamMetadata)
 	}
 	return c, nil
+}
+
+func resolveConversationConfig(cfg ConversationConfig) ConversationConfig {
+	if cfg.MaxSteps <= 0 {
+		cfg.MaxSteps = DefaultMaxSteps
+	}
+	if cfg.AutoShrink == nil {
+		autoShrink := DefaultAutoShrinkConfig()
+		cfg.AutoShrink = &autoShrink
+	} else {
+		autoShrink := *cfg.AutoShrink
+		cfg.AutoShrink = &autoShrink
+	}
+	if cfg.Summarizer == nil {
+		cfg.Summarizer = SummarizerFunc(DefaultSummarizerFunc)
+	}
+	if cfg.StreamMetadata != nil {
+		cfg.StreamMetadata = cloneConversationStreamMetadata(cfg.StreamMetadata)
+	}
+	return cfg
 }
 
 // Client returns the [Client] bound at construction time, or nil when

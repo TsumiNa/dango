@@ -12,7 +12,7 @@ import (
 // created. Relative paths and shell commands run in that temp directory;
 // absolute paths are accepted only when they stay inside that temp directory
 // or, for [NewSkill] skills loaded from a host directory, the source workspace
-// root. Directories added with [Skill.WithAccessibleDirs] are also accepted by
+// root. Directories added with [Skill.SetAccessibleDirs] are also accepted by
 // absolute path.
 func (s *Skill) BuiltinTools() ([]Tool, error) {
 	if s == nil {
@@ -48,19 +48,19 @@ func (s *Skill) AddTools(tools ...Tool) (*Skill, error) {
 	return bound, nil
 }
 
-// WithAccessibleDirsAndBuiltinTools returns a fresh lightweight copy of s with
+// SetAccessibleDirsAndBuiltinTools returns a fresh lightweight copy of s with
 // built-in filesystem tools rebuilt against the supplied accessible
 // directories.
 //
 // Existing non-built-in tools are preserved. Existing built-in tools are
 // replaced so their workspace resolver sees the new directory set. It must be
 // called before the skill is bound.
-func (s *Skill) WithAccessibleDirsAndBuiltinTools(dirs ...string) (*Skill, error) {
+func (s *Skill) SetAccessibleDirsAndBuiltinTools(dirs ...string) (*Skill, error) {
 	if s == nil {
-		return nil, fmt.Errorf("skill: WithAccessibleDirsAndBuiltinTools requires a non-nil skill")
+		return nil, fmt.Errorf("skill: SetAccessibleDirsAndBuiltinTools requires a non-nil skill")
 	}
 	if s.conv != nil {
-		return nil, fmt.Errorf("skill: WithAccessibleDirsAndBuiltinTools requires an unbound skill")
+		return nil, fmt.Errorf("skill: SetAccessibleDirsAndBuiltinTools requires an unbound skill")
 	}
 	copySkill := s.copy()
 	customTools := copySkill.tools[:0]
@@ -71,7 +71,7 @@ func (s *Skill) WithAccessibleDirsAndBuiltinTools(dirs ...string) (*Skill, error
 		customTools = append(customTools, tool)
 	}
 	copySkill.tools = append([]Tool(nil), customTools...)
-	if err := copySkill.WithAccessibleDirs(dirs...); err != nil {
+	if err := copySkill.SetAccessibleDirs(dirs...); err != nil {
 		return nil, err
 	}
 	builtinTools, err := copySkill.BuiltinTools()

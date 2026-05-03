@@ -7,7 +7,7 @@ import (
 )
 
 func TestWriterMarshalsDeltaAndUsesStatus(t *testing.T) {
-	s := New(Scope{SessionID: "sess_1"})
+	s := New(Scope{SessionID: "sess_1"}, DefaultConfig())
 	t.Cleanup(s.Close)
 
 	sub, err := s.Subscribe(Filter{Prefixes: []string{"llm."}})
@@ -43,7 +43,7 @@ func TestWriterMarshalsDeltaAndUsesStatus(t *testing.T) {
 }
 
 func TestWriterRejectsInvalidRawDelta(t *testing.T) {
-	s := New(Scope{})
+	s := New(Scope{}, DefaultConfig())
 	t.Cleanup(s.Close)
 
 	writer := s.Writer(Source{Layer: "conversation"}, nil)
@@ -54,7 +54,7 @@ func TestWriterRejectsInvalidRawDelta(t *testing.T) {
 }
 
 func TestWriterStatusEvent(t *testing.T) {
-	s := New(Scope{})
+	s := New(Scope{}, DefaultConfig())
 	t.Cleanup(s.Close)
 
 	sub, err := s.Subscribe(Filter{EventTypes: []string{EventStatusProgress}})

@@ -60,7 +60,7 @@ type Executor struct {
 	skill      *llm.Skill
 	planner    *ExecutionPlanner
 	bindClient *llm.Client
-	bindConfig *llm.ConversationConfig
+	bindConfig llm.ConversationConfig
 	runtime    *llm.Skill
 	// accessibleDirs is the resource directory set most recently passed by the
 	// runner for this executor's runtime skill.
@@ -77,28 +77,57 @@ type Executor struct {
 	RunE func(ctx context.Context, parentOutputs map[string]any) (output any, newNodes []*runnerpkg.Node, err error)
 }
 
+// ExecutorOption adjusts a constructed [Executor] before it is returned.
+type ExecutorOption func(*Executor)
+
+// WithExecutorLogger installs logger as the Executor's lifecycle logger.
+//
+// The Executor keeps a reference to logger. slog.Logger values are safe for
+// concurrent use; callers that wrap a handler with additional mutable state are
+// responsible for that handler's synchronization.
+func WithExecutorLogger(logger *slog.Logger) ExecutorOption {
+	return func(e *Executor) {
+		e.logger = logger
+	}
+}
+
+// WithExecutorClient installs client as the LLM client forwarded to
+// [llm.Skill.Bind].
+//
+// The Executor keeps a reference to client and uses it when a runner binds the
+// skill. [llm.Client] is safe for concurrent request use, but callers must not
+// mutate the shared client or its raw SDK client while runner work is in flight.
+func WithExecutorClient(client *llm.Client) ExecutorOption {
+	return func(e *Executor) {
+		e.bindClient = client
+	}
+}
+
 // NewExecutor constructs an [Executor] bound to sk and planner.
 //
-// logger receives lifecycle log messages and may be nil to silence them.
-// sk and planner must be non-nil. client and cfg are later forwarded to
-// [llm.Skill.Bind] by runner-owned execution setup.
-func NewExecutor(logger *slog.Logger, sk *llm.Skill, client *llm.Client, cfg *llm.ConversationConfig, planner *ExecutionPlanner) (*Executor, error) {
+// sk and planner must be non-nil. cfg is later forwarded to [llm.Skill.Bind]
+// by runner-owned execution setup.
+func NewExecutor(sk *llm.Skill, planner *ExecutionPlanner, cfg llm.ConversationConfig, opts ...ExecutorOption) (*Executor, error) {
 	if sk == nil {
 		return nil, fmt.Errorf("orchestrate: executor requires a non-nil skill")
 	}
 	if planner == nil {
 		return nil, fmt.Errorf("orchestrate: executor requires a non-nil planner")
 	}
-	if logger != nil {
-		logger.Info("Creating a new Executor")
-	}
-	return &Executor{
-		logger:     logger,
+	e := &Executor{
 		skill:      sk,
 		planner:    planner,
-		bindClient: client,
 		bindConfig: cloneConversationConfig(cfg),
-	}, nil
+	}
+	for _, opt := range opts {
+		if opt != nil {
+			opt(e)
+		}
+	}
+	if e.logger != nil {
+		e.logger.Info("Creating a new Executor")
+	}
+	return e, nil
 }
 
 // Skill returns the [llm.Skill] this executor was bound to.
@@ -231,12 +260,18 @@ func (e *Executor) BindForRunner(sessID *string, accessibleDirs []string, sessSt
 	if len(accessibleDirs) > 0 {
 		dirs := append(e.skill.AccessibleDirs(), accessibleDirs...)
 		var err error
-		sk, err = e.skill.WithAccessibleDirsAndBuiltinTools(dirs...)
+		sk, err = e.skill.SetAccessibleDirsAndBuiltinTools(dirs...)
 		if err != nil {
 			return "", err
 		}
 	}
-	bound, err := sk.Bind(e.bindClient, e.bindConfig, sessID, sessStores...)
+	bindOpts := []llm.BindOption(nil)
+	if sessID != nil {
+		bindOpts = append(bindOpts, llm.WithExistingSession(*sessID, sessStores...))
+	} else if len(sessStores) > 0 {
+		bindOpts = append(bindOpts, llm.WithNewSession(sessStores...))
+	}
+	bound, err := sk.Bind(e.bindClient, e.bindConfig, bindOpts...)
 	if err != nil {
 		return "", err
 	}

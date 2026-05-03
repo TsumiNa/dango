@@ -10,7 +10,7 @@ import (
 
 func TestRunnerPersistsEventsAndCancellation(t *testing.T) {
 	store := mustNewRunnerStore(t, t.TempDir())
-	r := NewWithSetup(Setup{Logger: testLogger, Store: store})
+	r := New(WithLogger(testLogger), WithStore(store))
 
 	ctx, cancel := context.WithCancel(context.Background())
 	if err := r.Start(ctx); err != nil {
@@ -68,7 +68,7 @@ func TestRunnerPersistsEventsAndCancellation(t *testing.T) {
 
 func TestRunnerPersistsFailure(t *testing.T) {
 	store := mustNewRunnerStore(t, t.TempDir())
-	r := NewWithSetup(Setup{Logger: testLogger, Store: store})
+	r := New(WithLogger(testLogger), WithStore(store))
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()

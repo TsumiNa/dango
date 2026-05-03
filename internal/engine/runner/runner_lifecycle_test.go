@@ -45,14 +45,13 @@ func TestRunner_StartManagedReviewsExecutesReportsAndSettles(t *testing.T) {
 			},
 		},
 	}
-	r := NewWithSetup(Setup{
-		Logger:          testLogger,
-		Plan:            plan,
-		Nodes:           nodes,
-		PlannerSkill:    bindTestPlannerSkill(t, mustReviewJSON(t, true, "")),
-		SkillSummaries:  []SkillSummary{{Name: "single", Description: "Single-step skill."}},
-		PlanNodeBuilder: func(plan *CoarsePlan) (map[string]*Node, error) { return nodes, nil },
-	})
+	r := New(
+		WithLogger(testLogger),
+		WithInitialPlan(plan, nodes),
+		WithPlannerSkill(bindTestPlannerSkill(t, mustReviewJSON(t, true, ""))),
+		WithSkillSummaries([]SkillSummary{{Name: "single", Description: "Single-step skill."}}),
+		WithPlanNodeBuilder(func(plan *CoarsePlan) (map[string]*Node, error) { return nodes, nil }),
+	)
 
 	if err := r.StartManaged(context.Background()); err != nil {
 		t.Fatalf("StartManaged: %v", err)

@@ -11,13 +11,8 @@ const (
 	defaultSubscriberBuffer = 16
 )
 
-// Setup groups optional startup inputs for a Stream. The zero value is valid
-// and preserves [New]'s defaults when passed to [NewWithSetup].
-type Setup struct {
-	// Store receives each emitted event before subscribers receive it. A nil
-	// Store leaves durable replay disabled.
-	Store Store
-
+// Config controls optional stream behavior.
+type Config struct {
 	// BufferLimit bounds the number of recent events kept in memory for replay.
 	// Zero uses the default limit unless DisableBuffer is true. Negative values
 	// are treated as zero.
@@ -25,6 +20,27 @@ type Setup struct {
 
 	// DisableBuffer disables the in-memory replay buffer.
 	DisableBuffer bool
+}
+
+// DefaultConfig returns the default optional behavior for [New].
+func DefaultConfig() Config {
+	return Config{BufferLimit: defaultBufferLimit}
+}
+
+// Option adjusts a constructed [Stream] before it is returned.
+type Option func(*Stream)
+
+// WithStore installs store as the constructed Stream's durable event sink.
+//
+// The Stream keeps a reference to store and calls it from [Stream.Emit] while
+// holding the stream's delivery lock. A nil store leaves durable replay
+// disabled. If store is shared with other goroutines, callers are responsible
+// for synchronization unless the Store implementation documents its own
+// concurrency safety.
+func WithStore(store Store) Option {
+	return func(s *Stream) {
+		s.store = store
+	}
 }
 
 // Stream is an append-only event bus for one logical execution scope.
@@ -43,26 +59,24 @@ type Stream struct {
 	subscribers map[uint64]*Subscription
 }
 
-// New creates a stream scoped to one request/run/session with default setup.
-func New(scope Scope) *Stream {
-	return NewWithSetup(scope, Setup{})
-}
-
-// NewWithSetup creates a stream scoped to one request/run/session with
-// explicit startup inputs.
-func NewWithSetup(scope Scope, setup Setup) *Stream {
+// New creates a stream scoped to one request/run/session.
+func New(scope Scope, cfg Config, opts ...Option) *Stream {
 	bufferLimit := defaultBufferLimit
-	if setup.DisableBuffer {
+	if cfg.DisableBuffer {
 		bufferLimit = 0
-	} else if setup.BufferLimit > 0 {
-		bufferLimit = setup.BufferLimit
+	} else if cfg.BufferLimit > 0 {
+		bufferLimit = cfg.BufferLimit
 	}
 	s := &Stream{
 		scope:       scope,
 		bufferLimit: bufferLimit,
-		store:       setup.Store,
 		now:         time.Now,
 		subscribers: make(map[uint64]*Subscription),
+	}
+	for _, opt := range opts {
+		if opt != nil {
+			opt(s)
+		}
 	}
 	return s
 }

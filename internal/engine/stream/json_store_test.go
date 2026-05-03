@@ -17,7 +17,7 @@ func TestJSONStorePersistsReplayAcrossReopen(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewJSONStore: %v", err)
 	}
-	stream := NewWithSetup(Scope{RunnerID: "run_1"}, Setup{Store: store, DisableBuffer: true})
+	stream := New(Scope{RunnerID: "run_1"}, Config{DisableBuffer: true}, WithStore(store))
 	t.Cleanup(stream.Close)
 
 	emit := func(eventType string, nodeID string, delta string) {
@@ -44,7 +44,7 @@ func TestJSONStorePersistsReplayAcrossReopen(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewJSONStore(reopen): %v", err)
 	}
-	replayStream := NewWithSetup(Scope{RunnerID: "run_1"}, Setup{Store: reopenedStore, DisableBuffer: true})
+	replayStream := New(Scope{RunnerID: "run_1"}, Config{DisableBuffer: true}, WithStore(reopenedStore))
 	t.Cleanup(replayStream.Close)
 
 	sub, err := replayStream.Subscribe(Filter{Prefixes: []string{"llm."}}, WithReplayFrom(2), WithSubscriberBuffer(0))
@@ -70,7 +70,7 @@ func TestJSONStoreLoadToleratesPartialTrailingLine(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewJSONStore: %v", err)
 	}
-	stream := NewWithSetup(Scope{}, Setup{Store: store, DisableBuffer: true})
+	stream := New(Scope{}, Config{DisableBuffer: true}, WithStore(store))
 	t.Cleanup(stream.Close)
 
 	for _, delta := range []string{`"one"`, `"two"`} {

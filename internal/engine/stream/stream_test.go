@@ -10,7 +10,7 @@ import (
 )
 
 func TestStreamEmitDeliversToMultipleSubscribers(t *testing.T) {
-	s := New(Scope{RequestID: "req_1", RunnerID: "run_1"})
+	s := New(Scope{RequestID: "req_1", RunnerID: "run_1"}, DefaultConfig())
 	t.Cleanup(s.Close)
 
 	first, err := s.Subscribe(Filter{})
@@ -47,7 +47,7 @@ func TestStreamEmitDeliversToMultipleSubscribers(t *testing.T) {
 }
 
 func TestStreamSubscribeFiltersAndReplay(t *testing.T) {
-	s := New(Scope{RequestID: "req_1"})
+	s := New(Scope{RequestID: "req_1"}, DefaultConfig())
 	t.Cleanup(s.Close)
 
 	emit := func(eventType string, delta string) {
@@ -83,7 +83,7 @@ func TestStreamSubscribeFiltersAndReplay(t *testing.T) {
 }
 
 func TestSubscriptionCancelStopsDelivery(t *testing.T) {
-	s := New(Scope{})
+	s := New(Scope{}, DefaultConfig())
 	t.Cleanup(s.Close)
 
 	sub, err := s.Subscribe(Filter{}, WithSubscriberBuffer(0))
@@ -104,7 +104,7 @@ func TestSubscriptionCancelStopsDelivery(t *testing.T) {
 }
 
 func TestSubscriptionSlowConsumerDoesNotBlockEmit(t *testing.T) {
-	s := New(Scope{})
+	s := New(Scope{}, DefaultConfig())
 	t.Cleanup(s.Close)
 
 	sub, err := s.Subscribe(Filter{}, WithSubscriberBuffer(0))
@@ -134,7 +134,7 @@ func TestSubscriptionSlowConsumerDoesNotBlockEmit(t *testing.T) {
 }
 
 func TestSubscriptionOverflowErrorPolicy(t *testing.T) {
-	s := New(Scope{})
+	s := New(Scope{}, DefaultConfig())
 	t.Cleanup(s.Close)
 
 	sub, err := s.Subscribe(Filter{}, WithSubscriberBuffer(0), WithOverflowPolicy(OverflowError))
@@ -155,7 +155,7 @@ func TestSubscriptionOverflowErrorPolicy(t *testing.T) {
 }
 
 func TestStreamEmitRejectsInvalidEvents(t *testing.T) {
-	s := New(Scope{})
+	s := New(Scope{}, DefaultConfig())
 	t.Cleanup(s.Close)
 
 	err := s.Emit(t.Context(), Event{
@@ -169,7 +169,7 @@ func TestStreamEmitRejectsInvalidEvents(t *testing.T) {
 }
 
 func TestStreamCloseClosesSubscribersAndRejectsUse(t *testing.T) {
-	s := New(Scope{})
+	s := New(Scope{}, DefaultConfig())
 	sub, err := s.Subscribe(Filter{})
 	if err != nil {
 		t.Fatalf("Subscribe: %v", err)
@@ -193,7 +193,7 @@ func TestStreamCloseClosesSubscribersAndRejectsUse(t *testing.T) {
 
 func TestStreamStoreAppendPrecedesDelivery(t *testing.T) {
 	store := &recordingStore{}
-	s := NewWithSetup(Scope{}, Setup{Store: store})
+	s := New(Scope{}, DefaultConfig(), WithStore(store))
 	t.Cleanup(s.Close)
 
 	sub, err := s.Subscribe(Filter{})
@@ -223,7 +223,7 @@ func TestStreamStoreAppendPrecedesDelivery(t *testing.T) {
 
 func TestStreamSubscribeLoadsReplayFromStoreBeyondBuffer(t *testing.T) {
 	store := &recordingStore{}
-	s := NewWithSetup(Scope{RequestID: "req_store"}, Setup{Store: store, BufferLimit: 1})
+	s := New(Scope{RequestID: "req_store"}, Config{BufferLimit: 1}, WithStore(store))
 	t.Cleanup(s.Close)
 
 	emit := func(eventType string, delta string) {
@@ -271,7 +271,7 @@ func TestStreamSubscribeLoadsReplayFromStoreBeyondBuffer(t *testing.T) {
 
 func TestStreamSubscribeReplayLastLoadsFromStoreWhenBufferDisabled(t *testing.T) {
 	store := &recordingStore{}
-	s := NewWithSetup(Scope{RunnerID: "run_store"}, Setup{Store: store, DisableBuffer: true})
+	s := New(Scope{RunnerID: "run_store"}, Config{DisableBuffer: true}, WithStore(store))
 	t.Cleanup(s.Close)
 
 	for _, delta := range []string{`"one"`, `"two"`, `"three"`} {
@@ -309,7 +309,7 @@ func TestStreamSubscribeReplayLastLoadsFromStoreWhenBufferDisabled(t *testing.T)
 
 func TestStreamSubscribeReturnsStoreLoadError(t *testing.T) {
 	store := &recordingStore{loadErr: errors.New("boom")}
-	s := NewWithSetup(Scope{}, Setup{Store: store, DisableBuffer: true})
+	s := New(Scope{}, Config{DisableBuffer: true}, WithStore(store))
 	t.Cleanup(s.Close)
 
 	if err := s.Emit(t.Context(), Event{

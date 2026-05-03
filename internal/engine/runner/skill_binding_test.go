@@ -40,13 +40,12 @@ func (e *bindRecorderExecutor) Report(ctx context.Context, output any) (any, err
 
 func TestRunner_PrepareNodeExecutors_ReusesStoredSessionID(t *testing.T) {
 	exec := &bindRecorderExecutor{}
-	r := NewWithSetup(Setup{
-		Logger: testLogger,
-		Plan:   &CoarsePlan{Request: "demo"},
-		Nodes: map[string]*Node{
+	r := New(
+		WithLogger(testLogger),
+		WithInitialPlan(&CoarsePlan{Request: "demo"}, map[string]*Node{
 			"only": {Id: "only", Executor: exec},
-		},
-	})
+		}),
+	)
 
 	if err := r.StartPolish(context.Background()); err != nil {
 		t.Fatalf("StartPolish: %v", err)
@@ -82,7 +81,7 @@ type streamingBindExecutor struct {
 }
 
 func (e *streamingBindExecutor) BindForRunner(sessID *string, accessibleDirs []string, sessStores ...llm.SessionStore) (string, error) {
-	e.eventStream = streampkg.New(streampkg.Scope{NodeID: "owned-node"})
+	e.eventStream = streampkg.New(streampkg.Scope{NodeID: "owned-node"}, streampkg.DefaultConfig())
 	return "session-owned-stream", nil
 }
 

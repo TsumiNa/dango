@@ -93,7 +93,7 @@ func TestConversationRun_EmitsStreamEvents(t *testing.T) {
 			return "tool says ok", nil
 		},
 	)
-	conv := mustNewConversation(t, testClient(srv.URL), "sys", []Tool{echo}, &ConversationConfig{
+	conv := mustNewConversation(t, testClient(srv.URL), "sys", []Tool{echo}, ConversationConfig{
 		StreamEvents: true,
 		StreamSource: streampkg.Source{Layer: "skill", ID: "echo_skill"},
 		StreamScope:  streampkg.Scope{RequestID: "req_1", NodeID: "node_1"},
@@ -171,7 +171,7 @@ func TestConversationRun_StreamsReasoningAndOutputDeltas(t *testing.T) {
 	}))
 	t.Cleanup(srv.Close)
 
-	conv := mustNewConversation(t, testClient(srv.URL), "sys", nil, &ConversationConfig{
+	conv := mustNewConversation(t, testClient(srv.URL), "sys", nil, ConversationConfig{
 		StreamEvents: true,
 		StreamSource: streampkg.Source{Layer: "skill", ID: "stream_skill"},
 		StreamScope:  streampkg.Scope{RequestID: "req_streaming_run", NodeID: "node_stream"},
@@ -220,7 +220,7 @@ func TestConversationRun_EmitsToolExecutionFailedEvent(t *testing.T) {
 			return "partial output", errors.New("tool exploded")
 		},
 	)
-	conv := mustNewConversation(t, testClient(srv.URL), "sys", []Tool{failTool}, &ConversationConfig{
+	conv := mustNewConversation(t, testClient(srv.URL), "sys", []Tool{failTool}, ConversationConfig{
 		StreamEvents: true,
 		StreamSource: streampkg.Source{Layer: "skill", ID: "fail_skill"},
 		StreamScope:  streampkg.Scope{RequestID: "req_fail", NodeID: "node_fail"},
@@ -266,7 +266,7 @@ func TestConversationRun_MaxStepsExceeded(t *testing.T) {
 	loop := NewFuncTool("loop", "", map[string]any{"type": "object"},
 		func(_ context.Context, _ string) (string, error) { return "again", nil },
 	)
-	conv := mustNewConversation(t, testClient(srv.URL), "sys", []Tool{loop}, &ConversationConfig{
+	conv := mustNewConversation(t, testClient(srv.URL), "sys", []Tool{loop}, ConversationConfig{
 		StreamEvents: true,
 		StreamSource: streampkg.Source{Layer: "skill", ID: "loop_skill"},
 		StreamScope:  streampkg.Scope{RequestID: "req_loop", NodeID: "node_loop"},

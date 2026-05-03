@@ -9,7 +9,7 @@ import (
 )
 
 func TestSubscriptionNextReturnsEventsAndClose(t *testing.T) {
-	s := New(Scope{})
+	s := New(Scope{}, DefaultConfig())
 	sub, err := s.Subscribe(Filter{})
 	if err != nil {
 		t.Fatalf("Subscribe: %v", err)
@@ -45,7 +45,7 @@ func TestSubscriptionNextReturnsEventsAndClose(t *testing.T) {
 }
 
 func TestSubscriptionNextReturnsContextError(t *testing.T) {
-	s := New(Scope{})
+	s := New(Scope{}, DefaultConfig())
 	t.Cleanup(s.Close)
 	sub, err := s.Subscribe(Filter{})
 	if err != nil {

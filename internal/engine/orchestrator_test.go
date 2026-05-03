@@ -15,8 +15,8 @@ import (
 )
 
 func TestNewOrchestrator_ReturnsIndependentInstances(t *testing.T) {
-	o1 := NewOrchestrator(context.Background(), nil)
-	o2 := NewOrchestrator(context.Background(), nil)
+	o1 := NewOrchestrator(WithOrchestratorContext(context.Background()))
+	o2 := NewOrchestrator(WithOrchestratorContext(context.Background()))
 	if o1 == o2 {
 		t.Fatal("NewOrchestrator() returned the same instance twice")
 	}
@@ -27,7 +27,7 @@ func TestNewOrchestrator_ReturnsIndependentInstances(t *testing.T) {
 
 func TestNewOrchestrator_UsesProvidedContext(t *testing.T) {
 	baseCtx, cancel := context.WithCancel(context.Background())
-	o := NewOrchestrator(baseCtx, testLogger)
+	o := NewOrchestrator(WithOrchestratorContext(baseCtx), WithOrchestratorLogger(testLogger))
 	ctx := o.operationContext(context.WithValue(context.Background(), testContextKey("key"), "value"))
 	cancel()
 	select {
@@ -44,7 +44,7 @@ func TestNewOrchestrator_UsesProvidedContext(t *testing.T) {
 }
 
 func TestOperationContext_ReturnsAlreadyMergedContext(t *testing.T) {
-	o := NewOrchestrator(context.Background(), testLogger)
+	o := NewOrchestrator(WithOrchestratorContext(context.Background()), WithOrchestratorLogger(testLogger))
 	ctx := o.operationContext(context.WithValue(context.Background(), testContextKey("key"), "value"))
 	if got := o.operationContext(ctx); got != ctx {
 		t.Fatalf("operationContext(already merged) = %T %p, want original %T %p", got, got, ctx, ctx)
@@ -77,7 +77,7 @@ func TestMergedContextErrKeepsFirstCancellationReason(t *testing.T) {
 }
 
 func TestSetLogger_NilRestoresDefaultLogger(t *testing.T) {
-	o := NewOrchestrator(context.Background(), nil)
+	o := NewOrchestrator(WithOrchestratorContext(context.Background()))
 	if err := o.SetLogger(newDiscardLogger()); err != nil {
 		t.Fatalf("SetLogger(custom): %v", err)
 	}
@@ -372,7 +372,7 @@ func TestAddSkills_LoadsLightweightSkill(t *testing.T) {
 	o := newOrchestrator(testLogger)
 	dir := writeTestSkill(t, "test-skill", "A skill for orchestrator test.")
 
-	mustAddSkills(t, o, AddSkillConfig{Skill: loadTestSkillFromDir(t, dir), Client: &llm.Client{}})
+	mustAddSkills(t, o, SkillRegistration{Skill: loadTestSkillFromDir(t, dir), Client: &llm.Client{}})
 
 	sk := o.Skills()["test-skill"]
 	if sk == nil {
@@ -395,7 +395,7 @@ func TestAddSkills_LoadsLightweightSkill(t *testing.T) {
 func TestAddSkillDirs_LoadsAndEquipsSkill(t *testing.T) {
 	o := newOrchestrator(testLogger)
 	client := &llm.Client{}
-	cfg := &llm.ConversationConfig{MaxSteps: 7}
+	cfg := llm.ConversationConfig{MaxSteps: 7}
 	dir := writeTestSkill(t, "dir-skill", "A skill loaded by directory.")
 
 	if err := o.SetClient(client); err != nil {
@@ -412,10 +412,10 @@ func TestAddSkillDirs_LoadsAndEquipsSkill(t *testing.T) {
 	if stored.Client != client {
 		t.Fatalf("stored client = %p, want %p", stored.Client, client)
 	}
-	if stored.Config == nil || stored.Config.MaxSteps != cfg.MaxSteps {
+	if stored.Config.MaxSteps != cfg.MaxSteps {
 		t.Fatalf("stored config = %+v, want MaxSteps=%d", stored.Config, cfg.MaxSteps)
 	}
-	bound, err := stored.Skill.Bind(stored.Client, stored.Config, nil)
+	bound, err := stored.Skill.Bind(stored.Client, stored.Config)
 	if err != nil {
 		t.Fatalf("Bind: %v", err)
 	}
@@ -433,8 +433,8 @@ func TestAddSkillDirs_LoadsAndEquipsSkill(t *testing.T) {
 func TestAddSkills_StoresRuntimeConfig(t *testing.T) {
 	o := newOrchestrator(testLogger)
 	client := &llm.Client{}
-	convCfg := &llm.ConversationConfig{MaxSteps: 7}
-	mustAddSkills(t, o, AddSkillConfig{Skill: loadTestSkillFromDir(t, writeTestSkill(t, "factory-skill", "Configured skill.")), Client: client, Config: convCfg})
+	convCfg := llm.ConversationConfig{MaxSteps: 7}
+	mustAddSkills(t, o, SkillRegistration{Skill: loadTestSkillFromDir(t, writeTestSkill(t, "factory-skill", "Configured skill.")), Client: client, Config: convCfg})
 	stored := o.skills["factory-skill"]
 	if stored.Skill == nil {
 		t.Fatal("expected skill config to be stored")
@@ -442,7 +442,7 @@ func TestAddSkills_StoresRuntimeConfig(t *testing.T) {
 	if stored.Client != client {
 		t.Fatalf("stored client = %p, want %p", stored.Client, client)
 	}
-	if stored.Config == nil || stored.Config.MaxSteps != convCfg.MaxSteps {
+	if stored.Config.MaxSteps != convCfg.MaxSteps {
 		t.Fatalf("stored config = %+v, want MaxSteps=%d", stored.Config, convCfg.MaxSteps)
 	}
 }
@@ -451,7 +451,7 @@ func TestAddSkills_PreservesAccessibleDirs(t *testing.T) {
 	o := newOrchestrator(testLogger)
 	extraDir := t.TempDir()
 	loaded := loadTestSkillFromDir(t, writeTestSkill(t, "accessible-skill", "Configured skill."))
-	mustAddSkills(t, o, AddSkillConfig{Skill: loaded, AccessibleDirs: []string{extraDir}, Client: &llm.Client{}})
+	mustAddSkills(t, o, SkillRegistration{Skill: loaded, AccessibleDirs: []string{extraDir}, Client: &llm.Client{}})
 	sk := o.Skills()["accessible-skill"]
 	if sk == nil {
 		t.Fatal("expected accessible-skill to be registered")
@@ -475,10 +475,10 @@ func TestAddSkills_EquipsSkillForAutonomousGlueCode(t *testing.T) {
 	o := newOrchestrator(testLogger)
 	extraDir := t.TempDir()
 	loaded := loadTestSkillFromDir(t, writeTestSkill(t, "glue-skill", "Can adapt execution."))
-	mustAddSkills(t, o, AddSkillConfig{Skill: loaded, AccessibleDirs: []string{extraDir}, Client: &llm.Client{}})
+	mustAddSkills(t, o, SkillRegistration{Skill: loaded, AccessibleDirs: []string{extraDir}, Client: &llm.Client{}})
 
 	stored := o.skills["glue-skill"]
-	bound, err := stored.Skill.Bind(stored.Client, stored.Config, nil)
+	bound, err := stored.Skill.Bind(stored.Client, stored.Config)
 	if err != nil {
 		t.Fatalf("Bind: %v", err)
 	}
@@ -506,8 +506,8 @@ func TestAddSkills_EquipsSkillForAutonomousGlueCode(t *testing.T) {
 
 func TestAddSkills_RejectsDuplicateSkillNames(t *testing.T) {
 	o := newOrchestrator(testLogger)
-	mustAddSkills(t, o, newTestSkillConfig(t, "duplicate", "first", nil))
-	if err := o.AddSkills(newTestSkillConfig(t, "duplicate", "second", nil)); err == nil {
+	mustAddSkills(t, o, newTestSkillRegistration(t, "duplicate", "first", nil))
+	if err := o.AddSkills(newTestSkillRegistration(t, "duplicate", "second", nil)); err == nil {
 		t.Fatal("expected duplicate registration to fail")
 	}
 }
@@ -517,7 +517,7 @@ func TestAddSkills_AllowsChangesAfterStartup(t *testing.T) {
 	mustRejectStartRequest(t, o)
 
 	dir := writeTestSkill(t, "late-skill", "Registered after startup.")
-	mustAddSkills(t, o, AddSkillConfig{Skill: loadTestSkillFromDir(t, dir), Client: &llm.Client{}})
+	mustAddSkills(t, o, SkillRegistration{Skill: loadTestSkillFromDir(t, dir), Client: &llm.Client{}})
 
 	sk := o.Skills()["late-skill"]
 	if sk == nil {
@@ -531,8 +531,8 @@ func TestAddSkills_AllowsChangesAfterStartup(t *testing.T) {
 func TestRemoveSkills_AllowsChangesAfterStartup(t *testing.T) {
 	o := newOrchestrator(testLogger)
 	mustAddSkills(t, o,
-		newTestSkillConfig(t, "ephemeral", "Removed after startup.", nil),
-		newTestSkillConfig(t, "ephemeral-2", "Also removed after startup.", nil),
+		newTestSkillRegistration(t, "ephemeral", "Removed after startup.", nil),
+		newTestSkillRegistration(t, "ephemeral-2", "Also removed after startup.", nil),
 	)
 	mustRejectStartRequest(t, o)
 
@@ -557,8 +557,8 @@ func TestRemoveSkills_RejectsUnknownSkill(t *testing.T) {
 func TestRemoveSkills_IsAtomicOnValidationFailure(t *testing.T) {
 	o := newOrchestrator(testLogger)
 	mustAddSkills(t, o,
-		newTestSkillConfig(t, "kept", "Must remain registered.", nil),
-		newTestSkillConfig(t, "removed", "Would be removed if validation passed.", nil),
+		newTestSkillRegistration(t, "kept", "Must remain registered.", nil),
+		newTestSkillRegistration(t, "removed", "Would be removed if validation passed.", nil),
 	)
 
 	if err := o.RemoveSkills("removed", "missing"); err == nil {
@@ -605,15 +605,14 @@ func TestStartRunner_ForwardsStreamAndQueryState(t *testing.T) {
 			},
 		},
 	}
-	managedRunner := runnerpkg.NewWithSetup(runnerpkg.Setup{
-		Context:         context.Background(),
-		Logger:          testLogger,
-		Plan:            plan,
-		Nodes:           nodes,
-		PlannerSkill:    bindTestOrchestratorSkill(t, mustReviewJSON(t, true, "")),
-		SkillSummaries:  []runnerpkg.SkillSummary{{Name: "single", Description: "Single test skill."}},
-		PlanNodeBuilder: func(plan *runnerpkg.CoarsePlan) (map[string]*runnerpkg.Node, error) { return nodes, nil },
-	})
+	managedRunner := runnerpkg.New(
+		runnerpkg.WithContext(context.Background()),
+		runnerpkg.WithLogger(testLogger),
+		runnerpkg.WithInitialPlan(plan, nodes),
+		runnerpkg.WithPlannerSkill(bindTestOrchestratorSkill(t, mustReviewJSON(t, true, ""))),
+		runnerpkg.WithSkillSummaries([]runnerpkg.SkillSummary{{Name: "single", Description: "Single test skill."}}),
+		runnerpkg.WithPlanNodeBuilder(func(plan *runnerpkg.CoarsePlan) (map[string]*runnerpkg.Node, error) { return nodes, nil }),
+	)
 
 	o.mu.Lock()
 	o.runners[managedRunner.ID()] = managedRunner
@@ -669,7 +668,7 @@ func TestLoadRunnerRecords_LoadsPersistedLog(t *testing.T) {
 	if err := o.SetRunnerStore(store); err != nil {
 		t.Fatalf("SetRunnerStore: %v", err)
 	}
-	mustAddSkills(t, o, newTestSkillConfig(t, "single", "Single-step runner.", nil))
+	mustAddSkills(t, o, newTestSkillRegistration(t, "single", "Single-step runner.", nil))
 	if err := o.SetOrchestratorSkill(bindTestOrchestratorSkill(t, mustPlanJSON(t, &CoarsePlan{
 		Request: "run a single node",
 		Nodes: []CoarsePlanNode{{

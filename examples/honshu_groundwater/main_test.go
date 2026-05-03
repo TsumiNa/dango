@@ -80,7 +80,7 @@ func TestSkillScriptCommandRunsThroughStandardBashTool(t *testing.T) {
 	if err != nil {
 		t.Fatalf("exampleRoot: %v", err)
 	}
-	sk, err := llm.NewSkill(filepath.Join(root, "elevation_lookup"), nil, nil)
+	sk, err := llm.NewSkill(filepath.Join(root, "elevation_lookup"), llm.DefaultSkillConfig())
 	if err != nil {
 		t.Fatalf("NewSkill: %v", err)
 	}
@@ -337,11 +337,11 @@ func TestHonshuOrchestratorRegistersAutonomousSkillRuntimes(t *testing.T) {
 		t.Fatalf("exampleRoot: %v", err)
 	}
 	client := &llm.Client{}
-	o := orchestrate.NewOrchestrator(context.Background(), nil)
+	o := orchestrate.NewOrchestrator(orchestrate.WithOrchestratorContext(context.Background()))
 	if err := o.SetClient(client); err != nil {
 		t.Fatalf("SetClient: %v", err)
 	}
-	if err := o.AddSkillDirs(&llm.ConversationConfig{MaxSteps: 32},
+	if err := o.AddSkillDirs(llm.ConversationConfig{MaxSteps: 32},
 		filepath.Join(root, "elevation_lookup"),
 		filepath.Join(root, "train_gp_model"),
 		filepath.Join(root, "markdown_to_pdf"),
@@ -354,7 +354,7 @@ func TestHonshuOrchestratorRegistersAutonomousSkillRuntimes(t *testing.T) {
 		if sk == nil {
 			t.Fatalf("skill %q was not registered", skillName)
 		}
-		bound, err := sk.Bind(client, nil, nil)
+		bound, err := sk.Bind(client, llm.DefaultConversationConfig())
 		if err != nil {
 			t.Fatalf("bind %s: %v", skillName, err)
 		}
@@ -565,11 +565,7 @@ func newFakeLLMClient(t *testing.T) *llm.Client {
 		option.WithAPIKey("test-key"),
 		option.WithBaseURL(server.URL+"/"),
 	)
-	client, err := llm.NewClient(llm.ClientConfig{
-		Provider: llm.ProviderOpenAI,
-		Model:    "honshu-groundwater-test",
-		Raw:      raw,
-	})
+	client, err := llm.NewClient(llm.ProviderOpenAI, "honshu-groundwater-test", raw, llm.DefaultClientConfig())
 	if err != nil {
 		t.Fatalf("NewClient: %v", err)
 	}

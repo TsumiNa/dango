@@ -19,11 +19,7 @@ func newTestClient(t *testing.T, baseURL string) *Client {
 		option.WithAPIKey("test-key"),
 		option.WithBaseURL(baseURL+"/"),
 	)
-	c, err := NewClient(ClientConfig{
-		Provider: ProviderOpenAI,
-		Model:    "test-model",
-		Raw:      raw,
-	})
+	c, err := NewClient(ProviderOpenAI, "test-model", raw, DefaultClientConfig())
 	if err != nil {
 		t.Fatalf("NewClient: %v", err)
 	}
@@ -49,27 +45,27 @@ func newRunSkill(t *testing.T, cfg runSkillConfig) *Skill {
 	if cfg.Dir == "" {
 		cfg.Dir = writeSkillDir(t, "---\nname: run-test\ndescription: d\n---\nsystem\n")
 	}
-	sk, err := NewSkill(cfg.Dir, nil, nil, cfg.Tools...)
+	sk, err := NewSkill(cfg.Dir, DefaultSkillConfig(), WithTools(cfg.Tools...))
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
-	var convCfg *ConversationConfig
+	convCfg := DefaultConversationConfig()
 	if cfg.MaxSteps > 0 || cfg.AutoTrim != nil || cfg.Summarizer != nil {
-		convCfg = &ConversationConfig{
-			MaxSteps:   cfg.MaxSteps,
-			AutoShrink: cfg.AutoTrim,
-			Summarizer: cfg.Summarizer,
-		}
+		convCfg.MaxSteps = cfg.MaxSteps
+		convCfg.AutoShrink = cfg.AutoTrim
+		convCfg.Summarizer = cfg.Summarizer
 	}
-	var sessID *string
+	var bindOpts []BindOption
 	if cfg.SessionID != "" {
-		sessID = &cfg.SessionID
+		if cfg.SessionStore != nil {
+			bindOpts = append(bindOpts, WithExistingSession(cfg.SessionID, cfg.SessionStore))
+		} else {
+			bindOpts = append(bindOpts, WithExistingSession(cfg.SessionID))
+		}
+	} else if cfg.SessionStore != nil {
+		bindOpts = append(bindOpts, WithNewSession(cfg.SessionStore))
 	}
-	var stores []SessionStore
-	if cfg.SessionStore != nil {
-		stores = append(stores, cfg.SessionStore)
-	}
-	bound, err := sk.Bind(cfg.Client, convCfg, sessID, stores...)
+	bound, err := sk.Bind(cfg.Client, convCfg, bindOpts...)
 	if err != nil {
 		t.Fatalf("Bind: %v", err)
 	}
@@ -80,7 +76,7 @@ func TestSkillRejectsDuplicateToolNames(t *testing.T) {
 	a := NewFuncTool("x", "", map[string]any{}, func(context.Context, string) (string, error) { return "", nil })
 	b := NewFuncTool("x", "", map[string]any{}, func(context.Context, string) (string, error) { return "", nil })
 	dir := writeSkillDir(t, "---\nname: x\ndescription: d\n---\n")
-	if _, err := NewSkill(dir, nil, nil, a, b); err == nil {
+	if _, err := NewSkill(dir, DefaultSkillConfig(), WithTools(a, b)); err == nil {
 		t.Fatal("expected error for duplicate tool names")
 	}
 }

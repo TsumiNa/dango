@@ -245,7 +245,7 @@ func TestRendererOmitsTokenUsageFromStatusLines(t *testing.T) {
 }
 
 func TestRendererDrainsSubscription(t *testing.T) {
-	s := streampkg.New(streampkg.Scope{RequestID: "req"})
+	s := streampkg.New(streampkg.Scope{RequestID: "req"}, streampkg.DefaultConfig())
 	sub, err := s.Subscribe(streampkg.Filter{}, streampkg.WithSubscriberBuffer(4))
 	if err != nil {
 		t.Fatalf("Subscribe: %v", err)

@@ -25,11 +25,11 @@ func loadTestSkill(t *testing.T) *llm.Skill {
 	if err := os.WriteFile(filepath.Join(dir, llm.SkillFile), []byte(content), 0o644); err != nil {
 		t.Fatalf("write SKILL.md: %v", err)
 	}
-	loaded, err := llm.NewSkill(dir, nil, nil)
+	loaded, err := llm.NewSkill(dir, llm.DefaultSkillConfig())
 	if err != nil {
 		t.Fatalf("llm.New: %v", err)
 	}
-	sk, err := loaded.Bind(&llm.Client{}, nil, nil)
+	sk, err := loaded.Bind(&llm.Client{}, llm.DefaultConversationConfig())
 	if err != nil {
 		t.Fatalf("Skill.Bind: %v", err)
 	}
@@ -43,7 +43,7 @@ func loadLightweightTestSkill(t *testing.T) *llm.Skill {
 	if err := os.WriteFile(filepath.Join(dir, llm.SkillFile), []byte(content), 0o644); err != nil {
 		t.Fatalf("write SKILL.md: %v", err)
 	}
-	sk, err := llm.NewSkill(dir, nil, nil)
+	sk, err := llm.NewSkill(dir, llm.DefaultSkillConfig())
 	if err != nil {
 		t.Fatalf("llm.New: %v", err)
 	}
@@ -54,7 +54,7 @@ func TestNewExecutor_BindsSkillAndPlanner(t *testing.T) {
 	sk := loadLightweightTestSkill(t)
 	client := &llm.Client{}
 	planner := &ExecutionPlanner{}
-	exec, err := NewExecutor(nil, sk, client, nil, planner)
+	exec, err := NewExecutor(sk, planner, llm.DefaultConversationConfig(), WithExecutorClient(client))
 	if err != nil {
 		t.Fatalf("NewExecutor: %v", err)
 	}
@@ -70,20 +70,20 @@ func TestNewExecutor_BindsSkillAndPlanner(t *testing.T) {
 }
 
 func TestNewExecutor_RejectsNilSkill(t *testing.T) {
-	if _, err := NewExecutor(nil, nil, nil, nil, &ExecutionPlanner{}); err == nil {
+	if _, err := NewExecutor(nil, &ExecutionPlanner{}, llm.DefaultConversationConfig()); err == nil {
 		t.Fatal("expected error for nil skill")
 	}
 }
 
 func TestNewExecutor_RejectsNilPlanner(t *testing.T) {
-	if _, err := NewExecutor(nil, loadLightweightTestSkill(t), nil, nil, nil); err == nil {
+	if _, err := NewExecutor(loadLightweightTestSkill(t), nil, llm.DefaultConversationConfig()); err == nil {
 		t.Fatal("expected error for nil planner")
 	}
 }
 
 func TestPolishPlan_BumpsVersionAndFillsPlan(t *testing.T) {
 	planner := &ExecutionPlanner{Version: 1}
-	exec, err := NewExecutor(nil, loadLightweightTestSkill(t), &llm.Client{}, nil, planner)
+	exec, err := NewExecutor(loadLightweightTestSkill(t), planner, llm.DefaultConversationConfig(), WithExecutorClient(&llm.Client{}))
 	if err != nil {
 		t.Fatalf("NewExecutor: %v", err)
 	}
@@ -99,7 +99,7 @@ func TestPolishPlan_BumpsVersionAndFillsPlan(t *testing.T) {
 }
 
 func TestExecute_UsesRunEWhenSet(t *testing.T) {
-	exec, err := NewExecutor(nil, loadLightweightTestSkill(t), &llm.Client{}, nil, &ExecutionPlanner{})
+	exec, err := NewExecutor(loadLightweightTestSkill(t), &ExecutionPlanner{}, llm.DefaultConversationConfig(), WithExecutorClient(&llm.Client{}))
 	if err != nil {
 		t.Fatalf("NewExecutor: %v", err)
 	}
@@ -121,7 +121,7 @@ func TestExecute_UsesRunEWhenSet(t *testing.T) {
 }
 
 func TestExecute_NoRunEReturnsMarkdownFallback(t *testing.T) {
-	exec, err := NewExecutor(slog.New(slog.NewTextHandler(os.Stderr, nil)), loadLightweightTestSkill(t), &llm.Client{}, nil, &ExecutionPlanner{})
+	exec, err := NewExecutor(loadLightweightTestSkill(t), &ExecutionPlanner{}, llm.DefaultConversationConfig(), WithExecutorLogger(slog.New(slog.NewTextHandler(os.Stderr, nil))), WithExecutorClient(&llm.Client{}))
 	if err != nil {
 		t.Fatalf("NewExecutor: %v", err)
 	}
@@ -149,10 +149,10 @@ func TestExecute_NoRunEReturnsMarkdownFallback(t *testing.T) {
 
 func TestExecutionPromptIncludesArtifactsRoot(t *testing.T) {
 	artifactsDir := t.TempDir()
-	exec, err := NewExecutor(nil, loadLightweightTestSkill(t), &llm.Client{}, nil, &ExecutionPlanner{
+	exec, err := NewExecutor(loadLightweightTestSkill(t), &ExecutionPlanner{
 		TaskDescription: "Write durable outputs.",
 		ArtifactsDir:    artifactsDir,
-	})
+	}, llm.DefaultConversationConfig(), WithExecutorClient(&llm.Client{}))
 	if err != nil {
 		t.Fatalf("NewExecutor: %v", err)
 	}
@@ -166,10 +166,10 @@ func TestExecutionPromptIncludesArtifactsRoot(t *testing.T) {
 }
 
 func TestExecutionPromptIncludesSourceInputForRootTask(t *testing.T) {
-	exec, err := NewExecutor(nil, loadLightweightTestSkill(t), &llm.Client{}, nil, &ExecutionPlanner{
+	exec, err := NewExecutor(loadLightweightTestSkill(t), &ExecutionPlanner{
 		TaskDescription: "Normalize groundwater records.",
 		SourceInput:     `{"records":[{"site":"Aomori-plain-01"}]}`,
-	})
+	}, llm.DefaultConversationConfig(), WithExecutorClient(&llm.Client{}))
 	if err != nil {
 		t.Fatalf("NewExecutor: %v", err)
 	}
@@ -186,7 +186,7 @@ func TestExecutionPromptIncludesSourceInputForRootTask(t *testing.T) {
 func TestExecute_RespectsCanceledContext(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	exec, err := NewExecutor(nil, loadLightweightTestSkill(t), &llm.Client{}, nil, &ExecutionPlanner{})
+	exec, err := NewExecutor(loadLightweightTestSkill(t), &ExecutionPlanner{}, llm.DefaultConversationConfig(), WithExecutorClient(&llm.Client{}))
 	if err != nil {
 		t.Fatalf("NewExecutor: %v", err)
 	}
@@ -200,7 +200,7 @@ func TestExecute_RespectsCanceledContext(t *testing.T) {
 
 func TestLLMClient_ReturnsConfiguredClientBeforeRunnerBind(t *testing.T) {
 	client := &llm.Client{}
-	exec, err := NewExecutor(nil, loadLightweightTestSkill(t), client, nil, &ExecutionPlanner{})
+	exec, err := NewExecutor(loadLightweightTestSkill(t), &ExecutionPlanner{}, llm.DefaultConversationConfig(), WithExecutorClient(client))
 	if err != nil {
 		t.Fatalf("NewExecutor: %v", err)
 	}
@@ -211,7 +211,7 @@ func TestLLMClient_ReturnsConfiguredClientBeforeRunnerBind(t *testing.T) {
 
 func TestRuntimeSkill_RequiresRunnerBinding(t *testing.T) {
 	lightweight := loadLightweightTestSkill(t)
-	exec, err := NewExecutor(nil, lightweight, &llm.Client{}, nil, &ExecutionPlanner{})
+	exec, err := NewExecutor(lightweight, &ExecutionPlanner{}, llm.DefaultConversationConfig(), WithExecutorClient(&llm.Client{}))
 	if err != nil {
 		t.Fatalf("NewExecutor: %v", err)
 	}
@@ -227,7 +227,7 @@ func TestBindForRunner_BindsLightweightSkillAndAllocatesSession(t *testing.T) {
 		t.Fatalf("NewJSONStore: %v", err)
 	}
 	lightweight := loadLightweightTestSkill(t)
-	exec, err := NewExecutor(nil, lightweight, client, nil, &ExecutionPlanner{})
+	exec, err := NewExecutor(lightweight, &ExecutionPlanner{}, llm.DefaultConversationConfig(), WithExecutorClient(client))
 	if err != nil {
 		t.Fatalf("NewExecutor: %v", err)
 	}
@@ -259,7 +259,7 @@ func TestBindForRunner_ReusesExistingSession(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewJSONStore: %v", err)
 	}
-	exec, err := NewExecutor(nil, loadLightweightTestSkill(t), client, nil, &ExecutionPlanner{})
+	exec, err := NewExecutor(loadLightweightTestSkill(t), &ExecutionPlanner{}, llm.DefaultConversationConfig(), WithExecutorClient(client))
 	if err != nil {
 		t.Fatalf("NewExecutor: %v", err)
 	}
@@ -278,7 +278,7 @@ func TestBindForRunner_ReusesExistingSession(t *testing.T) {
 
 func TestBindForRunnerConfiguresRuntimeSkillAccessibleDirs(t *testing.T) {
 	resourceDir := t.TempDir()
-	exec, err := NewExecutor(nil, loadLightweightTestSkill(t), &llm.Client{}, nil, &ExecutionPlanner{})
+	exec, err := NewExecutor(loadLightweightTestSkill(t), &ExecutionPlanner{}, llm.DefaultConversationConfig(), WithExecutorClient(&llm.Client{}))
 	if err != nil {
 		t.Fatalf("NewExecutor: %v", err)
 	}
@@ -300,10 +300,10 @@ func TestBindForRunnerConfiguresRuntimeSkillAccessibleDirs(t *testing.T) {
 }
 
 func TestPolish_ReturnsExchangeMarkdown(t *testing.T) {
-	exec, err := NewExecutor(nil, loadLightweightTestSkill(t), &llm.Client{}, nil, &ExecutionPlanner{
+	exec, err := NewExecutor(loadLightweightTestSkill(t), &ExecutionPlanner{
 		id:              "node-1",
 		TaskDescription: "Plan the work.",
-	})
+	}, llm.DefaultConversationConfig(), WithExecutorClient(&llm.Client{}))
 	if err != nil {
 		t.Fatalf("NewExecutor: %v", err)
 	}
@@ -370,15 +370,15 @@ func TestPolish_UsesRuntimeSkillWhenBound(t *testing.T) {
 	}))
 	t.Cleanup(srv.Close)
 	raw := openai.NewClient(option.WithAPIKey("test-key"), option.WithBaseURL(srv.URL+"/"))
-	client, err := llm.NewClient(llm.ClientConfig{Provider: llm.ProviderOpenAI, Model: "test-model", Raw: raw})
+	client, err := llm.NewClient(llm.ProviderOpenAI, "test-model", raw, llm.DefaultClientConfig())
 	if err != nil {
 		t.Fatalf("NewClient: %v", err)
 	}
 
-	exec, err := NewExecutor(nil, loadLightweightTestSkill(t), client, nil, &ExecutionPlanner{
+	exec, err := NewExecutor(loadLightweightTestSkill(t), &ExecutionPlanner{
 		id:              "node-1",
 		TaskDescription: "Train a GP-style groundwater model.",
-	})
+	}, llm.DefaultConversationConfig(), WithExecutorClient(client))
 	if err != nil {
 		t.Fatalf("NewExecutor: %v", err)
 	}
@@ -403,10 +403,10 @@ func TestPolish_UsesRuntimeSkillWhenBound(t *testing.T) {
 }
 
 func TestReport_ReturnsExchangeMarkdownFallback(t *testing.T) {
-	exec, err := NewExecutor(nil, loadLightweightTestSkill(t), &llm.Client{}, nil, &ExecutionPlanner{
+	exec, err := NewExecutor(loadLightweightTestSkill(t), &ExecutionPlanner{
 		id:              "node-1",
 		TaskDescription: "Report the work.",
-	})
+	}, llm.DefaultConversationConfig(), WithExecutorClient(&llm.Client{}))
 	if err != nil {
 		t.Fatalf("NewExecutor: %v", err)
 	}
