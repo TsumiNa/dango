@@ -254,7 +254,7 @@ func main() {
 	if err != nil {
 		log.Fatalf("new session store: %v", err)
 	}
-	baseSkill, err = baseSkill.WithTools(allTools...)
+	baseSkill, err = baseSkill.AddTools(allTools...)
 	if err != nil {
 		log.Fatalf("configure skill tools: %v", err)
 	}

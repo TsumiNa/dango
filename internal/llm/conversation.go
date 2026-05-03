@@ -141,14 +141,15 @@ type AutoShrinkConfig struct {
 // A nil *ConversationConfig passed to [NewConversation] uses the default
 // conversation settings. Non-zero MaxSteps overrides the request/tool-call
 // loop bound, AutoShrink overrides the default shrinking policy when non-nil,
-// Summarizer overrides the default local summary compression, and Stream
-// configures compact model/tool progress events for outer orchestration layers.
-// Stream output is observational and independent of session persistence.
+// Summarizer overrides the default local summary compression, and StreamEvents
+// asks NewConversation to create a conversation-owned event stream for compact
+// model/tool progress events. Stream output is observational and independent
+// of session persistence.
 type ConversationConfig struct {
 	MaxSteps       int
 	AutoShrink     *AutoShrinkConfig
 	Summarizer     Summarizer
-	Stream         *streampkg.Stream
+	StreamEvents   bool
 	StreamSource   streampkg.Source
 	StreamScope    streampkg.Scope
 	StreamMetadata map[string]any
@@ -360,12 +361,12 @@ func NewConversation(client *Client, instructions string, tools []Tool, cfg *Con
 		if cfg.Summarizer != nil {
 			c.summarizer = cfg.Summarizer
 		}
-		if cfg.Stream != nil {
+		if cfg.StreamEvents {
 			source := cfg.StreamSource
 			if source.Layer == "" {
 				source.Layer = "conversation"
 			}
-			c.eventStream = cfg.Stream
+			c.eventStream = streampkg.New(cfg.StreamScope)
 			c.eventSource = source
 			c.eventScope = cfg.StreamScope
 			c.eventMetadata = cloneConversationStreamMetadata(cfg.StreamMetadata)

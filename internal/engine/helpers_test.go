@@ -111,33 +111,114 @@ func mustAddSkills(t *testing.T, o *Orchestrator, cfgs ...AddSkillConfig) {
 }
 
 func bindTestOrchestratorSkill(t *testing.T, outputs ...string) *llm.Skill {
+	return bindTestOrchestratorSkillWithReasoning(t, "", outputs...)
+}
+
+func bindTestOrchestratorSkillWithReasoning(t *testing.T, reasoning string, outputs ...string) *llm.Skill {
 	t.Helper()
 	clearLLMEnv(t)
 	var responded int
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
+		var req struct {
+			Model  string `json:"model"`
+			Stream bool   `json:"stream"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&req)
+		if req.Model == "" {
+			req.Model = "test-model"
+		}
 		text := outputs[len(outputs)-1]
 		if responded < len(outputs) {
 			text = outputs[responded]
 		}
 		responded++
-		payload, err := json.Marshal(map[string]any{
-			"id":         "r1",
-			"object":     "response",
-			"created_at": 0,
-			"model":      "test-model",
-			"status":     "completed",
-			"output": []map[string]any{{
-				"id":     "m1",
-				"type":   "message",
-				"role":   "assistant",
+		output := make([]map[string]any, 0, 2)
+		if reasoning != "" {
+			output = append(output, map[string]any{
+				"id":     "rs1",
+				"type":   "reasoning",
 				"status": "completed",
-				"content": []map[string]any{{
-					"type":        "output_text",
-					"text":        text,
-					"annotations": []any{},
+				"summary": []map[string]any{{
+					"type": "summary_text",
+					"text": reasoning,
 				}},
+				"content": []map[string]any{{
+					"type": "reasoning_text",
+					"text": reasoning,
+				}},
+			})
+		}
+		output = append(output, map[string]any{
+			"id":     "m1",
+			"type":   "message",
+			"role":   "assistant",
+			"status": "completed",
+			"content": []map[string]any{{
+				"type":        "output_text",
+				"text":        text,
+				"annotations": []any{},
 			}},
+		})
+		if req.Stream {
+			w.Header().Set("Content-Type", "text/event-stream")
+			w.WriteHeader(http.StatusOK)
+			flusher, _ := w.(http.Flusher)
+			if reasoning != "" {
+				writeTestSSE(t, w, "response.reasoning_summary_text.delta", map[string]any{
+					"type":            "response.reasoning_summary_text.delta",
+					"delta":           reasoning,
+					"item_id":         "rs1",
+					"output_index":    0,
+					"content_index":   0,
+					"sequence_number": 0,
+				})
+			}
+			writeTestSSE(t, w, "response.output_text.delta", map[string]any{
+				"type":            "response.output_text.delta",
+				"delta":           text,
+				"item_id":         "m1",
+				"output_index":    0,
+				"content_index":   0,
+				"sequence_number": 1,
+			})
+			writeTestSSE(t, w, "response.completed", map[string]any{
+				"type":            "response.completed",
+				"sequence_number": 2,
+				"response": map[string]any{
+					"id":                  "r1",
+					"object":              "response",
+					"created_at":          0,
+					"model":               req.Model,
+					"status":              "completed",
+					"output":              output,
+					"parallel_tool_calls": false,
+					"tool_choice":         "auto",
+					"tools":               []any{},
+					"usage": map[string]any{
+						"input_tokens": 1,
+						"input_tokens_details": map[string]any{
+							"cached_tokens": 0,
+						},
+						"output_tokens": 1,
+						"output_tokens_details": map[string]any{
+							"reasoning_tokens": 0,
+						},
+						"total_tokens": 2,
+					},
+				},
+			})
+			if flusher != nil {
+				flusher.Flush()
+			}
+			return
+		}
+		payload, err := json.Marshal(map[string]any{
+			"id":                  "r1",
+			"object":              "response",
+			"created_at":          0,
+			"model":               "test-model",
+			"status":              "completed",
+			"output":              output,
 			"parallel_tool_calls": false,
 			"tool_choice":         "auto",
 			"tools":               []any{},
@@ -145,6 +226,7 @@ func bindTestOrchestratorSkill(t *testing.T, outputs ...string) *llm.Skill {
 		if err != nil {
 			t.Fatalf("marshal planner response: %v", err)
 		}
+		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write(payload)
 	}))
 	t.Cleanup(srv.Close)

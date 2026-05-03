@@ -21,6 +21,14 @@ import (
 
 var testLogger = slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelError}))
 
+func newTestRunner() *Runner {
+	return NewWithSetup(Setup{Logger: testLogger})
+}
+
+func newTestRunnerForPlan(plan *CoarsePlan, nodes map[string]*Node) *Runner {
+	return NewWithSetup(Setup{Logger: testLogger, Plan: plan, Nodes: nodes})
+}
+
 type testExecutor struct {
 	run    func(ctx context.Context, parentOutputs map[string]any) (any, []*Node, error)
 	polish func(ctx context.Context) (any, error)

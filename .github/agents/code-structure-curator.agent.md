@@ -10,7 +10,7 @@ You are a specialist at restoring developer-friendly Go code structure after aut
 
 Before planning or editing, read and follow:
 
-- `.github/instructions/minimal-implementation-and-tests.instructions.md`
+- `.github/instructions/implementation-and-tests.instructions.md`
 - `.github/instructions/go-file-organization.instructions.md`
 - `.github/instructions/go-docs.instructions.md` when doc comments move or exported Go symbols are affected
 - `.github/instructions/in-branch-api-compat.instructions.md` when API shape changes are involved

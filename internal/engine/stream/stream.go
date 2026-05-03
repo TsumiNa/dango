@@ -11,25 +11,20 @@ const (
 	defaultSubscriberBuffer = 16
 )
 
-// Option customizes a Stream.
-type Option func(*Stream)
+// Setup groups optional startup inputs for a Stream. The zero value is valid
+// and preserves [New]'s defaults when passed to [NewWithSetup].
+type Setup struct {
+	// Store receives each emitted event before subscribers receive it. A nil
+	// Store leaves durable replay disabled.
+	Store Store
 
-// WithBufferLimit bounds the number of recent events kept for replay.
-func WithBufferLimit(n int) Option {
-	return func(s *Stream) {
-		if n < 0 {
-			n = 0
-		}
-		s.bufferLimit = n
-	}
-}
+	// BufferLimit bounds the number of recent events kept in memory for replay.
+	// Zero uses the default limit unless DisableBuffer is true. Negative values
+	// are treated as zero.
+	BufferLimit int
 
-// WithStore attaches a durable event store. Emit appends to the store before
-// subscribers receive the event.
-func WithStore(store Store) Option {
-	return func(s *Stream) {
-		s.store = store
-	}
+	// DisableBuffer disables the in-memory replay buffer.
+	DisableBuffer bool
 }
 
 // Stream is an append-only event bus for one logical execution scope.
@@ -48,16 +43,26 @@ type Stream struct {
 	subscribers map[uint64]*Subscription
 }
 
-// New creates a stream scoped to one request/run/session.
-func New(scope Scope, opts ...Option) *Stream {
+// New creates a stream scoped to one request/run/session with default setup.
+func New(scope Scope) *Stream {
+	return NewWithSetup(scope, Setup{})
+}
+
+// NewWithSetup creates a stream scoped to one request/run/session with
+// explicit startup inputs.
+func NewWithSetup(scope Scope, setup Setup) *Stream {
+	bufferLimit := defaultBufferLimit
+	if setup.DisableBuffer {
+		bufferLimit = 0
+	} else if setup.BufferLimit > 0 {
+		bufferLimit = setup.BufferLimit
+	}
 	s := &Stream{
 		scope:       scope,
-		bufferLimit: defaultBufferLimit,
+		bufferLimit: bufferLimit,
+		store:       setup.Store,
 		now:         time.Now,
 		subscribers: make(map[uint64]*Subscription),
-	}
-	for _, opt := range opts {
-		opt(s)
 	}
 	return s
 }

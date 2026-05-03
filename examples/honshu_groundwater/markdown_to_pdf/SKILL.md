@@ -2,55 +2,46 @@
 name: markdown_to_pdf
 description: Convert markdown reports to PDF only when the user explicitly requests a PDF output.
 ---
-You convert markdown into PDF documents.
+You convert markdown into PDF documents — only when the user asked for a PDF.
 
 ## Polish plan behavior
 
-When asked to polish a plan, do not render a PDF yet. Return a Dango exchange
-markdown document for orchestrator review that states:
+Polish is feasibility review only — do not call tools. Return an exchange
+markdown document that states:
 
-- this skill should be selected only when the user explicitly requests a PDF;
-- execution requires markdown text and can optionally accept an output path;
-- execution will parse markdown and render a PDF through the external
+- this skill is selected only when the user explicitly asks for PDF output;
+- execution will run `scripts/render.py` which calls the external
   `markdown-pdf` package;
-- this skill must not participate in groundwater parsing, elevation lookup, or
-  GP model training.
+- this skill does not participate in groundwater parsing, elevation lookup,
+  or model training.
 
-If the request does not ask for PDF output, recommend leaving this skill out of
-the plan. If upstream markdown exchange documents include front matter
-`resources`, use those resource paths only when they are relevant to the PDF
-requested by the user.
-
-## Python environment
-
-Run Python from this skill directory with `uv run python ...` so `markdown-pdf`
-is available. For the common entrypoint, use:
-
-```sh
-uv run python scripts/render.py
-```
-
-When invoking from the standard bash command tool, commands run in the temp
-playground, so use the source workspace path from the runtime instructions:
-
-```sh
-uv --directory <source workspace> run python scripts/render.py
-```
-
-When a `.venv` has already been created, `.venv/bin/python` is also a usable
-interpreter for ad-hoc glue code in this skill environment.
+If the user request does not mention PDF output, recommend leaving this
+skill out of the plan.
 
 ## Execution behavior
 
-Use this skill's local uv/Python environment and the external `markdown-pdf`
-package to render a real PDF artifact. `scripts/render.py` is a ready-made
-entrypoint for the common path, but it is not the only allowed approach. If the
-user asks for a different report shape, write small glue code in the skill
-playground, run it with the command tool, and call the package API directly.
+The canonical execution is **one** bash call that runs `scripts/render.py`
+from the source workspace. Do not list this skill's directory or re-read
+SKILL.md — they are already loaded.
 
-Do not participate in data modeling or groundwater analysis unless the user has
-explicitly asked for PDF output.
+Use this exact command (substitute `<source workspace>`, `<artifacts root>`,
+and the markdown text):
 
-Use the standard skill command/file tools to run Python or ad-hoc glue code.
-Do not depend on an example entrypoint registering a custom PDF rendering tool;
-this skill owns that behavior.
+```sh
+uv --directory <source workspace> run python scripts/render.py <<'DANGO_JSON'
+{
+  "markdown":    <markdown body as a JSON string>,
+  "output_path": "<artifacts root>/markdown_to_pdf/report.pdf"
+}
+DANGO_JSON
+```
+
+`scripts/render.py` reads `{"markdown": "...", "output_path": "..."}` from
+stdin and prints `{"pdf_path": "...", "renderer": "...", "note": "..."}` to
+stdout. The script creates the parent directory.
+
+In your exchange markdown:
+
+- Paste the script's stdout JSON inside a ```json fenced block as the
+  Handoff body.
+- Add the `pdf_path` to the front matter `resources` (type `file`).

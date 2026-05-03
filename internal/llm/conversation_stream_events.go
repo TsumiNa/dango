@@ -11,6 +11,15 @@ import (
 
 const conversationStreamTextLimit = 4096
 
+// EventStream returns the conversation-owned progress stream, or nil when the
+// conversation was created without [ConversationConfig.StreamEvents].
+func (c *Conversation) EventStream() *streampkg.Stream {
+	if c == nil {
+		return nil
+	}
+	return c.eventStream
+}
+
 func (c *Conversation) emitStreamEvent(ctx context.Context, eventType string, status string, delta any, metadata map[string]any) {
 	if c == nil || c.eventStream == nil {
 		return

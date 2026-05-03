@@ -165,6 +165,24 @@ func TestExecutionPromptIncludesArtifactsRoot(t *testing.T) {
 	}
 }
 
+func TestExecutionPromptIncludesSourceInputForRootTask(t *testing.T) {
+	exec, err := NewExecutor(nil, loadLightweightTestSkill(t), &llm.Client{}, nil, &ExecutionPlanner{
+		TaskDescription: "Normalize groundwater records.",
+		SourceInput:     `{"records":[{"site":"Aomori-plain-01"}]}`,
+	})
+	if err != nil {
+		t.Fatalf("NewExecutor: %v", err)
+	}
+	prompt := exec.executionPrompt(nil)
+	if !strings.Contains(prompt, "Original request input for this root task:") || !strings.Contains(prompt, "Aomori-plain-01") {
+		t.Fatalf("execution prompt missing source input:\n%s", prompt)
+	}
+	withParent := exec.executionPrompt(map[string]any{"upstream": "exchange"})
+	if strings.Contains(withParent, "Original request input for this root task:") {
+		t.Fatalf("execution prompt leaked source input when parent exchange exists:\n%s", withParent)
+	}
+}
+
 func TestExecute_RespectsCanceledContext(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()

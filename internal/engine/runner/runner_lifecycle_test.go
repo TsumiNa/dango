@@ -20,7 +20,7 @@ func newPolishNode(id string, polishFrag any) *Node {
 }
 
 func TestRunner_StartPolishRequiresPlan(t *testing.T) {
-	r := New(WithLogger(testLogger))
+	r := newTestRunner()
 	if err := r.StartPolish(context.Background()); !errors.Is(err, ErrPlanRequired) {
 		t.Fatalf("StartPolish without plan err = %v, want ErrPlanRequired", err)
 	}
@@ -45,13 +45,14 @@ func TestRunner_StartManagedReviewsExecutesReportsAndSettles(t *testing.T) {
 			},
 		},
 	}
-	r := New(
-		WithLogger(testLogger),
-		WithPlan(plan, nodes),
-		WithPlannerSkill(bindTestPlannerSkill(t, mustReviewJSON(t, true, ""))),
-		WithSkillSummaries([]SkillSummary{{Name: "single", Description: "Single-step skill."}}),
-		WithPlanNodeBuilder(func(plan *CoarsePlan) (map[string]*Node, error) { return nodes, nil }),
-	)
+	r := NewWithSetup(Setup{
+		Logger:          testLogger,
+		Plan:            plan,
+		Nodes:           nodes,
+		PlannerSkill:    bindTestPlannerSkill(t, mustReviewJSON(t, true, "")),
+		SkillSummaries:  []SkillSummary{{Name: "single", Description: "Single-step skill."}},
+		PlanNodeBuilder: func(plan *CoarsePlan) (map[string]*Node, error) { return nodes, nil },
+	})
 
 	if err := r.StartManaged(context.Background()); err != nil {
 		t.Fatalf("StartManaged: %v", err)
@@ -75,7 +76,7 @@ func TestRunner_StartPolishCollectsFragmentsAndAwaitsReview(t *testing.T) {
 		"A": newPolishNode("A", "frag-A"),
 		"B": newPolishNode("B", "frag-B"),
 	}
-	r := New(WithLogger(testLogger), WithPlan(plan, nodes))
+	r := newTestRunnerForPlan(plan, nodes)
 
 	if err := r.StartPolish(context.Background()); err != nil {
 		t.Fatalf("StartPolish: %v", err)
@@ -111,7 +112,7 @@ func TestRunner_StartPolishFailureAborts(t *testing.T) {
 			},
 		},
 	}
-	r := New(WithLogger(testLogger), WithPlan(plan, nodes))
+	r := newTestRunnerForPlan(plan, nodes)
 
 	if err := r.StartPolish(context.Background()); err != nil {
 		t.Fatalf("StartPolish: %v", err)
@@ -146,7 +147,7 @@ func TestRunner_AcceptPolishedPlanRunsEngineAndReports(t *testing.T) {
 			},
 		},
 	}
-	r := New(WithLogger(testLogger), WithPlan(plan, nodes))
+	r := newTestRunnerForPlan(plan, nodes)
 
 	if err := r.StartPolish(context.Background()); err != nil {
 		t.Fatalf("StartPolish: %v", err)
@@ -194,7 +195,7 @@ func TestRunner_RejectPolishedPlanTransitionsToAwaitingReplan(t *testing.T) {
 	nodes := map[string]*Node{
 		"A": newPolishNode("A", "frag-A"),
 	}
-	r := New(WithLogger(testLogger), WithPlan(plan, nodes))
+	r := newTestRunnerForPlan(plan, nodes)
 
 	if err := r.StartPolish(context.Background()); err != nil {
 		t.Fatalf("StartPolish: %v", err)
@@ -224,7 +225,7 @@ func TestRunner_ReplanWithRestartsPolish(t *testing.T) {
 	nodes1 := map[string]*Node{"A": newPolishNode("A", "frag-A1")}
 	nodes2 := map[string]*Node{"B": newPolishNode("B", "frag-B2")}
 
-	r := New(WithLogger(testLogger), WithPlan(plan1, nodes1))
+	r := newTestRunnerForPlan(plan1, nodes1)
 	if err := r.StartPolish(context.Background()); err != nil {
 		t.Fatalf("StartPolish: %v", err)
 	}
@@ -283,7 +284,7 @@ func TestRunner_AcceptRejectConcurrentSingleWinner(t *testing.T) {
 			},
 		},
 	}
-	r := New(WithLogger(testLogger), WithPlan(plan, nodes))
+	r := newTestRunnerForPlan(plan, nodes)
 	if err := r.StartPolish(context.Background()); err != nil {
 		t.Fatalf("StartPolish: %v", err)
 	}
@@ -361,7 +362,7 @@ func TestRunner_ReportIncludesDynamicNodes(t *testing.T) {
 			},
 		},
 	}
-	r := New(WithLogger(testLogger), WithPlan(plan, nodes))
+	r := newTestRunnerForPlan(plan, nodes)
 	if err := r.StartPolish(context.Background()); err != nil {
 		t.Fatalf("StartPolish: %v", err)
 	}
@@ -389,14 +390,14 @@ func TestRunner_ReportIncludesDynamicNodes(t *testing.T) {
 }
 
 func TestRunner_CompleteRejectedFromWrongPhase(t *testing.T) {
-	r := New(WithLogger(testLogger))
+	r := newTestRunner()
 	if err := r.Complete(context.Background()); !errors.Is(err, ErrInvalidPhase) {
 		t.Fatalf("Complete from PhaseCreated err = %v, want ErrInvalidPhase", err)
 	}
 }
 
 func TestRunner_AcceptRejectFromWrongPhase(t *testing.T) {
-	r := New(WithLogger(testLogger))
+	r := newTestRunner()
 	if err := r.AcceptPolishedPlan(context.Background(), &CoarsePlan{}); !errors.Is(err, ErrInvalidPhase) {
 		t.Fatalf("Accept from PhaseCreated err = %v, want ErrInvalidPhase", err)
 	}

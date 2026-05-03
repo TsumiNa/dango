@@ -115,10 +115,18 @@ func (e *Executor) runnableRuntimeSkill() (*llm.Skill, bool, error) {
 func (e *Executor) executionPrompt(parentOutputs map[string]any) string {
 	var b strings.Builder
 	b.WriteString("Execute the assigned task.\n\n")
+	b.WriteString("Tool budget is limited. Trust your SKILL.md and the Workspace access block already in this conversation: ")
+	b.WriteString("do not call pwd, do not list_dir on paths already named, and do not re-read SKILL.md or your own scripts. ")
+	b.WriteString("If your SKILL.md documents a canonical script entrypoint that fits this task, run it directly with one bash call and pass the parent handoff verbatim on stdin when the script accepts it. ")
+	b.WriteString("Treat the script's stdout as the authoritative result — do not re-read or paginate output files just to confirm them.\n\n")
 	b.WriteString("Return exactly one Dango exchange markdown document with YAML front matter. ")
-	b.WriteString("Use the Memo section for progress/state, Reasoning for any model-visible reasoning summary, and Handoff for the output intended for the listed recipients.\n\n")
+	b.WriteString("Use the Memo section for progress/state, Reasoning for a short summary of what you ran, and Handoff for the output intended for the listed recipients (paste structured tool output verbatim inside a fenced code block).\n\n")
 	b.WriteString("Task:\n")
 	b.WriteString(e.planner.TaskDescription)
+	if strings.TrimSpace(e.planner.SourceInput) != "" && len(parentOutputs) == 0 {
+		b.WriteString("\n\nOriginal request input for this root task:\n")
+		b.WriteString(e.planner.SourceInput)
+	}
 	b.WriteString("\n\nParent exchange documents:\n")
 	b.WriteString(formatParentOutputs(parentOutputs))
 	if e.planner.ArtifactsDir != "" {
@@ -140,10 +148,11 @@ func (e *Executor) executionPrompt(parentOutputs map[string]any) string {
 func (e *Executor) polishPrompt() string {
 	var b strings.Builder
 	b.WriteString("Polish the assigned task plan before execution.\n\n")
-	b.WriteString("Return exactly one Dango exchange markdown document with YAML front matter. ")
+	b.WriteString("This is a feasibility review only. Do not call any tools, do not run scripts, do not write files. ")
+	b.WriteString("Return immediately with one Dango exchange markdown document with YAML front matter. ")
 	b.WriteString("Use the Memo section for readiness notes, Reasoning for a concise feasibility summary, ")
 	b.WriteString("and Handoff for the revised execution approach intended for orchestrator review. ")
-	b.WriteString("Do not run execution tools or create final artifacts during polish.\n\n")
+	b.WriteString("If the task is outside your skill's scope, say so plainly in the Handoff and recommend the right skill.\n\n")
 	b.WriteString("Task:\n")
 	b.WriteString(e.planner.TaskDescription)
 	b.WriteString("\n\nCurrent planner draft:\n")
@@ -158,8 +167,9 @@ func (e *Executor) polishPrompt() string {
 func (e *Executor) reportPrompt(output any) string {
 	var b strings.Builder
 	b.WriteString("Summarize this executor output for final orchestration.\n\n")
-	b.WriteString("Return exactly one Dango exchange markdown document with YAML front matter. ")
-	b.WriteString("Route the handoff to the orchestrator.\n\n")
+	b.WriteString("Do not call execution tools and do not regenerate artifacts. ")
+	b.WriteString("Return one Dango exchange markdown document with YAML front matter, routed to the orchestrator. ")
+	b.WriteString("Keep the Handoff to a short summary plus any artifact paths from the executor output.\n\n")
 	b.WriteString("Executor output:\n")
 	b.WriteString(formatAny(output))
 	return b.String()

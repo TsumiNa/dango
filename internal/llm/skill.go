@@ -13,6 +13,7 @@ import (
 
 	"github.com/adrg/frontmatter"
 	"github.com/lithammer/shortuuid/v4"
+	streampkg "github.com/tsumina/dango/internal/engine/stream"
 )
 
 // SkillFile is the required filename inside a skill directory that carries
@@ -350,6 +351,15 @@ func (s *Skill) BashBlock() []string { return append([]string(nil), s.bashBlock.
 // inspect its turns, usage, or session metadata but should not mutate
 // it concurrently with a running [Skill.Run].
 func (s *Skill) Conversation() *Conversation { return s.conv }
+
+// EventStream returns the bound conversation's progress stream, or nil when
+// the skill is unbound or was bound without stream events enabled.
+func (s *Skill) EventStream() *streampkg.Stream {
+	if s == nil || s.conv == nil {
+		return nil
+	}
+	return s.conv.EventStream()
+}
 
 // Run drives a single task to completion by delegating to
 // [Conversation.Run].

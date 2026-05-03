@@ -72,18 +72,43 @@ func TestRendererFiltersAndDedupe(t *testing.T) {
 	}
 }
 
-func TestRendererTruncatesRunningTextWithFrame(t *testing.T) {
+func TestRendererCompressesRunningOutputWithFrame(t *testing.T) {
 	renderer := New(nil, Config{MaxText: 12, ProgressFrames: []string{"*"}})
-	line := renderer.FormatEvent(streampkg.Event{
+	event := streampkg.Event{
 		EventType: streampkg.EventLLMOutputDelta,
 		From:      streampkg.Source{Layer: "skill", ID: "train"},
 		Status:    streampkg.StatusRunning,
 		Delta:     mustJSONString(t, "this is a very long model output chunk"),
-	})
-	for _, want := range []string{"sk:", "output:", "this is a ve...", "truncated=true", "*"} {
+	}
+	line := renderer.FormatEvent(event)
+	for _, want := range []string{"Skill[train]", "output", "streaming", "*"} {
 		if !strings.Contains(line, want) {
 			t.Fatalf("line missing %q:\n%s", want, line)
 		}
+	}
+	if strings.Contains(line, "this is a") || strings.Contains(line, "truncated=true") {
+		t.Fatalf("running output leaked raw text: %q", line)
+	}
+	if repeated := renderer.FormatEvent(event); repeated != "" {
+		t.Fatalf("repeated running output line = %q, want suppressed", repeated)
+	}
+}
+
+func TestRendererBatchesRunningReasoning(t *testing.T) {
+	renderer := New(nil, Config{MaxText: 200, ProgressFrames: []string{"*"}})
+	event := streampkg.Event{
+		EventType: streampkg.EventLLMReasoningDelta,
+		From:      streampkg.Source{Layer: "skill", ID: "train"},
+		Status:    streampkg.StatusRunning,
+		Delta:     mustJSONString(t, "small "),
+	}
+	if line := renderer.FormatEvent(event); line != "" {
+		t.Fatalf("short reasoning line = %q, want buffered", line)
+	}
+	event.Delta = mustJSONString(t, strings.Repeat("reasoning ", 32))
+	line := renderer.FormatEvent(event)
+	if !strings.Contains(line, "Skill[train]") || !strings.Contains(line, "reasoning") || !strings.Contains(line, "small reasoning") {
+		t.Fatalf("batched reasoning line = %q", line)
 	}
 }
 
@@ -99,7 +124,7 @@ func TestRendererLinksArtifactPaths(t *testing.T) {
 		Status:    streampkg.StatusCompleted,
 		Delta:     json.RawMessage(`{"path":` + string(mustJSONString(t, path)) + `,"resource_type":"file","stage":"execute"}`),
 	})
-	for _, want := range []string{"ex:", "artifact=file://", "plot.png", "type=file", "stage=execute"} {
+	for _, want := range []string{"Executor[node]", "artifact=file://", "plot.png", "type=file", "stage=execute"} {
 		if !strings.Contains(line, want) {
 			t.Fatalf("line missing %q:\n%s", want, line)
 		}
@@ -132,6 +157,37 @@ done`),
 	}
 }
 
+func TestRendererWritesDraftExchangeMarkdownReferences(t *testing.T) {
+	dir := t.TempDir()
+	renderer := New(nil, Config{ExchangeDir: dir})
+	line := renderer.FormatEvent(streampkg.Event{
+		EventType:      streampkg.EventLLMOutputDelta,
+		From:           streampkg.Source{Layer: "skill", ID: "writer"},
+		Status:         streampkg.StatusCompleted,
+		SequenceNumber: 9,
+		Delta: mustJSONString(t, `---
+kind: dango_exchange
+status: ready
+---
+
+# Memo
+done
+
+# Handoff
+payload`),
+	})
+	if !strings.Contains(line, "exchange=file://") || !strings.Contains(line, "exchange-000000000009.md") {
+		t.Fatalf("exchange line = %q", line)
+	}
+	written, err := os.ReadFile(filepath.Join(dir, "exchange-000000000009.md"))
+	if err != nil {
+		t.Fatalf("exchange file not written: %v", err)
+	}
+	if !strings.Contains(string(written), "kind: dango_exchange") || !strings.Contains(string(written), "# Handoff") {
+		t.Fatalf("draft exchange file was not preserved raw:\n%s", string(written))
+	}
+}
+
 func TestRendererSummarizesOrchestratorPlanningOutput(t *testing.T) {
 	renderer := New(nil, Config{})
 	line := renderer.FormatEvent(streampkg.Event{
@@ -146,6 +202,19 @@ func TestRendererSummarizesOrchestratorPlanningOutput(t *testing.T) {
 	}
 }
 
+func TestRendererHidesOrchestratorReviewJSONOutput(t *testing.T) {
+	renderer := New(nil, Config{})
+	line := renderer.FormatEvent(streampkg.Event{
+		EventType: streampkg.EventLLMOutputDelta,
+		From:      streampkg.Source{Layer: "orchestrator", ID: "orchestrator"},
+		Status:    streampkg.StatusCompleted,
+		Delta:     mustJSONString(t, `{"approved":true}`),
+	})
+	if line != "" {
+		t.Fatalf("review output line = %q, want hidden", line)
+	}
+}
+
 func TestRendererHidesSkillTokenCompletion(t *testing.T) {
 	renderer := New(nil, Config{})
 	line := renderer.FormatEvent(streampkg.Event{
@@ -156,6 +225,22 @@ func TestRendererHidesSkillTokenCompletion(t *testing.T) {
 	})
 	if line != "" {
 		t.Fatalf("skill token completion line = %q, want hidden", line)
+	}
+}
+
+func TestRendererOmitsTokenUsageFromStatusLines(t *testing.T) {
+	renderer := New(nil, Config{})
+	line := renderer.FormatEvent(streampkg.Event{
+		EventType: streampkg.EventStatusCompleted,
+		From:      streampkg.Source{Layer: "orchestrator", ID: "orchestrator"},
+		Status:    streampkg.StatusCompleted,
+		Delta:     json.RawMessage(`{"message":"done","usage":{"total_tokens":42}}`),
+	})
+	if strings.Contains(line, "total_tokens=") {
+		t.Fatalf("status line leaked token usage: %q", line)
+	}
+	if !strings.Contains(line, "done") || !strings.Contains(line, "event=status.completed") {
+		t.Fatalf("status line missing core fields: %q", line)
 	}
 }
 

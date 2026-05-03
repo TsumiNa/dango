@@ -14,7 +14,7 @@ import (
 )
 
 func TestSubscribeStreamReplaysRunnerOwnedPhaseEvents(t *testing.T) {
-	r := New(WithLogger(testLogger))
+	r := newTestRunner()
 	r.stateMu.Lock()
 	r.phase = PhasePolishing
 	r.stateMu.Unlock()
@@ -45,7 +45,7 @@ func TestSubscribeStreamReplaysRunnerOwnedPhaseEvents(t *testing.T) {
 }
 
 func TestRunnerDoneClosesViaStreamSettleEvent(t *testing.T) {
-	r := New(WithLogger(testLogger))
+	r := newTestRunner()
 
 	select {
 	case <-r.Done():
@@ -69,14 +69,14 @@ func TestRunnerDoneClosesViaStreamSettleEvent(t *testing.T) {
 }
 
 func TestRunnerEmitsCompactStreamEvents(t *testing.T) {
-	eventStream := streampkg.New(streampkg.Scope{RequestID: "req_runner"})
+	r := newTestRunner()
+	eventStream := r.EventStream()
 	sub, err := eventStream.Subscribe(streampkg.Filter{EventTypes: []string{streampkg.EventRunnerNodeCompleted}}, streampkg.WithSubscriberBuffer(8))
 	if err != nil {
 		t.Fatalf("Subscribe: %v", err)
 	}
 	defer sub.Cancel()
 
-	r := New(WithLogger(testLogger), WithStream(eventStream))
 	node := &Node{
 		Id: "compact",
 		Executor: &testExecutor{
@@ -118,6 +118,56 @@ func TestRunnerEmitsCompactStreamEvents(t *testing.T) {
 	}
 }
 
+func TestRunnerEngineStoppedAfterIdleIsCompletedStreamStatus(t *testing.T) {
+	r := newTestRunner()
+	sub, err := r.SubscribeStream(streampkg.Filter{EventTypes: []string{streampkg.EventStatusProgress}}, streampkg.WithSubscriberBuffer(16))
+	if err != nil {
+		t.Fatalf("SubscribeStream: %v", err)
+	}
+	defer sub.Cancel()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	if err := r.Start(ctx); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	node := &Node{
+		Id: "idle-node",
+		Executor: &testExecutor{
+			run: func(context.Context, map[string]any) (any, []*Node, error) {
+				return "done", nil, nil
+			},
+		},
+	}
+	if err := r.AddNodes(ctx, node); err != nil {
+		t.Fatalf("AddNodes: %v", err)
+	}
+	waitForRunnerEvent(t, r, EventEngineIdle, "")
+	cancel()
+
+	readCtx, cancelRead := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancelRead()
+	for {
+		event, ok, err := sub.Next(readCtx)
+		if err != nil {
+			t.Fatalf("Next: %v", err)
+		}
+		if !ok {
+			t.Fatal("stream closed before engine stopped event")
+		}
+		var delta map[string]string
+		if err := json.Unmarshal(event.Delta, &delta); err != nil {
+			t.Fatalf("unmarshal delta: %v", err)
+		}
+		if delta["event"] != EventEngineStopped.String() {
+			continue
+		}
+		if event.Status != streampkg.StatusCompleted {
+			t.Fatalf("EngineStopped status = %q, want %q", event.Status, streampkg.StatusCompleted)
+		}
+		return
+	}
+}
+
 func TestRunnerEmitsArtifactCreatedEventsFromExchangeOutput(t *testing.T) {
 	artifactPath := filepath.Join(t.TempDir(), "predictions.csv")
 	if err := os.WriteFile(artifactPath, []byte("x\n"), 0o644); err != nil {
@@ -135,14 +185,14 @@ func TestRunnerEmitsArtifactCreatedEventsFromExchangeOutput(t *testing.T) {
 		t.Fatalf("Markdown: %v", err)
 	}
 
-	eventStream := streampkg.New(streampkg.Scope{RequestID: "req_artifact"})
+	r := newTestRunner()
+	eventStream := r.EventStream()
 	sub, err := eventStream.Subscribe(streampkg.Filter{EventTypes: []string{streampkg.EventArtifactCreated}}, streampkg.WithSubscriberBuffer(8))
 	if err != nil {
 		t.Fatalf("Subscribe: %v", err)
 	}
 	defer sub.Cancel()
 
-	r := New(WithLogger(testLogger), WithStream(eventStream))
 	node := &Node{
 		Id: "artifact-node",
 		Executor: &testExecutor{
@@ -209,14 +259,14 @@ func TestRunnerEmitsSkillMemoEventsFromExchangeOutput(t *testing.T) {
 		t.Fatalf("Markdown: %v", err)
 	}
 
-	eventStream := streampkg.New(streampkg.Scope{RequestID: "req_memo"})
+	r := newTestRunner()
+	eventStream := r.EventStream()
 	sub, err := eventStream.Subscribe(streampkg.Filter{EventTypes: []string{streampkg.EventSkillMemoDelta}}, streampkg.WithSubscriberBuffer(8))
 	if err != nil {
 		t.Fatalf("Subscribe: %v", err)
 	}
 	defer sub.Cancel()
 
-	r := New(WithLogger(testLogger), WithStream(eventStream))
 	node := &Node{
 		Id:        "memo-node",
 		SkillName: "memo-skill",
@@ -274,14 +324,14 @@ func TestRunnerDoesNotEmitSkillMemoWithoutMemo(t *testing.T) {
 		t.Fatalf("Markdown: %v", err)
 	}
 
-	eventStream := streampkg.New(streampkg.Scope{RequestID: "req_no_memo"})
+	r := newTestRunner()
+	eventStream := r.EventStream()
 	sub, err := eventStream.Subscribe(streampkg.Filter{EventTypes: []string{streampkg.EventSkillMemoDelta}}, streampkg.WithSubscriberBuffer(8))
 	if err != nil {
 		t.Fatalf("Subscribe: %v", err)
 	}
 	defer sub.Cancel()
 
-	r := New(WithLogger(testLogger), WithStream(eventStream))
 	node := &Node{
 		Id: "no-memo",
 		Executor: &testExecutor{
@@ -313,14 +363,14 @@ func TestRunnerDoesNotEmitArtifactCreatedWithoutResources(t *testing.T) {
 		t.Fatalf("Markdown: %v", err)
 	}
 
-	eventStream := streampkg.New(streampkg.Scope{RequestID: "req_no_artifact"})
+	r := newTestRunner()
+	eventStream := r.EventStream()
 	sub, err := eventStream.Subscribe(streampkg.Filter{EventTypes: []string{streampkg.EventArtifactCreated}}, streampkg.WithSubscriberBuffer(8))
 	if err != nil {
 		t.Fatalf("Subscribe: %v", err)
 	}
 	defer sub.Cancel()
 
-	r := New(WithLogger(testLogger), WithStream(eventStream))
 	node := &Node{
 		Id: "no-artifact",
 		Executor: &testExecutor{

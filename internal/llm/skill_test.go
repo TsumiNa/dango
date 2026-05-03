@@ -273,12 +273,12 @@ func TestSkillCopiesPreserveTempDir(t *testing.T) {
 	}
 	cleanupSkillTemp(t, loaded)
 
-	withTools, err := loaded.WithTools()
+	toolCopy, err := loaded.AddTools()
 	if err != nil {
-		t.Fatalf("WithTools: %v", err)
+		t.Fatalf("AddTools: %v", err)
 	}
-	if withTools.TempDir() != loaded.TempDir() {
-		t.Fatalf("WithTools TempDir() = %q, want %q", withTools.TempDir(), loaded.TempDir())
+	if toolCopy.TempDir() != loaded.TempDir() {
+		t.Fatalf("AddTools TempDir() = %q, want %q", toolCopy.TempDir(), loaded.TempDir())
 	}
 
 	bound, err := loaded.Bind(stubClient(), nil, nil)
@@ -349,9 +349,9 @@ func TestWithAccessibleDirsOverwritesAndClearsRuntimeInstruction(t *testing.T) {
 		t.Fatalf("runtime instructions still contain overwritten dir %q:\n%s", realFirstDir, instructions)
 	}
 
-	cleared, err := loaded.WithTools()
+	cleared, err := loaded.AddTools()
 	if err != nil {
-		t.Fatalf("WithTools: %v", err)
+		t.Fatalf("AddTools: %v", err)
 	}
 	if err := cleared.WithAccessibleDirs(); err != nil {
 		t.Fatalf("WithAccessibleDirs clear: %v", err)
@@ -383,9 +383,9 @@ func TestWithAccessibleDirsAndBuiltinToolsPreservesCustomTools(t *testing.T) {
 	}
 	cleanupSkillTemp(t, loaded)
 	custom := NewFuncTool("custom", "custom tool", map[string]any{"type": "object"}, nil)
-	withCustom, err := loaded.WithTools(custom)
+	withCustom, err := loaded.AddTools(custom)
 	if err != nil {
-		t.Fatalf("WithTools: %v", err)
+		t.Fatalf("AddTools: %v", err)
 	}
 	extraDir := t.TempDir()
 	withDirs, err := withCustom.WithAccessibleDirsAndBuiltinTools(extraDir)
@@ -413,7 +413,7 @@ func TestWithAccessibleDirsAndBuiltinToolsPreservesCustomTools(t *testing.T) {
 	}
 }
 
-func TestWithToolsCopyDoesNotShareAccessibleDirs(t *testing.T) {
+func TestAddToolsCopyDoesNotShareAccessibleDirs(t *testing.T) {
 	loaded, err := NewSkill(writeSkillDir(t, "---\nname: x\ndescription: d\n---\nbody\n"), nil, nil)
 	if err != nil {
 		t.Fatalf("New: %v", err)
@@ -423,13 +423,13 @@ func TestWithToolsCopyDoesNotShareAccessibleDirs(t *testing.T) {
 	if err := loaded.WithAccessibleDirs(firstDir); err != nil {
 		t.Fatalf("loaded.WithAccessibleDirs: %v", err)
 	}
-	copyWithTools, err := loaded.WithTools()
+	toolCopy, err := loaded.AddTools()
 	if err != nil {
-		t.Fatalf("WithTools: %v", err)
+		t.Fatalf("AddTools: %v", err)
 	}
 	secondDir := t.TempDir()
-	if err := copyWithTools.WithAccessibleDirs(secondDir); err != nil {
-		t.Fatalf("copyWithTools.WithAccessibleDirs: %v", err)
+	if err := toolCopy.WithAccessibleDirs(secondDir); err != nil {
+		t.Fatalf("toolCopy.WithAccessibleDirs: %v", err)
 	}
 	realFirstDir, err := filepath.EvalSymlinks(firstDir)
 	if err != nil {
@@ -442,8 +442,8 @@ func TestWithToolsCopyDoesNotShareAccessibleDirs(t *testing.T) {
 	if got := loaded.AccessibleDirs(); len(got) != 1 || got[0] != realFirstDir {
 		t.Fatalf("loaded.AccessibleDirs() = %v, want [%s]", got, realFirstDir)
 	}
-	if got := copyWithTools.AccessibleDirs(); len(got) != 1 || got[0] != realSecondDir {
-		t.Fatalf("copyWithTools.AccessibleDirs() = %v, want [%s]", got, realSecondDir)
+	if got := toolCopy.AccessibleDirs(); len(got) != 1 || got[0] != realSecondDir {
+		t.Fatalf("toolCopy.AccessibleDirs() = %v, want [%s]", got, realSecondDir)
 	}
 }
 

@@ -6,6 +6,7 @@ import (
 	"log/slog"
 
 	runnerpkg "github.com/tsumina/dango/internal/engine/runner"
+	streampkg "github.com/tsumina/dango/internal/engine/stream"
 	"github.com/tsumina/dango/internal/llm"
 )
 
@@ -25,6 +26,7 @@ const (
 type ExecutionPlanner struct {
 	id              string
 	TaskDescription string `json:"task_description" yaml:"description"`
+	SourceInput     string `json:"source_input,omitempty" yaml:"source_input,omitempty"`
 	ArtifactsDir    string `json:"artifacts_dir,omitempty" yaml:"artifacts_dir,omitempty"`
 	Reason          string `json:"reason" yaml:"reason"`
 	Solution        string `json:"solution" yaml:"solution"`
@@ -113,6 +115,15 @@ func (e *Executor) LLMClient() *llm.Client {
 		return e.runtime.Client()
 	}
 	return e.bindClient
+}
+
+// EventStream returns the runtime skill's conversation-owned progress stream,
+// once the executor has been bound by a runner.
+func (e *Executor) EventStream() *streampkg.Stream {
+	if e == nil || e.runtime == nil {
+		return nil
+	}
+	return e.runtime.EventStream()
 }
 
 // PolishPlan refines the planner's reasoning and solution based on the

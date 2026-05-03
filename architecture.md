@@ -4,7 +4,7 @@
 
 当前设计把三者分成两条正交链路：
 
-- 管理调用关系：`or` 对外接受 request，生成 coarse plan，装配并启动 `ru`；`ru` 维护单个 plan 的生命周期并调度多个 `ex`；上层程序只通过 `or` 查询和订阅 request 的处理状态，不需要感知 `ru` 和 `ex`。
+- 管理调用关系：`or` 对外接受 request，在 `StartRequest` 中创建 request-scoped stream，生成 coarse plan，装配并启动 `ru`；`ru` 维护单个 plan 的生命周期并调度多个 `ex`；上层程序通过 `or` 的 query API 和 `Response.Stream` 观察处理状态，不需要感知 `ru` 和 `ex`。
 - 数据流关系：skill 间的数据交换统一收敛为带 front matter 的 markdown exchange document。`ru` 只负责搬运、补齐 runner/node 元数据、持久化和转发这些文档，不解释 skill 业务语义。
 
 ## 调用关系
@@ -16,6 +16,7 @@ sequenceDiagram
     autonumber
     participant C as User / API / CLI
     participant O as or: Orchestrator
+    participant S as Request Stream
     participant OS as Orchestrator Skill
     participant SR as Skill Registry
     participant RR as Runner Registry
@@ -25,8 +26,11 @@ sequenceDiagram
     participant E as ex: Executor(s)
 
     C->>O: StartRequest req
+    O->>S: create request-scoped stream
     O->>OS: plan(request, skill summaries)
-    OS-->>O: CoarsePlan or RejectReason
+    OS-->>O: strict JSON CoarsePlan or RejectReason
+    O-->>S: planning reasoning / output / status
+    O-->>S: planning exchange markdown
     O->>SR: resolve lightweight skills + AddSkillConfig
     SR-->>O: skill configs
     O->>O: buildPlanNodes / newRunnerFromPlan
@@ -44,11 +48,12 @@ sequenceDiagram
     D-->>R: completed node
     R->>E: Report(ctx)
     E-->>R: report exchange markdown
-    R-->>RR: RunnerUpdate + Snapshot
-    C->>O: QueryRunner / SubscribeRunner / LoadRunnerRecords
+    R-->>S: runner / executor / skill stream events
+    C->>S: subscribe(resp.Stream)
+    C->>O: QueryRunner / LoadRunnerRecords
     O->>RR: lookup runner state
-    RR-->>O: RunnerView / RunnerUpdate
-    O-->>C: runner status and updates
+    RR-->>O: RunnerView
+    O-->>C: runner status and stored views
 ```
 
 关键边界：
@@ -61,6 +66,8 @@ sequenceDiagram
 
 `ex` 的默认输出不再是任意 Go 值，而是 markdown exchange document。这个文档可以落库、落本地文件，也方便 human review 和 skill 继续消费。
 
+`or` 的 planner / reviewer prompt 边界仍然使用严格 JSON：规划阶段返回 `{"plan": ...}` 或 `{"reject": ...}`，review / replan 也都返回 JSON。为了和其他阶段的数据面保持一致，`or` 会把 planning 结果额外包装成一份 markdown exchange document 发到 request stream，并交给 renderer / artifact subscriber 落盘；同时 planner reasoning、review/replan reasoning 也通过同一条 request stream 对外可见。
+
 每个 exchange document 使用 YAML front matter 描述路由和元数据，正文固定分为三段：
 
 - `Memo`：长任务、多阶段任务的自主规划、进度和状态记录。
@@ -72,22 +79,25 @@ sequenceDiagram
     autonumber
     participant I as Planning Input
     participant O as or
+    participant U as Request stream
     participant OS as Orchestrator Skill
     participant R as ru
     participant E as ex
     participant ST as RunnerStore
-    participant U as RunnerUpdate stream
 
     I->>O: Request + skill summaries
     O->>OS: plan(request, skill summaries)
-    OS-->>O: plan JSON / CoarsePlan
+    OS-->>O: strict JSON plan / reject
+    O-->>U: planning reasoning / output / status
+    O-->>U: planning exchange markdown
     O->>R: Node graph + Node metadata + Executor
     R->>E: Polish(ctx)
     E-->>R: kind=dango.exchange, stage=polish
     R->>R: save PolishDocuments map[nodeID]markdown
     R->>OS: review(plan, polish_documents)
     Note over R,OS: markdown docs, not runner internals
-    OS-->>R: review JSON: approved / reason
+    OS-->>R: review JSON: approved / reject
+    R-->>U: review / replan reasoning and compact runner events
 
     alt review rejected
         R->>OS: replan(request, currentPlan, reason, polish_documents)
@@ -107,7 +117,7 @@ sequenceDiagram
             R->>R: append to Node graph
         end
         R->>ST: append NodeCompleted(markdown)
-        R-->>U: publish RunnerUpdate
+        R-->>U: publish runner / executor / artifact events
     end
 
     par completed nodes
@@ -115,7 +125,7 @@ sequenceDiagram
         E-->>R: kind=dango.exchange, stage=report
         R->>R: save ReportSummaries map[nodeID]markdown
         R->>ST: append report markdown
-        R-->>U: publish RunnerUpdate
+        R-->>U: publish report-stage stream events
     end
 ```
 
@@ -128,13 +138,14 @@ sequenceDiagram
 
 ## Lifecycle Sequence
 
-下面是当前 managed lifecycle 的端到端时序。对外入口只有 `or.StartRequest`；后续 polish、review、replan、execute、report 由 `ru.StartManaged` 推进。
+下面是当前 managed lifecycle 的端到端时序。对外入口只有 `or.StartRequest`；它返回 `Response{RunnerID, Stream}`，后续 polish、review、replan、execute、report 由 `ru.StartManaged` 推进。
 
 ```mermaid
 sequenceDiagram
     autonumber
     participant C as Caller
     participant O as or
+    participant U as request stream
     participant OS as or skill
     participant R as ru
     participant E as ex
@@ -143,16 +154,18 @@ sequenceDiagram
     C->>O: StartRequest(ctx, req)
     O->>O: validate request / lock startup config
     O->>OS: plan(request, skill summaries)
-    OS-->>O: CoarsePlan or RejectReason
+    OS-->>O: strict JSON CoarsePlan or RejectReason
+    O-->>U: planning reasoning / output / status
+    O-->>U: planning exchange markdown
 
     alt rejected
         O-->>C: RequestRejectedError
     else planned
         O->>O: build Node graph + Executor per CoarsePlanNode
-        O->>R: New(... WithPlan, WithPlannerSkill, WithPlanNodeBuilder)
+        O->>R: NewWithSetup(Setup{Plan, Nodes, PlannerSkill, PlanNodeBuilder})
         O->>O: store runner in registry
         O->>R: StartManaged(ctx) or queue by priority
-        O-->>C: runnerID
+        O-->>C: Response{runnerID, stream}
     end
 
     R->>R: StartPolish
@@ -184,7 +197,7 @@ sequenceDiagram
         R->>E: Execute(ctx, parent exchange markdown)
         E-->>R: exchange markdown(stage=execute), optional newNodes
         R->>ST: append NodeCompleted(markdown)
-        R-->>O: RunnerUpdate + Snapshot
+        R-->>U: runner / executor / artifact events
     end
 
     R->>R: Complete on EngineIdle
@@ -193,8 +206,8 @@ sequenceDiagram
         E-->>R: exchange markdown(stage=report)
     end
     R->>ST: append terminal records
-    R-->>O: RunnerUpdate(phase=settled)
-    O-->>C: query / stream exposes status through or APIs
+    R-->>U: phase=settled and terminal events
+    O-->>C: query / request stream expose status through or APIs
 ```
 
 ## Exchange Document Shape
@@ -267,13 +280,13 @@ flowchart TB
 
 ## 持久化和可观察性
 
-`RunnerStore` 继续使用 append-only JSONL runner record。变化点是 node output 如果是合法 exchange markdown，会以 `data_encoding=markdown` 存入 `StoredRunnerEvent.DataText`，而不是作为普通 JSON string 存入 `DataJSON`。
+`RunnerStore` 继续使用 append-only JSONL runner record。变化点是 node output 如果是合法 exchange markdown，会以 `data_encoding=markdown` 存入 `StoredRunnerEvent.DataText`，而不是作为普通 JSON string 存入 `DataJSON`。对外实时观察面则统一走 `StartRequest` 返回的 `Response.Stream`。
 
 ```mermaid
 flowchart LR
     E[ex output\nExchange Markdown] --> R[ru annotateExchangeOutput]
     R --> S[RunnerSnapshot.CompletedNodes]
-    R --> U[RunnerUpdate.Event.Data]
+    R --> U[Response.Stream Event.Delta]
     R --> P[RunnerStore JSONL\nDataEncoding=markdown\nDataText=raw markdown]
     O[or query/subscribe APIs] --> S
     O --> U
@@ -289,4 +302,4 @@ flowchart LR
 
 ## 一句话总结
 
-`or` 负责对外和控制面，`ru` 负责单个 plan 的生命周期和 DAG 调度，`ex` 负责单个 node 的执行；三者之间的数据面统一使用带 front matter 的 markdown exchange document，让持久化、human review 和 skill handoff 使用同一种格式。
+`or` 负责对外和控制面，并创建 request-scoped stream；`ru` 负责单个 plan 的生命周期和 DAG 调度；`ex` 负责单个 node 的执行；三者之间的数据面统一使用带 front matter 的 markdown exchange document，而 outward observability 统一走 `Response.Stream`，让持久化、human review、skill handoff 和终端观察尽量对齐同一种结构。

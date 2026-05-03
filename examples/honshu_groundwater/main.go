@@ -138,21 +138,11 @@ func runHonshuGroundwaterExample(ctx context.Context, cfg exampleConfig) (*runne
 	for _, dir := range skillDirs {
 		logger.Info("registering skill", "skill_dir", dir)
 	}
-	if err := orchestrator.AddSkillDirs(&llm.ConversationConfig{MaxSteps: 12}, skillDirs...); err != nil {
+	if err := orchestrator.AddSkillDirs(&llm.ConversationConfig{MaxSteps: 32}, skillDirs...); err != nil {
 		return nil, err
 	}
 	renderCfg := streamrender.DefaultConfig()
 	renderCfg.ExchangeDir = filepath.Join(artifactsDir, "exchanges")
-	renderCfg.HiddenEventTypes = []string{
-		streampkg.EventLLMReasoningDelta,
-		streampkg.EventLLMToolCallStarted,
-		streampkg.EventLLMToolCallDelta,
-		streampkg.EventLLMToolCallCompleted,
-		streampkg.EventLLMToolResultDelta,
-		streampkg.EventToolExecutionStarted,
-		streampkg.EventToolExecutionCompleted,
-		streampkg.EventToolExecutionFailed,
-	}
 	if file, ok := cfg.Out.(*os.File); ok {
 		if info, err := file.Stat(); err == nil {
 			renderCfg.Color = info.Mode()&os.ModeCharDevice != 0
@@ -198,6 +188,13 @@ func runHonshuGroundwaterExample(ctx context.Context, cfg exampleConfig) (*runne
 	logger.Info("runner settled", "runner_id", runnerID, "status", view.State.Status, "phase", view.Phase)
 	if err := closeEventStream(); err != nil {
 		return nil, err
+	}
+	if view.State.Status == runnerpkg.RunnerStatusFailed {
+		errText := strings.TrimSpace(view.State.Error)
+		if errText == "" {
+			errText = "no error context recorded"
+		}
+		return view, fmt.Errorf("runner settled with failure: %s", errText)
 	}
 	return view, nil
 }

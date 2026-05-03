@@ -21,8 +21,8 @@ import (
 // materialized node graph, the engine event loop that dispatches nodes by
 // dependency readiness, a Done signal for settle-detection, and a structured
 // output stream that publishes lifecycle and node events via
-// [Runner.SubscribeStream]. Callers construct a Runner with [New] and any
-// number of [Option]s.
+// [Runner.SubscribeStream]. Callers construct a bare Runner with [New] or
+// provide startup dependencies through [NewWithSetup].
 type Runner struct {
 	ctx    context.Context
 	id     string
@@ -81,19 +81,37 @@ type Runner struct {
 	replanReason    string
 }
 
-// New constructs a Runner configured by the provided options.
-//
-// Options configure logger, persistence store, and an optional [CoarsePlan]
-// with its materialized node graph. Without [WithPlan], the Runner operates
-// as a bare execution engine: callers drive it by invoking [Runner.AddNodes]
-// after [Runner.Start].
-func New(opts ...Option) *Runner {
+// New constructs a bare Runner with default startup inputs. Callers drive it by
+// invoking [Runner.AddNodes] after [Runner.Start].
+func New() *Runner {
+	return NewWithSetup(Setup{})
+}
+
+// NewWithSetup constructs a Runner from explicit startup inputs. When setup
+// includes a [CoarsePlan] and materialized nodes, [Runner.Start] auto-adds the
+// provided nodes to the execution engine and [Runner.View] surfaces the plan to
+// observers.
+func NewWithSetup(setup Setup) *Runner {
 	id := shortuuid.New()
+	ctx := setup.Context
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	logger := setup.Logger
+	if logger == nil {
+		logger = slog.Default()
+	}
 	r := &Runner{
-		ctx:               context.Background(),
+		ctx:               ctx,
 		id:                id,
-		logger:            slog.Default(),
+		logger:            logger,
+		store:             setup.Store,
 		eventStream:       streampkg.New(streampkg.Scope{RunnerID: id}),
+		plan:              CloneCoarsePlan(setup.Plan),
+		initialNodes:      cloneNodeMap(setup.Nodes),
+		plannerSkill:      setup.PlannerSkill,
+		skillSummaries:    append([]SkillSummary(nil), setup.SkillSummaries...),
+		planNodeBuilder:   setup.PlanNodeBuilder,
 		state:             RunnerState{Status: RunnerStatusPending},
 		phase:             PhaseCreated,
 		done:              make(chan struct{}),
@@ -102,9 +120,6 @@ func New(opts ...Option) *Runner {
 		queryCh:           make(chan chan<- RunnerSnapshot),
 		skillSessionStore: newMemorySessionStore(),
 		skillSessionIDs:   make(map[string]string),
-	}
-	for _, opt := range opts {
-		opt(r)
 	}
 	if r.plan != nil && r.plan.RunnerID == "" {
 		r.plan.RunnerID = r.id
@@ -127,6 +142,9 @@ func (r *Runner) runtimeContext(ctx context.Context) context.Context {
 // ID returns the stable identifier assigned to this Runner at creation time.
 func (r *Runner) ID() string { return r.id }
 
+// EventStream returns the runner-owned progress stream.
+func (r *Runner) EventStream() *streampkg.Stream { return r.eventStream }
+
 // State returns the current engine-level lifecycle snapshot.
 func (r *Runner) State() RunnerState {
 	r.stateMu.RLock()
@@ -142,7 +160,7 @@ func (r *Runner) Phase() RunnerPhase {
 }
 
 // Plan returns the [CoarsePlan] the runner was constructed with via
-// [WithPlan], or nil in bare mode.
+// [Setup.Plan], or nil in bare mode.
 func (r *Runner) Plan() *CoarsePlan {
 	r.stateMu.RLock()
 	defer r.stateMu.RUnlock()
@@ -156,7 +174,7 @@ func (r *Runner) PlannerSkill() *llm.Skill {
 	return r.plannerSkill
 }
 
-// Nodes returns the initial node graph supplied via [WithPlan], keyed by
+// Nodes returns the initial node graph supplied via [Setup.Nodes], keyed by
 // node ID, or nil in bare mode.
 func (r *Runner) Nodes() map[string]*Node {
 	r.stateMu.RLock()
@@ -260,7 +278,7 @@ func (r *Runner) GetSnapshot(ctx context.Context) (RunnerSnapshot, error) {
 // Start is the bare entry point: it transitions directly from [PhaseCreated]
 // into [PhaseExecuting], skipping [PhasePolishing] and [PhaseAwaitingReview].
 // Callers wiring the full phased lifecycle should use [Runner.StartPolish]
-// followed by [Runner.AcceptPolishedPlan]. When [WithPlan] supplied initial
+// followed by [Runner.AcceptPolishedPlan]. When [Setup.Nodes] supplied initial
 // nodes they are added before the engine event loop begins. The returned
 // error is non-nil only if the runner is not in [PhaseCreated], if it has
 // already been started, or if queueing initial nodes fails; the engine's
@@ -399,7 +417,7 @@ func (r *Runner) settle(engineErr error) {
 // The observer goroutine exits when the runner settles (closing done) or when
 // [Runner.ctx] is canceled. Runners constructed but never started or aborted
 // leak the goroutine the same way the previous design leaked an open done
-// channel; pass a cancelable context via [WithContext] to bound the lifetime.
+// channel; pass a cancelable context via [Setup.Context] to bound the lifetime.
 func (r *Runner) startSettleObserver() {
 	sub, err := r.eventStream.Subscribe(streampkg.Filter{
 		EventTypes: []string{streampkg.EventRunnerPhaseChanged},

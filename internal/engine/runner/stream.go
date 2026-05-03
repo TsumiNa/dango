@@ -83,7 +83,10 @@ func runnerEventStreamType(eventType EventType, status RunnerStatus) (string, st
 	case EventEngineIdle:
 		return streampkg.EventStatusProgress, streampkg.StatusCompleted, true
 	case EventEngineStopped:
-		return streampkg.EventStatusProgress, runnerStreamStatus(status), true
+		if status == RunnerStatusFailed {
+			return streampkg.EventStatusProgress, streampkg.StatusFailed, true
+		}
+		return streampkg.EventStatusProgress, streampkg.StatusCompleted, true
 	default:
 		return "", "", false
 	}

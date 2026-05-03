@@ -85,8 +85,15 @@ func (o *Orchestrator) StartRequest(ctx context.Context, req Request) (*Response
 	if !req.Priority.valid() {
 		return nil, fmt.Errorf("orchestrate: request priority must be between %d and %d", RequestPriorityDefault, RequestPriorityHighest)
 	}
-	eventStream := streampkg.New(streampkg.Scope{})
-	resp := &Response{Stream: eventStream}
+	requestStream := streampkg.New(streampkg.Scope{})
+	resp := &Response{Stream: requestStream}
+	var streamMerges []*streampkg.Merge
+	cleanupMerges := true
+	defer func() {
+		if cleanupMerges {
+			stopStreamMerges(streamMerges)
+		}
+	}()
 
 	o.mu.Lock()
 	o.configLocked = true
@@ -96,14 +103,19 @@ func (o *Orchestrator) StartRequest(ctx context.Context, req Request) (*Response
 	skillConfigs := cloneAddSkillConfigs(o.skills)
 	o.mu.Unlock()
 	envClient, envClientErr := o.resolveEnvClient()
-	runtimeSkill, err := runtimeOrchestrator(orchestratorSkill, envClient, envClientErr)
+	planningSkill, err := runtimeOrchestrator(orchestratorSkill, envClient, envClientErr, planningConversationConfig())
 	if err != nil {
 		if errors.Is(err, errOrchestratorSkillUnconfigured) {
 			return resp, &RequestRejectedError{Reason: rejectUnconfiguredPlan(&req, cloneSkillMap(skillConfigs), orchestratorSkill)}
 		}
 		return resp, err
 	}
-	emitEngineStreamEvent(ctx, eventStream,
+	if merge, err := mergeChildStream(ctx, requestStream, planningSkill.EventStream()); err != nil {
+		return resp, err
+	} else if merge != nil {
+		streamMerges = append(streamMerges, merge)
+	}
+	emitEngineStreamEvent(ctx, requestStream,
 		streamSourceOrchestrator(),
 		streampkg.EventStatusStarted,
 		streampkg.StatusRunning,
@@ -113,9 +125,9 @@ func (o *Orchestrator) StartRequest(ctx context.Context, req Request) (*Response
 	)
 
 	skillSummaries := collectSkillSummaries(cloneSkillMap(skillConfigs))
-	plan, reject, err := planWithOrchestrator(ctx, req, skillSummaries, runtimeSkill, eventStream)
+	plan, reject, err := planWithOrchestrator(ctx, req, skillSummaries, planningSkill, requestStream)
 	if err != nil {
-		emitEngineStreamEvent(ctx, eventStream,
+		emitEngineStreamEvent(ctx, requestStream,
 			streamSourceOrchestrator(),
 			streampkg.EventStatusFailed,
 			streampkg.StatusFailed,
@@ -126,7 +138,7 @@ func (o *Orchestrator) StartRequest(ctx context.Context, req Request) (*Response
 		return resp, err
 	}
 	if reject != nil {
-		emitEngineStreamEvent(ctx, eventStream,
+		emitEngineStreamEvent(ctx, requestStream,
 			streamSourceOrchestrator(),
 			streampkg.EventStatusFailed,
 			streampkg.StatusFailed,
@@ -139,13 +151,27 @@ func (o *Orchestrator) StartRequest(ctx context.Context, req Request) (*Response
 	if plan == nil {
 		return resp, fmt.Errorf("orchestrate: planner returned neither a plan nor a reject reason")
 	}
-
-	runner, err := newRunnerFromPlan(ctx, logger, runnerStore, req, eventStream, plan, skillConfigs, runtimeSkill, skillSummaries)
+	plannerSkill, err := bindOrchestratorSkillWithConfig(orchestratorSkill, planningSkill.Client(), runnerPlannerConversationConfig())
 	if err != nil {
 		return resp, err
 	}
+	if merge, err := mergeChildStream(ctx, requestStream, plannerSkill.EventStream()); err != nil {
+		return resp, err
+	} else if merge != nil {
+		streamMerges = append(streamMerges, merge)
+	}
+
+	runner, err := newRunnerFromPlan(ctx, logger, runnerStore, req, plan, skillConfigs, plannerSkill, skillSummaries)
+	if err != nil {
+		return resp, err
+	}
+	if merge, err := mergeChildStream(ctx, requestStream, runner.EventStream()); err != nil {
+		return resp, err
+	} else if merge != nil {
+		streamMerges = append(streamMerges, merge)
+	}
 	runnerID := runner.ID()
-	emitEngineStreamEvent(ctx, eventStream,
+	emitEngineStreamEvent(ctx, requestStream,
 		streamSourceOrchestrator(),
 		streampkg.EventStatusProgress,
 		streampkg.StatusRunning,
@@ -158,10 +184,11 @@ func (o *Orchestrator) StartRequest(ctx context.Context, req Request) (*Response
 	o.runners[runnerID] = runner
 	o.mu.Unlock()
 
-	go o.watchRunnerDone(runner)
 	if err := o.submitManagedRunner(ctx, runner, req.Priority); err != nil {
 		return resp, err
 	}
+	cleanupMerges = false
+	go o.watchRunnerDone(runner)
 	resp.RunnerID = runnerID
 	return resp, nil
 }
@@ -188,27 +215,46 @@ func emitEngineStreamEvent(ctx context.Context, eventStream *streampkg.Stream, s
 	})
 }
 
-func newRunnerFromPlan(ctx context.Context, logger *slog.Logger, store runnerpkg.RunnerStore, req Request, eventStream *streampkg.Stream, plan *CoarsePlan, skills map[string]AddSkillConfig, plannerSkill *llm.Skill, skillSummaries []runnerpkg.SkillSummary) (*runnerpkg.Runner, error) {
-	nodes, err := buildPlanNodes(logger, req, eventStream, plan, skills)
+func mergeChildStream(ctx context.Context, downstream *streampkg.Stream, upstream *streampkg.Stream) (*streampkg.Merge, error) {
+	if downstream == nil || upstream == nil {
+		return nil, nil
+	}
+	merge, err := downstream.MergeFrom(ctx, upstream, streampkg.Filter{}, streampkg.WithSubscriberBuffer(4096))
+	if err != nil {
+		return nil, fmt.Errorf("orchestrate: merge child stream: %w", err)
+	}
+	return merge, nil
+}
+
+func stopStreamMerges(merges []*streampkg.Merge) {
+	for _, merge := range merges {
+		if merge != nil {
+			merge.Stop()
+		}
+	}
+}
+
+func newRunnerFromPlan(ctx context.Context, logger *slog.Logger, store runnerpkg.RunnerStore, req Request, plan *CoarsePlan, skills map[string]AddSkillConfig, plannerSkill *llm.Skill, skillSummaries []runnerpkg.SkillSummary) (*runnerpkg.Runner, error) {
+	nodes, err := buildPlanNodes(logger, req, plan, skills)
 	if err != nil {
 		return nil, err
 	}
-	return runnerpkg.New(
-		runnerpkg.WithContext(ctx),
-		runnerpkg.WithLogger(logger),
-		runnerpkg.WithStore(store),
-		runnerpkg.WithStream(eventStream),
-		runnerpkg.WithPlan(plan, nodes),
-		runnerpkg.WithPlannerSkill(plannerSkill),
-		runnerpkg.WithSkillSummaries(skillSummaries),
-		runnerpkg.WithPlanNodeBuilder(func(replanned *runnerpkg.CoarsePlan) (map[string]*runnerpkg.Node, error) {
+	return runnerpkg.NewWithSetup(runnerpkg.Setup{
+		Context:        ctx,
+		Logger:         logger,
+		Store:          store,
+		Plan:           plan,
+		Nodes:          nodes,
+		PlannerSkill:   plannerSkill,
+		SkillSummaries: skillSummaries,
+		PlanNodeBuilder: func(replanned *runnerpkg.CoarsePlan) (map[string]*runnerpkg.Node, error) {
 			request := Request{Input: replanned.Request, ArtifactsDir: req.ArtifactsDir}
-			return buildPlanNodes(logger, request, eventStream, replanned, skills)
-		}),
-	), nil
+			return buildPlanNodes(logger, request, replanned, skills)
+		},
+	}), nil
 }
 
-func buildPlanNodes(logger *slog.Logger, req Request, eventStream *streampkg.Stream, plan *CoarsePlan, skills map[string]AddSkillConfig) (map[string]*runnerpkg.Node, error) {
+func buildPlanNodes(logger *slog.Logger, req Request, plan *CoarsePlan, skills map[string]AddSkillConfig) (map[string]*runnerpkg.Node, error) {
 	if len(plan.Nodes) == 0 {
 		return nil, fmt.Errorf("orchestrate: coarse plan must contain at least one node")
 	}
@@ -232,6 +278,7 @@ func buildPlanNodes(logger *slog.Logger, req Request, eventStream *streampkg.Str
 		planner := &ExecutionPlanner{
 			id:              step.ID,
 			TaskDescription: step.TaskDescription,
+			SourceInput:     req.Input,
 			ArtifactsDir:    req.ArtifactsDir,
 		}
 		if planner.TaskDescription == "" {
@@ -247,7 +294,7 @@ func buildPlanNodes(logger *slog.Logger, req Request, eventStream *streampkg.Str
 				return nil, fmt.Errorf("orchestrate: configure artifacts dir for node %q: %w", step.ID, err)
 			}
 		}
-		convCfg := conversationConfigForNode(skillCfg.Config, eventStream, step.ID, step.SkillName)
+		convCfg := conversationConfigForNode(skillCfg.Config, step.ID, step.SkillName)
 		executor, err := NewExecutor(logger, skill, skillCfg.Client, convCfg, planner)
 		if err != nil {
 			return nil, fmt.Errorf("orchestrate: build executor for node %q: %w", step.ID, err)
@@ -275,15 +322,12 @@ func buildPlanNodes(logger *slog.Logger, req Request, eventStream *streampkg.Str
 	return nodes, nil
 }
 
-func conversationConfigForNode(cfg *llm.ConversationConfig, eventStream *streampkg.Stream, nodeID string, skillName string) *llm.ConversationConfig {
+func conversationConfigForNode(cfg *llm.ConversationConfig, nodeID string, skillName string) *llm.ConversationConfig {
 	out := cloneConversationConfig(cfg)
-	if eventStream == nil {
-		return out
-	}
 	if out == nil {
 		out = &llm.ConversationConfig{}
 	}
-	out.Stream = eventStream
+	out.StreamEvents = true
 	out.StreamSource = streampkg.Source{Layer: "skill", ID: skillName, ParentID: nodeID}
 	out.StreamScope = streampkg.Scope{NodeID: nodeID}
 	out.StreamMetadata = map[string]any{

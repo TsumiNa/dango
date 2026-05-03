@@ -193,7 +193,7 @@ func TestStreamCloseClosesSubscribersAndRejectsUse(t *testing.T) {
 
 func TestStreamStoreAppendPrecedesDelivery(t *testing.T) {
 	store := &recordingStore{}
-	s := New(Scope{}, WithStore(store))
+	s := NewWithSetup(Scope{}, Setup{Store: store})
 	t.Cleanup(s.Close)
 
 	sub, err := s.Subscribe(Filter{})
@@ -223,7 +223,7 @@ func TestStreamStoreAppendPrecedesDelivery(t *testing.T) {
 
 func TestStreamSubscribeLoadsReplayFromStoreBeyondBuffer(t *testing.T) {
 	store := &recordingStore{}
-	s := New(Scope{RequestID: "req_store"}, WithStore(store), WithBufferLimit(1))
+	s := NewWithSetup(Scope{RequestID: "req_store"}, Setup{Store: store, BufferLimit: 1})
 	t.Cleanup(s.Close)
 
 	emit := func(eventType string, delta string) {
@@ -271,7 +271,7 @@ func TestStreamSubscribeLoadsReplayFromStoreBeyondBuffer(t *testing.T) {
 
 func TestStreamSubscribeReplayLastLoadsFromStoreWhenBufferDisabled(t *testing.T) {
 	store := &recordingStore{}
-	s := New(Scope{RunnerID: "run_store"}, WithStore(store), WithBufferLimit(0))
+	s := NewWithSetup(Scope{RunnerID: "run_store"}, Setup{Store: store, DisableBuffer: true})
 	t.Cleanup(s.Close)
 
 	for _, delta := range []string{`"one"`, `"two"`, `"three"`} {
@@ -309,7 +309,7 @@ func TestStreamSubscribeReplayLastLoadsFromStoreWhenBufferDisabled(t *testing.T)
 
 func TestStreamSubscribeReturnsStoreLoadError(t *testing.T) {
 	store := &recordingStore{loadErr: errors.New("boom")}
-	s := New(Scope{}, WithStore(store), WithBufferLimit(0))
+	s := NewWithSetup(Scope{}, Setup{Store: store, DisableBuffer: true})
 	t.Cleanup(s.Close)
 
 	if err := s.Emit(t.Context(), Event{

@@ -6,11 +6,16 @@ import (
 	"sync"
 	"time"
 
+	streampkg "github.com/tsumina/dango/internal/engine/stream"
 	"github.com/tsumina/dango/internal/llm"
 )
 
 type skillBinder interface {
 	BindForRunner(sessID *string, accessibleDirs []string, sessStores ...llm.SessionStore) (string, error)
+}
+
+type eventStreamProvider interface {
+	EventStream() *streampkg.Stream
 }
 
 type memorySessionStore struct {
@@ -142,7 +147,7 @@ func (r *Runner) prepareNodeExecutor(id string, executor Executor, accessibleDir
 
 	binder, ok := executor.(skillBinder)
 	if !ok {
-		return nil
+		return r.mergeExecutorStream(id, executor)
 	}
 	boundSessionID, err := binder.BindForRunner(sessionID, accessibleDirs, r.skillSessionStore)
 	if err != nil {
@@ -150,6 +155,27 @@ func (r *Runner) prepareNodeExecutor(id string, executor Executor, accessibleDir
 	}
 	if boundSessionID != "" {
 		r.skillSessionIDs[id] = boundSessionID
+	}
+	return r.mergeExecutorStream(id, executor)
+}
+
+func (r *Runner) mergeExecutorStream(id string, executor Executor) error {
+	provider, ok := executor.(eventStreamProvider)
+	if !ok {
+		return nil
+	}
+	upstream := provider.EventStream()
+	if upstream == nil {
+		return nil
+	}
+	_, err := r.eventStream.MergeFrom(
+		r.runtimeContext(context.Background()),
+		upstream,
+		streampkg.Filter{},
+		streampkg.WithSubscriberBuffer(4096),
+	)
+	if err != nil {
+		return fmt.Errorf("merge node %q stream: %w", id, err)
 	}
 	return nil
 }

@@ -2,55 +2,63 @@
 name: elevation_lookup
 description: Parse Japanese groundwater observation JSON and enrich each site with elevation data from a location lookup API or deterministic fallback.
 ---
-You enrich groundwater observation records with elevation.
+You enrich groundwater observation records with elevation, then hand off
+compact structured JSON for downstream modeling.
 
 ## Polish plan behavior
 
-When asked to polish a plan, do not call the elevation tool yet and do not
-produce final enriched data. Review the assigned task and return a Dango
-exchange markdown document for the orchestrator that states:
+Polish is feasibility review only — do not call tools. Return an exchange
+markdown document for orchestrator review that states:
 
-- the input must contain messy JSON with site coordinates and groundwater
+- the input must be messy JSON containing site coordinates and groundwater
   level measurements;
-- execution will parse observations and call the deterministic in-skill
-  elevation API shim for every usable coordinate;
-- the handoff will be compact structured JSON for downstream modeling.
+- execution will run `scripts/enrich.py` which parses observations and calls
+  the deterministic in-skill elevation API shim for every usable coordinate;
+- the handoff will be a JSON object suitable for downstream modeling.
 
 If the task is only about modeling, PDF rendering, or report formatting, say
-that this skill should not be selected.
-
-## Python environment
-
-Run Python from this skill directory with `uv run python ...`. For the common
-entrypoint, use:
-
-```sh
-uv run python scripts/enrich.py
-```
-
-When invoking from the standard bash command tool, commands run in the temp
-playground, so use the source workspace path from the runtime instructions:
-
-```sh
-uv --directory <source workspace> run python scripts/enrich.py
-```
-
-When a `.venv` has already been created, `.venv/bin/python` is also a usable
-interpreter for ad-hoc glue code in this skill environment.
+this skill should not be selected.
 
 ## Execution behavior
 
-Use this skill's local uv/Python environment when site coordinates are present.
-This skill intentionally uses only the Python standard library, so it does not
-package a local helper module or declare external dependencies. `scripts/enrich.py`
-is a ready-made entrypoint for the common path, but it is not the only allowed
-approach. If the assigned task or upstream exchange markdown needs a different
-transformation, write small glue code in the skill playground and run it with
-the command tool.
+The canonical execution is **one** bash call that runs `scripts/enrich.py`
+with the messy JSON on stdin from the source workspace. Do not list this
+skill's directory, re-read SKILL.md, or read enrich.py — they are already
+loaded.
 
-Keep the output structured and compact so downstream modeling skills can
-consume it. Return a Dango exchange markdown document.
+Use this exact command (substitute `<source workspace>` from the Workspace
+access block above and `<messy JSON>` with the JSON the user supplied or the
+upstream handoff):
 
-Use the standard skill command/file tools to run Python or ad-hoc glue code.
-Do not depend on an example entrypoint registering a custom elevation lookup
-tool; this skill owns that behavior.
+```sh
+uv --directory <source workspace> run python scripts/enrich.py <<'DANGO_JSON'
+{ "observations_json": <messy JSON as a JSON string> }
+DANGO_JSON
+```
+
+`scripts/enrich.py` reads `{"observations_json": "<raw text>"}` from stdin and
+prints the enriched payload as JSON to stdout:
+
+```
+{
+  "datum": "...",
+  "elevation_source": "...",
+  "observation_n": <int>,
+  "observations": [{"site_id", "latitude", "longitude", "elevation_m",
+                    "water_level_m_bgl", "estimated", "notes",
+                    "source_water_text", "prefecture"}, ...]
+}
+```
+
+The script already handles every variant in the messy input (mixed key names,
+nested coordinate maps, "N/E/S/W" suffixes, level_cm_bgl, 水位, etc.).
+**Do not write ad-hoc parsing glue code** unless the task description
+explicitly demands a transformation `enrich.py` cannot produce.
+
+In your exchange markdown:
+
+- Paste the script's stdout JSON inside a ```json fenced block as the Handoff
+  body. Downstream skills extract it from there.
+- Set the front matter `resources` to any files you wrote to the artifacts
+  root (the canonical run does not need to write files; passing JSON inline
+  is enough).

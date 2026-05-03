@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"sort"
+	"strings"
 
 	runnerpkg "github.com/tsumina/dango/internal/engine/runner"
 	streampkg "github.com/tsumina/dango/internal/engine/stream"
@@ -33,7 +34,7 @@ type orchestratorSkillPlanPrompt struct {
 	} `json:"data"`
 }
 
-func planWithOrchestrator(ctx context.Context, req Request, skills []runnerpkg.SkillSummary, runtimeSkill *llm.Skill, eventStream *streampkg.Stream) (*CoarsePlan, *RejectReason, error) {
+func planWithOrchestrator(ctx context.Context, req Request, skills []runnerpkg.SkillSummary, runtimeSkill *llm.Skill, requestStream *streampkg.Stream) (*CoarsePlan, *RejectReason, error) {
 	prompt, err := marshalOrchestratorPlanningInput(req.Input, skills)
 	if err != nil {
 		return nil, nil, fmt.Errorf("orchestrate: marshal planner input: %w", err)
@@ -43,17 +44,19 @@ func planWithOrchestrator(ctx context.Context, req Request, skills []runnerpkg.S
 	if err != nil {
 		return nil, nil, err
 	}
-	if raw != "" {
-		emitEngineStreamEvent(ctx, eventStream,
+	if exchange, err := planningExchangeMarkdown(req.Input, runtimeSkill, raw); err != nil {
+		return nil, nil, fmt.Errorf("orchestrate: build planning exchange: %w", err)
+	} else if exchange != "" {
+		emitEngineStreamEvent(ctx, requestStream,
 			streamSourceOrchestrator(),
 			streampkg.EventLLMOutputDelta,
 			streampkg.StatusCompleted,
-			raw,
+			exchange,
 			streampkg.Scope{},
 			map[string]any{"stage": "planning"},
 		)
 	}
-	emitEngineStreamEvent(ctx, eventStream,
+	emitEngineStreamEvent(ctx, requestStream,
 		streamSourceOrchestrator(),
 		streampkg.EventStatusCompleted,
 		streampkg.StatusCompleted,
@@ -66,6 +69,21 @@ func planWithOrchestrator(ctx context.Context, req Request, skills []runnerpkg.S
 		return nil, nil, fmt.Errorf("orchestrate: %w", err)
 	}
 	return plan, reject, nil
+}
+
+func planningExchangeMarkdown(request string, runtimeSkill *llm.Skill, raw string) (string, error) {
+	if strings.TrimSpace(raw) == "" {
+		return "", nil
+	}
+	doc := runnerpkg.ExchangeDocument{
+		Stage:           runnerpkg.ExchangeStage("planning"),
+		SkillName:       "orchestrator",
+		TaskDescription: request,
+		Memo:            "Initial orchestrator planning result.",
+		Reasoning:       latestReasoning(runtimeSkill),
+		Handoff:         raw,
+	}
+	return doc.Markdown()
 }
 
 func marshalOrchestratorPlanningInput(request string, skills []runnerpkg.SkillSummary) (string, error) {
@@ -96,24 +114,47 @@ func parseOrchestratorPlanningOutput(raw string) (*runnerpkg.CoarsePlan, *Reject
 	return out.Plan, out.Reject, nil
 }
 
-func runtimeOrchestrator(sk *llm.Skill, envClient *llm.Client, envClientErr error) (*llm.Skill, error) {
+func runtimeOrchestrator(sk *llm.Skill, envClient *llm.Client, envClientErr error, cfg *llm.ConversationConfig) (*llm.Skill, error) {
 	if sk == nil {
 		return nil, errOrchestratorSkillUnconfigured
 	}
 	if sk.Client() != nil {
-		return bindOrchestratorSkill(sk, sk.Client())
+		return bindOrchestratorSkillWithConfig(sk, sk.Client(), cfg)
 	}
 	if envClientErr == nil && envClient != nil {
-		return bindOrchestratorSkill(sk, envClient)
+		return bindOrchestratorSkillWithConfig(sk, envClient, cfg)
 	}
 	return nil, errOrchestratorSkillUnconfigured
 }
 
 func bindOrchestratorSkill(sk *llm.Skill, client *llm.Client) (*llm.Skill, error) {
+	return bindOrchestratorSkillWithConfig(sk, client, nil)
+}
+
+func bindOrchestratorSkillWithConfig(sk *llm.Skill, client *llm.Client, cfg *llm.ConversationConfig) (*llm.Skill, error) {
 	if sk.Client() == client && sk.Conversation() != nil {
-		return sk, nil
+		if cfg == nil {
+			return sk, nil
+		}
 	}
-	return sk.Bind(client, nil, nil)
+	return sk.Bind(client, cfg, nil)
+}
+
+func planningConversationConfig() *llm.ConversationConfig {
+	return &llm.ConversationConfig{
+		StreamEvents: true,
+		StreamSource: streamSourceOrchestrator(),
+		StreamMetadata: map[string]any{
+			"stage": "planning",
+		},
+	}
+}
+
+func runnerPlannerConversationConfig() *llm.ConversationConfig {
+	return &llm.ConversationConfig{
+		StreamEvents: true,
+		StreamSource: streamSourceOrchestrator(),
+	}
 }
 
 func collectSkillSummaries(skills map[string]*llm.Skill) []runnerpkg.SkillSummary {

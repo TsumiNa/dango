@@ -156,17 +156,17 @@ func TestClient_Stream_EmitsConfiguredStreamEvents(t *testing.T) {
 	}))
 	t.Cleanup(srv.Close)
 
-	eventStream := streampkg.New(streampkg.Scope{RequestID: "req_stream"})
+	c := testClient(srv.URL)
+	conv := mustNewConversation(t, c, "sys", nil, &ConversationConfig{
+		StreamEvents: true,
+		StreamSource: streampkg.Source{Layer: "skill", ID: "stream_skill"},
+		StreamScope:  streampkg.Scope{RequestID: "req_stream", NodeID: "node_stream"},
+	})
+	eventStream := conv.EventStream()
 	sub, err := eventStream.Subscribe(streampkg.Filter{EventTypes: []string{streampkg.EventLLMOutputDelta}}, streampkg.WithSubscriberBuffer(8))
 	if err != nil {
 		t.Fatalf("Subscribe: %v", err)
 	}
-	c := testClient(srv.URL)
-	conv := mustNewConversation(t, c, "sys", nil, &ConversationConfig{
-		Stream:       eventStream,
-		StreamSource: streampkg.Source{Layer: "skill", ID: "stream_skill"},
-		StreamScope:  streampkg.Scope{NodeID: "node_stream"},
-	})
 	conv.AppendUser("hi")
 
 	ch, err := conv.Stream(t.Context(), "")

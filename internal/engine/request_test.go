@@ -5,9 +5,11 @@ import (
 	"encoding/json"
 	"errors"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
+	runnerpkg "github.com/tsumina/dango/internal/engine/runner"
 	streampkg "github.com/tsumina/dango/internal/engine/stream"
 	"github.com/tsumina/dango/internal/llm"
 )
@@ -127,6 +129,12 @@ func TestStartRequest_BuildsRunnerFromPlanAndReturnsID(t *testing.T) {
 	if got := runExecutor.Planner().TaskDescription; got != "Execute the approved outline." {
 		t.Errorf("run task description = %q, want %q", got, "Execute the approved outline.")
 	}
+	if got := draftExecutor.Planner().SourceInput; got != "build a report" {
+		t.Errorf("draft source input = %q, want original request", got)
+	}
+	if got := runExecutor.Planner().SourceInput; got != "build a report" {
+		t.Errorf("run source input = %q, want original request", got)
+	}
 	if got := runExecutor.Planner().ArtifactsDir; got != artifactsDir {
 		t.Errorf("run artifacts dir = %q, want %q", got, artifactsDir)
 	}
@@ -235,6 +243,86 @@ func TestStartRequest_ReturnsReplayableRequestStream(t *testing.T) {
 	}
 }
 
+func TestStartRequest_StreamsPlannerReasoningAndPlanningExchange(t *testing.T) {
+	clearLLMEnv(t)
+	o := newOrchestrator(testLogger)
+	mustAddSkills(t, o, newTestSkillConfig(t, "single", "Single-step runner.", nil))
+	planOutput := mustPlanJSON(t, &CoarsePlan{
+		Request: "run a single node",
+		Nodes: []CoarsePlanNode{{
+			ID:              "only",
+			SkillName:       "single",
+			TaskDescription: "Run the only node.",
+		}},
+	})
+	if err := o.SetOrchestratorSkill(bindTestOrchestratorSkillWithReasoning(t, "checked the available skills and request routing", planOutput, mustReviewJSON(t, true, ""))); err != nil {
+		t.Fatalf("SetOrchestratorSkill(test planner): %v", err)
+	}
+
+	resp, err := o.StartRequest(context.Background(), Request{Input: "run a single node"})
+	if err != nil {
+		t.Fatalf("StartRequest: %v", err)
+	}
+	sub, err := resp.Stream.Subscribe(streampkg.Filter{
+		EventTypes: []string{
+			streampkg.EventLLMReasoningDelta,
+			streampkg.EventLLMOutputDelta,
+		},
+	}, streampkg.WithSubscriberBuffer(64))
+	if err != nil {
+		t.Fatalf("Subscribe: %v", err)
+	}
+	defer sub.Cancel()
+
+	deadline := time.Now().Add(2 * time.Second)
+	var sawReasoning, sawPlanningExchange bool
+	for time.Now().Before(deadline) && !(sawReasoning && sawPlanningExchange) {
+		readCtx, cancel := context.WithTimeout(context.Background(), time.Until(deadline))
+		event, ok, err := sub.Next(readCtx)
+		cancel()
+		if err != nil || !ok {
+			break
+		}
+		if event.From.Layer != "orchestrator" {
+			continue
+		}
+		var delta string
+		if err := json.Unmarshal(event.Delta, &delta); err != nil {
+			continue
+		}
+		switch event.EventType {
+		case streampkg.EventLLMReasoningDelta:
+			if strings.Contains(delta, "checked the available skills") {
+				sawReasoning = true
+			}
+		case streampkg.EventLLMOutputDelta:
+			doc, err := runnerpkg.ParseExchangeMarkdown(delta)
+			if err != nil {
+				continue
+			}
+			if doc.Stage == runnerpkg.ExchangeStage("planning") && doc.SkillName == "orchestrator" && doc.TaskDescription == "run a single node" && doc.Handoff == planOutput && strings.Contains(doc.Reasoning, "checked the available skills") {
+				sawPlanningExchange = true
+			}
+		}
+	}
+	if !sawReasoning {
+		t.Fatal("missing planner reasoning stream event from orchestrator planning")
+	}
+	if !sawPlanningExchange {
+		t.Fatal("missing planning exchange markdown stream event from orchestrator planning")
+	}
+
+	managedRunner, err := o.Runner(resp.RunnerID)
+	if err != nil {
+		t.Fatalf("Runner: %v", err)
+	}
+	waitCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	if err := managedRunner.Wait(waitCtx); err != nil {
+		t.Fatalf("runner Wait: %v", err)
+	}
+}
+
 func TestStartRequest_EmitsRequestStreamEvents(t *testing.T) {
 	clearLLMEnv(t)
 	o := newOrchestrator(testLogger)
@@ -263,16 +351,12 @@ func TestStartRequest_EmitsRequestStreamEvents(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Subscribe: %v", err)
 	}
+	defer sub.Cancel()
+	defer resp.Stream.Close()
 	managedRunner, err := o.Runner(runnerID)
 	if err != nil {
 		t.Fatalf("Runner: %v", err)
 	}
-	waitCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-	defer cancel()
-	if err := managedRunner.Wait(waitCtx); err != nil {
-		t.Fatalf("runner Wait: %v", err)
-	}
-	resp.Stream.Close()
 
 	var (
 		sawPlanText bool
@@ -281,7 +365,17 @@ func TestStartRequest_EmitsRequestStreamEvents(t *testing.T) {
 		sawNodeDone bool
 		sawExecutor bool
 	)
-	for event := range sub.Events() {
+	readCtx, cancelRead := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancelRead()
+	for !(sawPlanText && sawCreated && sawSettled && sawNodeDone && sawExecutor) {
+		event, ok, err := sub.Next(readCtx)
+		if err != nil {
+			t.Fatalf("request stream event: %v", err)
+		}
+		if !ok {
+			t.Fatalf("request stream closed before expected events: text=%v created=%v settled=%v nodeDone=%v executor=%v",
+				sawPlanText, sawCreated, sawSettled, sawNodeDone, sawExecutor)
+		}
 		var deltaText string
 		_ = json.Unmarshal(event.Delta, &deltaText)
 		switch event.EventType {
@@ -308,6 +402,11 @@ func TestStartRequest_EmitsRequestStreamEvents(t *testing.T) {
 				sawExecutor = true
 			}
 		}
+	}
+	waitCtx, cancelWait := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancelWait()
+	if err := managedRunner.Wait(waitCtx); err != nil {
+		t.Fatalf("runner Wait: %v", err)
 	}
 	if !sawPlanText || !sawCreated || !sawSettled || !sawNodeDone || !sawExecutor {
 		t.Fatalf("missing stream events: text=%v created=%v settled=%v nodeDone=%v executor=%v",
@@ -352,10 +451,10 @@ func TestStartRequest_CreatesReplayableRunnerStream(t *testing.T) {
 	}
 	defer sub.Cancel()
 
-	var sawCreated, sawSettled, sawNodeDone bool
+	var sawSettled, sawNodeDone bool
 	readCtx, cancelRead := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancelRead()
-	for !(sawCreated && sawSettled && sawNodeDone) {
+	for !(sawSettled && sawNodeDone) {
 		event, ok, err := sub.Next(readCtx)
 		if err != nil {
 			t.Fatalf("Next: %v", err)
@@ -364,10 +463,6 @@ func TestStartRequest_CreatesReplayableRunnerStream(t *testing.T) {
 			t.Fatal("stream closed before replaying expected events")
 		}
 		switch event.EventType {
-		case streampkg.EventStatusProgress:
-			if event.From.Layer == "orchestrator" && event.Scope.RunnerID == runnerID {
-				sawCreated = true
-			}
 		case streampkg.EventRunnerPhaseChanged:
 			var delta map[string]string
 			_ = json.Unmarshal(event.Delta, &delta)

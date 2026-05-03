@@ -92,6 +92,54 @@ func TestNormalizeExchangeMarkdownWrapsPlainTextWithDefaults(t *testing.T) {
 	}
 }
 
+func TestNormalizeExchangeMarkdownPreservesDraftSections(t *testing.T) {
+	raw := `---
+kind: dango_exchange
+status: ready
+resources:
+  - path: /tmp/predictions.csv
+    type: file
+---
+
+# Memo
+Ran the script.
+
+# Reasoning
+The output is ready.
+
+# Handoff
+Use the CSV downstream.`
+
+	normalized, err := NormalizeExchangeMarkdown(raw, ExchangeDocument{
+		Stage:     ExchangeStageExecute,
+		NodeID:    "node-1",
+		SkillName: "model",
+	})
+	if err != nil {
+		t.Fatalf("NormalizeExchangeMarkdown: %v", err)
+	}
+	parsed, err := ParseExchangeMarkdown(normalized)
+	if err != nil {
+		t.Fatalf("ParseExchangeMarkdown: %v", err)
+	}
+	if parsed.Kind != ExchangeDocumentKind || parsed.Version != ExchangeDocumentVersion || parsed.Stage != ExchangeStageExecute {
+		t.Fatalf("metadata = %+v, want canonical defaults", parsed)
+	}
+	if parsed.Memo != "Ran the script." || parsed.Reasoning != "The output is ready." || parsed.Handoff != "Use the CSV downstream." {
+		t.Fatalf("sections = memo %q reasoning %q handoff %q", parsed.Memo, parsed.Reasoning, parsed.Handoff)
+	}
+	if len(parsed.Resources) != 1 || parsed.Resources[0].Path != "/tmp/predictions.csv" {
+		t.Fatalf("resources = %+v, want draft resource preserved", parsed.Resources)
+	}
+}
+
+func TestLooksLikeExchangeMarkdownAcceptsDraftKind(t *testing.T) {
+	raw := "---\nkind: exchange\n---\n\n## Handoff\nDone."
+	if !LooksLikeExchangeMarkdown(raw) {
+		t.Fatal("LooksLikeExchangeMarkdown = false, want true")
+	}
+}
+
 func TestParseExchangeMarkdownRejectsWrongKind(t *testing.T) {
 	raw := "---\nkind: other\nversion: 1\nstage: execute\n---\n"
 	if _, err := ParseExchangeMarkdown(raw); err == nil {

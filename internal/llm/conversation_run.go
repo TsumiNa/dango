@@ -51,7 +51,7 @@ func (c *Conversation) Run(ctx context.Context, userInput string, effort Reasoni
 	c.AppendUser(userInput)
 
 	for step := 0; step < budget; step++ {
-		resp, err := c.Send(ctx, effort)
+		resp, err := c.runStep(ctx, effort)
 		if err != nil {
 			return "", fmt.Errorf("llm: run step %d: %w", step, err)
 		}
@@ -75,6 +75,13 @@ func (c *Conversation) Run(ctx context.Context, userInput string, effort Reasoni
 	err := fmt.Errorf("llm: run exceeded max steps (%d) without final response", budget)
 	c.emitLLMFailure(ctx, err, "run")
 	return "", err
+}
+
+func (c *Conversation) runStep(ctx context.Context, effort ReasoningEffort) (*Response, error) {
+	if c.eventStream == nil {
+		return c.Send(ctx, effort)
+	}
+	return c.streamResponse(ctx, effort, nil, true)
 }
 
 // dispatch executes a single function call against the registered

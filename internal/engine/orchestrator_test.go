@@ -587,8 +587,6 @@ func TestStartRunner_ForwardsStreamAndQueryState(t *testing.T) {
 	started := make(chan struct{})
 	release := make(chan struct{})
 
-	// Build the runner with an event stream so SubscribeRunnerStream works.
-	eventStream := streampkg.New(streampkg.Scope{})
 	plan := &CoarsePlan{
 		Request: "stream",
 		Nodes:   []CoarsePlanNode{{ID: "only", SkillName: "single", TaskDescription: "stream"}},
@@ -607,15 +605,15 @@ func TestStartRunner_ForwardsStreamAndQueryState(t *testing.T) {
 			},
 		},
 	}
-	managedRunner := runnerpkg.New(
-		runnerpkg.WithContext(context.Background()),
-		runnerpkg.WithLogger(testLogger),
-		runnerpkg.WithPlan(plan, nodes),
-		runnerpkg.WithPlannerSkill(bindTestOrchestratorSkill(t, mustReviewJSON(t, true, ""))),
-		runnerpkg.WithSkillSummaries([]runnerpkg.SkillSummary{{Name: "single", Description: "Single test skill."}}),
-		runnerpkg.WithPlanNodeBuilder(func(plan *runnerpkg.CoarsePlan) (map[string]*runnerpkg.Node, error) { return nodes, nil }),
-		runnerpkg.WithStream(eventStream),
-	)
+	managedRunner := runnerpkg.NewWithSetup(runnerpkg.Setup{
+		Context:         context.Background(),
+		Logger:          testLogger,
+		Plan:            plan,
+		Nodes:           nodes,
+		PlannerSkill:    bindTestOrchestratorSkill(t, mustReviewJSON(t, true, "")),
+		SkillSummaries:  []runnerpkg.SkillSummary{{Name: "single", Description: "Single test skill."}},
+		PlanNodeBuilder: func(plan *runnerpkg.CoarsePlan) (map[string]*runnerpkg.Node, error) { return nodes, nil },
+	})
 
 	o.mu.Lock()
 	o.runners[managedRunner.ID()] = managedRunner

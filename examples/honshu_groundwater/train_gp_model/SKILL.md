@@ -2,61 +2,67 @@
 name: train_gp_model
 description: Train a Gaussian-process-style groundwater model, create a prediction surface plot, and save prediction CSV artifacts for downstream analysis.
 ---
-You build a groundwater prediction model from enriched observations.
+You build a groundwater prediction model from enriched observations and
+produce CSV + SVG artifacts.
 
 ## Polish plan behavior
 
-When asked to polish a plan, do not train the model yet and do not create CSV
-or plot artifacts. Return a Dango exchange markdown document for orchestrator
-review that states:
+Polish is feasibility review only — do not call tools. Return an exchange
+markdown document for orchestrator review that states:
 
-- this skill requires upstream enriched observations containing latitude,
-  longitude, elevation, and `water_level_m_bgl`;
-- execution will fit a Gaussian process regression model through
-  `scikit-learn` using RBF and WhiteKernel components;
-- execution will create a prediction grid over Honshu, save prediction values
-  as CSV, and save a surface plot as SVG through `matplotlib`;
+- this skill needs upstream enriched observations with `latitude`,
+  `longitude`, `elevation_m`, and `water_level_m_bgl`;
+- execution will run `scripts/train.py` which fits a `scikit-learn`
+  `GaussianProcessRegressor` (RBF + WhiteKernel), saves predictions to CSV,
+  and saves a surface plot to SVG via `matplotlib`;
 - PDF output is out of scope unless the user explicitly asks for it.
 
 If elevation values are missing, recommend an upstream elevation enrichment
-step before this skill runs.
-
-## Python environment
-
-Run Python from this skill directory with `uv run python ...` so `scikit-learn`,
-`numpy`, and `matplotlib` are available. For the common entrypoint, use:
-
-```sh
-uv run python scripts/train.py
-```
-
-When invoking from the standard bash command tool, commands run in the temp
-playground, so use the source workspace path from the runtime instructions:
-
-```sh
-uv --directory <source workspace> run python scripts/train.py
-```
-
-When a `.venv` has already been created, `.venv/bin/python` is also a usable
-interpreter for ad-hoc glue code in this skill environment.
+step.
 
 ## Execution behavior
 
-Use this skill's local uv/Python environment with `scikit-learn`, `numpy`, and
-`matplotlib` to train the model. `scripts/train.py` is a ready-made entrypoint
-for the common path, but it is not the only allowed approach. Read the assigned
-task and upstream exchange markdown first; if the handoff shape requires
-different data cleanup, feature construction, plotting, or artifact layout,
-write small glue code in the skill playground, run it with the command tool,
-and call those installed libraries directly.
+The canonical execution is **one** bash call that runs `scripts/train.py`
+from the source workspace. Do not list this skill's directory, re-read
+SKILL.md, or read train.py — they are already loaded. Pass the upstream
+exchange markdown verbatim; the script extracts the JSON block itself.
 
-Prefer a CSV artifact for prediction values unless the user explicitly asks only
-for narrative output. Include artifact paths and validation notes in the
-handoff. Return a Dango exchange markdown document whose front matter includes
-`resources` entries for the generated CSV and SVG paths so the runner can make
-their containing directory available to downstream skills.
+Use this exact command (substitute `<source workspace>` and `<artifacts root>`
+from the prompt context, and `<parent markdown>` with the upstream exchange
+markdown body):
 
-When the execution prompt includes an artifacts root, create a skill-specific
-subdirectory under that root, or pass that subdirectory as `artifacts_dir` to
-`scripts/train.py`. Do not require the example entrypoint to provide a custom
-tool for this skill.
+```sh
+uv --directory <source workspace> run python scripts/train.py <<'DANGO_JSON'
+{
+  "parent_exchange": <parent markdown as a JSON string>,
+  "artifacts_dir":   "<artifacts root>/train_gp_model"
+}
+DANGO_JSON
+```
+
+`scripts/train.py` reads `{"parent_exchange": "...", "artifacts_dir": "..."}`
+from stdin and prints a JSON summary to stdout:
+
+```
+{
+  "model": "...", "kernel": "...",
+  "observation_count": <int>, "prediction_count": <int>,
+  "csv_path": "...", "plot_path": "...",
+  "resources": [{"path", "type", "description"}, ...],
+  "mean_predicted_water_level_m_bgl": <float>,
+  "validation_summary": "...",
+  "downstream_reminder": "..."
+}
+```
+
+`mkdir -p` for `artifacts_dir` is handled by the script. **Do not write
+ad-hoc training glue code** unless the task description requires a model or
+output shape `train.py` cannot produce.
+
+In your exchange markdown:
+
+- Paste the script's stdout JSON inside a ```json fenced block as the
+  Handoff body.
+- Copy the `resources` array from the script output into your front matter
+  `resources` so the runner exposes the CSV and SVG paths to downstream
+  skills.

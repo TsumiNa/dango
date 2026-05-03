@@ -29,14 +29,14 @@ func (s *Skill) BuiltinTools() ([]Tool, error) {
 	return tools, nil
 }
 
-// WithTools returns a fresh lightweight copy of s with tools appended to its
+// AddTools returns a fresh lightweight copy of s with tools appended to its
 // existing tool set. It must be called before the skill is bound.
-func (s *Skill) WithTools(tools ...Tool) (*Skill, error) {
+func (s *Skill) AddTools(tools ...Tool) (*Skill, error) {
 	if s == nil {
-		return nil, fmt.Errorf("skill: WithTools requires a non-nil skill")
+		return nil, fmt.Errorf("skill: AddTools requires a non-nil skill")
 	}
 	if s.conv != nil {
-		return nil, fmt.Errorf("skill: WithTools requires an unbound skill")
+		return nil, fmt.Errorf("skill: AddTools requires an unbound skill")
 	}
 	combined := append([]Tool(nil), s.tools...)
 	combined = append(combined, tools...)

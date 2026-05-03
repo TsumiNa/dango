@@ -11,10 +11,15 @@ import (
 	"path/filepath"
 	"strings"
 
+	runnerpkg "github.com/tsumina/dango/internal/engine/runner"
 	streampkg "github.com/tsumina/dango/internal/engine/stream"
 )
 
-const defaultMaxText = 240
+const (
+	defaultMaxText      = 320
+	defaultRunnerIDClip = 8
+	reasoningFlushBytes = 240
+)
 
 // Config controls how stream events are rendered for terminal output.
 type Config struct {
@@ -26,7 +31,7 @@ type Config struct {
 	// HiddenEventTypes suppresses noisy event types after Filter matching.
 	HiddenEventTypes []string
 
-	// Color enables ANSI color in labels and status markers.
+	// Color enables ANSI color in labels, status icons, and key markers.
 	Color bool
 
 	// MaxText caps long delta fields. Zero uses a conservative default.
@@ -52,23 +57,40 @@ type Config struct {
 	ImageMaxBytes int
 }
 
-// DefaultConfig returns a compact, deterministic renderer configuration.
+// DefaultConfig returns a compact, deterministic renderer configuration that
+// surfaces orchestrator planning, runner phases, executor stages, skill memos,
+// and LLM reasoning/output deltas. Low-level tool noise is suppressed.
 func DefaultConfig() Config {
 	return Config{
-		MaxText:          defaultMaxText,
-		ProgressFrames:   []string{"|", "/", "-", "\\"},
-		DedupeRepeated:   true,
-		ImageMaxBytes:    2 << 20,
-		HiddenEventTypes: nil,
+		MaxText:        defaultMaxText,
+		ProgressFrames: []string{"|", "/", "-", "\\"},
+		DedupeRepeated: true,
+		ImageMaxBytes:  2 << 20,
+		HiddenEventTypes: []string{
+			streampkg.EventLLMToolCallStarted,
+			streampkg.EventLLMToolCallDelta,
+			streampkg.EventLLMToolCallCompleted,
+			streampkg.EventLLMToolResultDelta,
+			streampkg.EventToolExecutionStarted,
+			streampkg.EventToolExecutionCompleted,
+			streampkg.EventToolExecutionFailed,
+		},
 	}
 }
 
 // Renderer writes compact terminal lines for stream events.
 type Renderer struct {
-	out      io.Writer
-	cfg      Config
-	lastLine string
-	frame    int
+	out               io.Writer
+	cfg               Config
+	lastLine          string
+	frame             int
+	runningOutputSeen map[string]bool
+	reasoningBuffers  map[string]*runningTextBuffer
+}
+
+type runningTextBuffer struct {
+	text    string
+	emitted int
 }
 
 // New creates a Renderer that writes to out. A nil writer discards output.
@@ -85,7 +107,12 @@ func New(out io.Writer, cfg Config) *Renderer {
 	if cfg.ImageMaxBytes <= 0 {
 		cfg.ImageMaxBytes = 2 << 20
 	}
-	return &Renderer{out: out, cfg: cfg}
+	return &Renderer{
+		out:               out,
+		cfg:               cfg,
+		runningOutputSeen: map[string]bool{},
+		reasoningBuffers:  map[string]*runningTextBuffer{},
+	}
 }
 
 // RenderSubscription drains sub until it closes or ctx is canceled.
@@ -130,18 +157,19 @@ func (r *Renderer) FormatEvent(event streampkg.Event) string {
 		return ""
 	}
 	values := deltaMap(event)
-	line := r.formatKnownEvent(event, values)
-	if line == "" && knownEventType(event.EventType) {
+	body := r.formatKnownEvent(event, values)
+	if body == "" && knownEventType(event.EventType) {
 		return ""
 	}
-	if line == "" {
-		line = r.formatGenericEvent(event, values)
+	if body == "" {
+		body = r.formatGenericEvent(event, values)
 	}
-	if line == "" {
+	if body == "" {
 		return ""
 	}
+	line := r.composeLine(event, body)
 	if event.Status == streampkg.StatusRunning {
-		line += " " + r.nextFrame()
+		line += " " + r.dim(r.nextFrame())
 	}
 	return line
 }
@@ -178,6 +206,26 @@ func (r *Renderer) shouldRender(event streampkg.Event) bool {
 	return true
 }
 
+// composeLine renders the icon, layer label, identifier prefix, and body for
+// one event. body must already include any inline trailing key=value pairs.
+func (r *Renderer) composeLine(event streampkg.Event, body string) string {
+	parts := []string{r.statusIcon(event.Status), r.layerHeader(event)}
+	if body != "" {
+		parts = append(parts, body)
+	}
+	return strings.Join(parts, " ")
+}
+
+func (r *Renderer) layerHeader(event streampkg.Event) string {
+	layer, label := layerName(event.From.Layer)
+	id := layerIdentifier(event)
+	if id == "" {
+		return r.colorLayer(layer, label)
+	}
+	header := fmt.Sprintf("%s%s%s%s", label, r.dim("["), r.colorIdent(id), r.dim("]"))
+	return r.colorLayer(layer, header)
+}
+
 func (r *Renderer) formatKnownEvent(event streampkg.Event, values map[string]any) string {
 	switch event.EventType {
 	case streampkg.EventLLMReasoningDelta:
@@ -187,18 +235,13 @@ func (r *Renderer) formatKnownEvent(event streampkg.Event, values map[string]any
 	case streampkg.EventStatusStarted, streampkg.EventStatusProgress, streampkg.EventStatusCompleted, streampkg.EventStatusFailed:
 		return r.formatStatusEvent(event, values)
 	case streampkg.EventRunnerPhaseChanged:
-		phase := stringValue(values["phase"])
-		status := stringValue(values["status"])
-		if phase == "" {
-			phase = "unknown"
-		}
-		return fmt.Sprintf("%s runner_id=%s status=%s phase=%s", r.label("ru"), event.Scope.RunnerID, status, phase)
+		return r.formatRunnerPhase(event, values)
 	case streampkg.EventRunnerNodeStarted, streampkg.EventRunnerNodeCompleted, streampkg.EventRunnerNodeFailed:
-		return r.formatNodeEvent(event, values, "ru", strings.TrimPrefix(event.EventType, "runner."))
+		return r.formatNodeEvent(event, values, strings.TrimPrefix(event.EventType, "runner."))
 	case streampkg.EventExecutorPolishStarted, streampkg.EventExecutorPolishCompleted, streampkg.EventExecutorPolishFailed,
 		streampkg.EventExecutorExecuteStarted, streampkg.EventExecutorExecuteCompleted, streampkg.EventExecutorExecuteFailed,
 		streampkg.EventExecutorReportStarted, streampkg.EventExecutorReportCompleted, streampkg.EventExecutorReportFailed:
-		return r.formatNodeEvent(event, values, "ex", strings.TrimPrefix(event.EventType, "executor."))
+		return r.formatNodeEvent(event, values, strings.TrimPrefix(event.EventType, "executor."))
 	case streampkg.EventSkillMemoDelta:
 		return r.formatSkillMemo(event, values)
 	case streampkg.EventArtifactCreated:
@@ -214,21 +257,66 @@ func (r *Renderer) formatKnownEvent(event streampkg.Event, values map[string]any
 	}
 }
 
-func (r *Renderer) formatTextDelta(event streampkg.Event, name string) string {
+func (r *Renderer) formatTextDelta(event streampkg.Event, kind string) string {
 	text, ok := deltaString(event)
 	if !ok || strings.TrimSpace(text) == "" {
 		return ""
 	}
 	if exchangeText(text) {
-		return fmt.Sprintf("%s %s exchange=%s", r.label(layerLabel(event.From.Layer)), name, r.exchangeReference(event, text))
+		return fmt.Sprintf("%s %s exchange=%s", r.tag(kind), r.dim("·"), r.exchangeReference(event, text))
 	}
-	if event.From.Layer == "orchestrator" && stringValue(event.Metadata["stage"]) == "planning" && name == "output" {
-		return fmt.Sprintf("%s planning output captured status=%s", r.label("or"), event.Status)
+	if event.Status == streampkg.StatusRunning && kind == "reasoning" {
+		return r.formatRunningReasoning(event, text)
 	}
-	text, truncated := r.compact(text)
-	line := fmt.Sprintf("%s %s: %s", r.label(layerLabel(event.From.Layer)), name, text)
+	if event.Status == streampkg.StatusRunning && kind == "output" {
+		return r.formatRunningOutput(event, kind)
+	}
+	if event.From.Layer == "orchestrator" && stringValue(event.Metadata["stage"]) == "planning" && kind == "output" {
+		return fmt.Sprintf("planning output captured %s", r.kv("status", string(event.Status)))
+	}
+	if event.From.Layer == "orchestrator" && kind == "output" {
+		trimmed := strings.TrimSpace(text)
+		if (strings.HasPrefix(trimmed, "{") || strings.HasPrefix(trimmed, "[")) && json.Valid([]byte(trimmed)) {
+			return ""
+		}
+	}
+	clean, truncated := r.compact(text)
+	line := fmt.Sprintf("%s %s %s", r.tag(kind), r.dim("·"), clean)
 	if truncated {
-		line += " truncated=true"
+		line += " " + r.kv("truncated", "true")
+	}
+	return line
+}
+
+func (r *Renderer) formatRunningOutput(event streampkg.Event, kind string) string {
+	key := streamDeltaKey(event, kind)
+	if r.runningOutputSeen[key] {
+		return ""
+	}
+	r.runningOutputSeen[key] = true
+	return fmt.Sprintf("%s %s streaming", r.tag(kind), r.dim("·"))
+}
+
+func (r *Renderer) formatRunningReasoning(event streampkg.Event, text string) string {
+	key := streamDeltaKey(event, "reasoning")
+	buf := r.reasoningBuffers[key]
+	if buf == nil {
+		buf = &runningTextBuffer{}
+		r.reasoningBuffers[key] = buf
+	}
+	buf.text += text
+	if len(buf.text)-buf.emitted < reasoningFlushBytes && !endsReasoningPhrase(text) {
+		return ""
+	}
+	chunk := strings.TrimSpace(buf.text[buf.emitted:])
+	buf.emitted = len(buf.text)
+	if chunk == "" {
+		return ""
+	}
+	clean, truncated := r.compact(chunk)
+	line := fmt.Sprintf("%s %s %s", r.tag("reasoning"), r.dim("·"), clean)
+	if truncated {
+		line += " " + r.kv("truncated", "true")
 	}
 	return line
 }
@@ -249,40 +337,48 @@ func (r *Renderer) formatStatusEvent(event streampkg.Event, values map[string]an
 		return ""
 	}
 	message, truncated := r.compact(message)
-	label := r.label(layerLabel(event.From.Layer))
-	line := label
+	parts := []string{}
 	if message != "" {
-		line += " " + message
+		parts = append(parts, message)
 	}
-	line += fmt.Sprintf(" status=%s event=%s", event.Status, event.EventType)
+	parts = append(parts, r.kv("status", string(event.Status)), r.kv("event", event.EventType))
 	if runnerID := stringValue(values["runner_id"]); runnerID != "" {
-		line += " runner_id=" + runnerID
-	}
-	if usage, ok := values["usage"].(map[string]any); ok {
-		if total := stringValue(usage["total_tokens"]); total != "" {
-			line += " total_tokens=" + total
-		}
+		parts = append(parts, r.kv("runner_id", runnerID))
 	}
 	if truncated {
-		line += " truncated=true"
+		parts = append(parts, r.kv("truncated", "true"))
 	}
-	return line
+	return strings.Join(parts, " ")
 }
 
-func (r *Renderer) formatNodeEvent(event streampkg.Event, values map[string]any, label string, eventName string) string {
-	nodeID := stringValue(values["node_id"])
-	if nodeID == "" {
-		nodeID = event.Scope.NodeID
+func (r *Renderer) formatRunnerPhase(event streampkg.Event, values map[string]any) string {
+	phase := stringValue(values["phase"])
+	if phase == "" {
+		phase = "unknown"
 	}
-	line := fmt.Sprintf("%s runner_id=%s status=%s event=%s node=%s", r.label(label), event.Scope.RunnerID, event.Status, eventName, nodeID)
+	status := stringValue(values["status"])
+	if status == "" {
+		status = string(event.Status)
+	}
+	return r.kv("phase", phase) + " " + r.kv("status", status)
+}
+
+func (r *Renderer) formatNodeEvent(event streampkg.Event, values map[string]any, eventName string) string {
+	parts := []string{
+		r.kv("event", eventName),
+		r.kv("status", string(event.Status)),
+	}
+	if node := nodeID(event, values); node != "" {
+		parts = append(parts, r.kv("node", node))
+	}
 	if skill := skillName(event); skill != "" && skill != "unknown" {
-		line += " skill=" + skill
+		parts = append(parts, r.kv("skill", skill))
 	}
 	if errText := stringValue(values["error"]); errText != "" {
 		errText, _ = r.compact(errText)
-		line += fmt.Sprintf(" error=%q", errText)
+		parts = append(parts, r.kvQuoted("error", errText))
 	}
-	return line
+	return strings.Join(parts, " ")
 }
 
 func (r *Renderer) formatSkillMemo(event streampkg.Event, values map[string]any) string {
@@ -290,15 +386,23 @@ func (r *Renderer) formatSkillMemo(event streampkg.Event, values map[string]any)
 	if memo == "" {
 		return ""
 	}
-	line := fmt.Sprintf("%s skill=%s status=%s event=memo node=%s", r.label("sk"), skillName(event), event.Status, nodeID(event, values))
+	parts := []string{
+		r.tag("memo"), r.dim("·"), memo,
+		r.kv("status", string(event.Status)),
+	}
+	if node := nodeID(event, values); node != "" {
+		parts = append(parts, r.kv("node", node))
+	}
+	if skill := skillName(event); skill != "" && skill != "unknown" {
+		parts = append(parts, r.kv("skill", skill))
+	}
 	if stage := stringValue(values["stage"]); stage != "" {
-		line += " stage=" + stage
+		parts = append(parts, r.kv("stage", stage))
 	}
-	line += fmt.Sprintf(" memo=%q", memo)
 	if truncated || boolValue(values["truncated"]) {
-		line += " truncated=true"
+		parts = append(parts, r.kv("truncated", "true"))
 	}
-	return line
+	return strings.Join(parts, " ")
 }
 
 func (r *Renderer) formatArtifact(event streampkg.Event, values map[string]any) string {
@@ -306,17 +410,18 @@ func (r *Renderer) formatArtifact(event streampkg.Event, values map[string]any) 
 	if path == "" {
 		return ""
 	}
-	line := fmt.Sprintf("%s artifact=%s", r.label("ex"), fileURL(path))
+	parts := []string{r.kv("artifact", fileURL(path))}
 	if resourceType := stringValue(values["resource_type"]); resourceType != "" {
-		line += " type=" + resourceType
+		parts = append(parts, r.kv("type", resourceType))
 	}
 	if stage := stringValue(values["stage"]); stage != "" {
-		line += " stage=" + stage
+		parts = append(parts, r.kv("stage", stage))
 	}
 	if desc := stringValue(values["description"]); desc != "" {
 		desc, _ = r.compact(desc)
-		line += fmt.Sprintf(" description=%q", desc)
+		parts = append(parts, r.kvQuoted("description", desc))
 	}
+	line := strings.Join(parts, " ")
 	if inline := r.inlineImage(path); inline != "" {
 		line += "\n" + inline
 	}
@@ -324,48 +429,70 @@ func (r *Renderer) formatArtifact(event streampkg.Event, values map[string]any) 
 }
 
 func (r *Renderer) formatToolCall(event streampkg.Event, values map[string]any) string {
-	line := fmt.Sprintf("%s skill=%s status=%s event=%s tool=%s call=%s",
-		r.label("sk"), skillName(event), event.Status, strings.TrimPrefix(event.EventType, "llm."), stringValue(values["name"]), stringValue(values["call_id"]))
+	parts := []string{
+		r.kv("event", strings.TrimPrefix(event.EventType, "llm.")),
+		r.kv("status", string(event.Status)),
+		r.kv("skill", skillName(event)),
+		r.kv("tool", stringValue(values["name"])),
+		r.kv("call", stringValue(values["call_id"])),
+	}
 	if args := stringValue(values["arguments"]); args != "" {
 		args, _ = r.compact(args)
-		line += fmt.Sprintf(" args=%q", args)
+		parts = append(parts, r.kvQuoted("args", args))
 	}
-	return line
+	return strings.Join(parts, " ")
 }
 
 func (r *Renderer) formatToolExecution(event streampkg.Event, values map[string]any) string {
-	line := fmt.Sprintf("%s skill=%s status=%s event=%s tool=%s call=%s",
-		r.label("sk"), skillName(event), event.Status, strings.TrimPrefix(event.EventType, "tool."), stringValue(values["name"]), stringValue(values["call_id"]))
+	parts := []string{
+		r.kv("event", strings.TrimPrefix(event.EventType, "tool.")),
+		r.kv("status", string(event.Status)),
+		r.kv("skill", skillName(event)),
+		r.kv("tool", stringValue(values["name"])),
+		r.kv("call", stringValue(values["call_id"])),
+	}
 	if errText := stringValue(values["error"]); errText != "" {
 		errText, _ = r.compact(errText)
-		line += fmt.Sprintf(" error=%q", errText)
+		parts = append(parts, r.kvQuoted("error", errText))
 	}
-	return line
+	return strings.Join(parts, " ")
 }
 
 func (r *Renderer) formatToolResult(event streampkg.Event, values map[string]any) string {
-	line := fmt.Sprintf("%s skill=%s status=%s event=tool_result tool=%s call=%s",
-		r.label("sk"), skillName(event), event.Status, stringValue(values["name"]), stringValue(values["call_id"]))
+	parts := []string{
+		r.kv("event", "tool_result"),
+		r.kv("status", string(event.Status)),
+		r.kv("skill", skillName(event)),
+		r.kv("tool", stringValue(values["name"])),
+		r.kv("call", stringValue(values["call_id"])),
+	}
 	if errText := stringValue(values["error"]); errText != "" {
 		errText, _ = r.compact(errText)
-		line += fmt.Sprintf(" error=%q", errText)
+		parts = append(parts, r.kvQuoted("error", errText))
 	}
-	return line
+	return strings.Join(parts, " ")
 }
 
 func (r *Renderer) formatGenericEvent(event streampkg.Event, values map[string]any) string {
 	if text, ok := deltaString(event); ok {
 		text, truncated := r.compact(text)
-		line := fmt.Sprintf("%s status=%s event=%s delta=%q", r.label(layerLabel(event.From.Layer)), event.Status, event.EventType, text)
-		if truncated {
-			line += " truncated=true"
+		parts := []string{
+			r.kv("event", event.EventType),
+			r.kv("status", string(event.Status)),
+			r.kvQuoted("delta", text),
 		}
-		return line
+		if truncated {
+			parts = append(parts, r.kv("truncated", "true"))
+		}
+		return strings.Join(parts, " ")
 	}
 	if len(values) == 0 {
 		return ""
 	}
-	return fmt.Sprintf("%s status=%s event=%s", r.label(layerLabel(event.From.Layer)), event.Status, event.EventType)
+	return strings.Join([]string{
+		r.kv("event", event.EventType),
+		r.kv("status", string(event.Status)),
+	}, " ")
 }
 
 func (r *Renderer) compact(text string) (string, bool) {
@@ -385,26 +512,176 @@ func (r *Renderer) nextFrame() string {
 	return frame
 }
 
-func (r *Renderer) label(text string) string {
-	if text == "" {
-		text = "ev"
+// kv renders a structured key/value pair. The key is colored when enabled so
+// the eye can align quickly, while the value remains plain so values like
+// status=failed stay greppable.
+func (r *Renderer) kv(key, value string) string {
+	return r.colorKey(key) + "=" + value
+}
+
+func (r *Renderer) kvQuoted(key, value string) string {
+	return r.colorKey(key) + "=" + fmt.Sprintf("%q", value)
+}
+
+// tag renders an inline word marker such as "reasoning" or "output". It is
+// colored differently from the structured keys so a glance at the line shows
+// which kind of free-form payload follows the dot separator.
+func (r *Renderer) tag(name string) string {
+	if !r.cfg.Color {
+		return name
 	}
-	text += ":"
+	return ansi(33, name) // yellow for tag
+}
+
+func (r *Renderer) colorKey(key string) string {
+	if !r.cfg.Color {
+		return key
+	}
+	return ansi(36, key) // cyan
+}
+
+func (r *Renderer) colorIdent(text string) string {
 	if !r.cfg.Color {
 		return text
 	}
-	color := "36"
-	switch strings.TrimSuffix(text, ":") {
-	case "or":
-		color = "35"
-	case "ru":
-		color = "36"
-	case "ex":
-		color = "34"
-	case "sk":
-		color = "32"
+	return ansi(33, text) // yellow
+}
+
+func (r *Renderer) colorLayer(layer, text string) string {
+	if !r.cfg.Color {
+		return text
 	}
-	return "\x1b[" + color + "m" + text + "\x1b[0m"
+	color := layerColor(layer)
+	return ansi(color, text)
+}
+
+func (r *Renderer) statusIcon(status string) string {
+	switch status {
+	case streampkg.StatusFailed:
+		return r.colorStatus(status, "✗")
+	case streampkg.StatusCompleted:
+		return r.colorStatus(status, "✓")
+	case streampkg.StatusRunning:
+		return r.colorStatus(status, "●")
+	case streampkg.StatusPending:
+		return r.colorStatus(status, "○")
+	default:
+		return r.dim("·")
+	}
+}
+
+func (r *Renderer) colorStatus(status, text string) string {
+	if !r.cfg.Color {
+		return text
+	}
+	return ansi(statusColor(status), text)
+}
+
+func (r *Renderer) dim(text string) string {
+	if !r.cfg.Color {
+		return text
+	}
+	return ansi(90, text)
+}
+
+func ansi(color int, text string) string {
+	return fmt.Sprintf("\x1b[%dm%s\x1b[0m", color, text)
+}
+
+func statusColor(status string) int {
+	switch status {
+	case streampkg.StatusFailed:
+		return 31 // red
+	case streampkg.StatusCompleted:
+		return 32 // green
+	case streampkg.StatusRunning:
+		return 36 // cyan
+	case streampkg.StatusPending:
+		return 90 // dim
+	default:
+		return 37 // white
+	}
+}
+
+func layerColor(layer string) int {
+	switch layer {
+	case "orchestrator":
+		return 35 // magenta
+	case "runner":
+		return 36 // cyan
+	case "executor":
+		return 34 // blue
+	case "skill":
+		return 32 // green
+	default:
+		return 37
+	}
+}
+
+// layerName returns the canonical lower-case layer key together with its
+// human-readable label. Layers from unknown sources fall back to a Title-cased
+// version of the raw string so future event sources are still legible.
+func layerName(layer string) (string, string) {
+	switch layer {
+	case "orchestrator":
+		return layer, "Orchestrator"
+	case "runner":
+		return layer, "Runner"
+	case "executor":
+		return layer, "Executor"
+	case "skill":
+		return layer, "Skill"
+	case "":
+		return "", "Event"
+	default:
+		return layer, strings.ToUpper(layer[:1]) + layer[1:]
+	}
+}
+
+func layerIdentifier(event streampkg.Event) string {
+	switch event.From.Layer {
+	case "skill":
+		if name := skillName(event); name != "" && name != "unknown" {
+			return name
+		}
+		return event.From.ID
+	case "runner":
+		return shortRunnerID(event.Scope.RunnerID)
+	case "executor":
+		return event.From.ID
+	default:
+		return ""
+	}
+}
+
+func shortRunnerID(id string) string {
+	if len(id) > defaultRunnerIDClip {
+		return id[:defaultRunnerIDClip] + "…"
+	}
+	return id
+}
+
+func streamDeltaKey(event streampkg.Event, kind string) string {
+	return strings.Join([]string{
+		kind,
+		event.From.Layer,
+		event.From.ID,
+		event.From.ParentID,
+		event.Scope.RequestID,
+		event.Scope.RunnerID,
+		event.Scope.NodeID,
+	}, "|")
+}
+
+func endsReasoningPhrase(text string) bool {
+	trimmed := strings.TrimSpace(text)
+	return strings.HasSuffix(trimmed, ".") ||
+		strings.HasSuffix(trimmed, "?") ||
+		strings.HasSuffix(trimmed, "!") ||
+		strings.HasSuffix(trimmed, "。") ||
+		strings.HasSuffix(trimmed, "？") ||
+		strings.HasSuffix(trimmed, "！") ||
+		strings.Contains(text, "\n")
 }
 
 func (r *Renderer) exchangeReference(event streampkg.Event, text string) string {
@@ -487,21 +764,6 @@ func nodeID(event streampkg.Event, values map[string]any) string {
 	return event.Scope.NodeID
 }
 
-func layerLabel(layer string) string {
-	switch layer {
-	case "orchestrator":
-		return "or"
-	case "runner":
-		return "ru"
-	case "executor":
-		return "ex"
-	case "skill":
-		return "sk"
-	default:
-		return layer
-	}
-}
-
 func fileURL(path string) string {
 	if abs, err := filepath.Abs(path); err == nil {
 		path = abs
@@ -519,6 +781,5 @@ func imagePath(path string) bool {
 }
 
 func exchangeText(text string) bool {
-	trimmed := strings.TrimSpace(text)
-	return strings.HasPrefix(trimmed, "---") && strings.Contains(trimmed, "kind: dango.exchange")
+	return runnerpkg.LooksLikeExchangeMarkdown(text)
 }

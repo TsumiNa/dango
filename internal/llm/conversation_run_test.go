@@ -79,27 +79,12 @@ func TestConversationRun_HappyPath(t *testing.T) {
 func TestConversationRun_EmitsStreamEvents(t *testing.T) {
 	var responded int
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
 		if responded == 0 {
 			responded++
-			_, _ = w.Write([]byte(`{
-				"id":"r1","object":"response","created_at":0,"model":"m","status":"completed",
-				"output":[{
-					"id":"fc","type":"function_call","status":"completed",
-					"call_id":"c1","name":"echo","arguments":"{\"msg\":\"hi\"}"
-				}],
-				"parallel_tool_calls":false,"tool_choice":"auto","tools":[]
-			}`))
+			sseResponse(w, completedEvent("", "echo", `{"msg":"hi"}`))
 			return
 		}
-		_, _ = w.Write([]byte(`{
-			"id":"r2","object":"response","created_at":0,"model":"m","status":"completed",
-			"output":[{
-				"id":"m1","type":"message","role":"assistant","status":"completed",
-				"content":[{"type":"output_text","text":"final","annotations":[]}]
-			}],
-			"parallel_tool_calls":false,"tool_choice":"auto","tools":[]
-		}`))
+		sseResponse(w, textDeltaEvent("final"), completedEvent("final", "", ""))
 	}))
 	t.Cleanup(srv.Close)
 
@@ -108,19 +93,19 @@ func TestConversationRun_EmitsStreamEvents(t *testing.T) {
 			return "tool says ok", nil
 		},
 	)
-	eventStream := streampkg.New(streampkg.Scope{RequestID: "req_1"})
-	sub, err := eventStream.Subscribe(streampkg.Filter{}, streampkg.WithSubscriberBuffer(16))
-	if err != nil {
-		t.Fatalf("Subscribe: %v", err)
-	}
 	conv := mustNewConversation(t, testClient(srv.URL), "sys", []Tool{echo}, &ConversationConfig{
-		Stream:       eventStream,
+		StreamEvents: true,
 		StreamSource: streampkg.Source{Layer: "skill", ID: "echo_skill"},
-		StreamScope:  streampkg.Scope{NodeID: "node_1"},
+		StreamScope:  streampkg.Scope{RequestID: "req_1", NodeID: "node_1"},
 		StreamMetadata: map[string]any{
 			"skill_name": "echo_skill",
 		},
 	})
+	eventStream := conv.EventStream()
+	sub, err := eventStream.Subscribe(streampkg.Filter{}, streampkg.WithSubscriberBuffer(16))
+	if err != nil {
+		t.Fatalf("Subscribe: %v", err)
+	}
 
 	if _, err := conv.Run(t.Context(), "do it", ""); err != nil {
 		t.Fatalf("Run: %v", err)
@@ -175,30 +160,58 @@ func TestConversationRun_EmitsStreamEvents(t *testing.T) {
 	}
 }
 
+func TestConversationRun_StreamsReasoningAndOutputDeltas(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		sseResponse(w,
+			reasoningDeltaEvent("response.reasoning_summary_text.delta", "thinking live"),
+			textDeltaEvent("partial "),
+			textDeltaEvent("answer"),
+			completedEvent("partial answer", "", ""),
+		)
+	}))
+	t.Cleanup(srv.Close)
+
+	conv := mustNewConversation(t, testClient(srv.URL), "sys", nil, &ConversationConfig{
+		StreamEvents: true,
+		StreamSource: streampkg.Source{Layer: "skill", ID: "stream_skill"},
+		StreamScope:  streampkg.Scope{RequestID: "req_streaming_run", NodeID: "node_stream"},
+	})
+	eventStream := conv.EventStream()
+	sub, err := eventStream.Subscribe(streampkg.Filter{}, streampkg.WithSubscriberBuffer(16))
+	if err != nil {
+		t.Fatalf("Subscribe: %v", err)
+	}
+
+	out, err := conv.Run(t.Context(), "do it", "")
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if out != "partial answer" {
+		t.Fatalf("Run output = %q, want partial answer", out)
+	}
+	eventStream.Close()
+
+	events := collectStreamEvents(t, sub)
+	if !hasStringStreamEvent(events, streampkg.EventLLMReasoningDelta, streampkg.StatusRunning, "thinking live") {
+		t.Fatalf("missing running reasoning delta: %+v", events)
+	}
+	if !hasStringStreamEvent(events, streampkg.EventLLMOutputDelta, streampkg.StatusRunning, "partial ") {
+		t.Fatalf("missing running output delta: %+v", events)
+	}
+	if !hasStringStreamEvent(events, streampkg.EventLLMOutputDelta, streampkg.StatusCompleted, "partial answer") {
+		t.Fatalf("missing completed final output delta: %+v", events)
+	}
+}
+
 func TestConversationRun_EmitsToolExecutionFailedEvent(t *testing.T) {
 	var responded int
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
 		if responded == 0 {
 			responded++
-			_, _ = w.Write([]byte(`{
-				"id":"r1","object":"response","created_at":0,"model":"m","status":"completed",
-				"output":[{
-					"id":"fc","type":"function_call","status":"completed",
-					"call_id":"c1","name":"fail","arguments":"{}"
-				}],
-				"parallel_tool_calls":false,"tool_choice":"auto","tools":[]
-			}`))
+			sseResponse(w, completedEvent("", "fail", `{}`))
 			return
 		}
-		_, _ = w.Write([]byte(`{
-			"id":"r2","object":"response","created_at":0,"model":"m","status":"completed",
-			"output":[{
-				"id":"m1","type":"message","role":"assistant","status":"completed",
-				"content":[{"type":"output_text","text":"recovered","annotations":[]}]
-			}],
-			"parallel_tool_calls":false,"tool_choice":"auto","tools":[]
-		}`))
+		sseResponse(w, textDeltaEvent("recovered"), completedEvent("recovered", "", ""))
 	}))
 	t.Cleanup(srv.Close)
 
@@ -207,16 +220,16 @@ func TestConversationRun_EmitsToolExecutionFailedEvent(t *testing.T) {
 			return "partial output", errors.New("tool exploded")
 		},
 	)
-	eventStream := streampkg.New(streampkg.Scope{RequestID: "req_fail"})
+	conv := mustNewConversation(t, testClient(srv.URL), "sys", []Tool{failTool}, &ConversationConfig{
+		StreamEvents: true,
+		StreamSource: streampkg.Source{Layer: "skill", ID: "fail_skill"},
+		StreamScope:  streampkg.Scope{RequestID: "req_fail", NodeID: "node_fail"},
+	})
+	eventStream := conv.EventStream()
 	sub, err := eventStream.Subscribe(streampkg.Filter{}, streampkg.WithSubscriberBuffer(16))
 	if err != nil {
 		t.Fatalf("Subscribe: %v", err)
 	}
-	conv := mustNewConversation(t, testClient(srv.URL), "sys", []Tool{failTool}, &ConversationConfig{
-		Stream:       eventStream,
-		StreamSource: streampkg.Source{Layer: "skill", ID: "fail_skill"},
-		StreamScope:  streampkg.Scope{NodeID: "node_fail"},
-	})
 
 	if _, err := conv.Run(t.Context(), "do it", ""); err != nil {
 		t.Fatalf("Run: %v", err)
@@ -246,28 +259,23 @@ func TestConversationRun_EmitsToolExecutionFailedEvent(t *testing.T) {
 // bound rather than looping forever.
 func TestConversationRun_MaxStepsExceeded(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{
-			"id":"r","object":"response","created_at":0,"model":"m","status":"completed",
-			"output":[{"id":"fc","type":"function_call","status":"completed","call_id":"c","name":"loop","arguments":"{}"}],
-			"parallel_tool_calls":false,"tool_choice":"auto","tools":[]
-		}`))
+		sseResponse(w, completedEvent("", "loop", `{}`))
 	}))
 	t.Cleanup(srv.Close)
 
 	loop := NewFuncTool("loop", "", map[string]any{"type": "object"},
 		func(_ context.Context, _ string) (string, error) { return "again", nil },
 	)
-	eventStream := streampkg.New(streampkg.Scope{RequestID: "req_loop"})
+	conv := mustNewConversation(t, testClient(srv.URL), "sys", []Tool{loop}, &ConversationConfig{
+		StreamEvents: true,
+		StreamSource: streampkg.Source{Layer: "skill", ID: "loop_skill"},
+		StreamScope:  streampkg.Scope{RequestID: "req_loop", NodeID: "node_loop"},
+	})
+	eventStream := conv.EventStream()
 	sub, err := eventStream.Subscribe(streampkg.Filter{EventTypes: []string{streampkg.EventStatusFailed}}, streampkg.WithSubscriberBuffer(4))
 	if err != nil {
 		t.Fatalf("Subscribe: %v", err)
 	}
-	conv := mustNewConversation(t, testClient(srv.URL), "sys", []Tool{loop}, &ConversationConfig{
-		Stream:       eventStream,
-		StreamSource: streampkg.Source{Layer: "skill", ID: "loop_skill"},
-		StreamScope:  streampkg.Scope{NodeID: "node_loop"},
-	})
 	conv.SetMaxSteps(2)
 	if _, err := conv.Run(t.Context(), "go", ""); err == nil {
 		t.Fatal("expected max-steps error")
@@ -367,6 +375,22 @@ func hasStreamEvent(events []streampkg.Event, eventType string, layer string, no
 			continue
 		}
 		if match(delta) {
+			return true
+		}
+	}
+	return false
+}
+
+func hasStringStreamEvent(events []streampkg.Event, eventType string, status string, want string) bool {
+	for _, event := range events {
+		if event.EventType != eventType || event.Status != status {
+			continue
+		}
+		var delta string
+		if err := json.Unmarshal(event.Delta, &delta); err != nil {
+			continue
+		}
+		if delta == want {
 			return true
 		}
 	}

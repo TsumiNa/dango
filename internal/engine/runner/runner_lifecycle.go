@@ -44,7 +44,7 @@ func (r *Runner) Complete(ctx context.Context) error {
 //
 // StartPolish is valid from [PhaseCreated] (first entry) and from
 // [PhaseAwaitingReplan] (re-entry after a rejected plan). It requires a
-// plan supplied via [WithPlan].
+// plan supplied via [Setup.Plan].
 func (r *Runner) StartPolish(ctx context.Context) error {
 	ctx = r.runtimeContext(ctx)
 	if err := r.prepareNodeExecutors(r.initialNodes); err != nil {

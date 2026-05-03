@@ -131,10 +131,9 @@ func (doc ExchangeDocument) Markdown() (string, error) {
 // ParseExchangeMarkdown parses raw as a front matter markdown exchange
 // document.
 func ParseExchangeMarkdown(raw string) (*ExchangeDocument, error) {
-	var meta exchangeFrontMatter
-	body, err := frontmatter.Parse(strings.NewReader(raw), &meta)
+	meta, sections, err := parseExchangeEnvelope(raw)
 	if err != nil {
-		return nil, fmt.Errorf("runner: parse exchange front matter: %w", err)
+		return nil, err
 	}
 	if meta.Kind != ExchangeDocumentKind {
 		return nil, fmt.Errorf("runner: exchange document kind = %q, want %q", meta.Kind, ExchangeDocumentKind)
@@ -145,9 +144,20 @@ func ParseExchangeMarkdown(raw string) (*ExchangeDocument, error) {
 	if meta.Stage == "" {
 		return nil, fmt.Errorf("runner: exchange document stage must not be empty")
 	}
+	return exchangeDocumentFromEnvelope(meta, sections), nil
+}
 
-	sections := parseExchangeSections(string(body))
-	doc := &ExchangeDocument{
+func parseExchangeEnvelope(raw string) (exchangeFrontMatter, map[string]string, error) {
+	var meta exchangeFrontMatter
+	body, err := frontmatter.Parse(strings.NewReader(raw), &meta)
+	if err != nil {
+		return exchangeFrontMatter{}, nil, fmt.Errorf("runner: parse exchange front matter: %w", err)
+	}
+	return meta, parseExchangeSections(string(body)), nil
+}
+
+func exchangeDocumentFromEnvelope(meta exchangeFrontMatter, sections map[string]string) *ExchangeDocument {
+	return &ExchangeDocument{
 		Kind:            meta.Kind,
 		Version:         meta.Version,
 		Stage:           meta.Stage,
@@ -162,7 +172,6 @@ func ParseExchangeMarkdown(raw string) (*ExchangeDocument, error) {
 		Reasoning:       sections["reasoning"],
 		Handoff:         sections["handoff"],
 	}
-	return doc, nil
 }
 
 // NormalizeExchangeMarkdown returns raw as a valid exchange markdown document.
@@ -174,6 +183,9 @@ func NormalizeExchangeMarkdown(raw string, defaults ExchangeDocument) (string, e
 	if parsed, err := ParseExchangeMarkdown(raw); err == nil {
 		return withExchangeDefaults(*parsed, defaults).Markdown()
 	}
+	if draft, err := ParseExchangeDraftMarkdown(raw); err == nil {
+		return withExchangeDefaults(*draft, defaults).Markdown()
+	}
 	doc := withExchangeDefaults(ExchangeDocument{Handoff: strings.TrimSpace(raw)}, defaults)
 	return doc.Markdown()
 }
@@ -182,6 +194,41 @@ func NormalizeExchangeMarkdown(raw string, defaults ExchangeDocument) (string, e
 // document.
 func IsExchangeMarkdown(raw string) bool {
 	_, err := ParseExchangeMarkdown(raw)
+	return err == nil
+}
+
+// ParseExchangeDraftMarkdown parses model-produced exchange-like markdown that
+// follows the document shape but has incomplete or non-canonical front matter.
+// It preserves Memo, Reasoning, Handoff, handoffs, and resources so callers can
+// normalize drafts without wrapping the entire markdown as opaque text.
+func ParseExchangeDraftMarkdown(raw string) (*ExchangeDocument, error) {
+	meta, sections, err := parseExchangeEnvelope(raw)
+	if err != nil {
+		return nil, err
+	}
+	if !exchangeKindLooksLikeDraft(meta.Kind) {
+		return nil, fmt.Errorf("runner: exchange draft kind = %q", meta.Kind)
+	}
+	if !hasExchangeDraftSections(sections) {
+		return nil, fmt.Errorf("runner: exchange draft missing Memo, Reasoning, or Handoff sections")
+	}
+	doc := exchangeDocumentFromEnvelope(meta, sections)
+	if doc.Kind != ExchangeDocumentKind {
+		doc.Kind = ""
+	}
+	if doc.Version != ExchangeDocumentVersion {
+		doc.Version = 0
+	}
+	return doc, nil
+}
+
+// LooksLikeExchangeMarkdown reports whether raw is either a canonical exchange
+// document or a model-produced draft that can be normalized into one.
+func LooksLikeExchangeMarkdown(raw string) bool {
+	if IsExchangeMarkdown(raw) {
+		return true
+	}
+	_, err := ParseExchangeDraftMarkdown(raw)
 	return err == nil
 }
 
@@ -292,6 +339,21 @@ func parseExchangeSections(body string) map[string]string {
 	}
 	flush()
 	return sections
+}
+
+func exchangeKindLooksLikeDraft(kind string) bool {
+	switch strings.ToLower(strings.TrimSpace(kind)) {
+	case "", ExchangeDocumentKind, "exchange", "dango_exchange", "dango-exchange":
+		return true
+	default:
+		return false
+	}
+}
+
+func hasExchangeDraftSections(sections map[string]string) bool {
+	return strings.TrimSpace(sections["memo"]) != "" ||
+		strings.TrimSpace(sections["reasoning"]) != "" ||
+		strings.TrimSpace(sections["handoff"]) != ""
 }
 
 func exchangeSectionName(line string) string {

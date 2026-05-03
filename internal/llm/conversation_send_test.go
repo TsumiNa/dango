@@ -29,16 +29,16 @@ func TestConversationSend_EmitsCompletionEvent(t *testing.T) {
 	}))
 	t.Cleanup(srv.Close)
 
-	eventStream := streampkg.New(streampkg.Scope{RequestID: "req_send"})
+	conv := mustNewConversation(t, testClient(srv.URL), "sys", nil, &ConversationConfig{
+		StreamEvents: true,
+		StreamSource: streampkg.Source{Layer: "skill", ID: "send_skill"},
+		StreamScope:  streampkg.Scope{RequestID: "req_send", NodeID: "node_send"},
+	})
+	eventStream := conv.EventStream()
 	sub, err := eventStream.Subscribe(streampkg.Filter{EventTypes: []string{streampkg.EventStatusCompleted}}, streampkg.WithSubscriberBuffer(4))
 	if err != nil {
 		t.Fatalf("Subscribe: %v", err)
 	}
-	conv := mustNewConversation(t, testClient(srv.URL), "sys", nil, &ConversationConfig{
-		Stream:       eventStream,
-		StreamSource: streampkg.Source{Layer: "skill", ID: "send_skill"},
-		StreamScope:  streampkg.Scope{NodeID: "node_send"},
-	})
 	conv.AppendUser("hi")
 
 	if _, err := conv.Send(t.Context(), ""); err != nil {
@@ -71,16 +71,16 @@ func TestConversationSend_EmitsFailureEvent(t *testing.T) {
 	}))
 	t.Cleanup(srv.Close)
 
-	eventStream := streampkg.New(streampkg.Scope{RequestID: "req_send_fail"})
+	conv := mustNewConversation(t, testClient(srv.URL), "sys", nil, &ConversationConfig{
+		StreamEvents: true,
+		StreamSource: streampkg.Source{Layer: "skill", ID: "send_skill"},
+		StreamScope:  streampkg.Scope{RequestID: "req_send_fail", NodeID: "node_send"},
+	})
+	eventStream := conv.EventStream()
 	sub, err := eventStream.Subscribe(streampkg.Filter{EventTypes: []string{streampkg.EventStatusFailed}}, streampkg.WithSubscriberBuffer(4))
 	if err != nil {
 		t.Fatalf("Subscribe: %v", err)
 	}
-	conv := mustNewConversation(t, testClient(srv.URL), "sys", nil, &ConversationConfig{
-		Stream:       eventStream,
-		StreamSource: streampkg.Source{Layer: "skill", ID: "send_skill"},
-		StreamScope:  streampkg.Scope{NodeID: "node_send"},
-	})
 	conv.AppendUser("hi")
 
 	if _, err := conv.Send(t.Context(), ""); err == nil {

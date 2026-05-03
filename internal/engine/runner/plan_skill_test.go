@@ -25,3 +25,29 @@ func TestMarshalPlannerReviewInputUsesMarkdownDocuments(t *testing.T) {
 		t.Fatalf("polish document A = %q, want markdown-A", payload.Data.PolishDocuments["A"])
 	}
 }
+
+func TestParsePlannerReviewOutputAcceptsRejectObject(t *testing.T) {
+	review, err := parsePlannerReviewOutput(`{"reject":{"summary":"needs changes","analysis":"upstream field mapping is unclear"}}`)
+	if err != nil {
+		t.Fatalf("parsePlannerReviewOutput: %v", err)
+	}
+	if review.Approved {
+		t.Fatal("review.Approved = true, want false")
+	}
+	if got, want := review.Reason, "needs changes: upstream field mapping is unclear"; got != want {
+		t.Fatalf("review.Reason = %q, want %q", got, want)
+	}
+}
+
+func TestParsePlannerReviewOutputAllowsEmptyLegacyReason(t *testing.T) {
+	review, err := parsePlannerReviewOutput(`{"approved":false}`)
+	if err != nil {
+		t.Fatalf("parsePlannerReviewOutput: %v", err)
+	}
+	if review.Approved {
+		t.Fatal("review.Approved = true, want false")
+	}
+	if review.Reason != "" {
+		t.Fatalf("review.Reason = %q, want empty", review.Reason)
+	}
+}

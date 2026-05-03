@@ -175,5 +175,5 @@ var ErrRunnerAlreadyStarted = errors.New("orchestrate: runner already started")
 var ErrInvalidPhase = errors.New("orchestrate: runner in wrong phase for this transition")
 
 // ErrPlanRequired is returned when a phased-lifecycle transition is
-// invoked on a runner that was not constructed with [WithPlan].
+// invoked on a runner that was not constructed with [Setup.Plan].
 var ErrPlanRequired = errors.New("orchestrate: runner has no plan attached")

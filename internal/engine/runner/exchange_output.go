@@ -2,7 +2,7 @@ package runner
 
 func (r *Runner) annotateExchangeOutput(node *Node, output any) any {
 	text, ok := output.(string)
-	if !ok || !IsExchangeMarkdown(text) {
+	if !ok || !LooksLikeExchangeMarkdown(text) {
 		return output
 	}
 	defaults := ExchangeDocument{RunnerID: r.id}

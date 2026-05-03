@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 
 	"github.com/tsumina/dango/internal/llm"
 )
@@ -38,6 +39,15 @@ type plannerSkillReplanPrompt struct {
 
 type plannerSkillReplanResponse struct {
 	Plan *CoarsePlan `json:"plan,omitempty"`
+}
+
+type plannerSkillReviewResponse struct {
+	Approved *bool  `json:"approved,omitempty"`
+	Reason   string `json:"reason,omitempty"`
+	Reject   *struct {
+		Summary  string `json:"summary,omitempty"`
+		Analysis string `json:"analysis,omitempty"`
+	} `json:"reject,omitempty"`
 }
 
 func (r *Runner) reviewPolishedPlan(ctx context.Context) (*PlanReview, error) {
@@ -89,22 +99,33 @@ func (r *Runner) replanPolishedPlan(ctx context.Context, reason string) (*Coarse
 func marshalPlannerReviewInput(plan *CoarsePlan, polishFragments map[string]any) (string, error) {
 	var payload plannerSkillReviewPrompt
 	payload.Mode = "review"
-	payload.Task = "Review the current plan against the collected executor markdown documents. Return strict JSON as {\"approved\":true} or {\"approved\":false,\"reason\":\"...\"}."
-	payload.Contract = "Read each markdown document's front matter and Memo/Reasoning/Handoff sections. If approved is false, reason must explain the replan request briefly and concretely."
+	payload.Task = "Review the current plan against the collected executor markdown documents. Return strict JSON as {\"approved\":true} or {\"reject\":{\"summary\":\"...\",\"analysis\":\"...\"}}."
+	payload.Contract = "Read each markdown document's front matter and Memo/Reasoning/Handoff sections. If you reject the plan, reject.summary should be a short replan reason and reject.analysis should explain the issue concretely."
 	payload.Data.Plan = CloneCoarsePlan(plan)
 	payload.Data.PolishDocuments = plannerMarkdownDocuments(polishFragments)
 	return marshalPlannerPrompt(payload)
 }
 
 func parsePlannerReviewOutput(raw string) (*PlanReview, error) {
-	var out PlanReview
+	var out plannerSkillReviewResponse
 	if err := json.Unmarshal([]byte(raw), &out); err != nil {
 		return nil, fmt.Errorf("parse review output: %w", err)
 	}
-	if !out.Approved && out.Reason == "" {
-		return nil, fmt.Errorf("review rejected the plan without a reason")
+	if out.Reject != nil {
+		reason := strings.TrimSpace(out.Reject.Summary)
+		analysis := strings.TrimSpace(out.Reject.Analysis)
+		switch {
+		case reason == "":
+			reason = analysis
+		case analysis != "":
+			reason += ": " + analysis
+		}
+		return &PlanReview{Approved: false, Reason: reason}, nil
 	}
-	return &out, nil
+	if out.Approved == nil {
+		return nil, fmt.Errorf("review output missing approved or reject")
+	}
+	return &PlanReview{Approved: *out.Approved, Reason: strings.TrimSpace(out.Reason)}, nil
 }
 
 func marshalPlannerReplanInput(request string, currentPlan *CoarsePlan, reason string, polishFragments map[string]any, skills []SkillSummary) (string, error) {

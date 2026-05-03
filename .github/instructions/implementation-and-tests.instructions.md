@@ -1,11 +1,11 @@
 ---
-description: "Use when implementing user-described features, fixing bugs, or generating new code. Enforces minimal abstraction, minimal scope expansion, and core-logic test coverage with colocated `<source>_test.<ext>` files."
+description: "Use when implementing user-described features, fixing bugs, refactoring construction APIs, or generating new code. Enforces minimal abstraction, minimal scope expansion, option ownership semantics, and core-logic test coverage with colocated `<source>_test.<ext>` files."
 applyTo: "**"
 ---
 
-# Minimal Implementation and Core-Logic Tests
+# Implementation and Core-Logic Tests
 
-When implementing what the user described, follow these three principles together. They constrain both the production code and the accompanying tests.
+When implementing what the user described, follow these principles together. They constrain both the production code and the accompanying tests.
 
 ## 1. Minimal Abstraction
 
@@ -20,6 +20,26 @@ Use the most direct code structure that satisfies the described requirement.
 
 If you find yourself adding a layer "in case we need to swap it later", stop and use the concrete form instead.
 If you find yourself creating a function that only forwards to another function with nearly the same name, inline it unless there is a concrete lifecycle, validation, locking, instrumentation, or API-boundary reason for the wrapper.
+
+### Constructor Shape, Config, and Options
+
+Prefer the construction shape `New(required ..., cfg Cfg, opts ...Opt) *S` when a type needs both required inputs and optional tuning.
+
+- The leading required parameters are the concrete things the constructor needs to solve the problem or use its tools. They are not configuration. Examples include a `client`, instructions, source text, a filesystem root, or the executable tools a value must use.
+- `Cfg`/`Config` controls behavioral choices for how the constructor or resulting value uses those required inputs, such as limits, truncation policy, filtering, streaming mode, retry policy, or other public knobs.
+- `opts ...Opt` applies extra adjustments to the final instance after the config has been resolved and the instance has been built.
+
+Every caller-facing `Cfg`/`Config` struct should contain only exported fields and should provide a default entry point such as `Default`, `DefaultCfg`, or `DefaultConfig` following the package's local naming style. Callers should be able to either write a struct literal directly or start from the default value and adjust fields before passing it to `New`.
+
+Use `WithXxx(...)` option functions to adjust fields on the final instance produced from `Cfg`; do not use them to mutate the caller's config object. For example, if `New(Cfg{A: "hello"}, WithB(2))` constructs `S{a: "hello"}`, the option should set the returned instance's private `b` field to `2`. This gives private fields a deliberate construction-time control boundary.
+
+- Prefer `WithXxx(...)` for optional final-instance field adjustments that are clearer than exposing the field directly through `Cfg`.
+- Do not use `WithXxx(...)` as a mechanism for rewriting or patching the caller's config value. Normalize or copy config first, build the instance, then apply options to that instance.
+- After construction, private fields remain immutable to callers unless the type exposes a public method for changing them. Construction-time controls belong in `WithXxx(...)`; runtime controls belong in explicit public methods.
+- If a `WithXxx(...)` option installs an externally owned pointer, mutable object, stream, store, client, logger, context, callback, tool, or other live dependency into the instance, its doc comment must explicitly describe ownership and race expectations. Call out whether the constructed instance keeps a reference, whether the caller may mutate or close/cancel it after construction, and who is responsible for synchronization.
+- If the externally owned object does not document its own concurrency safety, the `WithXxx(...)` comment must warn that sharing or mutating it concurrently can race unless the caller provides synchronization or the constructed instance serializes access.
+- When a module owns a runtime object such as a stream, the default shape should still be for the module to create it and expose an accessor when callers need to observe it. If an option intentionally installs a caller-owned runtime object instead, document that the object is shared rather than owned by the constructed module.
+- Variadic options remain appropriate for short-lived operation settings such as subscription replay/buffer policies when they adjust that operation's final settings rather than mutating a config object.
 
 ### Go Type Placement
 
@@ -69,5 +89,8 @@ Before reporting an implementation as complete, confirm:
 
 1. No abstraction was added that is not justified by the described requirement.
 2. No feature, option, or refactor was added beyond the description.
-3. A `<source>_test.<ext>` file exists next to the changed source and exercises the core path plus the most likely failure patterns.
-4. The new and existing tests for the touched packages pass.
+3. Constructor APIs separate required problem inputs, public `Cfg`/`Config` behavioral knobs, and `WithXxx(...)` final-instance adjustments.
+4. Caller-facing `Cfg`/`Config` structs contain only exported fields and provide a default entry point.
+5. `WithXxx(...)` options adjust final instance fields, not caller config objects, and any option that stores an externally owned mutable/live object documents ownership and race expectations.
+6. A `<source>_test.<ext>` file exists next to the changed source and exercises the core path plus the most likely failure patterns.
+7. The new and existing tests for the touched packages pass.

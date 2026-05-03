@@ -8,8 +8,8 @@ import (
 )
 
 func TestNewRunner_AssignsUniqueID(t *testing.T) {
-	first := New(WithLogger(testLogger))
-	second := New(WithLogger(testLogger))
+	first := newTestRunner()
+	second := newTestRunner()
 	if first.ID() == "" {
 		t.Fatal("expected first runner to have a non-empty ID")
 	}
@@ -22,7 +22,7 @@ func TestNewRunner_AssignsUniqueID(t *testing.T) {
 }
 
 func TestRunner_StaticGraphExecution(t *testing.T) {
-	r := New(WithLogger(testLogger))
+	r := newTestRunner()
 
 	nodeA := &Node{
 		Id: "A",
@@ -71,7 +71,7 @@ func TestRunner_StaticGraphExecution(t *testing.T) {
 }
 
 func TestRunner_DynamicNodeAppend(t *testing.T) {
-	r := New(WithLogger(testLogger))
+	r := newTestRunner()
 
 	var nodeD *Node
 	nodeC := &Node{
@@ -116,7 +116,7 @@ func TestRunner_DynamicNodeAppend(t *testing.T) {
 }
 
 func TestRunner_ErrorTermination(t *testing.T) {
-	r := New(WithLogger(testLogger))
+	r := newTestRunner()
 
 	nodeErr := &Node{
 		Id: "Err",
@@ -153,7 +153,7 @@ func TestRunner_ErrorTermination(t *testing.T) {
 }
 
 func TestRunner_StreamAndExternalAppend(t *testing.T) {
-	r := New(WithLogger(testLogger))
+	r := newTestRunner()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
@@ -198,7 +198,7 @@ func TestRunner_StreamAndExternalAppend(t *testing.T) {
 	}
 }
 
-func TestRunner_WithPlanSeedsInitialNodes(t *testing.T) {
+func TestRunnerSetupPlanSeedsInitialNodes(t *testing.T) {
 	nodeA := &Node{
 		Id: "A",
 		Executor: &testExecutor{
@@ -211,10 +211,7 @@ func TestRunner_WithPlanSeedsInitialNodes(t *testing.T) {
 		Request: "seed test",
 		Nodes:   []CoarsePlanNode{{ID: "A", SkillName: "noop", TaskDescription: "only"}},
 	}
-	r := New(
-		WithLogger(testLogger),
-		WithPlan(plan, map[string]*Node{"A": nodeA}),
-	)
+	r := NewWithSetup(Setup{Logger: testLogger, Plan: plan, Nodes: map[string]*Node{"A": nodeA}})
 
 	if got := r.Plan(); got == nil || got.RunnerID != r.ID() {
 		t.Fatalf("Plan().RunnerID = %v, want %q", got, r.ID())
@@ -241,7 +238,7 @@ func TestRunner_WithPlanSeedsInitialNodes(t *testing.T) {
 }
 
 func TestRunner_DoneClosesOnAbort(t *testing.T) {
-	r := New(WithLogger(testLogger))
+	r := newTestRunner()
 	r.Abort(context.Canceled)
 
 	select {

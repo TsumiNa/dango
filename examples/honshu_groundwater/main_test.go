@@ -221,13 +221,13 @@ func TestRunHonshuGroundwaterExampleExecutesNeededSkills(t *testing.T) {
 	if view.Phase != runnerpkg.PhaseSettled {
 		t.Fatalf("phase = %q, want settled", view.Phase)
 	}
-	if !strings.Contains(stream.String(), "or: orchestrator planning started") {
+	if !strings.Contains(stream.String(), "Orchestrator orchestrator planning started") {
 		t.Fatalf("stream missing orchestrator planning status: %s", stream.String())
 	}
-	if strings.Contains(stream.String(), "or reasoning:") {
-		t.Fatalf("ordinary StartRequest should not force provider streaming reasoning: %s", stream.String())
+	if !strings.Contains(stream.String(), "Orchestrator reasoning ·") {
+		t.Fatalf("stream missing orchestrator reasoning: %s", stream.String())
 	}
-	if !strings.Contains(stream.String(), "runner_id=") {
+	if !strings.Contains(stream.String(), "Runner[") {
 		t.Fatalf("stream missing runner updates: %s", stream.String())
 	}
 	if !strings.Contains(stream.String(), "phase=settled") {
@@ -341,7 +341,7 @@ func TestHonshuOrchestratorRegistersAutonomousSkillRuntimes(t *testing.T) {
 	if err := o.SetClient(client); err != nil {
 		t.Fatalf("SetClient: %v", err)
 	}
-	if err := o.AddSkillDirs(&llm.ConversationConfig{MaxSteps: 12},
+	if err := o.AddSkillDirs(&llm.ConversationConfig{MaxSteps: 32},
 		filepath.Join(root, "elevation_lookup"),
 		filepath.Join(root, "train_gp_model"),
 		filepath.Join(root, "markdown_to_pdf"),
@@ -417,7 +417,7 @@ func TestStreamRendererShowsSettledPhase(t *testing.T) {
 		Scope:     streampkg.Scope{RunnerID: "runner-1"},
 		Delta:     json.RawMessage(`{"phase":"settled","status":"idle"}`),
 	})
-	for _, want := range []string{"runner_id=runner-1", "status=idle", "phase=settled"} {
+	for _, want := range []string{"Runner[runner-1]", "status=idle", "phase=settled"} {
 		if !strings.Contains(line, want) {
 			t.Fatalf("compact line missing %q:\n%s", want, line)
 		}
@@ -433,7 +433,7 @@ func TestStreamRendererShowsToolExecution(t *testing.T) {
 		Delta:     json.RawMessage(`{"call_id":"call_1","name":"bash"}`),
 		Metadata:  map[string]any{"skill_name": "train_gp_model"},
 	})
-	for _, want := range []string{"sk:", "skill=train_gp_model", "status=running", "event=execution.started", "tool=bash", "call=call_1"} {
+	for _, want := range []string{"Skill[train_gp_model]", "skill=train_gp_model", "status=running", "event=execution.started", "tool=bash", "call=call_1"} {
 		if !strings.Contains(line, want) {
 			t.Fatalf("compact line missing %q:\n%s", want, line)
 		}
@@ -635,7 +635,7 @@ func serveFakeSkill(w http.ResponseWriter, req *responsesRequest, userText strin
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
-		respondText(w, req.Model, doc)
+		respondMaybeText(w, req, doc)
 		return
 	}
 	if strings.HasPrefix(userText, "Summarize this executor output") {
@@ -644,7 +644,7 @@ func serveFakeSkill(w http.ResponseWriter, req *responsesRequest, userText strin
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
-		respondText(w, req.Model, doc)
+		respondMaybeText(w, req, doc)
 		return
 	}
 	if output := lastFunctionCallOutput(req.Input); output != "" {
@@ -653,7 +653,7 @@ func serveFakeSkill(w http.ResponseWriter, req *responsesRequest, userText strin
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
-		respondText(w, req.Model, doc)
+		respondMaybeText(w, req, doc)
 		return
 	}
 
@@ -677,7 +677,7 @@ func serveFakeSkill(w http.ResponseWriter, req *responsesRequest, userText strin
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
-		respondToolCall(w, req.Model, "call_train_gp", "bash", map[string]any{
+		respondMaybeToolCall(w, req, "call_train_gp", "bash", map[string]any{
 			"command":         command,
 			"timeout_seconds": 120,
 		})
@@ -699,7 +699,7 @@ func serveFakeSkill(w http.ResponseWriter, req *responsesRequest, userText strin
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
-		respondToolCall(w, req.Model, "call_lookup_elevation", "bash", map[string]any{
+		respondMaybeToolCall(w, req, "call_lookup_elevation", "bash", map[string]any{
 			"command":         command,
 			"timeout_seconds": 60,
 		})
@@ -716,7 +716,7 @@ func serveFakeSkill(w http.ResponseWriter, req *responsesRequest, userText strin
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
-		respondToolCall(w, req.Model, "call_render_pdf", "bash", map[string]any{
+		respondMaybeToolCall(w, req, "call_render_pdf", "bash", map[string]any{
 			"command":         command,
 			"timeout_seconds": 60,
 		})
@@ -1000,6 +1000,14 @@ func respondStreamText(w http.ResponseWriter, model, text string) {
 	}
 }
 
+func respondMaybeText(w http.ResponseWriter, req *responsesRequest, text string) {
+	if req.Stream {
+		respondStreamText(w, req.Model, text)
+		return
+	}
+	respondText(w, req.Model, text)
+}
+
 func reasoningDeltaEvent(delta string) string {
 	return fmt.Sprintf(
 		"event: response.reasoning_summary_text.delta\n"+
@@ -1023,6 +1031,33 @@ func completedEvent(model, text string) string {
 		text,
 	)
 	return "event: response.completed\ndata: " + data
+}
+
+func respondMaybeToolCall(w http.ResponseWriter, req *responsesRequest, callID, name string, args map[string]any) {
+	if req.Stream {
+		respondStreamToolCall(w, req.Model, callID, name, args)
+		return
+	}
+	respondToolCall(w, req.Model, callID, name, args)
+}
+
+func respondStreamToolCall(w http.ResponseWriter, model, callID, name string, args map[string]any) {
+	argBytes, _ := json.Marshal(args)
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.WriteHeader(http.StatusOK)
+	flusher, _ := w.(http.Flusher)
+	data := fmt.Sprintf(
+		`{"type":"response.completed","sequence_number":1,"response":{"id":"resp_tool_stream","object":"response","created_at":0,"model":%q,"status":"completed","output":[{"id":%q,"type":"function_call","status":"completed","call_id":%q,"name":%q,"arguments":%q}],"parallel_tool_calls":false,"tool_choice":"auto","tools":[],"usage":{"input_tokens":3,"input_tokens_details":{"cached_tokens":0},"output_tokens":4,"output_tokens_details":{"reasoning_tokens":0},"total_tokens":7}}}`,
+		model,
+		"fc_"+name,
+		callID,
+		name,
+		string(argBytes),
+	)
+	_, _ = w.Write([]byte("event: response.completed\ndata: " + data + "\n\n"))
+	if flusher != nil {
+		flusher.Flush()
+	}
 }
 
 func respondToolCall(w http.ResponseWriter, model, callID, name string, args map[string]any) {

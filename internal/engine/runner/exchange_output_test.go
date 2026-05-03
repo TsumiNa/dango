@@ -20,7 +20,7 @@ func TestAnnotateExchangeOutputAddsRunnerAndNodeMetadata(t *testing.T) {
 		t.Fatalf("Markdown: %v", err)
 	}
 
-	r := New(WithLogger(testLogger))
+	r := newTestRunner()
 	got := r.annotateExchangeOutput(&Node{
 		Id:              "node-1",
 		SkillName:       "skill-1",
@@ -55,7 +55,7 @@ func TestExchangeResourcesSurviveAnnotation(t *testing.T) {
 		t.Fatalf("Markdown: %v", err)
 	}
 
-	r := New(WithLogger(testLogger))
+	r := newTestRunner()
 	got := r.annotateExchangeOutput(&Node{Id: "node-1"}, raw)
 	parsed, err := ParseExchangeMarkdown(got.(string))
 	if err != nil {
@@ -86,7 +86,7 @@ func TestRunnerPassesParentExchangeResourceDirsToChildBinder(t *testing.T) {
 	child := &resourceRecorderExecutor{}
 	parent := &Node{Id: "parent", Executor: &staticExecutor{output: parentOutput}}
 	childNode := &Node{Id: "child", Parents: []*Node{parent}, Executor: child}
-	r := New(WithLogger(testLogger))
+	r := newTestRunner()
 	if err := r.Start(context.Background()); err != nil {
 		t.Fatalf("Start: %v", err)
 	}
@@ -110,7 +110,7 @@ func TestRunnerPassesParentExchangeResourceDirsToChildBinder(t *testing.T) {
 }
 
 func TestAnnotateExchangeOutputLeavesPlainValuesUntouched(t *testing.T) {
-	r := New(WithLogger(testLogger))
+	r := newTestRunner()
 	if got := r.annotateExchangeOutput(&Node{Id: "node-1"}, 10); got != 10 {
 		t.Fatalf("annotate int = %v, want 10", got)
 	}
