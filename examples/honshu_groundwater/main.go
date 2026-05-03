@@ -156,11 +156,9 @@ func runHonshuGroundwaterExample(ctx context.Context, cfg exampleConfig) (*runne
 		ArtifactsDir: artifactsDir,
 	})
 	if err != nil {
-		logger.Error("request failed before runner stream was available", "err", err)
-		return nil, fmt.Errorf("start request before runner stream is available: %w", err)
+		return nil, fmt.Errorf("start request: %w", err)
 	}
-	runnerID := resp.RunnerID
-	events, err := resp.Stream.Subscribe(streampkg.Filter{}, streampkg.WithSubscriberBuffer(256))
+	events, err := resp.Stream.Subscribe(streampkg.Filter{}, streampkg.WithSubscriberBuffer(8192))
 	if err != nil {
 		return nil, err
 	}
@@ -171,6 +169,11 @@ func runHonshuGroundwaterExample(ctx context.Context, cfg exampleConfig) (*runne
 	closeEventStream := func() error {
 		resp.Stream.Close()
 		return <-eventErrCh
+	}
+	runnerID, err := waitForRunnerCreated(ctx, resp.Stream)
+	if err != nil {
+		_ = closeEventStream()
+		return nil, err
 	}
 	logger.Info("runner created", "runner_id", runnerID)
 
@@ -243,21 +246,54 @@ func streamExampleEvents(ctx context.Context, out io.Writer, raw io.Writer, sub 
 		encoder = json.NewEncoder(raw)
 	}
 	renderer := streamrender.New(out, renderCfg)
-	for {
-		event, ok, err := sub.Next(ctx)
-		if err != nil {
-			return err
-		}
-		if !ok {
-			return nil
-		}
+	return renderer.RenderSubscriptionObserved(ctx, sub, func(event streampkg.Event) error {
 		if encoder != nil {
 			if err := encoder.Encode(event); err != nil {
 				return err
 			}
 		}
-		if err := renderer.RenderEvent(event); err != nil {
-			return err
+		return nil
+	})
+}
+
+func waitForRunnerCreated(ctx context.Context, eventStream *streampkg.Stream) (string, error) {
+	if eventStream == nil {
+		return "", fmt.Errorf("request stream is nil")
+	}
+	sub, err := eventStream.Subscribe(streampkg.Filter{EventTypes: []string{streampkg.EventStatusProgress, streampkg.EventStatusFailed}}, streampkg.WithSubscriberBuffer(64))
+	if err != nil {
+		return "", err
+	}
+	defer sub.Cancel()
+	for {
+		event, ok, err := sub.Next(ctx)
+		if err != nil {
+			return "", err
+		}
+		if !ok {
+			return "", fmt.Errorf("request stream closed before runner creation")
+		}
+		if event.From.Layer != "orchestrator" {
+			continue
+		}
+		values := map[string]any{}
+		_ = json.Unmarshal(event.Delta, &values)
+		if event.EventType == streampkg.EventStatusFailed {
+			if msg, ok := values["message"].(string); ok && msg != "" {
+				return "", fmt.Errorf("request rejected: %s", msg)
+			}
+			var text string
+			_ = json.Unmarshal(event.Delta, &text)
+			if text == "" {
+				text = "request rejected"
+			}
+			return "", fmt.Errorf("request rejected: %s", text)
+		}
+		if msg, _ := values["message"].(string); msg != "runner created" {
+			continue
+		}
+		if runnerID, _ := values["runner_id"].(string); runnerID != "" {
+			return runnerID, nil
 		}
 	}
 }

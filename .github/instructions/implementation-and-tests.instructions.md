@@ -21,6 +21,17 @@ Use the most direct code structure that satisfies the described requirement.
 If you find yourself adding a layer "in case we need to swap it later", stop and use the concrete form instead.
 If you find yourself creating a function that only forwards to another function with nearly the same name, inline it unless there is a concrete lifecycle, validation, locking, instrumentation, or API-boundary reason for the wrapper.
 
+### Runtime Communication and Streams
+
+Treat stream as the runtime communication substrate between orchestrator (`or`), runner (`ru`), and runnable skill (`sk`) execution units. Conceptually, stream is a featureful wrapper around a Go `chan`: it keeps channel-like publish/subscribe synchronization while adding filtering, fan-out, replay, merge, scope metadata, structured payloads, and optional persistence. These runtime participants should run as independent asynchronous participants, usually in their own goroutines once started. An executor (`ex`) is a proxy/sandbox container for exactly one skill and cannot do useful runtime work without that skill; it should add node/executor context to the bound skill's stream configuration and expose the skill-owned stream upward rather than owning a parallel runtime stream.
+
+- A module that starts another module should return after synchronous validation/setup and let the callee continue independently.
+- Do not use a blocking call chain or a return value as the normal way for `or`/`ru`/`ex`/`sk` to wait for each other at runtime.
+- Publish progress, readiness, identifiers such as `runner_id`, failures, tool execution, and model/skill output to the relevant owner stream (`or` request stream, `ru` runner stream, or bound `sk` runtime stream with `ex`/`node` context in source, scope, and metadata).
+- Consumers that need synchronization should subscribe to streams with focused filters and wait for the event they need, or use explicit query APIs for snapshots.
+- Direct return values are appropriate for construction, validation errors, immediate setup failures, and snapshot/query APIs. They are not the primary cross-module runtime communication channel.
+- Do not add parallel "Async" entrypoints when the core operation should itself be asynchronous. Fix the primary API semantics instead.
+
 ### Constructor Shape, Config, and Options
 
 Prefer the construction shape `New(required ..., cfg Cfg, opts ...Opt) *S` when a type needs both required inputs and optional tuning.

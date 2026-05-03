@@ -25,8 +25,9 @@ const SkillFile = "SKILL.md"
 // A Skill bundles the metadata and instruction prompt loaded from the
 // skill's SKILL.md with a multi-turn [Conversation] that runs that
 // instruction against a configured set of tools. Callers drive it with
-// [Skill.Run]; the underlying conversation owns the request/tool-call
-// loop and, when a session is configured, the append-only event log.
+// [Skill.Run]; the bound skill owns the runtime stream, while the underlying
+// conversation owns the request/tool-call loop and, when a session is
+// configured, the append-only event log.
 //
 // A skill directory is laid out as:
 //
@@ -54,7 +55,8 @@ type Skill struct {
 	bashBlock []string
 	tools     []Tool
 
-	conv *Conversation
+	conv        *Conversation
+	eventStream *streampkg.Stream
 }
 
 // SkillConfig controls optional behaviour while loading a [Skill].
@@ -256,7 +258,14 @@ func (s *Skill) Bind(client *Client, cfg ConversationConfig, opts ...BindOption)
 
 	bound := s.copy()
 
-	conv, err := NewConversation(client, s.runtimeInstruction(), bound.tools, cfg)
+	runtimeCfg := cfg
+	if runtimeCfg.StreamEvents {
+		if runtimeCfg.EventStream == nil {
+			runtimeCfg.EventStream = streampkg.New(runtimeCfg.StreamScope, streampkg.DefaultConfig())
+		}
+		bound.eventStream = runtimeCfg.EventStream
+	}
+	conv, err := NewConversation(client, s.runtimeInstruction(), bound.tools, runtimeCfg)
 	if err != nil {
 		return nil, err
 	}
@@ -311,6 +320,7 @@ func (s *Skill) copy() *Skill {
 	bound.envFiles = append([]string(nil), s.envFiles...)
 	bound.tools = append([]Tool(nil), s.tools...)
 	bound.conv = nil
+	bound.eventStream = nil
 	return &bound
 }
 
@@ -444,13 +454,13 @@ func (s *Skill) BashBlock() []string { return append([]string(nil), s.bashBlock.
 // it concurrently with a running [Skill.Run].
 func (s *Skill) Conversation() *Conversation { return s.conv }
 
-// EventStream returns the bound conversation's progress stream, or nil when
-// the skill is unbound or was bound without stream events enabled.
+// EventStream returns the bound skill's runtime stream, or nil when the skill
+// is unbound or was bound without stream events enabled.
 func (s *Skill) EventStream() *streampkg.Stream {
-	if s == nil || s.conv == nil {
+	if s == nil {
 		return nil
 	}
-	return s.conv.EventStream()
+	return s.eventStream
 }
 
 // Run drives a single task to completion by delegating to

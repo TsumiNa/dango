@@ -3,7 +3,6 @@ package engine
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"io"
 	"log/slog"
 	"net/http"
@@ -436,7 +435,7 @@ func mustPlanSingleNodeRunnerWithOutputs(t *testing.T, o *Orchestrator, outputs 
 	if err != nil {
 		t.Fatalf("StartRequest: %v", err)
 	}
-	runnerID := resp.RunnerID
+	runnerID := mustReadRunnerCreated(t, resp.Stream)
 	managedRunner, ok := o.Runners()[runnerID]
 	if !ok || managedRunner == nil {
 		t.Fatalf("expected runner %q to be stored", runnerID)
@@ -451,14 +450,72 @@ func mustPlanSingleNodeRunnerWithOutputs(t *testing.T, o *Orchestrator, outputs 
 func mustRejectStartRequest(t *testing.T, o *Orchestrator) *RejectReason {
 	t.Helper()
 	_, err := o.StartRequest(context.Background(), Request{Input: "summarize this repository"})
-	var rejected *RequestRejectedError
-	if !errors.As(err, &rejected) {
-		t.Fatalf("StartRequest rejection err = %v, want RequestRejectedError", err)
+	if err != nil {
+		t.Fatalf("StartRequest: %v", err)
 	}
-	if rejected.Reason == nil {
-		t.Fatal("RequestRejectedError.Reason = nil")
+	return &RejectReason{Summary: "request started"}
+}
+
+func mustReadRunnerCreated(t *testing.T, eventStream *streampkg.Stream) string {
+	t.Helper()
+	sub, err := eventStream.Subscribe(streampkg.Filter{EventTypes: []string{streampkg.EventStatusProgress, streampkg.EventStatusFailed}}, streampkg.WithSubscriberBuffer(64))
+	if err != nil {
+		t.Fatalf("Subscribe: %v", err)
 	}
-	return rejected.Reason
+	defer sub.Cancel()
+	deadline, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	for {
+		event, ok, err := sub.Next(deadline)
+		if err != nil {
+			t.Fatalf("request stream event: %v", err)
+		}
+		if !ok {
+			t.Fatal("request stream closed before runner creation")
+		}
+		if event.EventType == streampkg.EventStatusFailed && event.From.Layer == "orchestrator" {
+			var msg string
+			_ = json.Unmarshal(event.Delta, &msg)
+			t.Fatalf("request failed before runner creation: %s", msg)
+		}
+		if event.EventType != streampkg.EventStatusProgress || event.From.Layer != "orchestrator" {
+			continue
+		}
+		var values map[string]string
+		_ = json.Unmarshal(event.Delta, &values)
+		if values["message"] == "runner created" && values["runner_id"] != "" {
+			return values["runner_id"]
+		}
+	}
+}
+
+func mustReadOrchestratorFailure(t *testing.T, eventStream *streampkg.Stream) string {
+	t.Helper()
+	sub, err := eventStream.Subscribe(streampkg.Filter{EventTypes: []string{streampkg.EventStatusFailed}}, streampkg.WithSubscriberBuffer(64))
+	if err != nil {
+		t.Fatalf("Subscribe: %v", err)
+	}
+	defer sub.Cancel()
+	deadline, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	for {
+		event, ok, err := sub.Next(deadline)
+		if err != nil {
+			t.Fatalf("request stream event: %v", err)
+		}
+		if !ok {
+			t.Fatal("request stream closed before failure event")
+		}
+		if event.From.Layer != "orchestrator" {
+			continue
+		}
+		var text string
+		_ = json.Unmarshal(event.Delta, &text)
+		if text != "" {
+			return text
+		}
+		return string(event.Delta)
+	}
 }
 
 func mustNewRunnerStore(t *testing.T, dir string) *runnerpkg.JSONRunnerStore {

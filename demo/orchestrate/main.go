@@ -461,7 +461,7 @@ func mustStartRequest(ctx context.Context, o *orchestrate.Orchestrator, input st
 	if err != nil {
 		fatalf("StartRequest(%q): %v", input, err)
 	}
-	runnerID := resp.RunnerID
+	runnerID := mustReadRunnerCreated(ctx, resp.Stream)
 	view, err := o.QueryRunner(runnerID)
 	if err != nil {
 		fatalf("QueryRunner(%q): %v", runnerID, err)
@@ -470,6 +470,31 @@ func mustStartRequest(ctx context.Context, o *orchestrate.Orchestrator, input st
 		fatalf("StartRequest(%q) returned runner %q without a plan", input, runnerID)
 	}
 	return view.Plan
+}
+
+func mustReadRunnerCreated(ctx context.Context, stream *streampkg.Stream) string {
+	sub, err := stream.Subscribe(streampkg.Filter{EventTypes: []string{streampkg.EventStatusProgress, streampkg.EventStatusFailed}}, streampkg.WithSubscriberBuffer(64))
+	if err != nil {
+		fatalf("Subscribe request stream: %v", err)
+	}
+	defer sub.Cancel()
+	for {
+		event, ok, err := sub.Next(ctx)
+		if err != nil {
+			fatalf("request stream: %v", err)
+		}
+		if !ok {
+			fatalf("request stream closed before runner creation")
+		}
+		if event.EventType == streampkg.EventStatusFailed {
+			fatalf("request failed before runner creation: %s", string(event.Delta))
+		}
+		var values map[string]string
+		_ = json.Unmarshal(event.Delta, &values)
+		if values["message"] == "runner created" && values["runner_id"] != "" {
+			return values["runner_id"]
+		}
+	}
 }
 
 func mustRunner(o *orchestrate.Orchestrator, id string) *runnerpkg.Runner {

@@ -153,14 +153,20 @@ func DefaultAutoShrinkConfig() AutoShrinkConfig {
 // Non-zero MaxSteps overrides the request/tool-call loop bound, AutoShrink
 // overrides the default shrinking policy when non-nil, Summarizer overrides the
 // default local summary compression, and StreamEvents asks NewConversation to
-// create a conversation-owned event stream for compact model/tool progress
-// events. Stream output is observational and independent of session
-// persistence.
+// emit compact model/tool progress events. When StreamEvents is true,
+// [Conversation.Run] requests provider SSE so reasoning and output deltas can
+// be emitted while the response is running. If EventStream is non-nil, the
+// Conversation writes to that caller-owned stream; [Skill.Bind] uses this to
+// make the bound Skill own the runtime stream while its Conversation writes
+// events into it. If EventStream is nil, NewConversation creates a
+// conversation-owned stream for standalone llm package use. Stream output is
+// observational and independent of session persistence.
 type ConversationConfig struct {
 	MaxSteps       int
 	AutoShrink     *AutoShrinkConfig
 	Summarizer     Summarizer
 	StreamEvents   bool
+	EventStream    *streampkg.Stream
 	StreamSource   streampkg.Source
 	StreamScope    streampkg.Scope
 	StreamMetadata map[string]any
@@ -375,7 +381,10 @@ func NewConversation(client *Client, instructions string, tools []Tool, cfg Conv
 		if source.Layer == "" {
 			source.Layer = "conversation"
 		}
-		c.eventStream = streampkg.New(resolved.StreamScope, streampkg.DefaultConfig())
+		c.eventStream = resolved.EventStream
+		if c.eventStream == nil {
+			c.eventStream = streampkg.New(resolved.StreamScope, streampkg.DefaultConfig())
+		}
 		c.eventSource = source
 		c.eventScope = resolved.StreamScope
 		c.eventMetadata = cloneConversationStreamMetadata(resolved.StreamMetadata)

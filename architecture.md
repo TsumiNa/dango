@@ -2,14 +2,16 @@
 
 这份文档描述 `internal/engine/orchestrator.go`（简称 `or`）、`internal/engine/runner/runner.go`（简称 `ru`）和 `internal/engine/executor.go`（简称 `ex`）之间的调用关系和数据流关系。
 
-当前设计把三者分成两条正交链路：
+当前设计的世界原则是：`stream` 是底层通信设施，可以把它理解成对 Go `chan` 的功能化封装：保留 channel 风格的发布/订阅和等待能力，同时补上过滤、fan-out、replay、merge、scope metadata、结构化 payload 和可选持久化。`or`、`ru`、`sk` 是拥有运行生命周期的异步参与者，原则上不通过阻塞调用链等待彼此完成。一个模块启动另一个模块后应该脱手，后续进度、失败、runner id、阶段推进、tool execution 和 skill 输出都通过 stream 发布；需要同步的一方通过订阅/过滤 stream 等待自己关心的事件。直接函数返回值只用于同步校验、对象创建、快照读取或显式 query，不作为跨模块运行时通信面。`ex` 是绑定、沙箱和调度 skill 的容器，不是能脱离 skill 独立工作的执行主体；它给 skill stream 补齐 node/executor 上下文并向 `ru` 暴露该 stream。
 
-- 管理调用关系：`or` 对外接受 request，在 `StartRequest` 中创建 request-scoped stream，生成 coarse plan，装配并启动 `ru`；`ru` 维护单个 plan 的生命周期并调度多个 `ex`；上层程序通过 `or` 的 query API 和 `Response.Stream` 观察处理状态，不需要感知 `ru` 和 `ex`。
+当前设计把系统分成两条正交链路：
+
+- 管理调用关系：`or` 对外接受 request，在 `StartRequest` 中创建 request-scoped stream 并立即返回；后台 goroutine 继续生成 coarse plan、装配并启动 `ru`；`ru` 维护单个 plan 的生命周期并调度多个 `ex`；上层程序通过订阅 `Response.Stream` 和 `or` 的 query API 观察处理状态，不需要感知 `ru` 和 `ex` 的内部同步。
 - 数据流关系：skill 间的数据交换统一收敛为带 front matter 的 markdown exchange document。`ru` 只负责搬运、补齐 runner/node 元数据、持久化和转发这些文档，不解释 skill 业务语义。
 
 ## 调用关系
 
-`or` 是外部控制面，`ru` 是单个 request/plan 的生命周期宿主，`ex` 是单个 node 的执行单元。
+`or` 是外部控制面，`ru` 是单个 request/plan 的生命周期宿主，`sk` 是实际执行单元，`ex` 是与一个 `sk` 一对一绑定的代理/沙箱容器，`node` 是 `ru` 用来衔接 plan step、依赖和 executor 的轻量 wrapper。
 
 ```mermaid
 sequenceDiagram
@@ -27,6 +29,8 @@ sequenceDiagram
 
     C->>O: StartRequest req
     O->>S: create request-scoped stream
+    O-->>C: Response{stream} immediately
+    par background startup goroutine
     O->>OS: plan(request, skill summaries)
     OS-->>O: strict JSON CoarsePlan or RejectReason
     O-->>S: planning reasoning / output / status
@@ -35,7 +39,9 @@ sequenceDiagram
     SR-->>O: skill registrations
     O->>O: buildPlanNodes / newRunnerFromPlan
     O->>RR: store Runner + Node graph
+    O-->>S: runner created + runner_id
     O->>Q: enqueue by priority
+    end
     Q-->>R: start when admitted
     R->>R: StartManaged
     Note over R: created -> polishing -> awaiting_review<br/>-> executing -> report -> settled
@@ -48,8 +54,8 @@ sequenceDiagram
     D-->>R: completed node
     R->>E: Report(ctx)
     E-->>R: report exchange markdown
-    R-->>S: runner / executor / skill stream events
-    C->>S: subscribe(resp.Stream)
+    R-->>S: runner / skill stream events
+    C->>S: subscribe(resp.Stream) / wait for runner_id event
     C->>O: QueryRunner / LoadRunnerRecords
     O->>RR: lookup runner state
     RR-->>O: RunnerView
@@ -58,10 +64,12 @@ sequenceDiagram
 
 关键边界：
 
-- `or` 管外部 API、skill 注册、coarse plan 生成、runner 装配、runner registry、query/subscribe、队列和启动准入。
-- `ru` 管单个 plan 的生命周期、executor binding、DAG 调度、dynamic node append、snapshot/update/event、report 汇总和终态。
-- `ex` 管单个 node 在 `Polish`、`Execute`、`Report` 三个阶段的局部工作。
-- stream ownership 由被调用模块负责：`StartRequest` 创建 request-scoped stream；runner、conversation 等模块根据自己的配置创建并返回/暴露自己的 stream；上层只通过 `MergeFrom` 汇总，不把预先创建好的 stream 注入给下层。
+- `or` 管外部 API、skill 注册、coarse plan 生成、runner 装配、runner registry、query/subscribe、队列和启动准入，并拥有 request-scoped stream。orchestrator skill 作为 skill runtime 拥有自己的 planning stream，`or` 将它 merge 到 request stream。
+- `ru` 管单个 plan 的生命周期、executor binding、DAG 调度、dynamic node append、snapshot/update/event、report 汇总和终态，并拥有 runner-scoped stream。
+- `node` 是 `ru` 内部的轻量 wrapper：保存 step id、skill name、依赖、task description 和对应 executor，用来让 `ru` 按 plan 串接和调度 `ex`。
+- `sk` 是实际执行单元：被 `Bind` 成 runnable copy 后创建自己的 runtime stream，LLM reasoning、output delta、tool execution 和 exchange memo 都以 skill source 发布。
+- `ex` 是 skill 的代理/沙箱容器：它不能脱离 skill 独立完成工作；它负责给 skill runtime config 补齐 `node_id`、`skill_name`、source parent 等上下文，然后把 bound skill 的 stream 暴露给 `ru`。
+- stream ownership 由实际运行模块负责：`StartRequest` 创建 request-scoped stream；`ru` 创建 runner stream；bound `sk` 创建 skill runtime stream。上层只通过 `MergeFrom` 汇总，不把预先创建好的 stream 注入给下层。`ex`/`node` 的信息作为 skill stream 的 source/scope/metadata 上下文出现，而不是单独拥有一条可执行 stream。
 
 ## 数据流关系
 
@@ -139,7 +147,7 @@ sequenceDiagram
 
 ## Lifecycle Sequence
 
-下面是当前 managed lifecycle 的端到端时序。对外入口只有 `or.StartRequest`；它返回 `Response{RunnerID, Stream}`，后续 polish、review、replan、execute、report 由 `ru.StartManaged` 推进。
+下面是当前 managed lifecycle 的端到端时序。对外入口只有 `or.StartRequest`；它返回 `Response{Stream}` 后立即脱手。`RunnerID` 不是 `StartRequest` 的同步返回值，而是 request stream 上的 `runner created` 事件。后续 planning、polish、review、replan、execute、report 都由各自 goroutine 推进，订阅者通过 stream 同步。
 
 ```mermaid
 sequenceDiagram
@@ -154,19 +162,23 @@ sequenceDiagram
 
     C->>O: StartRequest(ctx, req)
     O->>O: validate request / lock startup config
+    O->>U: create request-scoped stream
+    O-->>C: Response{stream}
+    par background planning / startup
     O->>OS: plan(request, skill summaries)
     OS-->>O: strict JSON CoarsePlan or RejectReason
     O-->>U: planning reasoning / output / status
     O-->>U: planning exchange markdown
 
     alt rejected
-        O-->>C: RequestRejectedError
+        O-->>U: status.failed + reject reason
     else planned
         O->>O: build Node graph + Executor per CoarsePlanNode
         O->>R: runner.New(WithInitialPlan, WithPlannerSkill, WithSkillSummaries, WithPlanNodeBuilder)
         O->>O: store runner in registry
+        O-->>U: status.progress runner created + runner_id
         O->>R: StartManaged(ctx) or queue by priority
-        O-->>C: Response{runnerID, stream}
+    end
     end
 
     R->>R: StartPolish
@@ -303,4 +315,4 @@ flowchart LR
 
 ## 一句话总结
 
-`or` 负责对外和控制面，并创建 request-scoped stream；`ru` 负责单个 plan 的生命周期和 DAG 调度；`ex` 负责单个 node 的执行；三者之间的数据面统一使用带 front matter 的 markdown exchange document，而 outward observability 统一走 `Response.Stream`，让持久化、human review、skill handoff 和终端观察尽量对齐同一种结构。
+`or` 负责对外和控制面，并创建 request-scoped stream；`ru` 负责单个 plan 的生命周期和 DAG 调度；`sk` 负责实际执行并拥有 runtime stream；`ex`/`node` 负责把 skill 放进 runner plan 的沙箱和调度上下文。三者之间的数据面统一使用带 front matter 的 markdown exchange document，而 outward observability 统一走 `Response.Stream`，让持久化、human review、skill handoff 和终端观察尽量对齐同一种结构。

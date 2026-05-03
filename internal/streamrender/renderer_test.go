@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -81,20 +82,36 @@ func TestRendererCompressesRunningOutputWithFrame(t *testing.T) {
 		Delta:     mustJSONString(t, "this is a very long model output chunk"),
 	}
 	line := renderer.FormatEvent(event)
-	for _, want := range []string{"Skill[train]", "output", "streaming", "*"} {
+	for _, want := range []string{"Skill[train]", "output", "this is", "truncated=true", "*"} {
 		if !strings.Contains(line, want) {
 			t.Fatalf("line missing %q:\n%s", want, line)
 		}
 	}
-	if strings.Contains(line, "this is a") || strings.Contains(line, "truncated=true") {
-		t.Fatalf("running output leaked raw text: %q", line)
-	}
-	if repeated := renderer.FormatEvent(event); repeated != "" {
-		t.Fatalf("repeated running output line = %q, want suppressed", repeated)
+	event.Delta = mustJSONString(t, " next")
+	line = renderer.FormatEvent(event)
+	if !strings.Contains(line, "this is") || !strings.Contains(line, "truncated=true") {
+		t.Fatalf("running output did not keep accumulated text: %q", line)
 	}
 }
 
-func TestRendererBatchesRunningReasoning(t *testing.T) {
+func TestRendererSummarizesRunningExchangeDraft(t *testing.T) {
+	renderer := New(nil, Config{ProgressFrames: []string{"*"}})
+	line := renderer.FormatEvent(streampkg.Event{
+		EventType: streampkg.EventLLMOutputDelta,
+		From:      streampkg.Source{Layer: "skill", ID: "train"},
+		Status:    streampkg.StatusRunning,
+		Delta: mustJSONString(t, `---
+resources: []
+---
+# Memo
+drafting a long exchange document`),
+	})
+	if !strings.Contains(line, "drafting exchange") || strings.Contains(line, "resources") || strings.Contains(line, "# Memo") {
+		t.Fatalf("running exchange draft line = %q", line)
+	}
+}
+
+func TestRendererShowsRunningReasoningImmediately(t *testing.T) {
 	renderer := New(nil, Config{MaxText: 200, ProgressFrames: []string{"*"}})
 	event := streampkg.Event{
 		EventType: streampkg.EventLLMReasoningDelta,
@@ -102,13 +119,73 @@ func TestRendererBatchesRunningReasoning(t *testing.T) {
 		Status:    streampkg.StatusRunning,
 		Delta:     mustJSONString(t, "small "),
 	}
-	if line := renderer.FormatEvent(event); line != "" {
-		t.Fatalf("short reasoning line = %q, want buffered", line)
-	}
-	event.Delta = mustJSONString(t, strings.Repeat("reasoning ", 32))
 	line := renderer.FormatEvent(event)
-	if !strings.Contains(line, "Skill[train]") || !strings.Contains(line, "reasoning") || !strings.Contains(line, "small reasoning") {
-		t.Fatalf("batched reasoning line = %q", line)
+	if !strings.Contains(line, "Skill[train]") || !strings.Contains(line, "reasoning") || !strings.Contains(line, "small") {
+		t.Fatalf("running reasoning line = %q", line)
+	}
+}
+
+func TestRendererUpdatesRunningEventsInPlace(t *testing.T) {
+	var out bytes.Buffer
+	renderer := New(&out, Config{ProgressFrames: []string{"|", "/"}})
+	running := streampkg.Event{
+		EventType: streampkg.EventLLMReasoningDelta,
+		From:      streampkg.Source{Layer: "skill", ID: "train"},
+		Status:    streampkg.StatusRunning,
+		Delta:     mustJSONString(t, "planning"),
+	}
+	if err := renderer.RenderEvent(running); err != nil {
+		t.Fatalf("RenderEvent(running): %v", err)
+	}
+	if strings.Contains(out.String(), "\n") || !strings.Contains(out.String(), "\r\x1b[K") {
+		t.Fatalf("running output should update one terminal line: %q", out.String())
+	}
+	completed := running
+	completed.Status = streampkg.StatusCompleted
+	completed.Delta = mustJSONString(t, "done")
+	if err := renderer.RenderEvent(completed); err != nil {
+		t.Fatalf("RenderEvent(completed): %v", err)
+	}
+	if !strings.Contains(out.String(), "done\n") {
+		t.Fatalf("completed output should finish the live line: %q", out.String())
+	}
+}
+
+func TestRendererReplacesLiveLineWhenSourceChanges(t *testing.T) {
+	var out bytes.Buffer
+	renderer := New(&out, Config{ProgressFrames: []string{"|", "/"}})
+	first := streampkg.Event{
+		EventType: streampkg.EventLLMOutputDelta,
+		From:      streampkg.Source{Layer: "skill", ID: "elevation"},
+		Status:    streampkg.StatusRunning,
+		Delta:     mustJSONString(t, "drafting elevation handoff"),
+	}
+	second := first
+	second.From.ID = "train"
+	second.Delta = mustJSONString(t, "drafting model handoff")
+	if err := renderer.RenderEvent(first); err != nil {
+		t.Fatalf("RenderEvent(first): %v", err)
+	}
+	if err := renderer.RenderEvent(second); err != nil {
+		t.Fatalf("RenderEvent(second): %v", err)
+	}
+	if strings.Contains(out.String(), "\n") {
+		t.Fatalf("live source switch should replace the terminal line, not append one: %q", out.String())
+	}
+}
+
+func TestRendererShowsToolExecutionAsLiveLine(t *testing.T) {
+	renderer := New(nil, DefaultConfig())
+	line := renderer.FormatEvent(streampkg.Event{
+		EventType: streampkg.EventToolExecutionStarted,
+		From:      streampkg.Source{Layer: "skill", ID: "train"},
+		Status:    streampkg.StatusRunning,
+		Delta:     json.RawMessage(`{"name":"python","call_id":"call_1"}`),
+	})
+	for _, want := range []string{"Skill[train]", "tool calling", "python", "|"} {
+		if !strings.Contains(line, want) {
+			t.Fatalf("tool line missing %q:\n%s", want, line)
+		}
 	}
 }
 
@@ -267,6 +344,35 @@ func TestRendererDrainsSubscription(t *testing.T) {
 	}
 	if !strings.Contains(out.String(), "phase=settled") {
 		t.Fatalf("rendered output = %q", out.String())
+	}
+}
+
+func TestRendererObservedSubscriptionReportsEvents(t *testing.T) {
+	s := streampkg.New(streampkg.Scope{RequestID: "req"}, streampkg.DefaultConfig())
+	sub, err := s.Subscribe(streampkg.Filter{}, streampkg.WithSubscriberBuffer(4))
+	if err != nil {
+		t.Fatalf("Subscribe: %v", err)
+	}
+	if err := s.Emit(context.Background(), streampkg.Event{
+		EventType: streampkg.EventRunnerPhaseChanged,
+		From:      streampkg.Source{Layer: "runner", ID: "runner"},
+		Status:    streampkg.StatusCompleted,
+		Delta:     json.RawMessage(`{"phase":"settled","status":"idle"}`),
+	}); err != nil {
+		t.Fatalf("Emit: %v", err)
+	}
+	s.Close()
+
+	var observed int
+	renderer := New(io.Discard, Config{})
+	if err := renderer.RenderSubscriptionObserved(context.Background(), sub, func(streampkg.Event) error {
+		observed++
+		return nil
+	}); err != nil {
+		t.Fatalf("RenderSubscriptionObserved: %v", err)
+	}
+	if observed != 1 {
+		t.Fatalf("observed events = %d, want 1", observed)
 	}
 }
 

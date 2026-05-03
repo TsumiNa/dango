@@ -7,7 +7,7 @@ import (
 )
 
 const (
-	defaultBufferLimit      = 256
+	defaultBufferLimit      = 1 << 10
 	defaultSubscriberBuffer = 16
 )
 
@@ -43,7 +43,15 @@ func WithStore(store Store) Option {
 	}
 }
 
-// Stream is an append-only event bus for one logical execution scope.
+// Stream is an append-only, replayable channel-like communication bus for one
+// logical execution scope.
+//
+// Producers publish structured events with [Stream.Emit]; consumers synchronize
+// by subscribing with filters and reading from the returned subscription. Stream
+// adds fan-out, replay, merge, scoped metadata, and optional persistence around
+// the channel-shaped communication model used by orchestrator, runner, and
+// skill goroutines. Executors and nodes add context around skill-owned streams
+// and merge them upward rather than forming a separate execution substrate.
 type Stream struct {
 	scope       Scope
 	bufferLimit int

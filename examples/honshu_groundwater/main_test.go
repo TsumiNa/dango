@@ -433,7 +433,7 @@ func TestStreamRendererShowsToolExecution(t *testing.T) {
 		Delta:     json.RawMessage(`{"call_id":"call_1","name":"bash"}`),
 		Metadata:  map[string]any{"skill_name": "train_gp_model"},
 	})
-	for _, want := range []string{"Skill[train_gp_model]", "skill=train_gp_model", "status=running", "event=execution.started", "tool=bash", "call=call_1"} {
+	for _, want := range []string{"Skill[train_gp_model]", "tool calling", "bash", "|"} {
 		if !strings.Contains(line, want) {
 			t.Fatalf("compact line missing %q:\n%s", want, line)
 		}
@@ -448,7 +448,7 @@ func TestStreamRendererShowsFailedToolExecution(t *testing.T) {
 		Scope:     streampkg.Scope{NodeID: "train_model"},
 		Delta:     json.RawMessage(`{"call_id":"call_1","name":"bash","error":"exit status 1"}`),
 	})
-	for _, want := range []string{"skill=train_gp_model", "status=failed", "event=execution.failed", "tool=bash", "error=\"exit status 1\""} {
+	for _, want := range []string{"Skill[train_gp_model]", "tool failed", "bash", "status=failed", "skill=train_gp_model", "error=\"exit status 1\""} {
 		if !strings.Contains(line, want) {
 			t.Fatalf("compact line missing %q:\n%s", want, line)
 		}

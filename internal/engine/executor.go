@@ -51,10 +51,11 @@ type SharedData struct {
 
 // Executor runs a single task on top of a loaded [llm.Skill].
 //
-// An Executor is bound to one Skill at construction time and uses the
-// Skill's directory, prompt, and bound LLM client to plan and run the
-// task. The zero value is not usable; construct instances with
-// [NewExecutor].
+// An Executor is the engine-owned proxy container for one Skill runtime. It is
+// bound to one Skill at construction time, adds node/executor context to the
+// skill's runtime stream configuration, and uses the Skill's directory, prompt,
+// tools, and bound LLM client to plan and run the task. The zero value is not
+// usable; construct instances with [NewExecutor].
 type Executor struct {
 	logger     *slog.Logger
 	skill      *llm.Skill
@@ -146,8 +147,9 @@ func (e *Executor) LLMClient() *llm.Client {
 	return e.bindClient
 }
 
-// EventStream returns the runtime skill's conversation-owned progress stream,
-// once the executor has been bound by a runner.
+// EventStream returns the bound runtime skill's progress stream. The stream is
+// created by the skill binding; the executor exposes it after adding node
+// context to the skill's runtime configuration.
 func (e *Executor) EventStream() *streampkg.Stream {
 	if e == nil || e.runtime == nil {
 		return nil
@@ -271,7 +273,8 @@ func (e *Executor) BindForRunner(sessID *string, accessibleDirs []string, sessSt
 	} else if len(sessStores) > 0 {
 		bindOpts = append(bindOpts, llm.WithNewSession(sessStores...))
 	}
-	bound, err := sk.Bind(e.bindClient, e.bindConfig, bindOpts...)
+	cfg := e.runtimeConversationConfig()
+	bound, err := sk.Bind(e.bindClient, cfg, bindOpts...)
 	if err != nil {
 		return "", err
 	}
@@ -281,6 +284,20 @@ func (e *Executor) BindForRunner(sessID *string, accessibleDirs []string, sessSt
 		return conv.SessionID(), nil
 	}
 	return "", nil
+}
+
+func (e *Executor) runtimeConversationConfig() llm.ConversationConfig {
+	cfg := cloneConversationConfig(e.bindConfig)
+	if cfg.StreamEvents {
+		cfg.EventStream = nil
+		cfg.StreamSource = streampkg.Source{Layer: "skill", ID: e.skill.Name, ParentID: e.planner.id}
+		cfg.StreamScope = streampkg.Scope{NodeID: e.planner.id}
+		cfg.StreamMetadata = map[string]any{
+			"node_id":    e.planner.id,
+			"skill_name": e.skill.Name,
+		}
+	}
+	return cfg
 }
 
 func (e *Executor) runtimeSkill() (*llm.Skill, error) {

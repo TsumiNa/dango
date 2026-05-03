@@ -36,15 +36,19 @@ func TestRequestPriorityValid(t *testing.T) {
 	}
 }
 
-func TestStartRequest_ReturnsRejectedErrorWithoutPlanner(t *testing.T) {
+func TestStartRequest_StreamsRejectedRequestWithoutPlanner(t *testing.T) {
+	clearLLMEnv(t)
 	o := newOrchestrator(testLogger)
-	_, err := o.StartRequest(context.Background(), Request{Input: "summarize this repository"})
-	var rejected *RequestRejectedError
-	if !errors.As(err, &rejected) {
-		t.Fatalf("StartRequest err = %v, want RequestRejectedError", err)
+	resp, err := o.StartRequest(context.Background(), Request{Input: "summarize this repository"})
+	if err != nil {
+		t.Fatalf("StartRequest: %v", err)
 	}
-	if rejected.Reason == nil || rejected.Reason.Summary == "" || rejected.Reason.Analysis == "" {
-		t.Fatalf("rejected reason = %+v, want populated summary and analysis", rejected.Reason)
+	if resp == nil || resp.Stream == nil {
+		t.Fatal("StartRequest response stream is nil")
+	}
+	failed := mustReadOrchestratorFailure(t, resp.Stream)
+	if !strings.Contains(failed, "request rejected") {
+		t.Fatalf("failure = %q, want request rejection", failed)
 	}
 	if len(o.Runners()) != 0 {
 		t.Fatalf("expected no runners to be created on rejection")
@@ -82,7 +86,7 @@ func TestStartRequest_BuildsRunnerFromPlanAndReturnsID(t *testing.T) {
 	if err != nil {
 		t.Fatalf("StartRequest: %v", err)
 	}
-	runnerID := resp.RunnerID
+	runnerID := mustReadRunnerCreated(t, resp.Stream)
 	if runnerID == "" {
 		t.Fatal("runnerID is empty")
 	}
@@ -183,9 +187,6 @@ func TestStartRequest_ReturnsReplayableRequestStream(t *testing.T) {
 	if resp == nil || resp.Stream == nil {
 		t.Fatal("StartRequest response stream is nil")
 	}
-	if resp.RunnerID == "" {
-		t.Fatal("runnerID is empty")
-	}
 
 	sub, err := resp.Stream.Subscribe(streampkg.Filter{
 		EventTypes: []string{
@@ -232,7 +233,8 @@ func TestStartRequest_ReturnsReplayableRequestStream(t *testing.T) {
 		t.Fatal("missing planning-completed status stream event from orchestrator planning")
 	}
 
-	managedRunner, err := o.Runner(resp.RunnerID)
+	runnerID := mustReadRunnerCreated(t, resp.Stream)
+	managedRunner, err := o.Runner(runnerID)
 	if err != nil {
 		t.Fatalf("Runner: %v", err)
 	}
@@ -240,6 +242,54 @@ func TestStartRequest_ReturnsReplayableRequestStream(t *testing.T) {
 	defer cancel()
 	if err := managedRunner.Wait(waitCtx); err != nil {
 		t.Fatalf("runner Wait: %v", err)
+	}
+}
+
+func TestStartRequestStreamsBeforeRunnerCreation(t *testing.T) {
+	clearLLMEnv(t)
+	o := newOrchestrator(testLogger)
+	mustAddSkills(t, o, newTestSkillRegistration(t, "single", "Single-step runner.", nil))
+	planOutput := mustPlanJSON(t, &CoarsePlan{
+		Request: "run a single node",
+		Nodes: []CoarsePlanNode{{
+			ID:              "only",
+			SkillName:       "single",
+			TaskDescription: "Run the only node.",
+		}},
+	})
+	if err := o.SetOrchestratorSkill(bindTestOrchestratorSkill(t, planOutput, mustReviewJSON(t, true, ""))); err != nil {
+		t.Fatalf("SetOrchestratorSkill(test planner): %v", err)
+	}
+
+	resp, err := o.StartRequest(context.Background(), Request{Input: "run a single node"})
+	if err != nil {
+		t.Fatalf("StartRequest: %v", err)
+	}
+	if resp == nil || resp.Stream == nil {
+		t.Fatal("StartRequest returned nil stream")
+	}
+	if resp.RunnerID != "" {
+		t.Fatalf("StartRequest returned runnerID %q before stream synchronization", resp.RunnerID)
+	}
+	sub, err := resp.Stream.Subscribe(streampkg.Filter{EventTypes: []string{streampkg.EventStatusStarted}}, streampkg.WithSubscriberBuffer(16))
+	if err != nil {
+		t.Fatalf("Subscribe: %v", err)
+	}
+	defer sub.Cancel()
+
+	readCtx, cancelRead := context.WithTimeout(context.Background(), 2*time.Second)
+	event, ok, err := sub.Next(readCtx)
+	cancelRead()
+	if err != nil || !ok {
+		t.Fatalf("initial async stream event ok=%v err=%v", ok, err)
+	}
+	if event.EventType != streampkg.EventStatusStarted || event.From.Layer != "orchestrator" {
+		t.Fatalf("initial async event = %+v, want orchestrator status started", event)
+	}
+
+	runnerID := mustReadRunnerCreated(t, resp.Stream)
+	if runnerID == "" {
+		t.Fatal("runnerID is empty")
 	}
 }
 
@@ -312,7 +362,8 @@ func TestStartRequest_StreamsPlannerReasoningAndPlanningExchange(t *testing.T) {
 		t.Fatal("missing planning exchange markdown stream event from orchestrator planning")
 	}
 
-	managedRunner, err := o.Runner(resp.RunnerID)
+	runnerID := mustReadRunnerCreated(t, resp.Stream)
+	managedRunner, err := o.Runner(runnerID)
 	if err != nil {
 		t.Fatalf("Runner: %v", err)
 	}
@@ -346,19 +397,14 @@ func TestStartRequest_EmitsRequestStreamEvents(t *testing.T) {
 	if resp == nil || resp.Stream == nil {
 		t.Fatal("StartRequest response stream is nil")
 	}
-	runnerID := resp.RunnerID
 	sub, err := resp.Stream.Subscribe(streampkg.Filter{}, streampkg.WithSubscriberBuffer(64))
 	if err != nil {
 		t.Fatalf("Subscribe: %v", err)
 	}
 	defer sub.Cancel()
 	defer resp.Stream.Close()
-	managedRunner, err := o.Runner(runnerID)
-	if err != nil {
-		t.Fatalf("Runner: %v", err)
-	}
-
 	var (
+		runnerID    string
 		sawPlanText bool
 		sawCreated  bool
 		sawSettled  bool
@@ -384,8 +430,13 @@ func TestStartRequest_EmitsRequestStreamEvents(t *testing.T) {
 				sawPlanText = true
 			}
 		case streampkg.EventStatusProgress:
-			if event.From.Layer == "orchestrator" && event.Scope.RunnerID == runnerID {
-				sawCreated = true
+			if event.From.Layer == "orchestrator" {
+				var delta map[string]string
+				_ = json.Unmarshal(event.Delta, &delta)
+				if delta["message"] == "runner created" && delta["runner_id"] != "" {
+					runnerID = delta["runner_id"]
+					sawCreated = true
+				}
 			}
 		case streampkg.EventRunnerPhaseChanged:
 			var delta map[string]string
@@ -402,6 +453,10 @@ func TestStartRequest_EmitsRequestStreamEvents(t *testing.T) {
 				sawExecutor = true
 			}
 		}
+	}
+	managedRunner, err := o.Runner(runnerID)
+	if err != nil {
+		t.Fatalf("Runner: %v", err)
 	}
 	waitCtx, cancelWait := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancelWait()
@@ -434,7 +489,7 @@ func TestStartRequest_CreatesReplayableRunnerStream(t *testing.T) {
 	if err != nil {
 		t.Fatalf("StartRequest: %v", err)
 	}
-	runnerID := resp.RunnerID
+	runnerID := mustReadRunnerCreated(t, resp.Stream)
 	managedRunner, err := o.Runner(runnerID)
 	if err != nil {
 		t.Fatalf("Runner: %v", err)
@@ -484,7 +539,7 @@ func TestSubscribeRunnerStream_RejectsUnknownID(t *testing.T) {
 	}
 }
 
-func TestStartRequest_ErrorsWhenPlanUsesUnknownSkill(t *testing.T) {
+func TestStartRequest_StreamsFailureWhenPlanUsesUnknownSkill(t *testing.T) {
 	o := newOrchestrator(testLogger)
 	if err := o.SetOrchestratorSkill(bindTestOrchestratorSkill(t, mustPlanJSON(t, &CoarsePlan{
 		Request: "process images",
@@ -494,8 +549,12 @@ func TestStartRequest_ErrorsWhenPlanUsesUnknownSkill(t *testing.T) {
 	}
 
 	resp, err := o.StartRequest(context.Background(), Request{Input: "process images"})
-	if err == nil {
-		t.Fatal("expected error when the plan references an unknown skill")
+	if err != nil {
+		t.Fatalf("StartRequest: %v", err)
+	}
+	failed := mustReadOrchestratorFailure(t, resp.Stream)
+	if !strings.Contains(failed, "unregistered skill") {
+		t.Fatalf("failure = %q, want unregistered skill", failed)
 	}
 	if resp != nil && resp.RunnerID != "" {
 		t.Fatalf("runnerID = %q, want empty", resp.RunnerID)

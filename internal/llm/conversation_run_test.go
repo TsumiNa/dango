@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -161,7 +162,10 @@ func TestConversationRun_EmitsStreamEvents(t *testing.T) {
 }
 
 func TestConversationRun_StreamsReasoningAndOutputDeltas(t *testing.T) {
+	var gotBody string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		gotBody = string(body)
 		sseResponse(w,
 			reasoningDeltaEvent("response.reasoning_summary_text.delta", "thinking live"),
 			textDeltaEvent("partial "),
@@ -188,6 +192,13 @@ func TestConversationRun_StreamsReasoningAndOutputDeltas(t *testing.T) {
 	}
 	if out != "partial answer" {
 		t.Fatalf("Run output = %q, want partial answer", out)
+	}
+	var req map[string]any
+	if err := json.Unmarshal([]byte(gotBody), &req); err != nil {
+		t.Fatalf("request body not JSON: %v (%s)", err, gotBody)
+	}
+	if stream, _ := req["stream"].(bool); !stream {
+		t.Fatalf("StreamEvents=true request stream = %v, want true; body=%s", req["stream"], gotBody)
 	}
 	eventStream.Close()
 

@@ -69,6 +69,31 @@ func TestNewExecutor_BindsSkillAndPlanner(t *testing.T) {
 	}
 }
 
+func TestExecutorExposesBoundSkillRuntimeEventStream(t *testing.T) {
+	cfg := llm.DefaultConversationConfig()
+	cfg.StreamEvents = true
+	exec, err := NewExecutor(loadLightweightTestSkill(t), &ExecutionPlanner{id: "node-1"}, cfg, WithExecutorClient(&llm.Client{}))
+	if err != nil {
+		t.Fatalf("NewExecutor: %v", err)
+	}
+	if exec.EventStream() != nil {
+		t.Fatal("EventStream() before binding is non-nil")
+	}
+	if _, err := exec.BindForRunner(nil, nil); err != nil {
+		t.Fatalf("BindForRunner: %v", err)
+	}
+	stream := exec.EventStream()
+	if stream == nil {
+		t.Fatal("EventStream() after binding is nil")
+	}
+	if got := exec.runtime.EventStream(); got != stream {
+		t.Fatalf("runtime skill stream = %p, want executor-exposed stream %p", got, stream)
+	}
+	if got := exec.runtime.Conversation().EventStream(); got != stream {
+		t.Fatalf("runtime conversation stream = %p, want skill stream %p", got, stream)
+	}
+}
+
 func TestNewExecutor_RejectsNilSkill(t *testing.T) {
 	if _, err := NewExecutor(nil, &ExecutionPlanner{}, llm.DefaultConversationConfig()); err == nil {
 		t.Fatal("expected error for nil skill")

@@ -90,6 +90,44 @@ func collect(t *testing.T, ch <-chan StreamEvent, timeout time.Duration) []Strea
 	}
 }
 
+func TestNewConversationWritesEventsToCallerOwnedStream(t *testing.T) {
+	owned := streampkg.New(streampkg.Scope{NodeID: "node-1"}, streampkg.DefaultConfig())
+	sub, err := owned.Subscribe(streampkg.Filter{}, streampkg.WithSubscriberBuffer(4))
+	if err != nil {
+		t.Fatalf("Subscribe: %v", err)
+	}
+	t.Cleanup(sub.Cancel)
+
+	cfg := DefaultConversationConfig()
+	cfg.StreamEvents = true
+	cfg.EventStream = owned
+	cfg.StreamSource = streampkg.Source{Layer: "executor", ID: "node-1"}
+	conv, err := NewConversation(nil, "sys", nil, cfg)
+	if err != nil {
+		t.Fatalf("NewConversation: %v", err)
+	}
+	if conv.EventStream() != owned {
+		t.Fatalf("EventStream() = %p, want caller-owned stream %p", conv.EventStream(), owned)
+	}
+
+	conv.emitStreamEvent(t.Context(), streampkg.EventStatusProgress, streampkg.StatusRunning, map[string]any{"message": "ready"}, nil)
+	nextCtx, cancel := context.WithTimeout(t.Context(), time.Second)
+	defer cancel()
+	event, ok, err := sub.Next(nextCtx)
+	if err != nil {
+		t.Fatalf("Next: %v", err)
+	}
+	if !ok {
+		t.Fatal("stream closed before event")
+	}
+	if event.From.Layer != "executor" || event.From.ID != "node-1" {
+		t.Fatalf("event source = %+v, want executor node source", event.From)
+	}
+	if event.Scope.NodeID != "node-1" {
+		t.Fatalf("event scope node = %q, want node-1", event.Scope.NodeID)
+	}
+}
+
 // TestClient_Stream_ForwardsTextDeltas verifies that text deltas
 // arrive on the channel in order, the channel is closed on clean
 // completion, and the accumulated assistant text is appended to the

@@ -8,6 +8,8 @@ import (
 	"strings"
 	"testing"
 	"testing/fstest"
+
+	streampkg "github.com/tsumina/dango/internal/engine/stream"
 )
 
 func writeSkillDir(t *testing.T, content string) string {
@@ -475,6 +477,33 @@ func TestBind_BuildsRunnableCopyFromLoadedSkill(t *testing.T) {
 	}
 	if bound.Name != loaded.Name || bound.Description != loaded.Description || bound.Dir() != loaded.Dir() {
 		t.Fatalf("bound skill metadata changed unexpectedly: got %+v want name=%q description=%q", bound, loaded.Name, loaded.Description)
+	}
+}
+
+func TestBindCreatesSkillOwnedRuntimeStream(t *testing.T) {
+	dir := writeSkillDir(t, "---\nname: loaded\ndescription: d\n---\nbody\n")
+	loaded, err := NewSkill(dir, DefaultSkillConfig())
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	cfg := DefaultConversationConfig()
+	cfg.StreamEvents = true
+	cfg.StreamSource = streampkg.Source{Layer: "skill", ID: "loaded", ParentID: "node-1"}
+	cfg.StreamScope = streampkg.Scope{NodeID: "node-1"}
+
+	bound, err := loaded.Bind(stubClient(), cfg)
+	if err != nil {
+		t.Fatalf("Bind: %v", err)
+	}
+	stream := bound.EventStream()
+	if stream == nil {
+		t.Fatal("EventStream() = nil, want skill-owned runtime stream")
+	}
+	if loaded.EventStream() != nil {
+		t.Fatal("loaded EventStream() changed after Bind")
+	}
+	if got := bound.Conversation().EventStream(); got != stream {
+		t.Fatalf("conversation stream = %p, want skill stream %p", got, stream)
 	}
 }
 

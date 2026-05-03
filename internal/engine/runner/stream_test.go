@@ -295,7 +295,7 @@ func TestRunnerEmitsSkillMemoEventsFromExchangeOutput(t *testing.T) {
 		t.Fatal("stream closed before memo event")
 	}
 	if event.From.Layer != "skill" || event.From.ID != "memo-skill" || event.From.ParentID != node.Id {
-		t.Fatalf("event source = %+v, want skill memo source", event.From)
+		t.Fatalf("event source = %+v, want skill memo source with node parent", event.From)
 	}
 	if event.Scope.RunnerID != r.ID() || event.Scope.NodeID != node.Id {
 		t.Fatalf("event scope = %+v, want runner/node ids", event.Scope)

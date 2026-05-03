@@ -1,6 +1,11 @@
-// Package stream provides a small structured event bus for cross-layer output.
+// Package stream provides a structured communication primitive for engine
+// layers.
 //
-// Streams are scoped to one logical request/run/session and deliver JSON-safe
-// event chunks to any number of subscribers. Producers emit compact deltas;
-// consumers decide whether to render, persist, replay, or ignore those events.
+// A Stream is the engine's featureful channel abstraction: it preserves the
+// simple producer/subscriber synchronization shape of channels while adding
+// scoped metadata, filtering, replay, fan-out, merge, optional persistence, and
+// structured JSON-safe event payloads. Orchestrator, runner, and bound skill
+// runtimes use streams as their communication surface instead of blocking on
+// each other through call stacks; executors and nodes add scheduling context to
+// skill streams before merging them upward.
 package stream

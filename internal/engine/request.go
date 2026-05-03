@@ -56,9 +56,9 @@ type Request struct {
 // Response is returned by [Orchestrator.StartRequest].
 //
 // Stream is the request-scoped event stream created for this orchestration
-// attempt. RunnerID is populated once planning succeeds and a runner is
-// materialized; it is empty when the request is rejected before runner
-// creation.
+// attempt. StartRequest returns before planning finishes, so RunnerID is empty
+// in the initial response. The materialized runner ID is emitted on Stream in
+// the orchestrator "runner created" progress event.
 type Response struct {
 	Stream   *streampkg.Stream
 	RunnerID string
@@ -71,21 +71,56 @@ type RejectReason struct {
 	MissingSkills []string `json:"missing_skills,omitempty" yaml:"missing_skills,omitempty"`
 }
 
+type requestStartup struct {
+	logger            *slog.Logger
+	orchestratorSkill *llm.Skill
+	runnerStore       runnerpkg.RunnerStore
+	skillConfigs      map[string]SkillRegistration
+}
+
 // StartRequest is the outer-facing request entrypoint.
 //
-// It plans and materializes a runner, stores it for query and stream APIs,
-// subscribes to its lifecycle updates, and then either starts it immediately
-// or queues it when the configured runner limit is full. StartRequest is
-// non-blocking and returns a response containing the request stream and runner
-// ID once the runner has been accepted into orchestration. The stream is
+// It returns a request stream immediately, then plans and materializes the
+// runner in the background. Planning, rejection, runner creation, and runner
+// lifecycle updates are communicated through the stream. The stream is
 // replayable, so callers may subscribe after StartRequest returns and still
-// inspect planning events emitted during request startup.
+// inspect events emitted during request startup. StartRequest must not become a
+// synchronization point for planner, runner, executor, or skill work; callers
+// that need to wait for progress should subscribe to the returned stream or use
+// explicit query APIs.
 func (o *Orchestrator) StartRequest(ctx context.Context, req Request) (*Response, error) {
 	ctx = o.operationContext(ctx)
 	if !req.Priority.valid() {
 		return nil, fmt.Errorf("orchestrate: request priority must be between %d and %d", RequestPriorityDefault, RequestPriorityHighest)
 	}
 	requestStream := streampkg.New(streampkg.Scope{}, streampkg.DefaultConfig())
+
+	o.mu.Lock()
+	o.configLocked = true
+	startup := requestStartup{
+		logger:            o.logger,
+		orchestratorSkill: o.orchestratorSkill,
+		runnerStore:       o.runnerStore,
+		skillConfigs:      cloneSkillRegistrations(o.skills),
+	}
+	o.mu.Unlock()
+
+	go func() {
+		if _, err := o.startRequestWithStream(ctx, req, requestStream, startup); err != nil {
+			emitEngineStreamEvent(ctx, requestStream,
+				streamSourceOrchestrator(),
+				streampkg.EventStatusFailed,
+				streampkg.StatusFailed,
+				err.Error(),
+				streampkg.Scope{},
+				nil,
+			)
+		}
+	}()
+	return &Response{Stream: requestStream}, nil
+}
+
+func (o *Orchestrator) startRequestWithStream(ctx context.Context, req Request, requestStream *streampkg.Stream, startup requestStartup) (*Response, error) {
 	resp := &Response{Stream: requestStream}
 	var streamMerges []*streampkg.Merge
 	cleanupMerges := true
@@ -95,18 +130,11 @@ func (o *Orchestrator) StartRequest(ctx context.Context, req Request) (*Response
 		}
 	}()
 
-	o.mu.Lock()
-	o.configLocked = true
-	logger := o.logger
-	orchestratorSkill := o.orchestratorSkill
-	runnerStore := o.runnerStore
-	skillConfigs := cloneSkillRegistrations(o.skills)
-	o.mu.Unlock()
 	envClient, envClientErr := o.resolveEnvClient()
-	planningSkill, err := runtimeOrchestrator(orchestratorSkill, envClient, envClientErr, planningConversationConfig())
+	planningSkill, err := runtimeOrchestrator(startup.orchestratorSkill, envClient, envClientErr, planningConversationConfig())
 	if err != nil {
 		if errors.Is(err, errOrchestratorSkillUnconfigured) {
-			return resp, &RequestRejectedError{Reason: rejectUnconfiguredPlan(&req, cloneSkillMap(skillConfigs), orchestratorSkill)}
+			return resp, &RequestRejectedError{Reason: rejectUnconfiguredPlan(&req, cloneSkillMap(startup.skillConfigs), startup.orchestratorSkill)}
 		}
 		return resp, err
 	}
@@ -124,7 +152,7 @@ func (o *Orchestrator) StartRequest(ctx context.Context, req Request) (*Response
 		nil,
 	)
 
-	skillSummaries := collectSkillSummaries(cloneSkillMap(skillConfigs))
+	skillSummaries := collectSkillSummaries(cloneSkillMap(startup.skillConfigs))
 	plan, reject, err := planWithOrchestrator(ctx, req, skillSummaries, planningSkill, requestStream)
 	if err != nil {
 		emitEngineStreamEvent(ctx, requestStream,
@@ -151,7 +179,7 @@ func (o *Orchestrator) StartRequest(ctx context.Context, req Request) (*Response
 	if plan == nil {
 		return resp, fmt.Errorf("orchestrate: planner returned neither a plan nor a reject reason")
 	}
-	plannerSkill, err := bindOrchestratorSkillWithConfig(orchestratorSkill, planningSkill.Client(), runnerPlannerConversationConfig())
+	plannerSkill, err := bindOrchestratorSkillWithConfig(startup.orchestratorSkill, planningSkill.Client(), runnerPlannerConversationConfig())
 	if err != nil {
 		return resp, err
 	}
@@ -161,7 +189,7 @@ func (o *Orchestrator) StartRequest(ctx context.Context, req Request) (*Response
 		streamMerges = append(streamMerges, merge)
 	}
 
-	runner, err := newRunnerFromPlan(ctx, logger, runnerStore, req, plan, skillConfigs, plannerSkill, skillSummaries)
+	runner, err := newRunnerFromPlan(ctx, startup.logger, startup.runnerStore, req, plan, startup.skillConfigs, plannerSkill, skillSummaries)
 	if err != nil {
 		return resp, err
 	}
@@ -171,6 +199,10 @@ func (o *Orchestrator) StartRequest(ctx context.Context, req Request) (*Response
 		streamMerges = append(streamMerges, merge)
 	}
 	runnerID := runner.ID()
+	o.mu.Lock()
+	o.runners[runnerID] = runner
+	o.mu.Unlock()
+
 	emitEngineStreamEvent(ctx, requestStream,
 		streamSourceOrchestrator(),
 		streampkg.EventStatusProgress,
@@ -179,10 +211,6 @@ func (o *Orchestrator) StartRequest(ctx context.Context, req Request) (*Response
 		streampkg.Scope{RunnerID: runnerID},
 		nil,
 	)
-
-	o.mu.Lock()
-	o.runners[runnerID] = runner
-	o.mu.Unlock()
 
 	if err := o.submitManagedRunner(ctx, runner, req.Priority); err != nil {
 		return resp, err
@@ -324,12 +352,8 @@ func buildPlanNodes(logger *slog.Logger, req Request, plan *CoarsePlan, skills m
 func conversationConfigForNode(cfg llm.ConversationConfig, nodeID string, skillName string) llm.ConversationConfig {
 	out := cloneConversationConfig(cfg)
 	out.StreamEvents = true
-	out.StreamSource = streampkg.Source{Layer: "skill", ID: skillName, ParentID: nodeID}
-	out.StreamScope = streampkg.Scope{NodeID: nodeID}
-	out.StreamMetadata = map[string]any{
-		"node_id":    nodeID,
-		"skill_name": skillName,
-	}
+	out.EventStream = nil
+	out.StreamMetadata = nil
 	return out
 }
 

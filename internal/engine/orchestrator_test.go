@@ -683,7 +683,7 @@ func TestLoadRunnerRecords_LoadsPersistedLog(t *testing.T) {
 	if err != nil {
 		t.Fatalf("StartRequest: %v", err)
 	}
-	runnerID := resp.RunnerID
+	runnerID := mustReadRunnerCreated(t, resp.Stream)
 	managedRunner, err := o.Runner(runnerID)
 	if err != nil {
 		t.Fatalf("Runner: %v", err)

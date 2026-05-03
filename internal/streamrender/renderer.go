@@ -10,15 +10,19 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
+	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 	runnerpkg "github.com/tsumina/dango/internal/engine/runner"
 	streampkg "github.com/tsumina/dango/internal/engine/stream"
 )
 
 const (
-	defaultMaxText      = 320
+	defaultMaxText      = 140
+	defaultMaxLineWidth = 120
 	defaultRunnerIDClip = 8
-	reasoningFlushBytes = 240
+	defaultProgressTick = 120 * time.Millisecond
 )
 
 // Config controls how stream events are rendered for terminal output.
@@ -37,9 +41,17 @@ type Config struct {
 	// MaxText caps long delta fields. Zero uses a conservative default.
 	MaxText int
 
+	// MaxLineWidth caps final terminal lines using ANSI-aware cell width. Zero
+	// uses a conservative default suitable for ordinary terminal windows.
+	MaxLineWidth int
+
 	// ProgressFrames are appended to running events to make repeated progress
 	// visibly alive. Nil uses ASCII spinner frames.
 	ProgressFrames []string
+
+	// ProgressTick controls how often an active terminal line advances its
+	// spinner while no new stream event has arrived. Zero uses the default tick.
+	ProgressTick time.Duration
 
 	// DedupeRepeated suppresses adjacent identical rendered lines.
 	DedupeRepeated bool
@@ -71,21 +83,20 @@ func DefaultConfig() Config {
 			streampkg.EventLLMToolCallDelta,
 			streampkg.EventLLMToolCallCompleted,
 			streampkg.EventLLMToolResultDelta,
-			streampkg.EventToolExecutionStarted,
-			streampkg.EventToolExecutionCompleted,
-			streampkg.EventToolExecutionFailed,
 		},
 	}
 }
 
 // Renderer writes compact terminal lines for stream events.
 type Renderer struct {
-	out               io.Writer
-	cfg               Config
-	lastLine          string
-	frame             int
-	runningOutputSeen map[string]bool
-	reasoningBuffers  map[string]*runningTextBuffer
+	out            io.Writer
+	cfg            Config
+	lastLine       string
+	frame          int
+	liveLineActive bool
+	liveLineKey    string
+	liveLineBase   string
+	textBuffers    map[string]*runningTextBuffer
 }
 
 type runningTextBuffer struct {
@@ -101,44 +112,77 @@ func New(out io.Writer, cfg Config) *Renderer {
 	if cfg.MaxText <= 0 {
 		cfg.MaxText = defaultMaxText
 	}
+	if cfg.MaxLineWidth <= 0 {
+		cfg.MaxLineWidth = defaultMaxLineWidth
+	}
 	if cfg.ProgressFrames == nil {
 		cfg.ProgressFrames = []string{"|", "/", "-", "\\"}
+	}
+	if cfg.ProgressTick <= 0 {
+		cfg.ProgressTick = defaultProgressTick
 	}
 	if cfg.ImageMaxBytes <= 0 {
 		cfg.ImageMaxBytes = 2 << 20
 	}
 	return &Renderer{
-		out:               out,
-		cfg:               cfg,
-		runningOutputSeen: map[string]bool{},
-		reasoningBuffers:  map[string]*runningTextBuffer{},
+		out:         out,
+		cfg:         cfg,
+		textBuffers: map[string]*runningTextBuffer{},
 	}
 }
 
 // RenderSubscription drains sub until it closes or ctx is canceled.
 func (r *Renderer) RenderSubscription(ctx context.Context, sub *streampkg.Subscription) error {
+	return r.RenderSubscriptionObserved(ctx, sub, nil)
+}
+
+// RenderSubscriptionObserved drains sub and calls observe for each event before
+// rendering it. The observer is useful for teeing raw stream events to a debug
+// log while preserving ticker-driven terminal refreshes.
+func (r *Renderer) RenderSubscriptionObserved(ctx context.Context, sub *streampkg.Subscription, observe func(streampkg.Event) error) error {
+	if sub == nil {
+		return nil
+	}
 	if ctx == nil {
 		ctx = context.Background()
 	}
+	ticker := time.NewTicker(r.cfg.ProgressTick)
+	defer ticker.Stop()
 	for {
-		event, ok, err := sub.Next(ctx)
-		if err != nil {
-			return err
-		}
-		if !ok {
-			return nil
-		}
-		if err := r.RenderEvent(event); err != nil {
-			return err
+		select {
+		case event, ok := <-sub.Events():
+			if !ok {
+				return r.finishLiveLine()
+			}
+			if observe != nil {
+				if err := observe(event); err != nil {
+					return err
+				}
+			}
+			if err := r.RenderEvent(event); err != nil {
+				return err
+			}
+		case <-ticker.C:
+			if err := r.refreshLiveLine(); err != nil {
+				return err
+			}
+		case <-ctx.Done():
+			return ctx.Err()
 		}
 	}
 }
 
 // RenderEvent formats event and writes one or more terminal lines.
 func (r *Renderer) RenderEvent(event streampkg.Event) error {
-	line := r.FormatEvent(event)
+	line := r.formatEvent(event, false)
 	if line == "" {
 		return nil
+	}
+	if r.isLiveEvent(event) {
+		return r.renderLiveLine(liveLineKey(event), line)
+	}
+	if err := r.finishLiveLine(); err != nil {
+		return err
 	}
 	if r.cfg.DedupeRepeated && line == r.lastLine {
 		return nil
@@ -153,6 +197,10 @@ func (r *Renderer) RenderEvent(event streampkg.Event) error {
 // FormatEvent returns the terminal line for event, or an empty string when the
 // event is filtered or intentionally silent.
 func (r *Renderer) FormatEvent(event streampkg.Event) string {
+	return r.formatEvent(event, true)
+}
+
+func (r *Renderer) formatEvent(event streampkg.Event, includeFrame bool) string {
 	if r == nil || !r.shouldRender(event) {
 		return ""
 	}
@@ -168,10 +216,69 @@ func (r *Renderer) FormatEvent(event streampkg.Event) string {
 		return ""
 	}
 	line := r.composeLine(event, body)
-	if event.Status == streampkg.StatusRunning {
-		line += " " + r.dim(r.nextFrame())
+	if includeFrame && r.isLiveEvent(event) {
+		line = r.lineWithFrame(line)
 	}
 	return line
+}
+
+func (r *Renderer) isLiveEvent(event streampkg.Event) bool {
+	if event.Status != streampkg.StatusRunning {
+		return false
+	}
+	switch event.EventType {
+	case streampkg.EventLLMReasoningDelta, streampkg.EventLLMOutputDelta,
+		streampkg.EventToolExecutionStarted:
+		return true
+	default:
+		return false
+	}
+}
+
+func (r *Renderer) renderLiveLine(key string, base string) error {
+	r.liveLineActive = true
+	r.liveLineKey = key
+	r.liveLineBase = base
+	line := r.lineWithFrame(base)
+	if r.cfg.DedupeRepeated && line == r.lastLine {
+		return nil
+	}
+	_, err := fmt.Fprint(r.out, "\r\x1b[K", line)
+	if err == nil {
+		r.lastLine = line
+	}
+	return err
+}
+
+func (r *Renderer) refreshLiveLine() error {
+	if !r.liveLineActive || r.liveLineBase == "" {
+		return nil
+	}
+	line := r.lineWithFrame(r.liveLineBase)
+	_, err := fmt.Fprint(r.out, "\r\x1b[K", line)
+	if err == nil {
+		r.lastLine = line
+	}
+	return err
+}
+
+func (r *Renderer) finishLiveLine() error {
+	if !r.liveLineActive {
+		return nil
+	}
+	r.liveLineActive = false
+	r.liveLineKey = ""
+	r.liveLineBase = ""
+	_, err := fmt.Fprint(r.out, "\r\x1b[K")
+	return err
+}
+
+func (r *Renderer) lineWithFrame(line string) string {
+	frame := r.nextFrame()
+	if frame == "" {
+		return r.fitLine(line)
+	}
+	return r.fitLine(line + " " + r.dim(frame))
 }
 
 func knownEventType(eventType string) bool {
@@ -262,14 +369,14 @@ func (r *Renderer) formatTextDelta(event streampkg.Event, kind string) string {
 	if !ok || strings.TrimSpace(text) == "" {
 		return ""
 	}
-	if exchangeText(text) {
-		return fmt.Sprintf("%s %s exchange=%s", r.tag(kind), r.dim("·"), r.exchangeReference(event, text))
-	}
 	if event.Status == streampkg.StatusRunning && kind == "reasoning" {
-		return r.formatRunningReasoning(event, text)
+		return r.formatRunningText(event, kind, text)
 	}
 	if event.Status == streampkg.StatusRunning && kind == "output" {
-		return r.formatRunningOutput(event, kind)
+		return r.formatRunningText(event, kind, text)
+	}
+	if exchangeText(text) {
+		return fmt.Sprintf("%s %s exchange=%s", r.tag(kind), r.dim("·"), r.exchangeReference(event, text))
 	}
 	if event.From.Layer == "orchestrator" && stringValue(event.Metadata["stage"]) == "planning" && kind == "output" {
 		return fmt.Sprintf("planning output captured %s", r.kv("status", string(event.Status)))
@@ -288,33 +395,24 @@ func (r *Renderer) formatTextDelta(event streampkg.Event, kind string) string {
 	return line
 }
 
-func (r *Renderer) formatRunningOutput(event streampkg.Event, kind string) string {
+func (r *Renderer) formatRunningText(event streampkg.Event, kind string, text string) string {
 	key := streamDeltaKey(event, kind)
-	if r.runningOutputSeen[key] {
-		return ""
-	}
-	r.runningOutputSeen[key] = true
-	return fmt.Sprintf("%s %s streaming", r.tag(kind), r.dim("·"))
-}
-
-func (r *Renderer) formatRunningReasoning(event streampkg.Event, text string) string {
-	key := streamDeltaKey(event, "reasoning")
-	buf := r.reasoningBuffers[key]
+	buf := r.textBuffers[key]
 	if buf == nil {
 		buf = &runningTextBuffer{}
-		r.reasoningBuffers[key] = buf
+		r.textBuffers[key] = buf
 	}
 	buf.text += text
-	if len(buf.text)-buf.emitted < reasoningFlushBytes && !endsReasoningPhrase(text) {
-		return ""
-	}
-	chunk := strings.TrimSpace(buf.text[buf.emitted:])
+	chunk := strings.TrimSpace(buf.text)
 	buf.emitted = len(buf.text)
 	if chunk == "" {
 		return ""
 	}
+	if looksLikeExchangeDraft(chunk) {
+		return fmt.Sprintf("%s %s drafting exchange %s", r.tag(kind), r.dim("·"), r.kv("bytes", fmt.Sprint(len(buf.text))))
+	}
 	clean, truncated := r.compact(chunk)
-	line := fmt.Sprintf("%s %s %s", r.tag("reasoning"), r.dim("·"), clean)
+	line := fmt.Sprintf("%s %s %s", r.tag(kind), r.dim("·"), clean)
 	if truncated {
 		line += " " + r.kv("truncated", "true")
 	}
@@ -444,11 +542,21 @@ func (r *Renderer) formatToolCall(event streampkg.Event, values map[string]any) 
 }
 
 func (r *Renderer) formatToolExecution(event streampkg.Event, values map[string]any) string {
+	name := stringValue(values["name"])
+	if name == "" {
+		name = "unknown"
+	}
+	if event.EventType == streampkg.EventToolExecutionStarted {
+		return fmt.Sprintf("%s %s %s", r.tag("tool calling"), r.dim("·"), name)
+	}
+	label := "tool completed"
+	if event.EventType == streampkg.EventToolExecutionFailed {
+		label = "tool failed"
+	}
 	parts := []string{
-		r.kv("event", strings.TrimPrefix(event.EventType, "tool.")),
+		r.tag(label), r.dim("·"), name,
 		r.kv("status", string(event.Status)),
 		r.kv("skill", skillName(event)),
-		r.kv("tool", stringValue(values["name"])),
 		r.kv("call", stringValue(values["call_id"])),
 	}
 	if errText := stringValue(values["error"]); errText != "" {
@@ -497,10 +605,17 @@ func (r *Renderer) formatGenericEvent(event streampkg.Event, values map[string]a
 
 func (r *Renderer) compact(text string) (string, bool) {
 	text = strings.Join(strings.Fields(text), " ")
-	if len(text) <= r.cfg.MaxText {
+	if ansi.StringWidth(text) <= r.cfg.MaxText {
 		return text, false
 	}
-	return text[:r.cfg.MaxText] + "...", true
+	return ansi.Truncate(text, r.cfg.MaxText, "..."), true
+}
+
+func (r *Renderer) fitLine(line string) string {
+	if r.cfg.MaxLineWidth <= 0 || ansi.StringWidth(line) <= r.cfg.MaxLineWidth {
+		return line
+	}
+	return ansi.Truncate(line, r.cfg.MaxLineWidth, "...")
 }
 
 func (r *Renderer) nextFrame() string {
@@ -530,21 +645,21 @@ func (r *Renderer) tag(name string) string {
 	if !r.cfg.Color {
 		return name
 	}
-	return ansi(33, name) // yellow for tag
+	return lipgloss.NewStyle().Foreground(lipgloss.Color("3")).Render(name)
 }
 
 func (r *Renderer) colorKey(key string) string {
 	if !r.cfg.Color {
 		return key
 	}
-	return ansi(36, key) // cyan
+	return lipgloss.NewStyle().Foreground(lipgloss.Color("6")).Render(key)
 }
 
 func (r *Renderer) colorIdent(text string) string {
 	if !r.cfg.Color {
 		return text
 	}
-	return ansi(33, text) // yellow
+	return lipgloss.NewStyle().Foreground(lipgloss.Color("3")).Render(text)
 }
 
 func (r *Renderer) colorLayer(layer, text string) string {
@@ -552,7 +667,7 @@ func (r *Renderer) colorLayer(layer, text string) string {
 		return text
 	}
 	color := layerColor(layer)
-	return ansi(color, text)
+	return lipgloss.NewStyle().Foreground(lipgloss.Color(fmt.Sprint(color))).Render(text)
 }
 
 func (r *Renderer) statusIcon(status string) string {
@@ -574,18 +689,14 @@ func (r *Renderer) colorStatus(status, text string) string {
 	if !r.cfg.Color {
 		return text
 	}
-	return ansi(statusColor(status), text)
+	return lipgloss.NewStyle().Foreground(lipgloss.Color(fmt.Sprint(statusColor(status)))).Render(text)
 }
 
 func (r *Renderer) dim(text string) string {
 	if !r.cfg.Color {
 		return text
 	}
-	return ansi(90, text)
-}
-
-func ansi(color int, text string) string {
-	return fmt.Sprintf("\x1b[%dm%s\x1b[0m", color, text)
+	return lipgloss.NewStyle().Faint(true).Render(text)
 }
 
 func statusColor(status string) int {
@@ -673,15 +784,16 @@ func streamDeltaKey(event streampkg.Event, kind string) string {
 	}, "|")
 }
 
-func endsReasoningPhrase(text string) bool {
-	trimmed := strings.TrimSpace(text)
-	return strings.HasSuffix(trimmed, ".") ||
-		strings.HasSuffix(trimmed, "?") ||
-		strings.HasSuffix(trimmed, "!") ||
-		strings.HasSuffix(trimmed, "。") ||
-		strings.HasSuffix(trimmed, "？") ||
-		strings.HasSuffix(trimmed, "！") ||
-		strings.Contains(text, "\n")
+func liveLineKey(event streampkg.Event) string {
+	return strings.Join([]string{
+		event.EventType,
+		event.From.Layer,
+		event.From.ID,
+		event.From.ParentID,
+		event.Scope.RequestID,
+		event.Scope.RunnerID,
+		event.Scope.NodeID,
+	}, "|")
 }
 
 func (r *Renderer) exchangeReference(event streampkg.Event, text string) string {
@@ -782,4 +894,12 @@ func imagePath(path string) bool {
 
 func exchangeText(text string) bool {
 	return runnerpkg.LooksLikeExchangeMarkdown(text)
+}
+
+func looksLikeExchangeDraft(text string) bool {
+	trimmed := strings.TrimSpace(text)
+	if runnerpkg.LooksLikeExchangeMarkdown(trimmed) {
+		return true
+	}
+	return strings.HasPrefix(trimmed, "---") && (strings.Contains(trimmed, "# Memo") || strings.Contains(trimmed, "# Handoff"))
 }
