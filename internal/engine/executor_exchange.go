@@ -103,7 +103,7 @@ func (e *Executor) exchangeDocument(stage runnerpkg.ExchangeStage, handoffs []ru
 func (e *Executor) runnableRuntimeSkill() (*llm.Skill, bool, error) {
 	runtime, err := e.runtimeSkill()
 	if err != nil {
-		return nil, false, nil
+		return nil, false, err
 	}
 	client := runtime.Client()
 	if client == nil || client.Model() == "" {

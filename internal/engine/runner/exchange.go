@@ -180,19 +180,26 @@ func exchangeDocumentFromEnvelope(meta exchangeFrontMatter, sections map[string]
 // filled and the document is rendered in canonical form. Otherwise raw is
 // treated as handoff text and wrapped in defaults.
 func NormalizeExchangeMarkdown(raw string, defaults ExchangeDocument) (string, error) {
-	if parsed, err := ParseExchangeMarkdown(raw); err == nil {
-		return withExchangeDefaults(*parsed, defaults).Markdown()
+	if doc, ok := parseExchangeLikeMarkdown(raw); ok {
+		return normalizeExchangeDocument(doc, defaults)
 	}
-	if draft, err := ParseExchangeDraftMarkdown(raw); err == nil {
-		return withExchangeDefaults(*draft, defaults).Markdown()
+	return normalizeExchangeDocument(ExchangeDocument{Handoff: strings.TrimSpace(raw)}, defaults)
+}
+
+func normalizeExchangeDocument(doc ExchangeDocument, defaults ExchangeDocument) (string, error) {
+	doc = withExchangeDefaults(doc, defaults)
+	if doc.Stage == "" {
+		return "", fmt.Errorf("runner: exchange document stage must not be empty")
 	}
-	doc := withExchangeDefaults(ExchangeDocument{Handoff: strings.TrimSpace(raw)}, defaults)
 	return doc.Markdown()
 }
 
 // IsExchangeMarkdown reports whether raw is a valid exchange markdown
 // document.
 func IsExchangeMarkdown(raw string) bool {
+	if !looksLikeExchangeEnvelope(raw) {
+		return false
+	}
 	_, err := ParseExchangeMarkdown(raw)
 	return err == nil
 }
@@ -225,11 +232,29 @@ func ParseExchangeDraftMarkdown(raw string) (*ExchangeDocument, error) {
 // LooksLikeExchangeMarkdown reports whether raw is either a canonical exchange
 // document or a model-produced draft that can be normalized into one.
 func LooksLikeExchangeMarkdown(raw string) bool {
-	if IsExchangeMarkdown(raw) {
-		return true
+	_, ok := parseExchangeLikeMarkdown(raw)
+	return ok
+}
+
+func parseExchangeLikeMarkdown(raw string) (ExchangeDocument, bool) {
+	if !looksLikeExchangeEnvelope(raw) {
+		return ExchangeDocument{}, false
 	}
-	_, err := ParseExchangeDraftMarkdown(raw)
-	return err == nil
+	if parsed, err := ParseExchangeMarkdown(raw); err == nil {
+		return *parsed, true
+	}
+	if draft, err := ParseExchangeDraftMarkdown(raw); err == nil {
+		return *draft, true
+	}
+	return ExchangeDocument{}, false
+}
+
+func looksLikeExchangeEnvelope(raw string) bool {
+	return strings.HasPrefix(raw, "---\n")
+}
+
+func looksLikeCanonicalExchangeMarkdown(raw string) bool {
+	return strings.HasPrefix(raw, "---\nkind: "+ExchangeDocumentKind+"\n")
 }
 
 type exchangeFrontMatter struct {

@@ -92,6 +92,12 @@ func TestNormalizeExchangeMarkdownWrapsPlainTextWithDefaults(t *testing.T) {
 	}
 }
 
+func TestNormalizeExchangeMarkdownRequiresStage(t *testing.T) {
+	if _, err := NormalizeExchangeMarkdown("plain output", ExchangeDocument{}); err == nil || !strings.Contains(err.Error(), "stage must not be empty") {
+		t.Fatalf("NormalizeExchangeMarkdown error = %v, want missing stage error", err)
+	}
+}
+
 func TestNormalizeExchangeMarkdownPreservesDraftSections(t *testing.T) {
 	raw := `---
 kind: dango_exchange

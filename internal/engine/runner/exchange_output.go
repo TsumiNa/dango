@@ -2,7 +2,11 @@ package runner
 
 func (r *Runner) annotateExchangeOutput(node *Node, output any) any {
 	text, ok := output.(string)
-	if !ok || !LooksLikeExchangeMarkdown(text) {
+	if !ok {
+		return output
+	}
+	doc, ok := parseExchangeLikeMarkdown(text)
+	if !ok {
 		return output
 	}
 	defaults := ExchangeDocument{RunnerID: r.id}
@@ -11,7 +15,7 @@ func (r *Runner) annotateExchangeOutput(node *Node, output any) any {
 		defaults.SkillName = node.SkillName
 		defaults.TaskDescription = node.TaskDescription
 	}
-	normalized, err := NormalizeExchangeMarkdown(text, defaults)
+	normalized, err := normalizeExchangeDocument(doc, defaults)
 	if err != nil {
 		return output
 	}

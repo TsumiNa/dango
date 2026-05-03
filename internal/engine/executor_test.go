@@ -150,6 +150,9 @@ func TestExecute_NoRunEReturnsMarkdownFallback(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewExecutor: %v", err)
 	}
+	if _, err := exec.BindForRunner(nil, nil); err != nil {
+		t.Fatalf("BindForRunner: %v", err)
+	}
 	out, nodes, err := exec.Execute(context.Background(), nil)
 	if err != nil {
 		t.Fatalf("Execute: %v", err)
@@ -157,7 +160,11 @@ func TestExecute_NoRunEReturnsMarkdownFallback(t *testing.T) {
 	if nodes != nil {
 		t.Fatalf("nodes = %v, want nil", nodes)
 	}
-	doc, err := runnerpkg.ParseExchangeMarkdown(out.(string))
+	outStr, ok := out.(string)
+	if !ok {
+		t.Fatalf("Execute output type = %T, want string; value = %v", out, out)
+	}
+	doc, err := runnerpkg.ParseExchangeMarkdown(outStr)
 	if err != nil {
 		t.Fatalf("ParseExchangeMarkdown: %v", err)
 	}
@@ -169,6 +176,16 @@ func TestExecute_NoRunEReturnsMarkdownFallback(t *testing.T) {
 	}
 	if doc.Handoff == "" {
 		t.Fatal("expected fallback handoff to be populated")
+	}
+}
+
+func TestExecute_NoRunERequiresRunnerBinding(t *testing.T) {
+	exec, err := NewExecutor(loadLightweightTestSkill(t), &ExecutionPlanner{}, llm.DefaultConversationConfig(), WithExecutorClient(&llm.Client{}))
+	if err != nil {
+		t.Fatalf("NewExecutor: %v", err)
+	}
+	if _, _, err := exec.Execute(context.Background(), nil); err == nil || !strings.Contains(err.Error(), "has not been bound") {
+		t.Fatalf("Execute error = %v, want unbound runtime skill error", err)
 	}
 }
 
@@ -332,6 +349,9 @@ func TestPolish_ReturnsExchangeMarkdown(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewExecutor: %v", err)
 	}
+	if _, err := exec.BindForRunner(nil, nil); err != nil {
+		t.Fatalf("BindForRunner: %v", err)
+	}
 
 	fragment, err := exec.Polish(context.Background())
 	if err != nil {
@@ -434,6 +454,9 @@ func TestReport_ReturnsExchangeMarkdownFallback(t *testing.T) {
 	}, llm.DefaultConversationConfig(), WithExecutorClient(&llm.Client{}))
 	if err != nil {
 		t.Fatalf("NewExecutor: %v", err)
+	}
+	if _, err := exec.BindForRunner(nil, nil); err != nil {
+		t.Fatalf("BindForRunner: %v", err)
 	}
 
 	summary, err := exec.Report(context.Background(), map[string]string{"result": "ok"})
