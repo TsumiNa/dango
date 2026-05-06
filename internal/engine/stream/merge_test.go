@@ -1070,3 +1070,179 @@ func TestMergeFromWithConfigMergeStopStopsHub(t *testing.T) {
 		t.Fatalf("merge.Done() did not close after Stop()")
 	}
 }
+
+func TestMergeFromWithConfigRejectsNegativeTickDuration(t *testing.T) {
+	parent := New(Scope{}, DefaultConfig())
+	child := New(Scope{}, DefaultConfig())
+	t.Cleanup(parent.Close)
+	t.Cleanup(child.Close)
+
+	_, err := parent.MergeFromWithConfig(t.Context(), child, Filter{}, MergeWindowConfig{
+		TickDuration: -time.Millisecond,
+	})
+	if !errors.Is(err, ErrInvalidMerge) {
+		t.Fatalf("MergeFromWithConfig negative tick err = %v, want ErrInvalidMerge", err)
+	}
+}
+
+func TestMergeFromWithConfigHubEmptyUpstreamCloseStopsMerge(t *testing.T) {
+	parent := New(Scope{}, DefaultConfig())
+	child := New(Scope{}, DefaultConfig())
+	t.Cleanup(parent.Close)
+
+	merge, err := parent.MergeFromWithConfig(t.Context(), child, Filter{}, MergeWindowConfig{
+		TickDuration: time.Hour,
+	})
+	if err != nil {
+		t.Fatalf("MergeFromWithConfig: %v", err)
+	}
+
+	child.Close()
+
+	select {
+	case <-merge.Done():
+	case <-time.After(time.Second):
+		t.Fatalf("merge.Done() did not close after empty upstream closed")
+	}
+}
+
+func TestMergeFromWithConfigHubDrainsBufferedEventsOnUpstreamClose(t *testing.T) {
+	parent := New(Scope{RequestID: "req_1"}, DefaultConfig())
+	child := New(Scope{NodeID: "node_1"}, DefaultConfig())
+	t.Cleanup(parent.Close)
+
+	sub, err := parent.Subscribe(Filter{EventTypes: []string{EventMergeBundle}})
+	if err != nil {
+		t.Fatalf("Subscribe: %v", err)
+	}
+	merge, err := parent.MergeFromWithConfig(t.Context(), child, Filter{}, MergeWindowConfig{
+		TickDuration: time.Hour,
+	})
+	if err != nil {
+		t.Fatalf("MergeFromWithConfig: %v", err)
+	}
+
+	if err := child.Emit(t.Context(), Event{
+		EventType: EventLLMOutputDelta,
+		From:      Source{Layer: "executor", ID: "node_1"},
+		Status:    StatusRunning,
+		Delta:     json.RawMessage(`"output"`),
+	}); err != nil {
+		t.Fatalf("Emit output: %v", err)
+	}
+	if err := child.Emit(t.Context(), Event{
+		EventType: EventLLMReasoningDelta,
+		From:      Source{Layer: "executor", ID: "node_1"},
+		Status:    StatusRunning,
+		Delta:     json.RawMessage(`"reasoning"`),
+	}); err != nil {
+		t.Fatalf("Emit reasoning: %v", err)
+	}
+	child.Close()
+
+	first := receiveEvent(t, sub.Events())
+	second := receiveEvent(t, sub.Events())
+	firstBundle, err := DecodeBundlePayload(first.Delta)
+	if err != nil {
+		t.Fatalf("Decode first bundle: %v", err)
+	}
+	secondBundle, err := DecodeBundlePayload(second.Delta)
+	if err != nil {
+		t.Fatalf("Decode second bundle: %v", err)
+	}
+	if len(firstBundle.NestedEvents) != 1 || firstBundle.NestedEvents[0].EventType != EventLLMOutputDelta {
+		t.Fatalf("first drained bundle = %+v, want output", firstBundle.NestedEvents)
+	}
+	if len(secondBundle.NestedEvents) != 1 || secondBundle.NestedEvents[0].EventType != EventLLMReasoningDelta {
+		t.Fatalf("second drained bundle = %+v, want reasoning", secondBundle.NestedEvents)
+	}
+
+	select {
+	case <-merge.Done():
+	case <-time.After(time.Second):
+		t.Fatalf("merge.Done() did not close after draining upstream")
+	}
+}
+
+func TestMergeFromWithConfigHubNestedEventsUseMergedScopeAndMetadata(t *testing.T) {
+	parent := New(Scope{RequestID: "req_1"}, DefaultConfig())
+	child := New(Scope{NodeID: "node_1"}, DefaultConfig())
+	t.Cleanup(parent.Close)
+	t.Cleanup(child.Close)
+
+	sub, err := parent.Subscribe(Filter{EventTypes: []string{EventMergeBundle}})
+	if err != nil {
+		t.Fatalf("Subscribe: %v", err)
+	}
+	merge, err := parent.MergeFromWithConfig(t.Context(), child, Filter{}, MergeWindowConfig{
+		TickDuration: 10 * time.Millisecond,
+	})
+	if err != nil {
+		t.Fatalf("MergeFromWithConfig: %v", err)
+	}
+	defer merge.Stop()
+
+	if err := child.Emit(t.Context(), Event{
+		EventType: EventLLMOutputDelta,
+		From:      Source{Layer: "executor", ID: "node_1"},
+		Status:    StatusRunning,
+		Delta:     json.RawMessage(`"output"`),
+	}); err != nil {
+		t.Fatalf("Emit: %v", err)
+	}
+
+	bundleEvent := receiveEvent(t, sub.Events())
+	bundle, err := DecodeBundlePayload(bundleEvent.Delta)
+	if err != nil {
+		t.Fatalf("DecodeBundlePayload: %v", err)
+	}
+	if len(bundle.NestedEvents) != 1 {
+		t.Fatalf("NestedEvents = %d, want 1", len(bundle.NestedEvents))
+	}
+	nested := bundle.NestedEvents[0]
+	if nested.Scope.RequestID != "req_1" || nested.Scope.NodeID != "node_1" {
+		t.Fatalf("nested scope = %+v, want parent request and child node", nested.Scope)
+	}
+	if nested.SequenceNumber != 0 {
+		t.Fatalf("nested sequence = %d, want cleared upstream sequence", nested.SequenceNumber)
+	}
+	if nested.Metadata["upstream_sequence_number"] != float64(1) {
+		t.Fatalf("nested upstream sequence metadata = %#v, want 1", nested.Metadata["upstream_sequence_number"])
+	}
+}
+
+func TestMergeFromWithConfigHubErrorVisibleThroughMergeErr(t *testing.T) {
+	parent := New(Scope{}, DefaultConfig())
+	child := New(Scope{}, DefaultConfig())
+	t.Cleanup(child.Close)
+
+	merge, err := parent.MergeFromWithConfig(t.Context(), child, Filter{}, MergeWindowConfig{
+		TickDuration: 10 * time.Millisecond,
+	})
+	if err != nil {
+		t.Fatalf("MergeFromWithConfig: %v", err)
+	}
+	defer merge.Stop()
+
+	if err := child.Emit(t.Context(), Event{
+		EventType: EventLLMOutputDelta,
+		From:      Source{Layer: "executor", ID: "node_1"},
+		Status:    StatusRunning,
+		Delta:     json.RawMessage(`"output"`),
+	}); err != nil {
+		t.Fatalf("Emit: %v", err)
+	}
+	parent.Close()
+
+	deadline := time.After(time.Second)
+	for {
+		if errors.Is(merge.Err(), ErrClosed) {
+			return
+		}
+		select {
+		case <-deadline:
+			t.Fatalf("merge.Err() = %v, want ErrClosed", merge.Err())
+		case <-time.After(10 * time.Millisecond):
+		}
+	}
+}
