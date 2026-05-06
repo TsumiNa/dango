@@ -188,3 +188,121 @@ func TestBundleEventTypeConstantExists(t *testing.T) {
 		t.Errorf("EventMergeBundle = %q, want merge.bundle", EventMergeBundle)
 	}
 }
+
+func TestExpandBundleEventReturnsNestedEventsInOrder(t *testing.T) {
+	first := Event{
+		EventType: EventLLMReasoningDelta,
+		From:      Source{Layer: "skill", ID: "skill_1"},
+		Status:    StatusRunning,
+		Delta:     json.RawMessage(`"thinking"`),
+	}
+	second := Event{
+		EventType: EventLLMOutputDelta,
+		From:      Source{Layer: "skill", ID: "skill_1"},
+		Status:    StatusRunning,
+		Delta:     json.RawMessage(`"answer"`),
+	}
+	delta, err := EncodeBundlePayload(BundlePayload{
+		TickID:       7,
+		NestedEvents: []Event{first, second},
+	})
+	if err != nil {
+		t.Fatalf("EncodeBundlePayload: %v", err)
+	}
+
+	events, err := ExpandBundleEvent(Event{
+		EventType: EventMergeBundle,
+		From:      Source{Layer: "hub"},
+		Status:    StatusCompleted,
+		Delta:     delta,
+	})
+	if err != nil {
+		t.Fatalf("ExpandBundleEvent: %v", err)
+	}
+
+	if len(events) != 2 {
+		t.Fatalf("expanded events = %d, want 2", len(events))
+	}
+	if events[0].EventType != EventLLMReasoningDelta || events[1].EventType != EventLLMOutputDelta {
+		t.Fatalf("expanded order = %q, %q", events[0].EventType, events[1].EventType)
+	}
+}
+
+func TestFilterBundleEventSelectsNestedEvents(t *testing.T) {
+	visible := Event{
+		EventType: EventLLMOutputDelta,
+		From:      Source{Layer: "skill", ID: "skill_1"},
+		Status:    StatusRunning,
+		Delta:     json.RawMessage(`"visible"`),
+	}
+	hidden := Event{
+		EventType: EventStatusProgress,
+		From:      Source{Layer: "executor", ID: "node_1"},
+		Status:    StatusRunning,
+		Delta:     json.RawMessage(`{"progress":50}`),
+	}
+	delta, err := EncodeBundlePayload(BundlePayload{
+		TickID:       8,
+		NestedEvents: []Event{hidden, visible},
+	})
+	if err != nil {
+		t.Fatalf("EncodeBundlePayload: %v", err)
+	}
+
+	events, err := FilterBundleEvent(Event{
+		EventType: EventMergeBundle,
+		From:      Source{Layer: "hub"},
+		Status:    StatusCompleted,
+		Delta:     delta,
+	}, Filter{Prefixes: []string{"llm."}})
+	if err != nil {
+		t.Fatalf("FilterBundleEvent: %v", err)
+	}
+
+	if len(events) != 1 {
+		t.Fatalf("filtered events = %d, want 1", len(events))
+	}
+	if events[0].EventType != EventLLMOutputDelta {
+		t.Fatalf("filtered event type = %q, want %q", events[0].EventType, EventLLMOutputDelta)
+	}
+}
+
+func TestExpandBundleEventPassesThroughNonBundleEvents(t *testing.T) {
+	event := Event{
+		EventType: EventStatusProgress,
+		From:      Source{Layer: "runner", ID: "runner_1"},
+		Status:    StatusRunning,
+		Delta:     json.RawMessage(`{"progress":10}`),
+	}
+
+	events, err := ExpandBundleEvent(event)
+	if err != nil {
+		t.Fatalf("ExpandBundleEvent: %v", err)
+	}
+	if len(events) != 1 {
+		t.Fatalf("expanded events = %d, want 1", len(events))
+	}
+	if events[0].EventType != event.EventType || events[0].From.ID != event.From.ID {
+		t.Fatalf("expanded event = %+v, want pass-through %+v", events[0], event)
+	}
+
+	filtered, err := FilterBundleEvent(event, Filter{EventTypes: []string{EventLLMOutputDelta}})
+	if err != nil {
+		t.Fatalf("FilterBundleEvent: %v", err)
+	}
+	if len(filtered) != 0 {
+		t.Fatalf("filtered pass-through events = %d, want 0", len(filtered))
+	}
+}
+
+func TestExpandBundleEventMalformedBundlePayloadReturnsError(t *testing.T) {
+	_, err := ExpandBundleEvent(Event{
+		EventType: EventMergeBundle,
+		From:      Source{Layer: "hub"},
+		Status:    StatusCompleted,
+		Delta:     json.RawMessage(`{"tick_id":9,"nested_events":`),
+	})
+	if err == nil {
+		t.Fatalf("ExpandBundleEvent malformed payload error = nil, want error")
+	}
+}

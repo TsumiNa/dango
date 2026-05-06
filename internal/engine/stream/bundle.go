@@ -52,3 +52,42 @@ func DecodeBundlePayload(delta json.RawMessage) (BundlePayload, error) {
 func IsValidBundlePayload(bundle BundlePayload) bool {
 	return len(bundle.NestedEvents) > 0
 }
+
+// ExpandBundleEvent returns the events a downstream consumer should handle for event.
+// Merge bundle events expand to their nested events in bundle order. Non-bundle
+// events pass through unchanged so callers can consume direct and bundled streams
+// with one code path during migration.
+func ExpandBundleEvent(event Event) ([]Event, error) {
+	if event.EventType != EventMergeBundle {
+		return []Event{event}, nil
+	}
+
+	bundle, err := DecodeBundlePayload(event.Delta)
+	if err != nil {
+		return nil, fmt.Errorf("expand bundle event: %w", err)
+	}
+	if !IsValidBundlePayload(bundle) {
+		return nil, fmt.Errorf("expand bundle event: empty bundle")
+	}
+
+	events := make([]Event, len(bundle.NestedEvents))
+	copy(events, bundle.NestedEvents)
+	return events, nil
+}
+
+// FilterBundleEvent expands event with [ExpandBundleEvent] and returns only the
+// resulting events that match filter.
+func FilterBundleEvent(event Event, filter Filter) ([]Event, error) {
+	events, err := ExpandBundleEvent(event)
+	if err != nil {
+		return nil, err
+	}
+
+	filtered := make([]Event, 0, len(events))
+	for _, candidate := range events {
+		if filter.Match(candidate) {
+			filtered = append(filtered, candidate)
+		}
+	}
+	return filtered, nil
+}
