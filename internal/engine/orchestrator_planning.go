@@ -44,6 +44,17 @@ func planWithOrchestrator(ctx context.Context, req Request, skills []runnerpkg.S
 	if err != nil {
 		return nil, nil, err
 	}
+	plan, reject, parseErr := parseOrchestratorPlanningOutput(raw)
+	if parseErr != nil {
+		raw, err = runtimeSkill.Run(ctx, runnerpkg.PlannerRetryPrompt(parseErr), defaultPlanningEffort)
+		if err != nil {
+			return nil, nil, err
+		}
+		plan, reject, parseErr = parseOrchestratorPlanningOutput(raw)
+		if parseErr != nil {
+			return nil, nil, fmt.Errorf("orchestrate: %w (after one retry)", parseErr)
+		}
+	}
 	if exchange, err := planningExchangeMarkdown(req.Input, runtimeSkill, raw); err != nil {
 		return nil, nil, fmt.Errorf("orchestrate: build planning exchange: %w", err)
 	} else if exchange != "" {
@@ -64,10 +75,6 @@ func planWithOrchestrator(ctx context.Context, req Request, skills []runnerpkg.S
 		streampkg.Scope{},
 		map[string]any{"stage": "planning"},
 	)
-	plan, reject, err := parseOrchestratorPlanningOutput(raw)
-	if err != nil {
-		return nil, nil, fmt.Errorf("orchestrate: %w", err)
-	}
 	return plan, reject, nil
 }
 
@@ -89,8 +96,8 @@ func planningExchangeMarkdown(request string, runtimeSkill *llm.Skill, raw strin
 func marshalOrchestratorPlanningInput(request string, skills []runnerpkg.SkillSummary) (string, error) {
 	var payload orchestratorSkillPlanPrompt
 	payload.Mode = "plan"
-	payload.Task = "Plan the request using the available skills. Return strict JSON with exactly one of {\"plan\": ...} or {\"reject\": ...}."
-	payload.Contract = "plan.request must be the original request; plan.nodes[].skill_name must reference an available skill; reject must include summary and analysis."
+	payload.Task = "Plan the user request using only the listed skills. Reply with one strict JSON object: either {\"plan\":{...}} or {\"reject\":{...}}. No fences, no commentary."
+	payload.Contract = "plan.request must repeat the user's original request verbatim. Each plan.nodes[] needs a snake_case id, a skill_name from data.skills, a self-contained task_description (what to do, inputs, output format, constraints, success criteria), and depends_on for any upstream-consuming node. reject must include summary, analysis, and missing_skills when the gap is a missing capability."
 	payload.Data.Request = request
 	payload.Data.Skills = append([]runnerpkg.SkillSummary(nil), skills...)
 	buf, err := json.Marshal(payload)
@@ -101,15 +108,19 @@ func marshalOrchestratorPlanningInput(request string, skills []runnerpkg.SkillSu
 }
 
 func parseOrchestratorPlanningOutput(raw string) (*runnerpkg.CoarsePlan, *RejectReason, error) {
+	cleaned := runnerpkg.ExtractJSONObject(raw)
+	if cleaned == "" {
+		return nil, nil, fmt.Errorf("parse plan output: planner returned no JSON object (raw=%q)", runnerpkg.SummarizeRaw(raw, 200))
+	}
 	var out orchestratorSkillPlanResponse
-	if err := json.Unmarshal([]byte(raw), &out); err != nil {
-		return nil, nil, fmt.Errorf("parse plan output: %w", err)
+	if err := json.Unmarshal([]byte(cleaned), &out); err != nil {
+		return nil, nil, fmt.Errorf("parse plan output: %w (raw=%q)", err, runnerpkg.SummarizeRaw(raw, 200))
 	}
 	if out.Plan != nil && out.Reject != nil {
 		return nil, nil, fmt.Errorf("planner returned both a plan and a reject reason")
 	}
 	if out.Plan == nil && out.Reject == nil {
-		return nil, nil, fmt.Errorf("planner returned neither a plan nor a reject reason")
+		return nil, nil, fmt.Errorf("planner returned neither a plan nor a reject reason (raw=%q)", runnerpkg.SummarizeRaw(raw, 200))
 	}
 	return out.Plan, out.Reject, nil
 }

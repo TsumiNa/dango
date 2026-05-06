@@ -19,6 +19,7 @@ import (
 	streampkg "github.com/tsumina/dango/internal/engine/stream"
 	"github.com/tsumina/dango/internal/llm"
 	"github.com/tsumina/dango/internal/streamrender"
+	"golang.org/x/term"
 )
 
 //go:embed sample_measurements.json
@@ -143,9 +144,13 @@ func runHonshuGroundwaterExample(ctx context.Context, cfg exampleConfig) (*runne
 	}
 	renderCfg := streamrender.DefaultConfig()
 	renderCfg.ExchangeDir = filepath.Join(artifactsDir, "exchanges")
+	renderCfg.Debug = logger.Enabled(ctx, slog.LevelDebug)
 	if file, ok := cfg.Out.(*os.File); ok {
 		if info, err := file.Stat(); err == nil {
 			renderCfg.Color = info.Mode()&os.ModeCharDevice != 0
+		}
+		if width, _, err := term.GetSize(int(file.Fd())); err == nil && width > 20 {
+			renderCfg.MaxLineWidth = width
 		}
 	}
 

@@ -9,20 +9,31 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
+	"github.com/muesli/termenv"
 	runnerpkg "github.com/tsumina/dango/internal/engine/runner"
 	streampkg "github.com/tsumina/dango/internal/engine/stream"
 )
 
 const (
-	defaultMaxText      = 140
-	defaultMaxLineWidth = 120
-	defaultRunnerIDClip = 8
-	defaultProgressTick = 120 * time.Millisecond
+	defaultMaxText           = 1200
+	defaultMaxLineWidth      = 100
+	defaultRunningSoftLimit  = 1200
+	defaultRunnerIDClip      = 8
+	defaultProgressTick      = 120 * time.Millisecond
+	minMarqueeWindow         = 16
+	approxCharsPerToken      = 4
+	completionMarqueeMinChar = 80
+	// terminalWidthSafetyMargin reserves a couple of cells so a composed line
+	// stays clear of the terminal's right edge. Without it terminals on
+	// boundary widths (e.g. fish prompt indicators) can wrap a marquee line and
+	// break the in-place \r\x1b[K update mechanism.
+	terminalWidthSafetyMargin = 2
 )
 
 // Config controls how stream events are rendered for terminal output.
@@ -38,12 +49,26 @@ type Config struct {
 	// Color enables ANSI color in labels, status icons, and key markers.
 	Color bool
 
-	// MaxText caps long delta fields. Zero uses a conservative default.
+	// Debug surfaces internal identifiers (node, call_id, runner_id) and other
+	// low-level fields that are normally hidden because they don't help end
+	// users. Layer headers like Executor[node-id] still appear without Debug.
+	Debug bool
+
+	// MaxText caps long delta fields. Zero uses a conservative default
+	// (~200 words). Static reasoning/output text longer than this is truncated
+	// with an ellipsis.
 	MaxText int
 
 	// MaxLineWidth caps final terminal lines using ANSI-aware cell width. Zero
 	// uses a conservative default suitable for ordinary terminal windows.
 	MaxLineWidth int
+
+	// RunningSoftLimit is the character budget below which a streaming
+	// reasoning/output buffer is shown verbatim on its live line. Once the
+	// accumulated text grows past this limit, the renderer attaches a
+	// "(Tokens N)" counter and replaces the line with a completion summary
+	// when the live source closes. Zero uses the same default as MaxText.
+	RunningSoftLimit int
 
 	// ProgressFrames are appended to running events to make repeated progress
 	// visibly alive. Nil uses ASCII spinner frames.
@@ -91,6 +116,7 @@ func DefaultConfig() Config {
 type Renderer struct {
 	out            io.Writer
 	cfg            Config
+	lip            *lipgloss.Renderer
 	lastLine       string
 	frame          int
 	liveLineActive bool
@@ -99,9 +125,17 @@ type Renderer struct {
 	textBuffers    map[string]*runningTextBuffer
 }
 
+// runningTextBuffer accumulates streaming reasoning/output deltas so the
+// renderer can show a single rolling line and emit a stats summary once the
+// live source closes.
 type runningTextBuffer struct {
-	text    string
-	emitted int
+	text      string
+	startedAt time.Time
+	source    streampkg.Source
+	scope     streampkg.Scope
+	metadata  map[string]any
+	kind      string
+	marqueed  bool
 }
 
 // New creates a Renderer that writes to out. A nil writer discards output.
@@ -115,6 +149,15 @@ func New(out io.Writer, cfg Config) *Renderer {
 	if cfg.MaxLineWidth <= 0 {
 		cfg.MaxLineWidth = defaultMaxLineWidth
 	}
+	// Reserve a couple of cells inside the caller's reported width so the
+	// composed line always lands strictly inside the terminal. Crossing the
+	// right edge wraps the line and breaks our "\r\x1b[K" in-place update.
+	if cfg.MaxLineWidth > terminalWidthSafetyMargin*2 {
+		cfg.MaxLineWidth -= terminalWidthSafetyMargin
+	}
+	if cfg.RunningSoftLimit <= 0 {
+		cfg.RunningSoftLimit = cfg.MaxText
+	}
 	if cfg.ProgressFrames == nil {
 		cfg.ProgressFrames = []string{"|", "/", "-", "\\"}
 	}
@@ -124,11 +167,21 @@ func New(out io.Writer, cfg Config) *Renderer {
 	if cfg.ImageMaxBytes <= 0 {
 		cfg.ImageMaxBytes = 2 << 20
 	}
-	return &Renderer{
+	r := &Renderer{
 		out:         out,
 		cfg:         cfg,
 		textBuffers: map[string]*runningTextBuffer{},
 	}
+	r.lip = lipgloss.NewRenderer(out)
+	if cfg.Color {
+		// Force ANSI colors regardless of TTY detection so callers that
+		// explicitly opt in (after their own io.Writer/TTY check) always get
+		// styled output.
+		r.lip.SetColorProfile(termenv.ANSI256)
+	} else {
+		r.lip.SetColorProfile(termenv.Ascii)
+	}
+	return r
 }
 
 // RenderSubscription drains sub until it closes or ctx is canceled.
@@ -175,14 +228,17 @@ func (r *Renderer) RenderSubscriptionObserved(ctx context.Context, sub *streampk
 // RenderEvent formats event and writes one or more terminal lines.
 func (r *Renderer) RenderEvent(event streampkg.Event) error {
 	line := r.formatEvent(event, false)
-	if line == "" {
-		return nil
-	}
 	if r.isLiveEvent(event) {
+		if line == "" {
+			return nil
+		}
 		return r.renderLiveLine(liveLineKey(event), line)
 	}
 	if err := r.finishLiveLine(); err != nil {
 		return err
+	}
+	if line == "" {
+		return nil
 	}
 	if r.cfg.DedupeRepeated && line == r.lastLine {
 		return nil
@@ -269,8 +325,44 @@ func (r *Renderer) finishLiveLine() error {
 	r.liveLineActive = false
 	r.liveLineKey = ""
 	r.liveLineBase = ""
-	_, err := fmt.Fprint(r.out, "\r\x1b[K")
-	return err
+	if _, err := fmt.Fprint(r.out, "\r\x1b[K"); err != nil {
+		return err
+	}
+	return r.flushMarqueedBuffers()
+}
+
+// flushMarqueedBuffers emits a completion summary for every reasoning/output
+// buffer that grew past the soft limit, then drops them from the buffer map.
+// Buffers that never reached marquee mode are kept so an interrupted source
+// can resume contributing to the same accumulating text on its next delta.
+func (r *Renderer) flushMarqueedBuffers() error {
+	if len(r.textBuffers) == 0 {
+		return nil
+	}
+	keys := make([]string, 0, len(r.textBuffers))
+	for k, buf := range r.textBuffers {
+		if buf != nil && buf.marqueed {
+			keys = append(keys, k)
+		}
+	}
+	if len(keys) == 0 {
+		return nil
+	}
+	// Stable order so multi-buffer flushes don't shuffle between runs.
+	sort.Strings(keys)
+	for _, k := range keys {
+		buf := r.textBuffers[k]
+		delete(r.textBuffers, k)
+		summary := r.buildRunningSummary(buf)
+		if summary == "" {
+			continue
+		}
+		if _, err := fmt.Fprintln(r.out, summary); err != nil {
+			return err
+		}
+		r.lastLine = summary
+	}
+	return nil
 }
 
 func (r *Renderer) lineWithFrame(line string) string {
@@ -369,14 +461,11 @@ func (r *Renderer) formatTextDelta(event streampkg.Event, kind string) string {
 	if !ok || strings.TrimSpace(text) == "" {
 		return ""
 	}
-	if event.Status == streampkg.StatusRunning && kind == "reasoning" {
-		return r.formatRunningText(event, kind, text)
-	}
-	if event.Status == streampkg.StatusRunning && kind == "output" {
+	if event.Status == streampkg.StatusRunning {
 		return r.formatRunningText(event, kind, text)
 	}
 	if exchangeText(text) {
-		return fmt.Sprintf("%s %s exchange=%s", r.tag(kind), r.dim("·"), r.exchangeReference(event, text))
+		return fmt.Sprintf("%s %s %s=%s", r.tag(kind), r.dim("·"), r.colorKey("exchange"), r.colorPath(r.exchangeReference(event, text)))
 	}
 	if event.From.Layer == "orchestrator" && stringValue(event.Metadata["stage"]) == "planning" && kind == "output" {
 		return fmt.Sprintf("planning output captured %s", r.kv("status", string(event.Status)))
@@ -390,33 +479,91 @@ func (r *Renderer) formatTextDelta(event streampkg.Event, kind string) string {
 	clean, truncated := r.compact(text)
 	line := fmt.Sprintf("%s %s %s", r.tag(kind), r.dim("·"), clean)
 	if truncated {
-		line += " " + r.kv("truncated", "true")
+		line += " " + r.dim(fmt.Sprintf("(Tokens %d)", estimateTokens(text)))
 	}
 	return line
 }
 
+// formatRunningText composes a single-line live update for a streaming
+// reasoning/output buffer. The line shows the most recent characters of the
+// accumulated text and, once the buffer grows past the soft limit, attaches a
+// "(Tokens N)" counter so the user keeps a sense of how much output has been
+// produced without the line itself getting any longer.
 func (r *Renderer) formatRunningText(event streampkg.Event, kind string, text string) string {
 	key := streamDeltaKey(event, kind)
 	buf := r.textBuffers[key]
 	if buf == nil {
-		buf = &runningTextBuffer{}
+		buf = &runningTextBuffer{
+			startedAt: time.Now(),
+			source:    event.From,
+			scope:     event.Scope,
+			metadata:  cloneMetadata(event.Metadata),
+			kind:      kind,
+		}
 		r.textBuffers[key] = buf
 	}
 	buf.text += text
 	chunk := strings.TrimSpace(buf.text)
-	buf.emitted = len(buf.text)
 	if chunk == "" {
 		return ""
 	}
 	if looksLikeExchangeDraft(chunk) {
 		return fmt.Sprintf("%s %s drafting exchange %s", r.tag(kind), r.dim("·"), r.kv("bytes", fmt.Sprint(len(buf.text))))
 	}
-	clean, truncated := r.compact(chunk)
-	line := fmt.Sprintf("%s %s %s", r.tag(kind), r.dim("·"), clean)
-	if truncated {
-		line += " " + r.kv("truncated", "true")
+	cleaned := compactWhitespace(chunk)
+	cleanedWidth := ansi.StringWidth(cleaned)
+	prefix := fmt.Sprintf("%s %s ", r.tag(kind), r.dim("·"))
+	prefixWidth := ansi.StringWidth(prefix)
+	headerWidth := r.runningHeaderWidth(event)
+	frameWidth := r.frameWidth()
+
+	showCounter := cleanedWidth > r.cfg.RunningSoftLimit
+	counter := ""
+	counterWidth := 0
+	if showCounter {
+		buf.marqueed = true
+		counter = " " + r.dim(fmt.Sprintf("(Tokens %d)", estimateTokens(cleaned)))
+		counterWidth = ansi.StringWidth(counter)
 	}
-	return line
+
+	available := r.cfg.MaxLineWidth - headerWidth - prefixWidth - counterWidth - frameWidth
+	if available < minMarqueeWindow {
+		available = minMarqueeWindow
+	}
+	visible := cleaned
+	if cleanedWidth > available {
+		visible = ansi.TruncateLeft(cleaned, cleanedWidth-available, "")
+	}
+	return prefix + visible + counter
+}
+
+// buildRunningSummary returns the line shown in place of a freshly-cleared
+// marquee live line so the user keeps a record of what just streamed past.
+func (r *Renderer) buildRunningSummary(buf *runningTextBuffer) string {
+	if buf == nil {
+		return ""
+	}
+	cleaned := compactWhitespace(buf.text)
+	chars := ansi.StringWidth(cleaned)
+	tokens := estimateTokens(cleaned)
+	parts := []string{
+		r.tag(buf.kind + " complete"), r.dim("·"),
+		r.kv("tokens", fmt.Sprintf("~%d", tokens)),
+		r.kv("chars", fmt.Sprint(chars)),
+	}
+	if !buf.startedAt.IsZero() {
+		dur := time.Since(buf.startedAt).Round(100 * time.Millisecond)
+		parts = append(parts, r.kv("dur", dur.String()))
+	}
+	body := strings.Join(parts, " ")
+	event := streampkg.Event{
+		EventType: buf.kind + ".complete",
+		From:      buf.source,
+		Status:    streampkg.StatusCompleted,
+		Scope:     buf.scope,
+		Metadata:  buf.metadata,
+	}
+	return r.composeLine(event, body)
 }
 
 func (r *Renderer) formatStatusEvent(event streampkg.Event, values map[string]any) string {
@@ -440,8 +587,10 @@ func (r *Renderer) formatStatusEvent(event streampkg.Event, values map[string]an
 		parts = append(parts, message)
 	}
 	parts = append(parts, r.kv("status", string(event.Status)), r.kv("event", event.EventType))
-	if runnerID := stringValue(values["runner_id"]); runnerID != "" {
-		parts = append(parts, r.kv("runner_id", runnerID))
+	if r.cfg.Debug {
+		if runnerID := stringValue(values["runner_id"]); runnerID != "" {
+			parts = append(parts, r.kv("runner_id", runnerID))
+		}
 	}
 	if truncated {
 		parts = append(parts, r.kv("truncated", "true"))
@@ -466,7 +615,9 @@ func (r *Renderer) formatNodeEvent(event streampkg.Event, values map[string]any,
 		r.kv("event", eventName),
 		r.kv("status", string(event.Status)),
 	}
-	if node := nodeID(event, values); node != "" {
+	// node= duplicates Executor[node-id] for executor-layer events, so we keep
+	// it only for runner-layer events (which header by runner ID) or in debug.
+	if node := nodeID(event, values); node != "" && (r.cfg.Debug || event.From.Layer == "runner") {
 		parts = append(parts, r.kv("node", node))
 	}
 	if skill := skillName(event); skill != "" && skill != "unknown" {
@@ -488,8 +639,10 @@ func (r *Renderer) formatSkillMemo(event streampkg.Event, values map[string]any)
 		r.tag("memo"), r.dim("·"), memo,
 		r.kv("status", string(event.Status)),
 	}
-	if node := nodeID(event, values); node != "" {
-		parts = append(parts, r.kv("node", node))
+	if r.cfg.Debug {
+		if node := nodeID(event, values); node != "" {
+			parts = append(parts, r.kv("node", node))
+		}
 	}
 	if skill := skillName(event); skill != "" && skill != "unknown" {
 		parts = append(parts, r.kv("skill", skill))
@@ -508,7 +661,7 @@ func (r *Renderer) formatArtifact(event streampkg.Event, values map[string]any) 
 	if path == "" {
 		return ""
 	}
-	parts := []string{r.kv("artifact", fileURL(path))}
+	parts := []string{r.colorKey("artifact") + "=" + r.colorPath(fileURL(path))}
 	if resourceType := stringValue(values["resource_type"]); resourceType != "" {
 		parts = append(parts, r.kv("type", resourceType))
 	}
@@ -532,7 +685,9 @@ func (r *Renderer) formatToolCall(event streampkg.Event, values map[string]any) 
 		r.kv("status", string(event.Status)),
 		r.kv("skill", skillName(event)),
 		r.kv("tool", stringValue(values["name"])),
-		r.kv("call", stringValue(values["call_id"])),
+	}
+	if r.cfg.Debug {
+		parts = append(parts, r.kv("call", stringValue(values["call_id"])))
 	}
 	if args := stringValue(values["arguments"]); args != "" {
 		args, _ = r.compact(args)
@@ -557,7 +712,9 @@ func (r *Renderer) formatToolExecution(event streampkg.Event, values map[string]
 		r.tag(label), r.dim("·"), name,
 		r.kv("status", string(event.Status)),
 		r.kv("skill", skillName(event)),
-		r.kv("call", stringValue(values["call_id"])),
+	}
+	if r.cfg.Debug {
+		parts = append(parts, r.kv("call", stringValue(values["call_id"])))
 	}
 	if errText := stringValue(values["error"]); errText != "" {
 		errText, _ = r.compact(errText)
@@ -572,7 +729,9 @@ func (r *Renderer) formatToolResult(event streampkg.Event, values map[string]any
 		r.kv("status", string(event.Status)),
 		r.kv("skill", skillName(event)),
 		r.kv("tool", stringValue(values["name"])),
-		r.kv("call", stringValue(values["call_id"])),
+	}
+	if r.cfg.Debug {
+		parts = append(parts, r.kv("call", stringValue(values["call_id"])))
 	}
 	if errText := stringValue(values["error"]); errText != "" {
 		errText, _ = r.compact(errText)
@@ -627,6 +786,28 @@ func (r *Renderer) nextFrame() string {
 	return frame
 }
 
+func (r *Renderer) frameWidth() int {
+	if len(r.cfg.ProgressFrames) == 0 {
+		return 0
+	}
+	width := 0
+	for _, frame := range r.cfg.ProgressFrames {
+		if w := ansi.StringWidth(frame); w > width {
+			width = w
+		}
+	}
+	return width + 1 // include the leading space
+}
+
+// runningHeaderWidth approximates the cell width of the icon + " " + layer
+// header that composeLine will prepend, so the marquee body can stay within
+// MaxLineWidth without further truncation by fitLine cutting the counter.
+func (r *Renderer) runningHeaderWidth(event streampkg.Event) int {
+	icon := r.statusIcon(event.Status)
+	header := r.layerHeader(event)
+	return ansi.StringWidth(icon) + 1 + ansi.StringWidth(header) + 1
+}
+
 // kv renders a structured key/value pair. The key is colored when enabled so
 // the eye can align quickly, while the value remains plain so values like
 // status=failed stay greppable.
@@ -645,21 +826,21 @@ func (r *Renderer) tag(name string) string {
 	if !r.cfg.Color {
 		return name
 	}
-	return lipgloss.NewStyle().Foreground(lipgloss.Color("3")).Render(name)
+	return r.lip.NewStyle().Foreground(lipgloss.Color("3")).Render(name)
 }
 
 func (r *Renderer) colorKey(key string) string {
 	if !r.cfg.Color {
 		return key
 	}
-	return lipgloss.NewStyle().Foreground(lipgloss.Color("6")).Render(key)
+	return r.lip.NewStyle().Foreground(lipgloss.Color("6")).Render(key)
 }
 
 func (r *Renderer) colorIdent(text string) string {
 	if !r.cfg.Color {
 		return text
 	}
-	return lipgloss.NewStyle().Foreground(lipgloss.Color("3")).Render(text)
+	return r.lip.NewStyle().Foreground(lipgloss.Color("3")).Render(text)
 }
 
 func (r *Renderer) colorLayer(layer, text string) string {
@@ -667,7 +848,19 @@ func (r *Renderer) colorLayer(layer, text string) string {
 		return text
 	}
 	color := layerColor(layer)
-	return lipgloss.NewStyle().Foreground(lipgloss.Color(fmt.Sprint(color))).Render(text)
+	return r.lip.NewStyle().Foreground(lipgloss.Color(fmt.Sprint(color))).Render(text)
+}
+
+// colorPath highlights a file path or file:// URL so the eye can spot
+// jump-to-file references in a busy stream. Underline + bright cyan also
+// happens to be what most modern terminals visually treat as a hyperlink, so
+// the styling reads as "this is something you can open" even without explicit
+// OSC 8 hyperlink escapes.
+func (r *Renderer) colorPath(text string) string {
+	if !r.cfg.Color {
+		return text
+	}
+	return r.lip.NewStyle().Foreground(lipgloss.Color("14")).Underline(true).Render(text)
 }
 
 func (r *Renderer) statusIcon(status string) string {
@@ -689,14 +882,14 @@ func (r *Renderer) colorStatus(status, text string) string {
 	if !r.cfg.Color {
 		return text
 	}
-	return lipgloss.NewStyle().Foreground(lipgloss.Color(fmt.Sprint(statusColor(status)))).Render(text)
+	return r.lip.NewStyle().Foreground(lipgloss.Color(fmt.Sprint(statusColor(status)))).Render(text)
 }
 
 func (r *Renderer) dim(text string) string {
 	if !r.cfg.Color {
 		return text
 	}
-	return lipgloss.NewStyle().Faint(true).Render(text)
+	return r.lip.NewStyle().Faint(true).Render(text)
 }
 
 func statusColor(status string) int {
@@ -785,6 +978,9 @@ func streamDeltaKey(event streampkg.Event, kind string) string {
 }
 
 func liveLineKey(event streampkg.Event) string {
+	if event.EventType == streampkg.EventLLMReasoningDelta || event.EventType == streampkg.EventLLMOutputDelta {
+		return streamDeltaKey(event, kindForEvent(event.EventType))
+	}
 	return strings.Join([]string{
 		event.EventType,
 		event.From.Layer,
@@ -794,6 +990,48 @@ func liveLineKey(event streampkg.Event) string {
 		event.Scope.RunnerID,
 		event.Scope.NodeID,
 	}, "|")
+}
+
+func kindForEvent(eventType string) string {
+	switch eventType {
+	case streampkg.EventLLMReasoningDelta:
+		return "reasoning"
+	case streampkg.EventLLMOutputDelta:
+		return "output"
+	default:
+		return ""
+	}
+}
+
+func cloneMetadata(meta map[string]any) map[string]any {
+	if len(meta) == 0 {
+		return nil
+	}
+	out := make(map[string]any, len(meta))
+	for k, v := range meta {
+		out[k] = v
+	}
+	return out
+}
+
+func compactWhitespace(text string) string {
+	return strings.Join(strings.Fields(text), " ")
+}
+
+// estimateTokens approximates the OpenAI-style token count for text using the
+// "~4 characters per token" rule of thumb. It exists so the live counter and
+// completion summary can give the user a rough sense of throughput without
+// pulling in a real tokenizer.
+func estimateTokens(text string) int {
+	if text == "" {
+		return 0
+	}
+	chars := ansi.StringWidth(text)
+	tokens := chars / approxCharsPerToken
+	if tokens == 0 {
+		tokens = 1
+	}
+	return tokens
 }
 
 func (r *Renderer) exchangeReference(event streampkg.Event, text string) string {

@@ -2,6 +2,7 @@ package runner
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 )
 
@@ -49,5 +50,58 @@ func TestParsePlannerReviewOutputAllowsEmptyLegacyReason(t *testing.T) {
 	}
 	if review.Reason != "" {
 		t.Fatalf("review.Reason = %q, want empty", review.Reason)
+	}
+}
+
+func TestParsePlannerReviewOutputStripsMarkdownFences(t *testing.T) {
+	raw := "```json\n{\"approved\":true}\n```"
+	review, err := parsePlannerReviewOutput(raw)
+	if err != nil {
+		t.Fatalf("parsePlannerReviewOutput: %v", err)
+	}
+	if !review.Approved {
+		t.Fatalf("approved = false, want true")
+	}
+}
+
+func TestParsePlannerReplanOutputStripsLeadingProse(t *testing.T) {
+	raw := "Sure, here is the revised plan:\n{\"plan\":{\"request\":\"r\",\"nodes\":[]}}\nLet me know if you need changes."
+	plan, err := parsePlannerReplanOutput(raw)
+	if err != nil {
+		t.Fatalf("parsePlannerReplanOutput: %v", err)
+	}
+	if plan.Request != "r" {
+		t.Fatalf("plan.Request = %q, want r", plan.Request)
+	}
+}
+
+func TestParsePlannerReplanOutputErrorIncludesRawSnippet(t *testing.T) {
+	_, err := parsePlannerReplanOutput("")
+	if err == nil {
+		t.Fatal("expected error for empty raw")
+	}
+	if !strings.Contains(err.Error(), "no JSON object") {
+		t.Fatalf("error missing diagnostic: %v", err)
+	}
+}
+
+func TestPlannerRetryPromptIncludesError(t *testing.T) {
+	prompt := PlannerRetryPrompt(errParseFailed)
+	if !strings.Contains(prompt, "could not be parsed") || !strings.Contains(prompt, errParseFailed.Error()) {
+		t.Fatalf("retry prompt missing parse-error context: %s", prompt)
+	}
+}
+
+var errParseFailed = simpleErr("synthetic parse failure")
+
+type simpleErr string
+
+func (e simpleErr) Error() string { return string(e) }
+
+func TestExtractJSONObjectHandlesEmbeddedFence(t *testing.T) {
+	raw := "Here you go:\n```json\n{\"a\":1,\"b\":\"}{escaped\"}\n```\nthanks"
+	got := ExtractJSONObject(raw)
+	if got != `{"a":1,"b":"}{escaped"}` {
+		t.Fatalf("ExtractJSONObject = %q", got)
 	}
 }

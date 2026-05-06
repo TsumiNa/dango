@@ -14,6 +14,7 @@ import (
 	"github.com/adrg/frontmatter"
 	"github.com/lithammer/shortuuid/v4"
 	streampkg "github.com/tsumina/dango/internal/engine/stream"
+	"github.com/tsumina/dango/internal/llm/internal/builtin"
 )
 
 // SkillFile is the required filename inside a skill directory that carries
@@ -328,10 +329,29 @@ func (s *Skill) runtimeInstruction() string {
 	if s == nil {
 		return ""
 	}
+	body := prependSystemInstruction(s.Instruction)
 	if s.workspace == nil {
-		return s.Instruction
+		return body
 	}
-	return appendWorkspaceInstruction(s.Instruction, s.workspace)
+	return appendWorkspaceInstruction(body, s.workspace)
+}
+
+// prependSystemInstruction wraps the skill's own SKILL.md body with the
+// platform-level conventions every skill needs (executor lifecycle, exchange
+// markdown contract, built-in tool budget rules, etc.). The shared block
+// always comes first so an external skill written without Dango knowledge
+// inherits the cooperation rules; the skill-specific body, which describes
+// *this* skill's job, refines and may override them.
+func prependSystemInstruction(instruction string) string {
+	system := strings.TrimSpace(builtin.SystemInstructions)
+	if system == "" {
+		return instruction
+	}
+	body := strings.TrimSpace(instruction)
+	if body == "" {
+		return system
+	}
+	return system + "\n\n" + body
 }
 
 func appendWorkspaceInstruction(instruction string, workspace *workspaceRoot) string {

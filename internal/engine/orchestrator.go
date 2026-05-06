@@ -153,7 +153,11 @@ func NewOrchestrator(opts ...OrchestratorOption) *Orchestrator {
 			opt(o)
 		}
 	}
-	sk, err := o.configuredOrchestratorSkill(defaultOrchestratorSkill())
+	embedded, err := loadOrchestratorSkill(orchestratorRegistryTools(o)...)
+	if err != nil {
+		panic(fmt.Sprintf("orchestrate: initialize default orchestrator skill: %v", err))
+	}
+	sk, err := o.configuredOrchestratorSkill(embedded)
 	if err != nil {
 		panic(fmt.Sprintf("orchestrate: initialize default orchestrator skill: %v", err))
 	}

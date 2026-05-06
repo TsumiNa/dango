@@ -58,13 +58,21 @@ func (r *Runner) reviewPolishedPlan(ctx context.Context) (*PlanReview, error) {
 	if err != nil {
 		return nil, fmt.Errorf("orchestrate: marshal review input: %w", err)
 	}
-	raw, err := r.plannerSkill.Run(r.runtimeContext(ctx), prompt, defaultReviewEffort)
+	runCtx := r.runtimeContext(ctx)
+	raw, err := r.plannerSkill.Run(runCtx, prompt, defaultReviewEffort)
 	if err != nil {
 		return nil, err
 	}
-	decision, err := parsePlannerReviewOutput(raw)
-	if err != nil {
-		return nil, fmt.Errorf("orchestrate: %w", err)
+	decision, parseErr := parsePlannerReviewOutput(raw)
+	if parseErr != nil {
+		raw, err = r.plannerSkill.Run(runCtx, PlannerRetryPrompt(parseErr), defaultReviewEffort)
+		if err != nil {
+			return nil, err
+		}
+		decision, parseErr = parsePlannerReviewOutput(raw)
+		if parseErr != nil {
+			return nil, fmt.Errorf("orchestrate: %w (after one retry)", parseErr)
+		}
 	}
 	return decision, nil
 }
@@ -81,13 +89,21 @@ func (r *Runner) replanPolishedPlan(ctx context.Context, reason string) (*Coarse
 	if err != nil {
 		return nil, nil, fmt.Errorf("orchestrate: marshal replan input: %w", err)
 	}
-	raw, err := r.plannerSkill.Run(r.runtimeContext(ctx), prompt, defaultReplanEffort)
+	runCtx := r.runtimeContext(ctx)
+	raw, err := r.plannerSkill.Run(runCtx, prompt, defaultReplanEffort)
 	if err != nil {
 		return nil, nil, err
 	}
-	plan, err := parsePlannerReplanOutput(raw)
-	if err != nil {
-		return nil, nil, fmt.Errorf("orchestrate: %w", err)
+	plan, parseErr := parsePlannerReplanOutput(raw)
+	if parseErr != nil {
+		raw, err = r.plannerSkill.Run(runCtx, PlannerRetryPrompt(parseErr), defaultReplanEffort)
+		if err != nil {
+			return nil, nil, err
+		}
+		plan, parseErr = parsePlannerReplanOutput(raw)
+		if parseErr != nil {
+			return nil, nil, fmt.Errorf("orchestrate: %w (after one retry)", parseErr)
+		}
 	}
 	nodes, err := r.planNodeBuilder(plan)
 	if err != nil {
@@ -99,17 +115,21 @@ func (r *Runner) replanPolishedPlan(ctx context.Context, reason string) (*Coarse
 func marshalPlannerReviewInput(plan *CoarsePlan, polishFragments map[string]any) (string, error) {
 	var payload plannerSkillReviewPrompt
 	payload.Mode = "review"
-	payload.Task = "Review the current plan against the collected executor markdown documents. Return strict JSON as {\"approved\":true} or {\"reject\":{\"summary\":\"...\",\"analysis\":\"...\"}}."
-	payload.Contract = "Read each markdown document's front matter and Memo/Reasoning/Handoff sections. If you reject the plan, reject.summary should be a short replan reason and reject.analysis should explain the issue concretely."
+	payload.Task = "Decide whether the polished plan is good enough to execute. Reply with one strict JSON object: {\"approved\":true} or {\"reject\":{...}}. No fences, no commentary."
+	payload.Contract = "Default to approve. Only reject when a polish document explicitly says the assigned task is infeasible for that skill, when polish output contradicts a hard user constraint, or when the plan picks the wrong skill for a node. reject.summary is a short replan reason; reject.analysis names the specific defect."
 	payload.Data.Plan = CloneCoarsePlan(plan)
 	payload.Data.PolishDocuments = plannerMarkdownDocuments(polishFragments)
 	return marshalPlannerPrompt(payload)
 }
 
 func parsePlannerReviewOutput(raw string) (*PlanReview, error) {
+	cleaned := ExtractJSONObject(raw)
+	if cleaned == "" {
+		return nil, fmt.Errorf("parse review output: planner returned no JSON object (raw=%q)", SummarizeRaw(raw, 200))
+	}
 	var out plannerSkillReviewResponse
-	if err := json.Unmarshal([]byte(raw), &out); err != nil {
-		return nil, fmt.Errorf("parse review output: %w", err)
+	if err := json.Unmarshal([]byte(cleaned), &out); err != nil {
+		return nil, fmt.Errorf("parse review output: %w (raw=%q)", err, SummarizeRaw(raw, 200))
 	}
 	if out.Reject != nil {
 		reason := strings.TrimSpace(out.Reject.Summary)
@@ -123,7 +143,7 @@ func parsePlannerReviewOutput(raw string) (*PlanReview, error) {
 		return &PlanReview{Approved: false, Reason: reason}, nil
 	}
 	if out.Approved == nil {
-		return nil, fmt.Errorf("review output missing approved or reject")
+		return nil, fmt.Errorf("review output missing approved or reject (raw=%q)", SummarizeRaw(raw, 200))
 	}
 	return &PlanReview{Approved: *out.Approved, Reason: strings.TrimSpace(out.Reason)}, nil
 }
@@ -131,8 +151,8 @@ func parsePlannerReviewOutput(raw string) (*PlanReview, error) {
 func marshalPlannerReplanInput(request string, currentPlan *CoarsePlan, reason string, polishFragments map[string]any, skills []SkillSummary) (string, error) {
 	var payload plannerSkillReplanPrompt
 	payload.Mode = "replan"
-	payload.Task = "Rewrite the current plan into the next candidate plan using the rejection reason, executor markdown documents, and available skills. Return strict JSON as {\"plan\": ...}."
-	payload.Contract = "Read each markdown document's front matter and Memo/Reasoning/Handoff sections. plan.request must be the original request; plan.nodes[].skill_name must reference an available skill; include only the nodes needed for the revised plan."
+	payload.Task = "Revise the current plan to address replan_reason. Reply with one strict JSON object: {\"plan\":{...}}. No fences, no commentary."
+	payload.Contract = "Make the smallest change that resolves replan_reason. Preserve node ids that remain valid. plan.request must repeat data.request verbatim; every plan.nodes[].skill_name must reference data.skills; task_description must be self-contained (what to do, inputs, outputs, constraints, success criteria); set depends_on for upstream-consuming nodes."
 	payload.Data.Request = request
 	payload.Data.CurrentPlan = CloneCoarsePlan(currentPlan)
 	payload.Data.ReplanReason = reason
@@ -142,12 +162,16 @@ func marshalPlannerReplanInput(request string, currentPlan *CoarsePlan, reason s
 }
 
 func parsePlannerReplanOutput(raw string) (*CoarsePlan, error) {
+	cleaned := ExtractJSONObject(raw)
+	if cleaned == "" {
+		return nil, fmt.Errorf("parse replan output: planner returned no JSON object (raw=%q)", SummarizeRaw(raw, 200))
+	}
 	var out plannerSkillReplanResponse
-	if err := json.Unmarshal([]byte(raw), &out); err != nil {
-		return nil, fmt.Errorf("parse replan output: %w", err)
+	if err := json.Unmarshal([]byte(cleaned), &out); err != nil {
+		return nil, fmt.Errorf("parse replan output: %w (raw=%q)", err, SummarizeRaw(raw, 200))
 	}
 	if out.Plan == nil {
-		return nil, fmt.Errorf("replanner returned no plan")
+		return nil, fmt.Errorf("replanner returned no plan (raw=%q)", SummarizeRaw(raw, 200))
 	}
 	return out.Plan, nil
 }
@@ -158,6 +182,19 @@ func marshalPlannerPrompt(v any) (string, error) {
 		return "", err
 	}
 	return string(buf), nil
+}
+
+// PlannerRetryPrompt builds a short follow-up turn for the planner skill when
+// the previous response could not be parsed. It is sent in the same
+// conversation so the model has full context on what it just produced.
+func PlannerRetryPrompt(parseErr error) string {
+	reason := "the previous response could not be parsed"
+	if parseErr != nil {
+		reason = parseErr.Error()
+	}
+	return "Your previous response could not be parsed: " + reason +
+		". Reply now with one strict JSON object only — no markdown fences, no language tag, no commentary, no leading or trailing prose. " +
+		"Match the JSON contract for the current mode exactly."
 }
 
 func plannerMarkdownDocuments(in map[string]any) map[string]string {

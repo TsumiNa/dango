@@ -73,8 +73,8 @@ func TestRendererFiltersAndDedupe(t *testing.T) {
 	}
 }
 
-func TestRendererCompressesRunningOutputWithFrame(t *testing.T) {
-	renderer := New(nil, Config{MaxText: 12, ProgressFrames: []string{"*"}})
+func TestRendererMarqueesRunningOutputBeyondSoftLimit(t *testing.T) {
+	renderer := New(nil, Config{MaxText: 12, MaxLineWidth: 60, ProgressFrames: []string{"*"}})
 	event := streampkg.Event{
 		EventType: streampkg.EventLLMOutputDelta,
 		From:      streampkg.Source{Layer: "skill", ID: "train"},
@@ -82,15 +82,45 @@ func TestRendererCompressesRunningOutputWithFrame(t *testing.T) {
 		Delta:     mustJSONString(t, "this is a very long model output chunk"),
 	}
 	line := renderer.FormatEvent(event)
-	for _, want := range []string{"Skill[train]", "output", "this is", "truncated=true", "*"} {
+	for _, want := range []string{"Skill[train]", "output", "(Tokens", "*"} {
 		if !strings.Contains(line, want) {
 			t.Fatalf("line missing %q:\n%s", want, line)
 		}
 	}
 	event.Delta = mustJSONString(t, " next")
 	line = renderer.FormatEvent(event)
-	if !strings.Contains(line, "this is") || !strings.Contains(line, "truncated=true") {
-		t.Fatalf("running output did not keep accumulated text: %q", line)
+	if !strings.Contains(line, "(Tokens") || !strings.Contains(line, "next") {
+		t.Fatalf("running output did not keep accumulated text + counter: %q", line)
+	}
+}
+
+func TestRendererSummarizesMarqueeOnFinish(t *testing.T) {
+	var out bytes.Buffer
+	renderer := New(&out, Config{MaxText: 8, MaxLineWidth: 60, ProgressFrames: []string{"*"}})
+	running := streampkg.Event{
+		EventType: streampkg.EventLLMReasoningDelta,
+		From:      streampkg.Source{Layer: "skill", ID: "train"},
+		Status:    streampkg.StatusRunning,
+		Delta:     mustJSONString(t, "this is a moderately long reasoning chunk that exceeds the soft limit"),
+	}
+	if err := renderer.RenderEvent(running); err != nil {
+		t.Fatalf("RenderEvent(running): %v", err)
+	}
+	finishing := streampkg.Event{
+		EventType: streampkg.EventRunnerPhaseChanged,
+		From:      streampkg.Source{Layer: "runner", ID: "runner-1"},
+		Status:    streampkg.StatusCompleted,
+		Scope:     streampkg.Scope{RunnerID: "runner-1"},
+		Delta:     json.RawMessage(`{"phase":"settled","status":"idle"}`),
+	}
+	if err := renderer.RenderEvent(finishing); err != nil {
+		t.Fatalf("RenderEvent(finishing): %v", err)
+	}
+	rendered := out.String()
+	for _, want := range []string{"reasoning complete", "tokens=~", "chars="} {
+		if !strings.Contains(rendered, want) {
+			t.Fatalf("summary line missing %q:\n%s", want, rendered)
+		}
 	}
 }
 

@@ -87,7 +87,16 @@ func (c *Conversation) emitTextDelta(ctx context.Context, eventType string, stat
 	if text == "" {
 		return
 	}
-	delta, truncated := compactConversationText(text)
+	// Truncate only live streaming deltas (StatusRunning). Final completed
+	// outputs must be preserved in full so downstream consumers (e.g. the
+	// renderer writing exchange files) receive the complete text.
+	var delta string
+	var truncated bool
+	if status == streampkg.StatusRunning {
+		delta, truncated = compactConversationText(text)
+	} else {
+		delta = text
+	}
 	metadata := map[string]any(nil)
 	if truncated {
 		metadata = map[string]any{"truncated": true}

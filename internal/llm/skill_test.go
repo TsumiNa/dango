@@ -378,6 +378,37 @@ func TestSetAccessibleDirsRejectsBoundSkill(t *testing.T) {
 	}
 }
 
+func TestRuntimeInstructionPrependsPlatformSystemPrompt(t *testing.T) {
+	loaded, err := NewSkill(writeSkillDir(t, "---\nname: x\ndescription: d\n---\nDO_THE_TASK\n"), DefaultSkillConfig())
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	cleanupSkillTemp(t, loaded)
+	bound, err := loaded.Bind(stubClient(), DefaultConversationConfig())
+	if err != nil {
+		t.Fatalf("Bind: %v", err)
+	}
+	instructions := bound.Conversation().Instructions()
+	for _, want := range []string{
+		"Dango platform conventions",
+		"Two skill roles",
+		"Executor lifecycle: polish → execute → report",
+		"Exchange markdown",
+		"DO_THE_TASK",
+		"Workspace access:",
+	} {
+		if !strings.Contains(instructions, want) {
+			t.Fatalf("runtime instruction missing %q:\n%s", want, instructions)
+		}
+	}
+	systemIdx := strings.Index(instructions, "Dango platform conventions")
+	bodyIdx := strings.Index(instructions, "DO_THE_TASK")
+	workIdx := strings.Index(instructions, "Do not access paths outside these roots.")
+	if !(systemIdx < bodyIdx && bodyIdx < workIdx) {
+		t.Fatalf("expected order: system block < skill body < workspace block; got system=%d body=%d work=%d", systemIdx, bodyIdx, workIdx)
+	}
+}
+
 func TestSetAccessibleDirsAndBuiltinToolsPreservesCustomTools(t *testing.T) {
 	loaded, err := NewSkill(writeSkillDir(t, "---\nname: x\ndescription: d\n---\nbody\n"), DefaultSkillConfig())
 	if err != nil {
