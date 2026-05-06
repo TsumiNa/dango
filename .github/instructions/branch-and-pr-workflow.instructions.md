@@ -10,15 +10,14 @@ When the user asks for a code change, feature, fix, refactor, upgrade, or any mo
 
 ## Decision Order
 
-Check these conditions in order and stop at the first match:
+In the Decision Order section, check these conditions in order and stop at the first match.
 
-1. **User explicitly opts out.** If the user says they do not want a new branch or PR (for example "just edit on main", "no PR needed", "直接改", "不用开 PR"), honor that and work wherever they indicate.
-
-2. **Current branch already has an open PR.** Continue working on the current branch. Do not create a new branch. Push follow-up commits to the same branch so they land on the existing PR.
-
-3. **Current branch is ahead of the default branch but has no PR yet.** Open a PR for the current branch against the default branch first, then continue working on the same branch. New commits will land on the newly opened PR.
-
-4. **Default case (current branch is the default branch, or is in sync with it, or none of the above apply).** Create a new branch off the default branch, make the change there, and open a PR when the change is ready to share.
+| Order | Condition | Action |
+| --- | --- | --- |
+| 1 | The user explicitly opts out of a new branch or PR, for example "just edit on main", "no PR needed", "直接改", or "不用开 PR". | Honor the user's direction and work wherever they indicate. |
+| 2 | The current branch already has an open PR. | Continue working on the current branch. Do not create a new branch. Push follow-up commits to the same branch so they land on the existing PR. |
+| 3 | The current branch is ahead of the default branch but has no PR yet. | Open a PR for the current branch against the default branch first, then continue working on the same branch. New commits will land on the newly opened PR. |
+| 4 | The current branch is the default branch, is in sync with it, or none of the above conditions apply. | Create a new branch off the default branch, make the change there, and open a PR when the change is ready to share. |
 
 ## Practical Rules
 

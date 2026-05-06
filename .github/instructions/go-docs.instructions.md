@@ -13,13 +13,14 @@ Write idiomatic Go documentation for `go doc`, `pkg.go.dev`, and local `pkgsite`
 - Write clear English prose in complete sentences.
 - Document packages, not file-modules. In Go, the primary documentation unit is the package.
 - Doc comments belong immediately above the package, const, var, type, or func declaration they document.
-- Explain semantics, invariants, side effects, concurrency guarantees, nil and zero-value behavior, error meaning, ownership and lifetime expectations, and cancellation or timeout behavior when relevant.
+- Explain behavior that affects correct use: semantics, invariants, side effects, and error meaning.
+- Document lifecycle and safety details when relevant: concurrency guarantees, nil and zero-value behavior, ownership and lifetime expectations, and cancellation or timeout behavior.
 - Do not restate information that is already obvious from the signature unless it matters for semantics.
 
 ## Package Docs
 
 - Every public package should have exactly one package doc comment.
-- Put package documentation in `doc.go` unless there is a strong reason not to.
+- Put package documentation in `doc.go` unless the package has a single source file where the package comment is clearer, or build tags, generated files, or local package layout require a different file.
 - Start package docs with `Package <name> ...`.
 - Package docs should be complete enough to stand on their own in `pkgsite`: include a one-sentence summary, what the package is for, important constraints or guarantees, the main entry points to read first, and a short usage snippet only when it adds real value.
 - When a package is architectural or workflow-heavy, package docs should also explain the package's role in the larger system, the typical call or lifecycle flow through the package, and the dependency direction between its core types, functions, or neighboring packages.
