@@ -118,3 +118,56 @@ func (m *Merge) setErr(err error) {
 		m.err = err
 	}
 }
+
+// upstreamIdentity uniquely identifies one upstream stream within a merge.
+// It combines the Layer and ID from the event Source.
+type upstreamIdentity struct {
+	layer string
+	id    string
+}
+
+// joinKey uniquely identifies a joinable group within a merge tick.
+// It combines the upstream identity, EventType, and Status.
+type joinKey struct {
+	upstream  upstreamIdentity
+	eventType string
+	status    string
+}
+
+// upstreamIdentityOf extracts the upstream identity from an event source.
+func upstreamIdentityOf(src Source) upstreamIdentity {
+	return upstreamIdentity{
+		layer: src.Layer,
+		id:    src.ID,
+	}
+}
+
+// joinKeyOf extracts the join key from an event.
+// The join key is used to determine if multiple events can be combined into
+// a single joined delta within the same tick.
+func joinKeyOf(event Event) joinKey {
+	return joinKey{
+		upstream:  upstreamIdentityOf(event.From),
+		eventType: event.EventType,
+		status:    event.Status,
+	}
+}
+
+// isJoinableStringDelta reports whether a delta is a JSON string that can be
+// safely joined with other string deltas.
+// Only JSON strings (not objects, arrays, numbers, booleans, or null) are
+// joinable, as they represent append-safe streaming content like LLM output.
+func isJoinableStringDelta(delta []byte) bool {
+	if len(delta) < 2 {
+		return false
+	}
+	// JSON strings start with '"' and end with '"'
+	return delta[0] == '"' && delta[len(delta)-1] == '"'
+}
+
+// canJoinDeltas reports whether two consecutive deltas with the same join key
+// can be combined into a single joined delta.
+// Both deltas must be JSON strings to be joinable.
+func canJoinDeltas(prevDelta, nextDelta []byte) bool {
+	return isJoinableStringDelta(prevDelta) && isJoinableStringDelta(nextDelta)
+}
