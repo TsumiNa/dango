@@ -124,9 +124,40 @@ func (r *Runner) prepareNodeExecutors(nodes map[string]*Node) error {
 		if node == nil || node.Executor == nil {
 			continue
 		}
-		if err := r.prepareNodeExecutor(id, node.Executor, nil); err != nil {
+		// Only bind the session here; do NOT merge the executor stream yet.
+		// runNode calls prepareNodeExecutor with the real accessibleDirs just
+		// before execution, which re-binds and creates a fresh EventStream.
+		// Merging here would subscribe to that first (throwaway) stream and
+		// leak the goroutine when the second bind replaces it.
+		if err := r.bindExecutorSession(id, node.Executor); err != nil {
 			return err
 		}
+	}
+	return nil
+}
+
+// bindExecutorSession binds a persistent session for executor without touching
+// the event stream. Stream merging is deferred to prepareNodeExecutor, which
+// is called with the correct accessibleDirs immediately before a node runs.
+func (r *Runner) bindExecutorSession(id string, executor Executor) error {
+	r.skillSessionMu.Lock()
+	defer r.skillSessionMu.Unlock()
+
+	binder, ok := executor.(skillBinder)
+	if !ok {
+		return nil
+	}
+	var sessionID *string
+	if existing := r.skillSessionIDs[id]; existing != "" {
+		existingCopy := existing
+		sessionID = &existingCopy
+	}
+	boundSessionID, err := binder.BindForRunner(sessionID, nil, r.skillSessionStore)
+	if err != nil {
+		return fmt.Errorf("bind node %q session: %w", id, err)
+	}
+	if boundSessionID != "" {
+		r.skillSessionIDs[id] = boundSessionID
 	}
 	return nil
 }

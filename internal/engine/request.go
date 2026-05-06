@@ -267,7 +267,7 @@ func newRunnerFromPlan(ctx context.Context, logger *slog.Logger, store runnerpkg
 	if err != nil {
 		return nil, err
 	}
-	return runnerpkg.New(
+	opts := []runnerpkg.Option{
 		runnerpkg.WithContext(ctx),
 		runnerpkg.WithLogger(logger),
 		runnerpkg.WithStore(store),
@@ -278,7 +278,11 @@ func newRunnerFromPlan(ctx context.Context, logger *slog.Logger, store runnerpkg
 			request := Request{Input: replanned.Request, ArtifactsDir: req.ArtifactsDir}
 			return buildPlanNodes(logger, request, replanned, skills)
 		}),
-	), nil
+	}
+	if req.ArtifactsDir != "" {
+		opts = append(opts, runnerpkg.WithAllowedResourceRoots(req.ArtifactsDir))
+	}
+	return runnerpkg.New(opts...), nil
 }
 
 func buildPlanNodes(logger *slog.Logger, req Request, plan *CoarsePlan, skills map[string]SkillRegistration) (map[string]*runnerpkg.Node, error) {

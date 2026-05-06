@@ -171,20 +171,22 @@ func (c *Conversation) streamResponse(ctx context.Context, effort ReasoningEffor
 		evt := stream.Current()
 		switch evt.Type {
 		case "response.output_text.delta":
-			if evt.Delta == "" || !categories.Has(StreamText) {
+			if evt.Delta == "" {
 				continue
 			}
+			// Always emit engine stream events for observability; StreamCategories
+			// only gates delivery to the caller-facing forward channel.
 			c.emitTextDelta(ctx, streampkg.EventLLMOutputDelta, streampkg.StatusRunning, evt.Delta)
-			if forward != nil && !forward(StreamEvent{TextDelta: evt.Delta}) {
+			if categories.Has(StreamText) && forward != nil && !forward(StreamEvent{TextDelta: evt.Delta}) {
 				return nil, ctx.Err()
 			}
 		case "response.reasoning_text.delta",
 			"response.reasoning_summary_text.delta":
-			if evt.Delta == "" || !categories.Has(StreamReasoning) {
+			if evt.Delta == "" {
 				continue
 			}
 			c.emitTextDelta(ctx, streampkg.EventLLMReasoningDelta, streampkg.StatusRunning, evt.Delta)
-			if forward != nil && !forward(StreamEvent{ReasoningDelta: evt.Delta}) {
+			if categories.Has(StreamReasoning) && forward != nil && !forward(StreamEvent{ReasoningDelta: evt.Delta}) {
 				return nil, ctx.Err()
 			}
 		case "response.completed":

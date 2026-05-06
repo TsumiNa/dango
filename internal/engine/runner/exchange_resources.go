@@ -3,6 +3,7 @@ package runner
 import (
 	"os"
 	"path/filepath"
+	"strings"
 )
 
 const (
@@ -12,7 +13,12 @@ const (
 	ExchangeResourceDir = "dir"
 )
 
-func exchangeResourceDirsFromOutputs(outputs map[string]any) []string {
+// exchangeResourceDirsFromOutputs collects the containing directories of all
+// resources declared in upstream exchange documents. allowedRoots constrains
+// which directories may be granted: a resolved directory is included only when
+// it is rooted under at least one entry in allowedRoots. An empty allowedRoots
+// disables the constraint (no filtering).
+func exchangeResourceDirsFromOutputs(outputs map[string]any, allowedRoots []string) []string {
 	if len(outputs) == 0 {
 		return nil
 	}
@@ -27,7 +33,7 @@ func exchangeResourceDirsFromOutputs(outputs map[string]any) []string {
 			continue
 		}
 		for _, resource := range doc.Resources {
-			if dir, ok := exchangeResourceDir(resource); ok && !containsDir(dirs, dir) {
+			if dir, ok := exchangeResourceDir(resource, allowedRoots); ok && !containsDir(dirs, dir) {
 				dirs = append(dirs, dir)
 			}
 		}
@@ -35,25 +41,65 @@ func exchangeResourceDirsFromOutputs(outputs map[string]any) []string {
 	return dirs
 }
 
-func exchangeResourceDir(resource ExchangeResource) (string, bool) {
+func exchangeResourceDir(resource ExchangeResource, allowedRoots []string) (string, bool) {
 	if resource.Path == "" || !filepath.IsAbs(resource.Path) {
 		return "", false
 	}
 	path := resource.Path
+	var dir string
 	switch resource.Type {
 	case ExchangeResourceDir:
-		return canonicalExistingDir(path)
+		resolved, ok := canonicalExistingDir(path)
+		if !ok {
+			return "", false
+		}
+		dir = resolved
 	case ExchangeResourceFile:
-		return canonicalExistingDir(filepath.Dir(path))
+		resolved, ok := canonicalExistingDir(filepath.Dir(path))
+		if !ok {
+			return "", false
+		}
+		dir = resolved
+	default:
+		info, err := os.Stat(path)
+		if err != nil {
+			return "", false
+		}
+		target := path
+		if !info.IsDir() {
+			target = filepath.Dir(path)
+		}
+		resolved, ok := canonicalExistingDir(target)
+		if !ok {
+			return "", false
+		}
+		dir = resolved
 	}
-	info, err := os.Stat(path)
-	if err != nil {
+	if !dirUnderAllowedRoots(dir, allowedRoots) {
 		return "", false
 	}
-	if info.IsDir() {
-		return canonicalExistingDir(path)
+	return dir, true
+}
+
+// dirUnderAllowedRoots reports whether dir is rooted under at least one entry
+// in allowedRoots. When allowedRoots is empty the check is skipped (permit
+// all), so callers that have no configured roots keep the previous behaviour.
+func dirUnderAllowedRoots(dir string, allowedRoots []string) bool {
+	if len(allowedRoots) == 0 {
+		return true
 	}
-	return canonicalExistingDir(filepath.Dir(path))
+	for _, root := range allowedRoots {
+		if root == "" {
+			continue
+		}
+		// Ensure root ends with separator so "/foobar" is not matched by root "/foo".
+		rootPrefix := filepath.Clean(root) + string(filepath.Separator)
+		cleaned := filepath.Clean(dir) + string(filepath.Separator)
+		if cleaned == rootPrefix || strings.HasPrefix(cleaned, rootPrefix) {
+			return true
+		}
+	}
+	return false
 }
 
 func canonicalExistingDir(dir string) (string, bool) {

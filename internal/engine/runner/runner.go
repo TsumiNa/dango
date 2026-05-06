@@ -36,9 +36,10 @@ type Runner struct {
 	plannerSkill      *llm.Skill
 	skillSummaries    []SkillSummary
 	planNodeBuilder   PlanNodeBuilder
-	skillSessionStore llm.SessionStore
-	skillSessionIDs   map[string]string
-	skillSessionMu    sync.Mutex
+	skillSessionStore    llm.SessionStore
+	skillSessionIDs      map[string]string
+	skillSessionMu       sync.Mutex
+	allowedResourceRoots []string
 
 	// Engine-level lifecycle state.
 	stateMu sync.RWMutex
@@ -537,7 +538,7 @@ func (r *Runner) runEngine(ctx context.Context) error {
 		for _, p := range n.Parents {
 			inputs[p.Id] = outputs[p.Id]
 		}
-		if err := r.prepareNodeExecutor(n.Id, n.Executor, exchangeResourceDirsFromOutputs(inputs)); err != nil {
+		if err := r.prepareNodeExecutor(n.Id, n.Executor, exchangeResourceDirsFromOutputs(inputs, r.allowedResourceRoots)); err != nil {
 			return err
 		}
 

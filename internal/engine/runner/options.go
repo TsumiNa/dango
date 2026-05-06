@@ -90,3 +90,17 @@ func WithPlanNodeBuilder(builder PlanNodeBuilder) Option {
 		r.planNodeBuilder = builder
 	}
 }
+
+// WithAllowedResourceRoots restricts which filesystem paths exchange documents
+// may declare as resources. A resolved resource directory is only granted to
+// downstream skills when it is rooted under at least one of roots. Paths
+// outside these roots are silently discarded.
+//
+// Callers should pass the request artifacts directory (and any other trusted
+// roots) so that model-generated exchange documents cannot escalate filesystem
+// access beyond the expected workspace.
+func WithAllowedResourceRoots(roots ...string) Option {
+	return func(r *Runner) {
+		r.allowedResourceRoots = append(r.allowedResourceRoots, roots...)
+	}
+}
