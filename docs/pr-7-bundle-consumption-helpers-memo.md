@@ -2,7 +2,7 @@
 
 ## Completed: PR 7 - Add bundle-aware downstream consumption helpers
 
-**PR**: pending
+**PR**: https://github.com/TsumiNa/dango/pull/33
 
 ### Implementation Details
 
