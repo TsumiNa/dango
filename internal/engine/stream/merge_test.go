@@ -125,3 +125,235 @@ func TestStreamMergeFromRejectsInvalidSources(t *testing.T) {
 		t.Fatalf("MergeFrom self err = %v, want ErrInvalidMerge", err)
 	}
 }
+
+func TestUpstreamIdentitySameSourceShareIdentity(t *testing.T) {
+	src1 := Source{Layer: "executor", ID: "node_a"}
+	src2 := Source{Layer: "executor", ID: "node_a"}
+	src3 := Source{Layer: "executor", ID: "node_b"}
+	src4 := Source{Layer: "skill", ID: "node_a"}
+
+	id1 := upstreamIdentityOf(src1)
+	id2 := upstreamIdentityOf(src2)
+	id3 := upstreamIdentityOf(src3)
+	id4 := upstreamIdentityOf(src4)
+
+	if id1 != id2 {
+		t.Fatalf("same source should produce same identity: %+v vs %+v", id1, id2)
+	}
+	if id1 == id3 {
+		t.Fatalf("different ID should produce different identity: %+v vs %+v", id1, id3)
+	}
+	if id1 == id4 {
+		t.Fatalf("different Layer should produce different identity: %+v vs %+v", id1, id4)
+	}
+}
+
+func TestJoinKeySameEventPropertiesShareKey(t *testing.T) {
+	event1 := Event{
+		EventType: EventLLMOutputDelta,
+		From:      Source{Layer: "executor", ID: "node_a"},
+		Status:    StatusRunning,
+		Delta:     json.RawMessage(`"hello"`),
+	}
+	event2 := Event{
+		EventType: EventLLMOutputDelta,
+		From:      Source{Layer: "executor", ID: "node_a"},
+		Status:    StatusRunning,
+		Delta:     json.RawMessage(`" world"`),
+	}
+	event3 := Event{
+		EventType: EventLLMReasoningDelta,
+		From:      Source{Layer: "executor", ID: "node_a"},
+		Status:    StatusRunning,
+		Delta:     json.RawMessage(`"hello"`),
+	}
+	event4 := Event{
+		EventType: EventLLMOutputDelta,
+		From:      Source{Layer: "executor", ID: "node_b"},
+		Status:    StatusRunning,
+		Delta:     json.RawMessage(`"hello"`),
+	}
+	event5 := Event{
+		EventType: EventLLMOutputDelta,
+		From:      Source{Layer: "executor", ID: "node_a"},
+		Status:    StatusCompleted,
+		Delta:     json.RawMessage(`"hello"`),
+	}
+
+	key1 := joinKeyOf(event1)
+	key2 := joinKeyOf(event2)
+	key3 := joinKeyOf(event3)
+	key4 := joinKeyOf(event4)
+	key5 := joinKeyOf(event5)
+
+	if key1 != key2 {
+		t.Fatalf("same upstream/type/status should share key: %+v vs %+v", key1, key2)
+	}
+	if key1 == key3 {
+		t.Fatalf("different EventType should produce different key: %+v vs %+v", key1, key3)
+	}
+	if key1 == key4 {
+		t.Fatalf("different upstream ID should produce different key: %+v vs %+v", key1, key4)
+	}
+	if key1 == key5 {
+		t.Fatalf("different Status should produce different key: %+v vs %+v", key1, key5)
+	}
+}
+
+func TestJoinableStringDeltaDetectsJSONStrings(t *testing.T) {
+	tests := []struct {
+		name     string
+		delta    []byte
+		wantJoin bool
+	}{
+		{
+			name:     "simple string",
+			delta:    []byte(`"hello"`),
+			wantJoin: true,
+		},
+		{
+			name:     "string with spaces",
+			delta:    []byte(`" world"`),
+			wantJoin: true,
+		},
+		{
+			name:     "empty string",
+			delta:    []byte(`""`),
+			wantJoin: true,
+		},
+		{
+			name:     "string with escapes",
+			delta:    []byte(`"hello\nworld"`),
+			wantJoin: true,
+		},
+		{
+			name:     "JSON object",
+			delta:    []byte(`{"key":"value"}`),
+			wantJoin: false,
+		},
+		{
+			name:     "JSON array",
+			delta:    []byte(`["item1","item2"]`),
+			wantJoin: false,
+		},
+		{
+			name:     "JSON number",
+			delta:    []byte(`42`),
+			wantJoin: false,
+		},
+		{
+			name:     "JSON boolean",
+			delta:    []byte(`true`),
+			wantJoin: false,
+		},
+		{
+			name:     "JSON null",
+			delta:    []byte(`null`),
+			wantJoin: false,
+		},
+		{
+			name:     "empty bytes",
+			delta:    []byte(``),
+			wantJoin: false,
+		},
+		{
+			name:     "single quote",
+			delta:    []byte(`"`),
+			wantJoin: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := isJoinableStringDelta(tt.delta)
+			if got != tt.wantJoin {
+				t.Fatalf("isJoinableStringDelta(%q) = %v, want %v", tt.delta, got, tt.wantJoin)
+			}
+		})
+	}
+}
+
+func TestCanJoinDeltasOnlyJoinsStrings(t *testing.T) {
+	tests := []struct {
+		name      string
+		prevDelta []byte
+		nextDelta []byte
+		wantJoin  bool
+	}{
+		{
+			name:      "both strings",
+			prevDelta: []byte(`"hello"`),
+			nextDelta: []byte(`" world"`),
+			wantJoin:  true,
+		},
+		{
+			name:      "both empty strings",
+			prevDelta: []byte(`""`),
+			nextDelta: []byte(`""`),
+			wantJoin:  true,
+		},
+		{
+			name:      "prev string next object",
+			prevDelta: []byte(`"hello"`),
+			nextDelta: []byte(`{"key":"value"}`),
+			wantJoin:  false,
+		},
+		{
+			name:      "prev object next string",
+			prevDelta: []byte(`{"key":"value"}`),
+			nextDelta: []byte(`"hello"`),
+			wantJoin:  false,
+		},
+		{
+			name:      "both objects",
+			prevDelta: []byte(`{"a":1}`),
+			nextDelta: []byte(`{"b":2}`),
+			wantJoin:  false,
+		},
+		{
+			name:      "both arrays",
+			prevDelta: []byte(`["a"]`),
+			nextDelta: []byte(`["b"]`),
+			wantJoin:  false,
+		},
+		{
+			name:      "both numbers",
+			prevDelta: []byte(`42`),
+			nextDelta: []byte(`43`),
+			wantJoin:  false,
+		},
+		{
+			name:      "both booleans",
+			prevDelta: []byte(`true`),
+			nextDelta: []byte(`false`),
+			wantJoin:  false,
+		},
+		{
+			name:      "both null",
+			prevDelta: []byte(`null`),
+			nextDelta: []byte(`null`),
+			wantJoin:  false,
+		},
+		{
+			name:      "prev null next string",
+			prevDelta: []byte(`null`),
+			nextDelta: []byte(`"hello"`),
+			wantJoin:  false,
+		},
+		{
+			name:      "string with newlines",
+			prevDelta: []byte(`"line1\n"`),
+			nextDelta: []byte(`"line2\n"`),
+			wantJoin:  true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := canJoinDeltas(tt.prevDelta, tt.nextDelta)
+			if got != tt.wantJoin {
+				t.Fatalf("canJoinDeltas(%q, %q) = %v, want %v", tt.prevDelta, tt.nextDelta, got, tt.wantJoin)
+			}
+		})
+	}
+}
