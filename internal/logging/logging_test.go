@@ -10,10 +10,10 @@ func TestNewJSONLoggerWritesStructuredOutput(t *testing.T) {
 	t.Parallel()
 
 	var buffer bytes.Buffer
-	logger, closer, err := New(Config{
+	logger, closer, err := New(&buffer, Config{
 		Level:  "debug",
 		Format: "json",
-	}, &buffer)
+	})
 	if err != nil {
 		t.Fatalf("New() error = %v", err)
 	}
@@ -34,10 +34,10 @@ func TestNewJSONLoggerWritesStructuredOutput(t *testing.T) {
 func TestNewRejectsUnsupportedLevel(t *testing.T) {
 	t.Parallel()
 
-	_, closer, err := New(Config{
+	_, closer, err := New(&bytes.Buffer{}, Config{
 		Level:  "trace",
 		Format: "text",
-	}, &bytes.Buffer{})
+	})
 	if err == nil {
 		t.Fatal("expected error for unsupported level")
 	}

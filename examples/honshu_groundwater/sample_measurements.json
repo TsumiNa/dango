@@ -1,0 +1,320 @@
+{
+  "survey": "Honshu groundwater notes, April 2026",
+  "datum_hint": "Most water levels are depth below ground surface; mixed field notation.",
+  "operator_warning": "The field log was merged from several teams. Coordinate and water-level fields are intentionally inconsistent.",
+  "records": [
+    {
+      "site": "Aomori-plain-01",
+      "where": { "pref": "Aomori", "lat": "40.824 N", "lon": "140.741 E" },
+      "gw": { "water level": "2.4 m below ground", "estimate": false },
+      "notes": ["rice fields", "sample after two days of rain"]
+    },
+    {
+      "site_id": "hachinohe-coastal-terrace",
+      "latitude": 40.5123,
+      "longitude": 141.4884,
+      "water_level": "3.25m BGL",
+      "description": "coastal terrace well, screened in weathered sand"
+    },
+    {
+      "site": "Akita Omono lowland",
+      "lat": "39.7200",
+      "lng": "140.1035",
+      "measurement": { "value": "1.55", "unit": "m_below_surface" },
+      "context": "paddy district, high confidence"
+    },
+    {
+      "id": "morioka-kita-fan",
+      "location": { "lat": "39.7021N", "lon": "141.1545E" },
+      "level_cm_bgl": 265,
+      "meter": "manual tape",
+      "notes": "coarse fan gravel"
+    },
+    {
+      "id": "sendai-east",
+      "location": "38.268N, 140.869E",
+      "level_cm_bgl": 180,
+      "confidence": "estimated",
+      "meter": "manual tape"
+    },
+    {
+      "site": "Yamagata basin west",
+      "coords": [38.2554, 140.3396],
+      "water": { "depth_m_bgl": 2.85, "quality_note": "iron staining" },
+      "units": "m"
+    },
+    {
+      "name": "Fukushima Koriyama terrace",
+      "where": { "pref": "Fukushima", "lat": 37.4004, "lon": 140.3597 },
+      "gw": { "estimated_m": 3.75 },
+      "remarks": "estimated from pressure transducer offset"
+    },
+    {
+      "site": "Iwaki coastal plain",
+      "location": "37.0505N, 140.8877E",
+      "水位": "1.7m BGL",
+      "description": "near river mouth, shallow unconfined aquifer"
+    },
+    {
+      "name": "Niigata coastal fan",
+      "coords": [37.916, 139.036],
+      "water": { "depth_m_bgl": 1.15, "quality_note": "brackish edge" },
+      "units": "m"
+    },
+    {
+      "site": "Nagaoka Shinano floodplain",
+      "geo": { "lat": 37.4463, "lon": 138.8512 },
+      "gw": { "water level": "1.95 meters below casing reference, approx BGL" },
+      "notes": ["snowmelt season", "near levee"]
+    },
+    {
+      "id": "joetsu-takada-plain",
+      "lat": "37.1479 N",
+      "lng": "138.2361 E",
+      "estimated_depth_m": 2.25,
+      "remarks": "screen interval not confirmed"
+    },
+    {
+      "site_id": "toyama-joganji-fan",
+      "latitude": 36.6953,
+      "longitude": 137.2113,
+      "level_cm_bgl": 430,
+      "notes": "steep alluvial fan; local pumping nearby"
+    },
+    {
+      "site": "Kanazawa Tedori plain",
+      "location": { "lat": "36.5613", "lon": "136.6562" },
+      "measurement": { "value": 2.1, "unit": "m_below_surface" },
+      "context": "suburban monitoring well"
+    },
+    {
+      "name": "Fukui basin east",
+      "coords": [36.0641, 136.2196],
+      "water_level_m_bgl": 2.65,
+      "description": "valley-fill sediments"
+    },
+    {
+      "site": "Matsumoto basin central",
+      "where": { "pref": "Nagano", "lat": "36.2380N", "lon": "137.9720E" },
+      "gw": { "water level": "4.8 m below ground", "estimate": false },
+      "notes": "intermontane basin"
+    },
+    {
+      "id": "kofu-basin-south",
+      "location": "35.6639N, 138.5684E",
+      "estimated_depth_m": 4.35,
+      "remarks": "estimated from nearby municipal well"
+    },
+    {
+      "site": "Maebashi Tone fan",
+      "lat": 36.3895,
+      "lng": 139.0634,
+      "water": { "depth_m_bgl": 3.2 },
+      "notes": ["fan toe", "spring discharge observed downslope"]
+    },
+    {
+      "site_id": "utsunomiya-kinugawa-lowland",
+      "latitude": 36.5551,
+      "longitude": 139.8828,
+      "measurement": { "value": "2.05", "unit": "m_below_surface" },
+      "context": "lowland observation, stable drawdown"
+    },
+    {
+      "site": "Mito Naka terrace",
+      "geo": { "lat": "36.3659N", "lon": "140.4714E" },
+      "水位": "3.6m BGL",
+      "description": "terrace sand and gravel"
+    },
+    {
+      "site": "Chiba Kujukuri coastal plain",
+      "coords": [35.5296, 140.3184],
+      "gw": { "estimated_m": 0.85 },
+      "remarks": "estimated after tide correction"
+    },
+    {
+      "site_id": "tokyo-west-upland",
+      "latitude": 35.6895,
+      "longitude": 139.6917,
+      "水位": "3.1m BGL",
+      "description": "urban monitoring well near terrace edge"
+    },
+    {
+      "site": "Yokohama bay margin",
+      "where": { "pref": "Kanagawa", "lat": 35.4437, "lon": 139.6380 },
+      "measurement": { "value": "1.45", "unit": "m_below_surface" },
+      "context": "reclaimed ground, shallow fill aquifer"
+    },
+    {
+      "site": "Shizuoka Abe fan",
+      "lat": "34.9756",
+      "lng": "138.3828",
+      "water_level": "2.75 m BGL",
+      "notes": "fan gravel near river"
+    },
+    {
+      "id": "hamamatsu-coastal-lowland",
+      "location": "34.7108N, 137.7261E",
+      "level_cm_bgl": 120,
+      "confidence": "high",
+      "meter": "pressure logger"
+    }
+  ],
+  "regional_batches": {
+    "central_and_tokai": {
+      "batch_note": "Mixed field sheets from Nobi, Ise, and Mikawa plains.",
+      "sites": [
+        {
+          "site": "Nagoya Nobi plain",
+          "lat": "35.1815",
+          "lng": "136.9066",
+          "estimated_depth_m": 1.9,
+          "remarks": "screened in shallow alluvium"
+        },
+        {
+          "site_id": "gifu-nagara-floodplain",
+          "latitude": 35.4233,
+          "longitude": 136.7607,
+          "gw": { "water level": "2.35 m below ground" },
+          "notes": ["river-adjacent", "manual tape"]
+        },
+        {
+          "name": "Toyohashi Atsumi margin",
+          "coords": [34.7692, 137.3915],
+          "water": { "depth_m_bgl": 1.6 },
+          "description": "coastal sand and alluvium"
+        },
+        {
+          "site": "Tsu Ise plain",
+          "location": { "lat": "34.7186N", "lon": "136.5058E" },
+          "measurement": { "value": "1.05", "unit": "m_below_surface" },
+          "context": "lowland paddy well"
+        }
+      ]
+    },
+    "kansai": [
+      {
+        "site": "Otsu Lake Biwa margin",
+        "where": { "pref": "Shiga", "lat": 35.0045, "lon": 135.8686 },
+        "water_level_m_bgl": 1.25,
+        "description": "lacustrine margin; shallow water table"
+      },
+      {
+        "id": "kohoku-alluvial-fan",
+        "location": "35.3827N, 136.2735E",
+        "estimated_depth_m": 2.05,
+        "remarks": "estimated because casing datum was missing"
+      },
+      {
+        "site": "Kyoto Kamo fan",
+        "lat": "35.0116",
+        "lng": "135.7681",
+        "水位": "2.9m BGL",
+        "notes": "urban fan deposits"
+      },
+      {
+        "site": "Osaka Yodo lowland",
+        "geo": { "lat": 34.6937, "lon": 135.5023 },
+        "measurement": { "value": "0.95", "unit": "m_below_surface" },
+        "context": "lowland site, high confidence"
+      },
+      {
+        "site": "Kobe Rokko footslope",
+        "coords": [34.6901, 135.1955],
+        "water": { "depth_m_bgl": 3.45 },
+        "notes": ["footslope", "fractured bedrock contribution suspected"]
+      },
+      {
+        "site_id": "nara-basin-center",
+        "latitude": 34.6851,
+        "longitude": 135.8048,
+        "gw": { "estimated_m": 2.55 },
+        "remarks": "estimated from nearby irrigation well"
+      },
+      {
+        "site": "Wakayama Kinokawa plain",
+        "location": { "lat": "34.2305N", "lon": "135.1708E" },
+        "level_cm_bgl": 175,
+        "context": "river plain"
+      }
+    ],
+    "chugoku": [
+      {
+        "site": "Tottori dune backswamp",
+        "where": { "pref": "Tottori", "lat": 35.5011, "lon": 134.2351 },
+        "water_level": "0.65 m BGL",
+        "description": "dune backswamp, very shallow"
+      },
+      {
+        "site_id": "yonago-yumigahama",
+        "latitude": 35.4281,
+        "longitude": 133.3309,
+        "measurement": { "value": "0.8", "unit": "m_below_surface" },
+        "context": "coastal bar aquifer"
+      },
+      {
+        "site": "Okayama Asahi plain",
+        "lat": "34.6551",
+        "lng": "133.9195",
+        "gw": { "water level": "1.4m below ground" },
+        "notes": "deltaic alluvium"
+      },
+      {
+        "site": "Kurashiki coastal industrial area",
+        "coords": [34.5850, 133.7721],
+        "estimated_depth_m": 1.1,
+        "remarks": "estimated; reclaimed ground"
+      },
+      {
+        "site": "Hiroshima delta",
+        "location": { "lat": "34.3853N", "lon": "132.4553E" },
+        "gw": { "estimated_m": 1.35 },
+        "notes": "deltaic sediments"
+      },
+      {
+        "id": "fukuyama-ashida-plain",
+        "location": "34.4859N, 133.3623E",
+        "level_cm_bgl": 165,
+        "meter": "manual tape"
+      },
+      {
+        "site": "Yamaguchi coastal plain",
+        "where": { "pref": "Yamaguchi", "lat": 34.1785, "lon": 131.4737 },
+        "measurement": { "value": 1.75, "unit": "m_below_surface" },
+        "context": "coastal lowland"
+      },
+      {
+        "site": "Shimonoseki terrace",
+        "lat": "33.9578 N",
+        "lng": "130.9415 E",
+        "water": { "depth_m_bgl": 2.7 },
+        "notes": ["terrace edge", "well recently purged"]
+      },
+      {
+        "site_id": "iwakuni-nishiki-delta",
+        "latitude": 34.1666,
+        "longitude": 132.2189,
+        "water_level_m_bgl": 1.05,
+        "description": "small delta plain"
+      },
+      {
+        "name": "Matsue Ohashi lowland",
+        "coords": [35.4723, 133.0505],
+        "measurement": { "value": "0.9", "unit": "m_below_surface" },
+        "context": "near brackish lagoon"
+      },
+      {
+        "site": "Izumo plain east",
+        "location": "35.3670N, 132.7547E",
+        "gw": { "water level": "1.2 m BGL" },
+        "notes": "alluvial plain"
+      },
+      {
+        "site": "Miyoshi inland basin",
+        "geo": { "lat": 34.8057, "lon": 132.8516 },
+        "estimated_depth_m": 3.05,
+        "remarks": "estimated from old screen depth record"
+      }
+    ]
+  },
+  "extra_text": "Ignore this: an operator may later request a PDF summary, but no PDF is requested now."
+}

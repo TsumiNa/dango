@@ -29,7 +29,7 @@ func TestDefaultOrchestratorSkill_LoadsEmbeddedSkillDirectory(t *testing.T) {
 	if sk.Conversation() != nil {
 		t.Fatal("Conversation() should be nil for lightweight embedded skill")
 	}
-	if _, err := NewEmbeddedOrchestratorSkill(&llm.Client{}, nil, nil); err != nil {
+	if _, err := NewEmbeddedOrchestratorSkill(&llm.Client{}, llm.DefaultConversationConfig()); err != nil {
 		t.Fatalf("NewEmbeddedOrchestratorSkill: %v", err)
 	}
 }

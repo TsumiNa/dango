@@ -9,6 +9,7 @@ import (
 	"github.com/openai/openai-go/v3"
 	"github.com/openai/openai-go/v3/responses"
 	"github.com/openai/openai-go/v3/shared"
+	streampkg "github.com/tsumina/dango/internal/engine/stream"
 )
 
 // Response holds the parsed result of a [Conversation.Send] call.
@@ -50,14 +51,16 @@ var ErrNoClient = fmt.Errorf("llm: conversation has no client")
 // request body and leaves the client's default untouched.
 func (c *Conversation) Send(ctx context.Context, effort ReasoningEffort) (*Response, error) {
 	if c.client == nil {
+		c.emitLLMFailure(ctx, ErrNoClient, "send")
 		return nil, ErrNoClient
 	}
 	params := c.buildRequestParams(effort)
 	resp, err := c.client.raw.Responses.New(ctx, params)
 	if err != nil {
+		c.emitLLMFailure(ctx, err, "send")
 		return nil, err
 	}
-	return c.applyResponseOutput(ctx, resp), nil
+	return c.applyResponseOutput(ctx, resp, true), nil
 }
 
 // applyResponseOutput appends the model's output items from resp to
@@ -65,7 +68,7 @@ func (c *Conversation) Send(ctx context.Context, effort ReasoningEffort) (*Respo
 // view. It is shared with the streaming commit path so the
 // post-request conversation state is identical regardless of how the
 // response was delivered.
-func (c *Conversation) applyResponseOutput(ctx context.Context, resp *responses.Response) *Response {
+func (c *Conversation) applyResponseOutput(ctx context.Context, resp *responses.Response, emitContentDeltas bool) *Response {
 	out := &Response{
 		Usage: usageFromResponse(resp.Usage),
 		Raw:   resp,
@@ -83,6 +86,9 @@ func (c *Conversation) applyResponseOutput(ctx context.Context, resp *responses.
 			if text != "" {
 				out.Text += text
 				c.AppendAssistantText(text)
+				if emitContentDeltas {
+					c.emitTextDelta(ctx, streampkg.EventLLMOutputDelta, streampkg.StatusCompleted, text)
+				}
 			}
 		case "function_call":
 			call := item.AsFunctionCall()
@@ -92,7 +98,9 @@ func (c *Conversation) applyResponseOutput(ctx context.Context, resp *responses.
 				Arguments: call.Arguments,
 			}
 			out.ToolCalls = append(out.ToolCalls, tc)
+			c.emitToolCallStarted(ctx, tc)
 			c.AppendToolCall(tc)
+			c.emitToolCallCompleted(ctx, tc)
 		case "reasoning":
 			// Capture the model's chain-of-thought for observability.
 			// Summary is the redacted public summary; Content is the
@@ -130,6 +138,9 @@ func (c *Conversation) applyResponseOutput(ctx context.Context, resp *responses.
 			}
 			if text != "" || len(raw) > 0 {
 				c.AppendReasoning(text, raw)
+				if emitContentDeltas {
+					c.emitTextDelta(ctx, streampkg.EventLLMReasoningDelta, streampkg.StatusCompleted, text)
+				}
 			}
 		}
 	}
@@ -137,6 +148,7 @@ func (c *Conversation) applyResponseOutput(ctx context.Context, resp *responses.
 	// recordUsage has already fallen back to Trim so the next request
 	// still fits in context.
 	_ = c.recordUsage(ctx, out.Usage)
+	c.emitResponseCompleted(ctx, out)
 	return out
 }
 

@@ -41,6 +41,7 @@ func (c *Conversation) SetMaxSteps(n int) {
 // back to the level configured on the bound [Client].
 func (c *Conversation) Run(ctx context.Context, userInput string, effort ReasoningEffort) (string, error) {
 	if c.client == nil {
+		c.emitLLMFailure(ctx, ErrNoClient, "run")
 		return "", ErrNoClient
 	}
 	budget := c.maxSteps
@@ -50,24 +51,37 @@ func (c *Conversation) Run(ctx context.Context, userInput string, effort Reasoni
 	c.AppendUser(userInput)
 
 	for step := 0; step < budget; step++ {
-		resp, err := c.Send(ctx, effort)
+		resp, err := c.runStep(ctx, effort)
 		if err != nil {
 			return "", fmt.Errorf("llm: run step %d: %w", step, err)
 		}
 		if len(resp.ToolCalls) == 0 {
 			if lastErr := c.LastError(); lastErr != nil {
-				return resp.Text, fmt.Errorf("llm: session persistence failed: %w", lastErr)
+				runErr := fmt.Errorf("llm: session persistence failed: %w", lastErr)
+				c.emitLLMFailure(ctx, runErr, "run")
+				return resp.Text, runErr
 			}
 			return resp.Text, nil
 		}
 		for _, call := range resp.ToolCalls {
+			c.emitToolExecutionStarted(ctx, call)
 			output, execErr := c.dispatch(ctx, call)
+			c.emitToolExecutionFinished(ctx, call, execErr)
 			c.AppendToolOutput(call.CallID, output, execErr)
 			// execErr is surfaced to the model via output so the loop
 			// can recover on the next turn.
 		}
 	}
-	return "", fmt.Errorf("llm: run exceeded max steps (%d) without final response", budget)
+	err := fmt.Errorf("llm: run exceeded max steps (%d) without final response", budget)
+	c.emitLLMFailure(ctx, err, "run")
+	return "", err
+}
+
+func (c *Conversation) runStep(ctx context.Context, effort ReasoningEffort) (*Response, error) {
+	if c.eventStream == nil {
+		return c.Send(ctx, effort)
+	}
+	return c.streamResponse(ctx, effort, nil, true)
 }
 
 // dispatch executes a single function call against the registered

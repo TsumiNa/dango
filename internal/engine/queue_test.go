@@ -141,7 +141,7 @@ func newManagedQueueTestRunner(t *testing.T, request string, run func(context.Co
 	return runnerpkg.New(
 		runnerpkg.WithContext(context.Background()),
 		runnerpkg.WithLogger(testLogger),
-		runnerpkg.WithPlan(plan, nodes),
+		runnerpkg.WithInitialPlan(plan, nodes),
 		runnerpkg.WithPlannerSkill(bindTestOrchestratorSkill(t, mustReviewJSON(t, true, ""))),
 		runnerpkg.WithSkillSummaries([]runnerpkg.SkillSummary{{Name: "single", Description: "Single test skill."}}),
 		runnerpkg.WithPlanNodeBuilder(func(plan *runnerpkg.CoarsePlan) (map[string]*runnerpkg.Node, error) { return nodes, nil }),

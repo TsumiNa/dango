@@ -14,5 +14,5 @@
 // conversation when the caller is ready to run it. Skills expose three
 // workspace layers to built-in tools: the skill source directory, a private
 // temp playground for relative paths and shell execution, and optional
-// user-added accessible directories configured with [Skill.WithAccessibleDirs].
+// user-added accessible directories configured with [Skill.SetAccessibleDirs].
 package llm

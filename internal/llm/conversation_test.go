@@ -8,9 +8,9 @@ import (
 	"testing"
 )
 
-func mustNewConversation(t testing.TB, client *Client, instructions string, tools []Tool, cfg ...*ConversationConfig) *Conversation {
+func mustNewConversation(t testing.TB, client *Client, instructions string, tools []Tool, cfg ...ConversationConfig) *Conversation {
 	t.Helper()
-	var config *ConversationConfig
+	config := DefaultConversationConfig()
 	if len(cfg) > 0 {
 		config = cfg[0]
 	}
@@ -32,7 +32,7 @@ func TestNewConversationRejectsInvalidTools(t *testing.T) {
 		{name: "duplicate name", tools: []Tool{valid, NewFuncTool("valid", "", nil, nil)}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			if _, err := NewConversation(nil, "sys", tc.tools, nil); err == nil {
+			if _, err := NewConversation(nil, "sys", tc.tools, DefaultConversationConfig()); err == nil {
 				t.Fatal("NewConversation returned nil error")
 			}
 		})
@@ -42,7 +42,7 @@ func TestNewConversationRejectsInvalidTools(t *testing.T) {
 func TestNewConversationAppliesConfig(t *testing.T) {
 	shrinker := AutoShrinkConfig{ContextWindow: 100, Threshold: 0.5, KeepToolExchanges: 1, KeepTurns: 2}
 	summarizer := SummarizerFunc(func(context.Context, []Turn) (string, error) { return "summary", nil })
-	conv := mustNewConversation(t, nil, "sys", nil, &ConversationConfig{
+	conv := mustNewConversation(t, nil, "sys", nil, ConversationConfig{
 		MaxSteps:   3,
 		AutoShrink: &shrinker,
 		Summarizer: summarizer,
@@ -63,6 +63,9 @@ func TestNewConversationAppliesConfig(t *testing.T) {
 	}
 	if defaults.autoShrink.Threshold == 0 {
 		t.Fatal("default autoShrink was not initialised")
+	}
+	if defaults.summarizer == nil {
+		t.Fatal("default summarizer was not initialised")
 	}
 }
 
@@ -240,6 +243,9 @@ func TestConversationAutoShrinkTriggersTierOrder(t *testing.T) {
 	if conv.Len() > 4 {
 		t.Errorf("Trim did not apply: Len() = %d", conv.Len())
 	}
+	if turns[0].Role != RoleAssistant || !strings.Contains(turns[0].Text, "Earlier conversation") {
+		t.Errorf("default summarizer did not write the leading summary turn: %+v", turns[0])
+	}
 	// Among surviving tool_output turns only the last must retain full body.
 	var fullOutputs int
 	for _, tn := range turns {
@@ -325,6 +331,27 @@ func TestConversationCompressReplacesPrefixWithSummary(t *testing.T) {
 	}
 	if turns[1].Text != "a2" {
 		t.Errorf("trailing turn lost: %+v", turns[1])
+	}
+}
+
+func TestDefaultSummarizerFuncSummarizesTextAndTools(t *testing.T) {
+	summary, err := DefaultSummarizerFunc(context.Background(), []Turn{
+		{Role: RoleUser, Text: "hello    there"},
+		{Role: RoleToolCall, Tool: &ToolCallPayload{CallID: "call-1", Name: "lookup", Arguments: `{"site":"tokyo"}`}},
+		{Role: RoleToolOutput, Tool: &ToolCallPayload{CallID: "call-1", Output: "done"}},
+	})
+	if err != nil {
+		t.Fatalf("DefaultSummarizerFunc: %v", err)
+	}
+	for _, want := range []string{
+		"Earlier conversation:",
+		"user: hello there",
+		`tool_call: tool call lookup {"site":"tokyo"}`,
+		"tool_output: tool result call-1 done",
+	} {
+		if !strings.Contains(summary, want) {
+			t.Fatalf("summary missing %q:\n%s", want, summary)
+		}
 	}
 }
 
@@ -527,6 +554,9 @@ func TestConversationJSONRoundTrip(t *testing.T) {
 	}
 	if got := restored.autoShrink; got.ContextWindow != 8000 || got.KeepTurns != 5 {
 		t.Errorf("autoShrink = %+v", got)
+	}
+	if restored.summarizer == nil {
+		t.Fatal("restored default summarizer = nil")
 	}
 }
 

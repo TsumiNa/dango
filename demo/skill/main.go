@@ -167,7 +167,7 @@ func main() {
 	field("bash allow additions", formatSlice(bashAllow))
 	field("bash block removals", formatSlice(bashBlock))
 
-	baseSkill, err := llm.NewSkill(dir, bashAllow, bashBlock)
+	baseSkill, err := llm.NewSkill(dir, llm.SkillConfig{BashAllow: bashAllow, BashBlock: bashBlock})
 	if err != nil {
 		log.Fatalf("load skill: %v", err)
 	}
@@ -254,11 +254,11 @@ func main() {
 	if err != nil {
 		log.Fatalf("new session store: %v", err)
 	}
-	baseSkill, err = baseSkill.WithTools(allTools...)
+	baseSkill, err = baseSkill.AddTools(allTools...)
 	if err != nil {
 		log.Fatalf("configure skill tools: %v", err)
 	}
-	convCfg := &llm.ConversationConfig{
+	convCfg := llm.ConversationConfig{
 		MaxSteps:   12,
 		AutoShrink: &shrinkCfg,
 		Summarizer: summarizer,
@@ -269,7 +269,7 @@ func main() {
 	field("auto shrink", fmt.Sprintf("window=%d threshold=%.0f%% keep_turns=%d keep_tool_exchanges=%d",
 		shrinkCfg.ContextWindow, shrinkCfg.Threshold*100, shrinkCfg.KeepTurns, shrinkCfg.KeepToolExchanges))
 	okLine("summarizer configured with a separate Client.Respond call")
-	sk, err := baseSkill.Bind(client, convCfg, nil, store)
+	sk, err := baseSkill.Bind(client, convCfg, llm.WithNewSession(store))
 	if err != nil {
 		log.Fatalf("bind skill: %v", err)
 	}
@@ -298,7 +298,7 @@ func main() {
 
 	banner(6, "Run 2 | restored session", "the saved event log is replayed before the follow-up task")
 	printBlock("user task", secondInput, cyan)
-	restored, err := baseSkill.Bind(client, convCfg, &sessionID, store)
+	restored, err := baseSkill.Bind(client, convCfg, llm.WithExistingSession(sessionID, store))
 	if err != nil {
 		log.Fatalf("restore skill session: %v", err)
 	}

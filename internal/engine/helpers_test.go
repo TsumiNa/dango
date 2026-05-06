@@ -3,7 +3,6 @@ package engine
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"io"
 	"log/slog"
 	"net/http"
@@ -16,17 +15,15 @@ import (
 	"github.com/openai/openai-go/v3"
 	"github.com/openai/openai-go/v3/option"
 	runnerpkg "github.com/tsumina/dango/internal/engine/runner"
+	streampkg "github.com/tsumina/dango/internal/engine/stream"
 	"github.com/tsumina/dango/internal/llm"
 )
 
 var testLogger = slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelError}))
 
 type Node = runnerpkg.Node
-type EventType = runnerpkg.EventType
-type RunnerEvent = runnerpkg.RunnerEvent
 type RunnerRecord = runnerpkg.RunnerRecord
 type RunnerView = runnerpkg.RunnerView
-type RunnerUpdate = runnerpkg.RunnerUpdate
 type RunnerPhase = runnerpkg.RunnerPhase
 
 const (
@@ -54,7 +51,7 @@ const (
 var ErrRunnerLogNotFound = runnerpkg.ErrRunnerLogNotFound
 
 func newOrchestrator(logger *slog.Logger) *Orchestrator {
-	return NewOrchestrator(context.Background(), logger)
+	return NewOrchestrator(WithOrchestratorContext(context.Background()), WithOrchestratorLogger(logger))
 }
 
 func newDiscardLogger() *slog.Logger {
@@ -87,25 +84,25 @@ func writeTestSkill(t *testing.T, name, description string) string {
 
 func loadTestSkillFromDir(t *testing.T, dir string) *llm.Skill {
 	t.Helper()
-	sk, err := llm.NewSkill(dir, nil, nil)
+	sk, err := llm.NewSkill(dir, llm.DefaultSkillConfig())
 	if err != nil {
 		t.Fatalf("llm.New(%q): %v", dir, err)
 	}
 	return sk
 }
 
-func newTestSkillConfig(t *testing.T, name, description string, client *llm.Client) AddSkillConfig {
+func newTestSkillRegistration(t *testing.T, name, description string, client *llm.Client) SkillRegistration {
 	t.Helper()
 	if client == nil {
 		client = &llm.Client{}
 	}
-	return AddSkillConfig{
+	return SkillRegistration{
 		Skill:  loadTestSkillFromDir(t, writeTestSkill(t, name, description)),
 		Client: client,
 	}
 }
 
-func mustAddSkills(t *testing.T, o *Orchestrator, cfgs ...AddSkillConfig) {
+func mustAddSkills(t *testing.T, o *Orchestrator, cfgs ...SkillRegistration) {
 	t.Helper()
 	if err := o.AddSkills(cfgs...); err != nil {
 		t.Fatalf("AddSkills: %v", err)
@@ -113,14 +110,218 @@ func mustAddSkills(t *testing.T, o *Orchestrator, cfgs ...AddSkillConfig) {
 }
 
 func bindTestOrchestratorSkill(t *testing.T, outputs ...string) *llm.Skill {
+	return bindTestOrchestratorSkillWithReasoning(t, "", outputs...)
+}
+
+func bindTestOrchestratorSkillWithReasoning(t *testing.T, reasoning string, outputs ...string) *llm.Skill {
 	t.Helper()
 	clearLLMEnv(t)
 	var responded int
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
+		var req struct {
+			Model  string `json:"model"`
+			Stream bool   `json:"stream"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&req)
+		if req.Model == "" {
+			req.Model = "test-model"
+		}
 		text := outputs[len(outputs)-1]
 		if responded < len(outputs) {
 			text = outputs[responded]
+		}
+		responded++
+		output := make([]map[string]any, 0, 2)
+		if reasoning != "" {
+			output = append(output, map[string]any{
+				"id":     "rs1",
+				"type":   "reasoning",
+				"status": "completed",
+				"summary": []map[string]any{{
+					"type": "summary_text",
+					"text": reasoning,
+				}},
+				"content": []map[string]any{{
+					"type": "reasoning_text",
+					"text": reasoning,
+				}},
+			})
+		}
+		output = append(output, map[string]any{
+			"id":     "m1",
+			"type":   "message",
+			"role":   "assistant",
+			"status": "completed",
+			"content": []map[string]any{{
+				"type":        "output_text",
+				"text":        text,
+				"annotations": []any{},
+			}},
+		})
+		if req.Stream {
+			w.Header().Set("Content-Type", "text/event-stream")
+			w.WriteHeader(http.StatusOK)
+			flusher, _ := w.(http.Flusher)
+			if reasoning != "" {
+				writeTestSSE(t, w, "response.reasoning_summary_text.delta", map[string]any{
+					"type":            "response.reasoning_summary_text.delta",
+					"delta":           reasoning,
+					"item_id":         "rs1",
+					"output_index":    0,
+					"content_index":   0,
+					"sequence_number": 0,
+				})
+			}
+			writeTestSSE(t, w, "response.output_text.delta", map[string]any{
+				"type":            "response.output_text.delta",
+				"delta":           text,
+				"item_id":         "m1",
+				"output_index":    0,
+				"content_index":   0,
+				"sequence_number": 1,
+			})
+			writeTestSSE(t, w, "response.completed", map[string]any{
+				"type":            "response.completed",
+				"sequence_number": 2,
+				"response": map[string]any{
+					"id":                  "r1",
+					"object":              "response",
+					"created_at":          0,
+					"model":               req.Model,
+					"status":              "completed",
+					"output":              output,
+					"parallel_tool_calls": false,
+					"tool_choice":         "auto",
+					"tools":               []any{},
+					"usage": map[string]any{
+						"input_tokens": 1,
+						"input_tokens_details": map[string]any{
+							"cached_tokens": 0,
+						},
+						"output_tokens": 1,
+						"output_tokens_details": map[string]any{
+							"reasoning_tokens": 0,
+						},
+						"total_tokens": 2,
+					},
+				},
+			})
+			if flusher != nil {
+				flusher.Flush()
+			}
+			return
+		}
+		payload, err := json.Marshal(map[string]any{
+			"id":                  "r1",
+			"object":              "response",
+			"created_at":          0,
+			"model":               "test-model",
+			"status":              "completed",
+			"output":              output,
+			"parallel_tool_calls": false,
+			"tool_choice":         "auto",
+			"tools":               []any{},
+		})
+		if err != nil {
+			t.Fatalf("marshal planner response: %v", err)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write(payload)
+	}))
+	t.Cleanup(srv.Close)
+	raw := openai.NewClient(option.WithAPIKey("test-key"), option.WithBaseURL(srv.URL+"/"))
+	client, err := llm.NewClient(llm.ProviderOpenAI, "test-model", raw, llm.DefaultClientConfig())
+	if err != nil {
+		t.Fatalf("NewClient: %v", err)
+	}
+	bound, err := defaultOrchestratorSkill().Bind(client, llm.DefaultConversationConfig())
+	if err != nil {
+		t.Fatalf("Bind(default orchestrator skill): %v", err)
+	}
+	return bound
+}
+
+func bindStreamingTestOrchestratorSkill(t *testing.T, streamOutput string, nonStreamOutputs ...string) *llm.Skill {
+	t.Helper()
+	clearLLMEnv(t)
+	if len(nonStreamOutputs) == 0 {
+		nonStreamOutputs = []string{mustReviewJSON(t, true, "")}
+	}
+	var responded int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req struct {
+			Model  string `json:"model"`
+			Stream bool   `json:"stream"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		if req.Stream {
+			w.Header().Set("Content-Type", "text/event-stream")
+			w.WriteHeader(http.StatusOK)
+			flusher, _ := w.(http.Flusher)
+			writeTestSSE(t, w, "response.reasoning_summary_text.delta", map[string]any{
+				"type":            "response.reasoning_summary_text.delta",
+				"delta":           "planning stream is active",
+				"item_id":         "r1",
+				"output_index":    0,
+				"content_index":   0,
+				"sequence_number": 0,
+			})
+			writeTestSSE(t, w, "response.output_text.delta", map[string]any{
+				"type":            "response.output_text.delta",
+				"delta":           streamOutput,
+				"item_id":         "m1",
+				"output_index":    0,
+				"content_index":   0,
+				"sequence_number": 1,
+			})
+			writeTestSSE(t, w, "response.completed", map[string]any{
+				"type":            "response.completed",
+				"sequence_number": 2,
+				"response": map[string]any{
+					"id":         "r1",
+					"object":     "response",
+					"created_at": 0,
+					"model":      req.Model,
+					"status":     "completed",
+					"output": []map[string]any{{
+						"id":     "m1",
+						"type":   "message",
+						"role":   "assistant",
+						"status": "completed",
+						"content": []map[string]any{{
+							"type":        "output_text",
+							"text":        streamOutput,
+							"annotations": []any{},
+						}},
+					}},
+					"parallel_tool_calls": false,
+					"tool_choice":         "auto",
+					"tools":               []any{},
+					"usage": map[string]any{
+						"input_tokens": 1,
+						"input_tokens_details": map[string]any{
+							"cached_tokens": 0,
+						},
+						"output_tokens": 1,
+						"output_tokens_details": map[string]any{
+							"reasoning_tokens": 0,
+						},
+						"total_tokens": 2,
+					},
+				},
+			})
+			if flusher != nil {
+				flusher.Flush()
+			}
+			return
+		}
+
+		text := nonStreamOutputs[len(nonStreamOutputs)-1]
+		if responded < len(nonStreamOutputs) {
+			text = nonStreamOutputs[responded]
 		}
 		responded++
 		payload, err := json.Marshal(map[string]any{
@@ -147,19 +348,30 @@ func bindTestOrchestratorSkill(t *testing.T, outputs ...string) *llm.Skill {
 		if err != nil {
 			t.Fatalf("marshal planner response: %v", err)
 		}
+		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write(payload)
 	}))
 	t.Cleanup(srv.Close)
 	raw := openai.NewClient(option.WithAPIKey("test-key"), option.WithBaseURL(srv.URL+"/"))
-	client, err := llm.NewClient(llm.ClientConfig{Provider: llm.ProviderOpenAI, Model: "test-model", Raw: raw})
+	client, err := llm.NewClient(llm.ProviderOpenAI, "test-model", raw, llm.DefaultClientConfig())
 	if err != nil {
 		t.Fatalf("NewClient: %v", err)
 	}
-	bound, err := defaultOrchestratorSkill().Bind(client, nil, nil)
+	bound, err := defaultOrchestratorSkill().Bind(client, llm.DefaultConversationConfig())
 	if err != nil {
 		t.Fatalf("Bind(default orchestrator skill): %v", err)
 	}
 	return bound
+}
+
+func writeTestSSE(t *testing.T, w io.Writer, event string, payload any) {
+	t.Helper()
+	data, err := json.Marshal(payload)
+	if err != nil {
+		t.Fatalf("marshal SSE payload: %v", err)
+	}
+	_, _ = io.WriteString(w, "event: "+event+"\n")
+	_, _ = io.WriteString(w, "data: "+string(data)+"\n\n")
 }
 
 func mustPlanJSON(t *testing.T, plan *CoarsePlan) string {
@@ -203,7 +415,7 @@ func mustPlanSingleNodeRunner(t *testing.T, o *Orchestrator) (*CoarsePlan, *runn
 
 func mustPlanSingleNodeRunnerWithOutputs(t *testing.T, o *Orchestrator, outputs ...string) (*CoarsePlan, *runnerpkg.Runner) {
 	t.Helper()
-	mustAddSkills(t, o, newTestSkillConfig(t, "single", "Single-step runner.", nil))
+	mustAddSkills(t, o, newTestSkillRegistration(t, "single", "Single-step runner.", nil))
 	if len(outputs) == 0 {
 		outputs = []string{mustPlanJSON(t, &CoarsePlan{
 			Request: "run a single node",
@@ -219,10 +431,11 @@ func mustPlanSingleNodeRunnerWithOutputs(t *testing.T, o *Orchestrator, outputs 
 	if err := o.SetOrchestratorSkill(bindTestOrchestratorSkill(t, outputs...)); err != nil {
 		t.Fatalf("SetOrchestratorSkill: %v", err)
 	}
-	runnerID, err := o.StartRequest(context.Background(), &Request{Input: "run a single node"})
+	resp, err := o.StartRequest(context.Background(), Request{Input: "run a single node"})
 	if err != nil {
 		t.Fatalf("StartRequest: %v", err)
 	}
+	runnerID := mustReadRunnerCreated(t, resp.Stream)
 	managedRunner, ok := o.Runners()[runnerID]
 	if !ok || managedRunner == nil {
 		t.Fatalf("expected runner %q to be stored", runnerID)
@@ -236,15 +449,73 @@ func mustPlanSingleNodeRunnerWithOutputs(t *testing.T, o *Orchestrator, outputs 
 
 func mustRejectStartRequest(t *testing.T, o *Orchestrator) *RejectReason {
 	t.Helper()
-	_, err := o.StartRequest(context.Background(), &Request{Input: "summarize this repository"})
-	var rejected *RequestRejectedError
-	if !errors.As(err, &rejected) {
-		t.Fatalf("StartRequest rejection err = %v, want RequestRejectedError", err)
+	_, err := o.StartRequest(context.Background(), Request{Input: "summarize this repository"})
+	if err != nil {
+		t.Fatalf("StartRequest: %v", err)
 	}
-	if rejected.Reason == nil {
-		t.Fatal("RequestRejectedError.Reason = nil")
+	return &RejectReason{Summary: "request started"}
+}
+
+func mustReadRunnerCreated(t *testing.T, eventStream *streampkg.Stream) string {
+	t.Helper()
+	sub, err := eventStream.Subscribe(streampkg.Filter{EventTypes: []string{streampkg.EventStatusProgress, streampkg.EventStatusFailed}}, streampkg.WithSubscriberBuffer(64))
+	if err != nil {
+		t.Fatalf("Subscribe: %v", err)
 	}
-	return rejected.Reason
+	defer sub.Cancel()
+	deadline, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	for {
+		event, ok, err := sub.Next(deadline)
+		if err != nil {
+			t.Fatalf("request stream event: %v", err)
+		}
+		if !ok {
+			t.Fatal("request stream closed before runner creation")
+		}
+		if event.EventType == streampkg.EventStatusFailed && event.From.Layer == "orchestrator" {
+			var msg string
+			_ = json.Unmarshal(event.Delta, &msg)
+			t.Fatalf("request failed before runner creation: %s", msg)
+		}
+		if event.EventType != streampkg.EventStatusProgress || event.From.Layer != "orchestrator" {
+			continue
+		}
+		var values map[string]string
+		_ = json.Unmarshal(event.Delta, &values)
+		if values["message"] == "runner created" && values["runner_id"] != "" {
+			return values["runner_id"]
+		}
+	}
+}
+
+func mustReadOrchestratorFailure(t *testing.T, eventStream *streampkg.Stream) string {
+	t.Helper()
+	sub, err := eventStream.Subscribe(streampkg.Filter{EventTypes: []string{streampkg.EventStatusFailed}}, streampkg.WithSubscriberBuffer(64))
+	if err != nil {
+		t.Fatalf("Subscribe: %v", err)
+	}
+	defer sub.Cancel()
+	deadline, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	for {
+		event, ok, err := sub.Next(deadline)
+		if err != nil {
+			t.Fatalf("request stream event: %v", err)
+		}
+		if !ok {
+			t.Fatal("request stream closed before failure event")
+		}
+		if event.From.Layer != "orchestrator" {
+			continue
+		}
+		var text string
+		_ = json.Unmarshal(event.Delta, &text)
+		if text != "" {
+			return text
+		}
+		return string(event.Delta)
+	}
 }
 
 func mustNewRunnerStore(t *testing.T, dir string) *runnerpkg.JSONRunnerStore {
@@ -256,53 +527,20 @@ func mustNewRunnerStore(t *testing.T, dir string) *runnerpkg.JSONRunnerStore {
 	return store
 }
 
-func waitForRunnerEvent(t *testing.T, ch <-chan runnerpkg.RunnerEvent, want runnerpkg.EventType, nodeID string) runnerpkg.RunnerEvent {
+func waitForStreamEvent(t *testing.T, sub *streampkg.Subscription, eventType string, label string) streampkg.Event {
 	t.Helper()
-	timer := time.NewTimer(2 * time.Second)
-	defer timer.Stop()
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
 	for {
-		select {
-		case <-timer.C:
-			t.Fatalf("timed out waiting for event %s/%s", want.String(), nodeID)
-		case ev := <-ch:
-			if ev.Type == want && ev.NodeID == nodeID {
-				return ev
-			}
+		ev, ok, err := sub.Next(ctx)
+		if err != nil {
+			t.Fatalf("stream error waiting for %s (%s): %v", eventType, label, err)
 		}
-	}
-}
-
-func waitForRunnerUpdate(t *testing.T, ch <-chan RunnerUpdate, predicate func(RunnerUpdate) bool, label string) RunnerUpdate {
-	t.Helper()
-	timer := time.NewTimer(2 * time.Second)
-	defer timer.Stop()
-	for {
-		select {
-		case <-timer.C:
-			t.Fatalf("timed out waiting for runner update: %s", label)
-		case update, ok := <-ch:
-			if !ok {
-				t.Fatalf("runner update stream closed while waiting for %s", label)
-			}
-			if predicate(update) {
-				return update
-			}
+		if !ok {
+			t.Fatalf("stream closed while waiting for %s (%s)", eventType, label)
 		}
-	}
-}
-
-func waitForRunnerUpdateClosed(t *testing.T, ch <-chan RunnerUpdate, label string) {
-	t.Helper()
-	timer := time.NewTimer(2 * time.Second)
-	defer timer.Stop()
-	for {
-		select {
-		case _, ok := <-ch:
-			if !ok {
-				return
-			}
-		case <-timer.C:
-			t.Fatalf("timed out waiting for runner update stream to close: %s", label)
+		if ev.EventType == eventType {
+			return ev
 		}
 	}
 }

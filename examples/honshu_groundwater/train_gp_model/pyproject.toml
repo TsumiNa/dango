@@ -1,0 +1,10 @@
+[project]
+name = "honshu-groundwater-train-gp-model"
+version = "0.1.0"
+description = "Offline GP-style groundwater modeling skill for the Dango Honshu example."
+requires-python = ">=3.11"
+dependencies = [
+    "matplotlib>=3.10",
+    "numpy>=2.2",
+    "scikit-learn>=1.7",
+]

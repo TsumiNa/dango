@@ -13,6 +13,8 @@ import (
 
 	"github.com/adrg/frontmatter"
 	"github.com/lithammer/shortuuid/v4"
+	streampkg "github.com/tsumina/dango/internal/engine/stream"
+	"github.com/tsumina/dango/internal/llm/internal/builtin"
 )
 
 // SkillFile is the required filename inside a skill directory that carries
@@ -24,8 +26,9 @@ const SkillFile = "SKILL.md"
 // A Skill bundles the metadata and instruction prompt loaded from the
 // skill's SKILL.md with a multi-turn [Conversation] that runs that
 // instruction against a configured set of tools. Callers drive it with
-// [Skill.Run]; the underlying conversation owns the request/tool-call
-// loop and, when a session is configured, the append-only event log.
+// [Skill.Run]; the bound skill owns the runtime stream, while the underlying
+// conversation owns the request/tool-call loop and, when a session is
+// configured, the append-only event log.
 //
 // A skill directory is laid out as:
 //
@@ -53,15 +56,86 @@ type Skill struct {
 	bashBlock []string
 	tools     []Tool
 
-	conv *Conversation
+	conv        *Conversation
+	eventStream *streampkg.Stream
+}
+
+// SkillConfig controls optional behaviour while loading a [Skill].
+type SkillConfig struct {
+	// BashAllow lists command names allowed by built-in bash tools.
+	BashAllow []string
+	// BashBlock lists command names blocked by built-in bash tools.
+	BashBlock []string
+}
+
+// DefaultSkillConfig returns the default optional behaviour for [NewSkill].
+func DefaultSkillConfig() SkillConfig {
+	return SkillConfig{}
+}
+
+// SkillOption adjusts a constructed lightweight [Skill] before it is returned.
+type SkillOption func(*Skill) error
+
+// WithTools appends tool implementations to the constructed Skill's initial
+// tool set.
+//
+// The Skill keeps references to the supplied Tool values and may call them from
+// a bound conversation while the skill is running. Callers remain responsible
+// for any synchronization required by mutable tool implementations or by state
+// captured in tool callbacks.
+func WithTools(tools ...Tool) SkillOption {
+	return func(s *Skill) error {
+		combined := append([]Tool(nil), s.tools...)
+		combined = append(combined, tools...)
+		if err := validateTools(combined); err != nil {
+			return err
+		}
+		s.tools = combined
+		return nil
+	}
+}
+
+// BindOption configures one [Skill.Bind] operation.
+type BindOption func(*bindSettings)
+
+type bindSettings struct {
+	sessionID *string
+	stores    []SessionStore
+}
+
+// WithNewSession opens a new persisted conversation session in stores while
+// binding a Skill.
+//
+// The bound Skill's Conversation keeps references to the supplied stores and
+// appends session events to them during later conversation mutations. Callers
+// are responsible for synchronization if a store is shared concurrently unless
+// the SessionStore implementation documents its own concurrency safety.
+func WithNewSession(stores ...SessionStore) BindOption {
+	return func(settings *bindSettings) {
+		settings.sessionID = nil
+		settings.stores = append([]SessionStore(nil), stores...)
+	}
+}
+
+// WithExistingSession resumes sessionID from stores while binding a Skill.
+//
+// The bound Skill's Conversation keeps references to the supplied stores and
+// appends session events to them during later conversation mutations. Callers
+// are responsible for synchronization if a store is shared concurrently unless
+// the SessionStore implementation documents its own concurrency safety.
+func WithExistingSession(sessionID string, stores ...SessionStore) BindOption {
+	return func(settings *bindSettings) {
+		id := sessionID
+		settings.sessionID = &id
+		settings.stores = append([]SessionStore(nil), stores...)
+	}
 }
 
 // NewSkill reads [SkillFile] from dir and prepares a lightweight Skill.
 //
-// bashAllow and bashBlock are stored for callers that compose built-in bash
-// tools around the skill. tools is the complete tool set advertised to the
-// model when the skill is bound with [Skill.Bind]. Tool names must be unique
-// and non-empty.
+// cfg controls how the skill's built-in bash tools are later configured.
+// options such as [WithTools] adjust the final lightweight skill instance
+// before it is returned.
 //
 // When dir is a host path, NewSkill also records that directory's .env file when it
 // exists and exposes the directory as the skill's source workspace. When dir
@@ -69,7 +143,7 @@ type Skill struct {
 //
 // Accepted values are string-like host directory paths and values
 // implementing [fs.FS].
-func NewSkill(dir any, bashAllow []string, bashBlock []string, tools ...Tool) (*Skill, error) {
+func NewSkill(dir any, cfg SkillConfig, opts ...SkillOption) (*Skill, error) {
 	if rawFS, ok := any(dir).(fs.FS); ok {
 		if rawFS == nil {
 			return nil, fmt.Errorf("skill: requires a non-nil filesystem")
@@ -78,8 +152,12 @@ func NewSkill(dir any, bashAllow []string, bashBlock []string, tools ...Tool) (*
 		if err != nil {
 			return nil, err
 		}
-		sk, err := newFromFS(rawFS, "skill filesystem", workspace, nil, bashAllow, bashBlock, tools...)
+		sk, err := newFromFS(rawFS, "skill filesystem", workspace, nil, cfg)
 		if err != nil {
+			_ = workspace.cleanup()
+			return nil, err
+		}
+		if err := applySkillOptions(sk, opts); err != nil {
 			_ = workspace.cleanup()
 			return nil, err
 		}
@@ -104,18 +182,19 @@ func NewSkill(dir any, bashAllow []string, bashBlock []string, tools ...Tool) (*
 		return nil, fmt.Errorf("skill: inspect env file %q: %w", envFile, err)
 	}
 
-	sk, err := newFromFS(os.DirFS(workspace.SkillRoot()), workspace.SkillRoot(), workspace, envFiles, bashAllow, bashBlock, tools...)
+	sk, err := newFromFS(os.DirFS(workspace.SkillRoot()), workspace.SkillRoot(), workspace, envFiles, cfg)
 	if err != nil {
+		_ = workspace.cleanup()
+		return nil, err
+	}
+	if err := applySkillOptions(sk, opts); err != nil {
 		_ = workspace.cleanup()
 		return nil, err
 	}
 	return sk, nil
 }
 
-func newFromFS(fs fs.FS, displayDir string, workspace *workspaceRoot, envFiles []string, bashAllow []string, bashBlock []string, tools ...Tool) (*Skill, error) {
-	if err := validateTools(tools); err != nil {
-		return nil, err
-	}
+func newFromFS(fs fs.FS, displayDir string, workspace *workspaceRoot, envFiles []string, cfg SkillConfig) (*Skill, error) {
 	skillPath := path.Join(".", SkillFile)
 	file, err := fs.Open(skillPath)
 	if err != nil {
@@ -135,11 +214,22 @@ func newFromFS(fs fs.FS, displayDir string, workspace *workspaceRoot, envFiles [
 	sk.dir = fs
 	sk.workspace = workspace
 	sk.envFiles = append([]string(nil), envFiles...)
-	sk.bashAllow = append([]string(nil), bashAllow...)
-	sk.bashBlock = append([]string(nil), bashBlock...)
-	sk.tools = append([]Tool(nil), tools...)
+	sk.bashAllow = append([]string(nil), cfg.BashAllow...)
+	sk.bashBlock = append([]string(nil), cfg.BashBlock...)
 
 	return &sk, nil
+}
+
+func applySkillOptions(sk *Skill, opts []SkillOption) error {
+	for i, opt := range opts {
+		if opt == nil {
+			return fmt.Errorf("skill: option %d is nil", i)
+		}
+		if err := opt(sk); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // Bind returns a runnable copy of s using the provided runtime wiring.
@@ -150,12 +240,12 @@ func newFromFS(fs fs.FS, displayDir string, workspace *workspaceRoot, envFiles [
 // constructs one with [NewClientFromEnv]; skills loaded from a host directory
 // pass that directory's .env file when it exists.
 //
-// When sessID is non-nil and non-empty, it must identify a session that
-// already exists in at least one of sessStores. In that case Bind resumes that
-// persisted session; it does not seed or create a new stored session for an
-// explicit caller-provided id. If the id cannot be resolved from the supplied
-// stores, Bind returns [ErrSessionNotFound].
-func (s *Skill) Bind(client *Client, cfg *ConversationConfig, sessID *string, sessStores ...SessionStore) (*Skill, error) {
+// [WithNewSession] opens a fresh persisted session. [WithExistingSession]
+// resumes a session that already exists in at least one supplied store; it does
+// not seed or create a new stored session for an explicit caller-provided id.
+// If the id cannot be resolved from the supplied stores, Bind returns
+// [ErrSessionNotFound].
+func (s *Skill) Bind(client *Client, cfg ConversationConfig, opts ...BindOption) (*Skill, error) {
 	if s == nil {
 		return nil, fmt.Errorf("skill: Bind requires a non-nil skill")
 	}
@@ -169,16 +259,29 @@ func (s *Skill) Bind(client *Client, cfg *ConversationConfig, sessID *string, se
 
 	bound := s.copy()
 
-	conv, err := NewConversation(client, s.runtimeInstruction(), bound.tools, cfg)
+	runtimeCfg := cfg
+	if runtimeCfg.StreamEvents {
+		if runtimeCfg.EventStream == nil {
+			runtimeCfg.EventStream = streampkg.New(runtimeCfg.StreamScope, streampkg.DefaultConfig())
+		}
+		bound.eventStream = runtimeCfg.EventStream
+	}
+	conv, err := NewConversation(client, s.runtimeInstruction(), bound.tools, runtimeCfg)
 	if err != nil {
 		return nil, err
 	}
-	if len(sessStores) > 0 || sessID != nil {
-		id, err := resolveSessionID(context.Background(), sessID, sessStores)
+	settings := bindSettings{}
+	for _, opt := range opts {
+		if opt != nil {
+			opt(&settings)
+		}
+	}
+	if len(settings.stores) > 0 || settings.sessionID != nil {
+		id, err := resolveSessionID(context.Background(), settings.sessionID, settings.stores)
 		if err != nil {
 			return nil, err
 		}
-		if err := conv.OpenSession(context.Background(), id, sessStores...); err != nil {
+		if err := conv.OpenSession(context.Background(), id, settings.stores...); err != nil {
 			return nil, fmt.Errorf("skill: open session %q: %w", id, err)
 		}
 	}
@@ -186,7 +289,7 @@ func (s *Skill) Bind(client *Client, cfg *ConversationConfig, sessID *string, se
 	return bound, nil
 }
 
-// WithAccessibleDirs configures the additional directories this skill's
+// SetAccessibleDirs configures the additional directories this skill's
 // built-in tools may access in addition to the skill source root and temp
 // playground.
 //
@@ -194,18 +297,18 @@ func (s *Skill) Bind(client *Client, cfg *ConversationConfig, sessID *string, se
 // subdirectory that remains inside one of these roots is accepted by the Skill
 // workspace resolver. Relative tool paths still resolve inside [Skill.TempDir];
 // use absolute paths to access these additional directories. Calling
-// WithAccessibleDirs replaces the previous additional directory set; passing no
+// SetAccessibleDirs replaces the previous additional directory set; passing no
 // directories removes them all. It must be called after construction and before
 // [Skill.Bind].
-func (s *Skill) WithAccessibleDirs(dirs ...string) error {
+func (s *Skill) SetAccessibleDirs(dirs ...string) error {
 	if s == nil {
-		return fmt.Errorf("skill: WithAccessibleDirs requires a non-nil skill")
+		return fmt.Errorf("skill: SetAccessibleDirs requires a non-nil skill")
 	}
 	if s.conv != nil {
-		return fmt.Errorf("skill: WithAccessibleDirs requires an unbound skill")
+		return fmt.Errorf("skill: SetAccessibleDirs requires an unbound skill")
 	}
 	if s.workspace == nil {
-		return fmt.Errorf("skill: WithAccessibleDirs requires a skill workspace")
+		return fmt.Errorf("skill: SetAccessibleDirs requires a skill workspace")
 	}
 	return s.workspace.setAccessibleDirs(dirs...)
 }
@@ -218,6 +321,7 @@ func (s *Skill) copy() *Skill {
 	bound.envFiles = append([]string(nil), s.envFiles...)
 	bound.tools = append([]Tool(nil), s.tools...)
 	bound.conv = nil
+	bound.eventStream = nil
 	return &bound
 }
 
@@ -225,10 +329,29 @@ func (s *Skill) runtimeInstruction() string {
 	if s == nil {
 		return ""
 	}
+	body := prependSystemInstruction(s.Instruction)
 	if s.workspace == nil {
-		return s.Instruction
+		return body
 	}
-	return appendWorkspaceInstruction(s.Instruction, s.workspace)
+	return appendWorkspaceInstruction(body, s.workspace)
+}
+
+// prependSystemInstruction wraps the skill's own SKILL.md body with the
+// platform-level conventions every skill needs (executor lifecycle, exchange
+// markdown contract, built-in tool budget rules, etc.). The shared block
+// always comes first so an external skill written without Dango knowledge
+// inherits the cooperation rules; the skill-specific body, which describes
+// *this* skill's job, refines and may override them.
+func prependSystemInstruction(instruction string) string {
+	system := strings.TrimSpace(builtin.SystemInstructions)
+	if system == "" {
+		return instruction
+	}
+	body := strings.TrimSpace(instruction)
+	if body == "" {
+		return system
+	}
+	return system + "\n\n" + body
 }
 
 func appendWorkspaceInstruction(instruction string, workspace *workspaceRoot) string {
@@ -350,6 +473,15 @@ func (s *Skill) BashBlock() []string { return append([]string(nil), s.bashBlock.
 // inspect its turns, usage, or session metadata but should not mutate
 // it concurrently with a running [Skill.Run].
 func (s *Skill) Conversation() *Conversation { return s.conv }
+
+// EventStream returns the bound skill's runtime stream, or nil when the skill
+// is unbound or was bound without stream events enabled.
+func (s *Skill) EventStream() *streampkg.Stream {
+	if s == nil {
+		return nil
+	}
+	return s.eventStream
+}
 
 // Run drives a single task to completion by delegating to
 // [Conversation.Run].

@@ -222,7 +222,7 @@ func main() {
 			ansiYellow, client.Provider(), llm.ProviderOpenAI, ansiReset)
 	}
 
-	conv, err := llm.NewConversation(client, systemInstruction, nil, nil)
+	conv, err := llm.NewConversation(client, systemInstruction, nil, llm.DefaultConversationConfig())
 	if err != nil {
 		log.Fatalf("new conversation: %v", err)
 	}

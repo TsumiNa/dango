@@ -2,8 +2,11 @@ package runner
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"sync"
+
+	streampkg "github.com/tsumina/dango/internal/engine/stream"
 )
 
 // Complete signals that the engine has reached its end successfully,
@@ -41,7 +44,7 @@ func (r *Runner) Complete(ctx context.Context) error {
 //
 // StartPolish is valid from [PhaseCreated] (first entry) and from
 // [PhaseAwaitingReplan] (re-entry after a rejected plan). It requires a
-// plan supplied via [WithPlan].
+// plan supplied via [Setup.Plan].
 func (r *Runner) StartPolish(ctx context.Context) error {
 	ctx = r.runtimeContext(ctx)
 	if err := r.prepareNodeExecutors(r.initialNodes); err != nil {
@@ -60,7 +63,7 @@ func (r *Runner) StartPolish(ctx context.Context) error {
 	r.phase = PhasePolishing
 	r.stateMu.Unlock()
 
-	r.publishUpdate(nil)
+	r.emitPhaseChangedEvent()
 	go r.runPolishStage(ctx, nodes)
 	return nil
 }
@@ -108,7 +111,7 @@ func (r *Runner) RejectPolishedPlan(reason string) error {
 	r.replanReason = reason
 	r.lifecycleMu.Unlock()
 
-	r.publishUpdate(nil)
+	r.emitPhaseChangedEvent()
 	return nil
 }
 
@@ -153,7 +156,7 @@ func (r *Runner) ReplanWith(ctx context.Context, plan *CoarsePlan, nodes map[str
 	r.replanReason = ""
 	r.lifecycleMu.Unlock()
 
-	r.publishUpdate(nil)
+	r.emitPhaseChangedEvent()
 	go r.runPolishStage(ctx, cloneNodeMap(clonedNodes))
 	return nil
 }
@@ -164,7 +167,7 @@ func (r *Runner) ReplanWith(ctx context.Context, plan *CoarsePlan, nodes map[str
 // planner skill used to create the original plan, replans when review rejects
 // the candidate, executes the accepted graph, and finally runs report before
 // settling. StartManaged is non-blocking; callers observe progress through
-// [Runner.View], [Runner.SubscribeUpdates], and [Runner.Wait].
+// [Runner.View], [Runner.SubscribeStream], and [Runner.Wait].
 func (r *Runner) StartManaged(ctx context.Context) error {
 	ctx = r.runtimeContext(ctx)
 	if err := ctx.Err(); err != nil {
@@ -241,23 +244,33 @@ func (r *Runner) runManagedLifecycleE(ctx context.Context) error {
 }
 
 func (r *Runner) acceptAndComplete(ctx context.Context) error {
-	events := r.Subscribe(32)
+	sub, err := r.SubscribeStream(streampkg.Filter{
+		EventTypes: []string{
+			streampkg.EventStatusProgress,
+			streampkg.EventRunnerNodeFailed,
+		},
+		Scope: streampkg.Scope{RunnerID: r.id},
+	}, streampkg.WithSubscriberBuffer(32))
+	if err != nil {
+		return err
+	}
+	defer sub.Cancel()
 	if err := r.AcceptPolishedPlan(ctx, r.Plan()); err != nil {
 		return err
 	}
 	for {
-		select {
-		case event := <-events:
-			if event.Type == EventEngineIdle {
-				return r.Complete(ctx)
-			}
-			if event.Type == EventNodeFailed || event.Type == EventEngineStopped {
-				return r.Wait(ctx)
-			}
-		case <-r.Done():
+		event, ok, err := sub.Next(ctx)
+		if err != nil {
+			return err
+		}
+		if !ok {
 			return r.Wait(context.Background())
-		case <-ctx.Done():
-			return ctx.Err()
+		}
+		if runnerStreamEventMatches(event, EventEngineIdle, "") {
+			return r.Complete(ctx)
+		}
+		if event.EventType == streampkg.EventRunnerNodeFailed || runnerStreamEventMatches(event, EventEngineStopped, "") {
+			return r.Wait(ctx)
 		}
 	}
 }
@@ -266,30 +279,77 @@ func (r *Runner) waitForPhase(ctx context.Context, want RunnerPhase) error {
 	if r.Phase() == want {
 		return nil
 	}
-	updates, unsubscribe := r.SubscribeUpdates(16)
-	defer unsubscribe()
+	sub, err := r.SubscribeStream(streampkg.Filter{
+		EventTypes: []string{streampkg.EventRunnerPhaseChanged},
+		Scope:      streampkg.Scope{RunnerID: r.id},
+	}, streampkg.WithSubscriberBuffer(8))
+	if err != nil {
+		return err
+	}
+	defer sub.Cancel()
+	if phase := r.Phase(); phase == want {
+		return nil
+	} else if phase == PhaseSettled {
+		return r.Wait(context.Background())
+	}
+
 	for {
-		select {
-		case update, ok := <-updates:
-			if !ok {
-				return r.Wait(context.Background())
-			}
-			if update.Phase == want {
-				return nil
-			}
-			if update.Phase == PhaseSettled {
-				return r.Wait(context.Background())
-			}
-		case <-r.Done():
+		event, ok, err := sub.Next(ctx)
+		if err != nil {
+			return err
+		}
+		if !ok {
 			return r.Wait(context.Background())
-		case <-ctx.Done():
-			return ctx.Err()
+		}
+		current := r.Phase()
+		if current == want {
+			return nil
+		}
+		if current == PhaseSettled {
+			return r.Wait(context.Background())
+		}
+		phase, ok := phaseFromStreamEvent(event)
+		if !ok {
+			continue
+		}
+		if phase == want && r.Phase() == want {
+			return nil
+		}
+		if phase == PhaseSettled {
+			return r.Wait(context.Background())
 		}
 	}
 }
 
+func phaseFromStreamEvent(event streampkg.Event) (RunnerPhase, bool) {
+	var delta struct {
+		Phase RunnerPhase `json:"phase"`
+	}
+	if err := json.Unmarshal(event.Delta, &delta); err != nil || delta.Phase == "" {
+		return "", false
+	}
+	return delta.Phase, true
+}
+
+func runnerStreamEventMatches(event streampkg.Event, want EventType, nodeID string) bool {
+	var delta struct {
+		Event  string `json:"event"`
+		NodeID string `json:"node_id"`
+	}
+	if err := json.Unmarshal(event.Delta, &delta); err != nil {
+		return false
+	}
+	if delta.Event != want.String() {
+		return false
+	}
+	if nodeID == "" {
+		return true
+	}
+	return delta.NodeID == nodeID || event.Scope.NodeID == nodeID
+}
+
 func (r *Runner) runPolishStage(ctx context.Context, nodes map[string]*Node) {
-	fragments, err := fanOutPolish(ctx, nodes)
+	fragments, err := r.fanOutPolish(ctx, nodes)
 
 	r.lifecycleMu.Lock()
 	r.polishFragments = fragments
@@ -302,19 +362,19 @@ func (r *Runner) runPolishStage(ctx context.Context, nodes map[string]*Node) {
 	}
 
 	r.transitionPhase(PhaseAwaitingReview)
-	r.publishUpdate(nil)
+	r.emitPhaseChangedEvent()
 }
 
 func (r *Runner) runReportStage(ctx context.Context) {
 	ctx = r.runtimeContext(ctx)
 	r.transitionPhase(PhaseReport)
-	r.publishUpdate(nil)
+	r.emitPhaseChangedEvent()
 
 	r.updateMu.Lock()
 	snapshot := cloneRunnerSnapshot(r.snapshot)
 	r.updateMu.Unlock()
 
-	summaries, err := fanOutReport(ctx, snapshot.NodesData, snapshot.CompletedNodes)
+	summaries, err := r.fanOutReport(ctx, snapshot.NodesData, snapshot.CompletedNodes)
 
 	r.lifecycleMu.Lock()
 	r.reportSummaries = summaries
@@ -326,7 +386,7 @@ func (r *Runner) runReportStage(ctx context.Context) {
 	}
 }
 
-func fanOutPolish(ctx context.Context, nodes map[string]*Node) (map[string]any, error) {
+func (r *Runner) fanOutPolish(ctx context.Context, nodes map[string]*Node) (map[string]any, error) {
 	if len(nodes) == 0 {
 		return map[string]any{}, nil
 	}
@@ -341,19 +401,33 @@ func fanOutPolish(ctx context.Context, nodes map[string]*Node) (map[string]any, 
 			continue
 		}
 		wg.Add(1)
-		go func(id string, executor Executor) {
+		go func(id string, node *Node, executor Executor) {
 			defer wg.Done()
+			r.emitExecutorStreamEvent(ctx, streampkg.EventExecutorPolishStarted, streampkg.StatusRunning, id, node, map[string]any{
+				"stage": "polish",
+			})
 			frag, err := executor.Polish(ctx)
-			mu.Lock()
-			defer mu.Unlock()
 			if err != nil {
+				r.emitExecutorStreamEvent(ctx, streampkg.EventExecutorPolishFailed, streampkg.StatusFailed, id, node, map[string]any{
+					"stage": "polish",
+					"error": compactStreamText(err.Error()),
+				})
+				mu.Lock()
+				defer mu.Unlock()
 				if firstErr == nil {
 					firstErr = fmt.Errorf("polish %s: %w", id, err)
 				}
 				return
 			}
+			r.emitExecutorStreamEvent(ctx, streampkg.EventExecutorPolishCompleted, streampkg.StatusCompleted, id, node, map[string]any{
+				"stage": "polish",
+			})
+			frag = r.annotateExchangeOutput(node, frag)
+			r.emitExchangeDocumentEvents(ctx, node, frag)
+			mu.Lock()
+			defer mu.Unlock()
 			fragments[id] = frag
-		}(id, node.Executor)
+		}(id, node, node.Executor)
 	}
 	wg.Wait()
 	if firstErr != nil {
@@ -362,7 +436,7 @@ func fanOutPolish(ctx context.Context, nodes map[string]*Node) (map[string]any, 
 	return fragments, nil
 }
 
-func fanOutReport(ctx context.Context, nodes map[string]*Node, outputs map[string]any) (map[string]any, error) {
+func (r *Runner) fanOutReport(ctx context.Context, nodes map[string]*Node, outputs map[string]any) (map[string]any, error) {
 	if len(outputs) == 0 {
 		return map[string]any{}, nil
 	}
@@ -381,19 +455,33 @@ func fanOutReport(ctx context.Context, nodes map[string]*Node, outputs map[strin
 			continue
 		}
 		wg.Add(1)
-		go func(id string, executor Executor, output any) {
+		go func(id string, node *Node, executor Executor, output any) {
 			defer wg.Done()
+			r.emitExecutorStreamEvent(ctx, streampkg.EventExecutorReportStarted, streampkg.StatusRunning, id, node, map[string]any{
+				"stage": "report",
+			})
 			summary, err := executor.Report(ctx, output)
-			mu.Lock()
-			defer mu.Unlock()
 			if err != nil {
+				r.emitExecutorStreamEvent(ctx, streampkg.EventExecutorReportFailed, streampkg.StatusFailed, id, node, map[string]any{
+					"stage": "report",
+					"error": compactStreamText(err.Error()),
+				})
+				mu.Lock()
+				defer mu.Unlock()
 				if firstErr == nil {
 					firstErr = fmt.Errorf("report %s: %w", id, err)
 				}
 				return
 			}
+			r.emitExecutorStreamEvent(ctx, streampkg.EventExecutorReportCompleted, streampkg.StatusCompleted, id, node, map[string]any{
+				"stage": "report",
+			})
+			summary = r.annotateExchangeOutput(node, summary)
+			r.emitExchangeDocumentEvents(ctx, node, summary)
+			mu.Lock()
+			defer mu.Unlock()
 			summaries[id] = summary
-		}(id, node.Executor, output)
+		}(id, node, node.Executor, output)
 	}
 	wg.Wait()
 	if firstErr != nil {

@@ -33,11 +33,16 @@ var ErrSessionNotInitialised = errors.New("llm: session log must start with an i
 var ErrSessionAlreadyInitialised = errors.New("llm: session already initialised")
 
 // SessionStore is an append-only persistence layer for [Conversation]
-// state. Each mutation a conversation performs is recorded as an
-// [Event]; replay of the event sequence reconstructs the conversation
+// lifecycle state. Each mutation a conversation performs is recorded as
+// an [Event]; replay of the event sequence reconstructs the conversation
 // deterministically. The append-only shape gives every conversation a
 // step-by-step history that can be rolled back via
 // [SessionStore.Truncate] and reused as training data.
+//
+// SessionStore is intentionally not a blanket stream archive. Outer callers
+// can subscribe to request streams and persist observability events
+// independently; session logs should stay focused on the state needed to
+// resume, replay, or trim one conversation during its lifetime.
 //
 // Implementations must be safe for concurrent use: multiple goroutines
 // may share a SessionStore, but the events for a single sessionID are

@@ -13,7 +13,6 @@ func TestRunnerPersistsEventsAndCancellation(t *testing.T) {
 	r := New(WithLogger(testLogger), WithStore(store))
 
 	ctx, cancel := context.WithCancel(context.Background())
-	sub := r.Subscribe(16)
 	if err := r.Start(ctx); err != nil {
 		t.Fatalf("Start: %v", err)
 	}
@@ -30,7 +29,7 @@ func TestRunnerPersistsEventsAndCancellation(t *testing.T) {
 		t.Fatalf("AddNodes: %v", err)
 	}
 
-	waitForRunnerEvent(t, sub, EventNodeCompleted, "persisted")
+	waitForRunnerEvent(t, r, EventNodeCompleted, "persisted")
 	cancel()
 	waitCtx, waitCancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer waitCancel()

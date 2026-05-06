@@ -6,11 +6,16 @@ import (
 	"sync"
 	"time"
 
+	streampkg "github.com/tsumina/dango/internal/engine/stream"
 	"github.com/tsumina/dango/internal/llm"
 )
 
 type skillBinder interface {
-	BindForRunner(sessID *string, sessStores ...llm.SessionStore) (string, error)
+	BindForRunner(sessID *string, accessibleDirs []string, sessStores ...llm.SessionStore) (string, error)
+}
+
+type eventStreamProvider interface {
+	EventStream() *streampkg.Stream
 }
 
 type memorySessionStore struct {
@@ -115,28 +120,93 @@ func (r *Runner) prepareNodeExecutors(nodes map[string]*Node) error {
 	if len(nodes) == 0 || r.skillSessionStore == nil {
 		return nil
 	}
-	r.skillSessionMu.Lock()
-	defer r.skillSessionMu.Unlock()
 	for id, node := range nodes {
 		if node == nil || node.Executor == nil {
 			continue
 		}
-		binder, ok := node.Executor.(skillBinder)
-		if !ok {
-			continue
+		// Only bind the session here; do NOT merge the executor stream yet.
+		// runNode calls prepareNodeExecutor with the real accessibleDirs just
+		// before execution, which re-binds and creates a fresh EventStream.
+		// Merging here would subscribe to that first (throwaway) stream and
+		// leak the goroutine when the second bind replaces it.
+		if err := r.bindExecutorSession(id, node.Executor); err != nil {
+			return err
 		}
-		var sessionID *string
-		if existing := r.skillSessionIDs[id]; existing != "" {
-			existingCopy := existing
-			sessionID = &existingCopy
-		}
-		boundSessionID, err := binder.BindForRunner(sessionID, r.skillSessionStore)
-		if err != nil {
-			return fmt.Errorf("prepare node %q executor: %w", id, err)
-		}
-		if boundSessionID != "" {
-			r.skillSessionIDs[id] = boundSessionID
-		}
+	}
+	return nil
+}
+
+// bindExecutorSession binds a persistent session for executor without touching
+// the event stream. Stream merging is deferred to prepareNodeExecutor, which
+// is called with the correct accessibleDirs immediately before a node runs.
+func (r *Runner) bindExecutorSession(id string, executor Executor) error {
+	r.skillSessionMu.Lock()
+	defer r.skillSessionMu.Unlock()
+
+	binder, ok := executor.(skillBinder)
+	if !ok {
+		return nil
+	}
+	var sessionID *string
+	if existing := r.skillSessionIDs[id]; existing != "" {
+		existingCopy := existing
+		sessionID = &existingCopy
+	}
+	boundSessionID, err := binder.BindForRunner(sessionID, nil, r.skillSessionStore)
+	if err != nil {
+		return fmt.Errorf("bind node %q session: %w", id, err)
+	}
+	if boundSessionID != "" {
+		r.skillSessionIDs[id] = boundSessionID
+	}
+	return nil
+}
+
+func (r *Runner) prepareNodeExecutor(id string, executor Executor, accessibleDirs []string) error {
+	if executor == nil || r.skillSessionStore == nil {
+		return nil
+	}
+
+	r.skillSessionMu.Lock()
+	defer r.skillSessionMu.Unlock()
+
+	var sessionID *string
+	if existing := r.skillSessionIDs[id]; existing != "" {
+		existingCopy := existing
+		sessionID = &existingCopy
+	}
+
+	binder, ok := executor.(skillBinder)
+	if !ok {
+		return r.mergeExecutorStream(id, executor)
+	}
+	boundSessionID, err := binder.BindForRunner(sessionID, accessibleDirs, r.skillSessionStore)
+	if err != nil {
+		return fmt.Errorf("prepare node %q executor: %w", id, err)
+	}
+	if boundSessionID != "" {
+		r.skillSessionIDs[id] = boundSessionID
+	}
+	return r.mergeExecutorStream(id, executor)
+}
+
+func (r *Runner) mergeExecutorStream(id string, executor Executor) error {
+	provider, ok := executor.(eventStreamProvider)
+	if !ok {
+		return nil
+	}
+	upstream := provider.EventStream()
+	if upstream == nil {
+		return nil
+	}
+	_, err := r.eventStream.MergeFrom(
+		r.runtimeContext(context.Background()),
+		upstream,
+		streampkg.Filter{},
+		streampkg.WithSubscriberBuffer(4096),
+	)
+	if err != nil {
+		return fmt.Errorf("merge node %q stream: %w", id, err)
 	}
 	return nil
 }

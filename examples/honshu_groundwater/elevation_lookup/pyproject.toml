@@ -1,0 +1,6 @@
+[project]
+name = "honshu-groundwater-elevation-lookup"
+version = "0.1.0"
+description = "Offline elevation enrichment skill for the Dango Honshu groundwater example."
+requires-python = ">=3.11"
+dependencies = []

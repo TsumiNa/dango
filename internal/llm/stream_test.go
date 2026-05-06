@@ -2,12 +2,15 @@ package llm
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
+
+	streampkg "github.com/tsumina/dango/internal/engine/stream"
 )
 
 // sseResponse writes the given event lines as a single SSE payload
@@ -87,6 +90,44 @@ func collect(t *testing.T, ch <-chan StreamEvent, timeout time.Duration) []Strea
 	}
 }
 
+func TestNewConversationWritesEventsToCallerOwnedStream(t *testing.T) {
+	owned := streampkg.New(streampkg.Scope{NodeID: "node-1"}, streampkg.DefaultConfig())
+	sub, err := owned.Subscribe(streampkg.Filter{}, streampkg.WithSubscriberBuffer(4))
+	if err != nil {
+		t.Fatalf("Subscribe: %v", err)
+	}
+	t.Cleanup(sub.Cancel)
+
+	cfg := DefaultConversationConfig()
+	cfg.StreamEvents = true
+	cfg.EventStream = owned
+	cfg.StreamSource = streampkg.Source{Layer: "executor", ID: "node-1"}
+	conv, err := NewConversation(nil, "sys", nil, cfg)
+	if err != nil {
+		t.Fatalf("NewConversation: %v", err)
+	}
+	if conv.EventStream() != owned {
+		t.Fatalf("EventStream() = %p, want caller-owned stream %p", conv.EventStream(), owned)
+	}
+
+	conv.emitStreamEvent(t.Context(), streampkg.EventStatusProgress, streampkg.StatusRunning, map[string]any{"message": "ready"}, nil)
+	nextCtx, cancel := context.WithTimeout(t.Context(), time.Second)
+	defer cancel()
+	event, ok, err := sub.Next(nextCtx)
+	if err != nil {
+		t.Fatalf("Next: %v", err)
+	}
+	if !ok {
+		t.Fatal("stream closed before event")
+	}
+	if event.From.Layer != "executor" || event.From.ID != "node-1" {
+		t.Fatalf("event source = %+v, want executor node source", event.From)
+	}
+	if event.Scope.NodeID != "node-1" {
+		t.Fatalf("event scope node = %q, want node-1", event.Scope.NodeID)
+	}
+}
+
 // TestClient_Stream_ForwardsTextDeltas verifies that text deltas
 // arrive on the channel in order, the channel is closed on clean
 // completion, and the accumulated assistant text is appended to the
@@ -140,6 +181,56 @@ func TestClient_Stream_ForwardsTextDeltas(t *testing.T) {
 	}
 	if conv.Usage().Total == 0 {
 		t.Errorf("usage not recorded after streaming completion")
+	}
+}
+
+func TestClient_Stream_EmitsConfiguredStreamEvents(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		sseResponse(w,
+			textDeltaEvent("Hel"),
+			textDeltaEvent("lo"),
+			completedEvent("Hello", "", ""),
+		)
+	}))
+	t.Cleanup(srv.Close)
+
+	c := testClient(srv.URL)
+	conv := mustNewConversation(t, c, "sys", nil, ConversationConfig{
+		StreamEvents: true,
+		StreamSource: streampkg.Source{Layer: "skill", ID: "stream_skill"},
+		StreamScope:  streampkg.Scope{RequestID: "req_stream", NodeID: "node_stream"},
+	})
+	eventStream := conv.EventStream()
+	sub, err := eventStream.Subscribe(streampkg.Filter{EventTypes: []string{streampkg.EventLLMOutputDelta}}, streampkg.WithSubscriberBuffer(8))
+	if err != nil {
+		t.Fatalf("Subscribe: %v", err)
+	}
+	conv.AppendUser("hi")
+
+	ch, err := conv.Stream(t.Context(), "")
+	if err != nil {
+		t.Fatalf("Stream: %v", err)
+	}
+	_ = collect(t, ch, 5*time.Second)
+	eventStream.Close()
+
+	events := collectStreamEvents(t, sub)
+	if len(events) != 2 {
+		t.Fatalf("stream events = %d, want 2: %+v", len(events), events)
+	}
+	var joined string
+	for _, event := range events {
+		if event.From.Layer != "skill" || event.Scope.RequestID != "req_stream" || event.Scope.NodeID != "node_stream" {
+			t.Fatalf("event routing = from %+v scope %+v", event.From, event.Scope)
+		}
+		var delta string
+		if err := json.Unmarshal(event.Delta, &delta); err != nil {
+			t.Fatalf("unmarshal delta: %v", err)
+		}
+		joined += delta
+	}
+	if joined != "Hello" {
+		t.Fatalf("joined stream event text = %q, want Hello", joined)
 	}
 }
 

@@ -15,10 +15,19 @@ import (
 
 	"github.com/openai/openai-go/v3"
 	"github.com/openai/openai-go/v3/option"
+	streampkg "github.com/tsumina/dango/internal/engine/stream"
 	"github.com/tsumina/dango/internal/llm"
 )
 
 var testLogger = slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelError}))
+
+func newTestRunner() *Runner {
+	return New(WithLogger(testLogger))
+}
+
+func newTestRunnerForPlan(plan *CoarsePlan, nodes map[string]*Node) *Runner {
+	return New(WithLogger(testLogger), WithInitialPlan(plan, nodes))
+}
 
 type testExecutor struct {
 	run    func(ctx context.Context, parentOutputs map[string]any) (any, []*Node, error)
@@ -56,19 +65,39 @@ func mustNewRunnerStore(t *testing.T, dir string) *JSONRunnerStore {
 	return store
 }
 
-func waitForRunnerEvent(t *testing.T, ch <-chan RunnerEvent, want EventType, nodeID string) RunnerEvent {
+func waitForRunnerEvent(t *testing.T, r *Runner, want EventType, nodeID string) streampkg.Event {
 	t.Helper()
-	timer := time.NewTimer(2 * time.Second)
-	defer timer.Stop()
+	eventType, _, ok := runnerEventStreamType(want, r.State().Status)
+	if !ok {
+		t.Fatalf("runner event %s has no stream event type", want.String())
+	}
+	filter := streampkg.Filter{
+		EventTypes: []string{eventType},
+		Scope:      streampkg.Scope{RunnerID: r.ID()},
+	}
+	if nodeID != "" {
+		filter.Scope.NodeID = nodeID
+	}
+	sub, err := r.SubscribeStream(filter, streampkg.WithSubscriberBuffer(16))
+	if err != nil {
+		t.Fatalf("SubscribeStream: %v", err)
+	}
+	defer sub.Cancel()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
 	for {
-		select {
-		case <-timer.C:
-			t.Fatalf("timed out waiting for event %s/%s", want.String(), nodeID)
-		case ev := <-ch:
-			if ev.Type == want && ev.NodeID == nodeID {
-				return ev
-			}
+		event, ok, err := sub.Next(ctx)
+		if err != nil {
+			t.Fatalf("stream error waiting for event %s/%s: %v", want.String(), nodeID, err)
 		}
+		if !ok {
+			t.Fatalf("stream closed waiting for event %s/%s", want.String(), nodeID)
+		}
+		if !runnerStreamEventMatches(event, want, nodeID) {
+			continue
+		}
+		return event
 	}
 }
 
@@ -151,16 +180,16 @@ func bindTestPlannerSkill(t *testing.T, outputs ...string) *llm.Skill {
 	if err := os.WriteFile(filepath.Join(dir, llm.SkillFile), []byte(content), 0o644); err != nil {
 		t.Fatalf("write SKILL.md: %v", err)
 	}
-	sk, err := llm.NewSkill(dir, nil, nil)
+	sk, err := llm.NewSkill(dir, llm.DefaultSkillConfig())
 	if err != nil {
 		t.Fatalf("llm.New: %v", err)
 	}
 	raw := openai.NewClient(option.WithAPIKey("test-key"), option.WithBaseURL(srv.URL+"/"))
-	client, err := llm.NewClient(llm.ClientConfig{Provider: llm.ProviderOpenAI, Model: "test-model", Raw: raw})
+	client, err := llm.NewClient(llm.ProviderOpenAI, "test-model", raw, llm.DefaultClientConfig())
 	if err != nil {
 		t.Fatalf("NewClient: %v", err)
 	}
-	bound, err := sk.Bind(client, nil, nil)
+	bound, err := sk.Bind(client, llm.DefaultConversationConfig())
 	if err != nil {
 		t.Fatalf("Bind(planner): %v", err)
 	}

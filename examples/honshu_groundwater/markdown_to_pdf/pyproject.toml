@@ -1,0 +1,8 @@
+[project]
+name = "honshu-groundwater-markdown-to-pdf"
+version = "0.1.0"
+description = "Distractor markdown-to-PDF skill for the Dango Honshu example."
+requires-python = ">=3.11"
+dependencies = [
+    "markdown-pdf>=1.13.1",
+]

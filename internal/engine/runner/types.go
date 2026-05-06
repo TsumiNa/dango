@@ -23,7 +23,8 @@ type Executor interface {
 	Report(ctx context.Context, output any) (summary any, err error)
 }
 
-// EventType defines the lifecycle events published by the runner.
+// EventType defines internal engine lifecycle events persisted by the runner
+// and normalized into compact stream events.
 type EventType uint8
 
 const (
@@ -54,7 +55,7 @@ func (e EventType) String() string {
 	}
 }
 
-// RunnerEvent represents a notification regarding graph execution states.
+// RunnerEvent represents an internal graph execution state change.
 type RunnerEvent struct {
 	Type   EventType
 	NodeID string
@@ -146,8 +147,10 @@ const (
 
 // Node represents a single unit of work within the Runner's execution graph.
 type Node struct {
-	Id      string  `json:"id" yaml:"id"`
-	Parents []*Node `json:"parents,omitempty" yaml:"parents,omitempty"`
+	Id              string  `json:"id" yaml:"id"`
+	SkillName       string  `json:"skill_name,omitempty" yaml:"skill_name,omitempty"`
+	TaskDescription string  `json:"task_description,omitempty" yaml:"task_description,omitempty"`
+	Parents         []*Node `json:"parents,omitempty" yaml:"parents,omitempty"`
 	// Executor contains the execution logic of the node.
 	Executor Executor `json:"-" yaml:"-"`
 
@@ -172,5 +175,5 @@ var ErrRunnerAlreadyStarted = errors.New("orchestrate: runner already started")
 var ErrInvalidPhase = errors.New("orchestrate: runner in wrong phase for this transition")
 
 // ErrPlanRequired is returned when a phased-lifecycle transition is
-// invoked on a runner that was not constructed with [WithPlan].
+// invoked on a runner that was not constructed with [Setup.Plan].
 var ErrPlanRequired = errors.New("orchestrate: runner has no plan attached")

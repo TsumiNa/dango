@@ -33,15 +33,11 @@ const reasoningReplayResponseBody = `{
 // ReplayReasoning enabled so the reasoning capture/replay branches run.
 func testClientWithReplay(t *testing.T, baseURL string) *Client {
 	t.Helper()
-	c, err := NewClient(ClientConfig{
-		Provider: ProviderOpenAI,
-		Model:    "test-model",
-		Raw: openai.NewClient(
-			option.WithAPIKey("test-key"),
-			option.WithBaseURL(baseURL+"/"),
-		),
-		ReplayReasoning: true,
-	})
+	raw := openai.NewClient(
+		option.WithAPIKey("test-key"),
+		option.WithBaseURL(baseURL+"/"),
+	)
+	c, err := NewClient(ProviderOpenAI, "test-model", raw, ClientConfig{ReplayReasoning: true})
 	if err != nil {
 		t.Fatalf("NewClient: %v", err)
 	}

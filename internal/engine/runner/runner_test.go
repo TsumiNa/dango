@@ -8,8 +8,8 @@ import (
 )
 
 func TestNewRunner_AssignsUniqueID(t *testing.T) {
-	first := New(WithLogger(testLogger))
-	second := New(WithLogger(testLogger))
+	first := newTestRunner()
+	second := newTestRunner()
 	if first.ID() == "" {
 		t.Fatal("expected first runner to have a non-empty ID")
 	}
@@ -22,7 +22,7 @@ func TestNewRunner_AssignsUniqueID(t *testing.T) {
 }
 
 func TestRunner_StaticGraphExecution(t *testing.T) {
-	r := New(WithLogger(testLogger))
+	r := newTestRunner()
 
 	nodeA := &Node{
 		Id: "A",
@@ -71,7 +71,7 @@ func TestRunner_StaticGraphExecution(t *testing.T) {
 }
 
 func TestRunner_DynamicNodeAppend(t *testing.T) {
-	r := New(WithLogger(testLogger))
+	r := newTestRunner()
 
 	var nodeD *Node
 	nodeC := &Node{
@@ -116,7 +116,7 @@ func TestRunner_DynamicNodeAppend(t *testing.T) {
 }
 
 func TestRunner_ErrorTermination(t *testing.T) {
-	r := New(WithLogger(testLogger))
+	r := newTestRunner()
 
 	nodeErr := &Node{
 		Id: "Err",
@@ -152,13 +152,11 @@ func TestRunner_ErrorTermination(t *testing.T) {
 	}
 }
 
-func TestRunner_SubscriberAndExternalAppend(t *testing.T) {
-	r := New(WithLogger(testLogger))
+func TestRunner_StreamAndExternalAppend(t *testing.T) {
+	r := newTestRunner()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
-
-	subCh := r.Subscribe(10)
 
 	if err := r.Start(ctx); err != nil {
 		t.Fatalf("Start: %v", err)
@@ -175,16 +173,7 @@ func TestRunner_SubscriberAndExternalAppend(t *testing.T) {
 
 	_ = r.AddNodes(ctx, nodeFirst)
 
-	completedFirst := false
-	for e := range subCh {
-		if e.Type == EventNodeCompleted && e.NodeID == "First" {
-			completedFirst = true
-			break
-		}
-	}
-	if !completedFirst {
-		t.Fatal("never received completed event for First")
-	}
+	waitForRunnerEvent(t, r, EventNodeCompleted, "First")
 
 	nodeExtDynamic := &Node{
 		Id:      "ExtDynamic",
@@ -199,26 +188,17 @@ func TestRunner_SubscriberAndExternalAppend(t *testing.T) {
 
 	_ = r.AddNodes(ctx, nodeExtDynamic)
 
-	completedExt := false
-	for {
-		select {
-		case <-ctx.Done():
-			t.Fatal("timed out waiting for ExtDynamic to complete")
-		case e := <-subCh:
-			if e.Type == EventNodeCompleted && e.NodeID == "ExtDynamic" {
-				if e.Data.(int) != 10 {
-					t.Fatalf("expected output 10, got %v", e.Data)
-				}
-				completedExt = true
-			}
-		}
-		if completedExt {
-			break
-		}
+	waitForRunnerEvent(t, r, EventNodeCompleted, "ExtDynamic")
+	snap, err := r.GetSnapshot(ctx)
+	if err != nil {
+		t.Fatalf("GetSnapshot: %v", err)
+	}
+	if snap.CompletedNodes["ExtDynamic"].(int) != 10 {
+		t.Fatalf("expected output 10, got %v", snap.CompletedNodes["ExtDynamic"])
 	}
 }
 
-func TestRunner_WithPlanSeedsInitialNodes(t *testing.T) {
+func TestRunnerSetupPlanSeedsInitialNodes(t *testing.T) {
 	nodeA := &Node{
 		Id: "A",
 		Executor: &testExecutor{
@@ -231,10 +211,7 @@ func TestRunner_WithPlanSeedsInitialNodes(t *testing.T) {
 		Request: "seed test",
 		Nodes:   []CoarsePlanNode{{ID: "A", SkillName: "noop", TaskDescription: "only"}},
 	}
-	r := New(
-		WithLogger(testLogger),
-		WithPlan(plan, map[string]*Node{"A": nodeA}),
-	)
+	r := New(WithLogger(testLogger), WithInitialPlan(plan, map[string]*Node{"A": nodeA}))
 
 	if got := r.Plan(); got == nil || got.RunnerID != r.ID() {
 		t.Fatalf("Plan().RunnerID = %v, want %q", got, r.ID())
@@ -243,11 +220,10 @@ func TestRunner_WithPlanSeedsInitialNodes(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 
-	sub := r.Subscribe(16)
 	if err := r.Start(ctx); err != nil {
 		t.Fatalf("Start: %v", err)
 	}
-	waitForRunnerEvent(t, sub, EventNodeCompleted, "A")
+	waitForRunnerEvent(t, r, EventNodeCompleted, "A")
 
 	view := r.View()
 	if view.Plan == nil || view.Plan.Request != "seed test" {
@@ -262,7 +238,7 @@ func TestRunner_WithPlanSeedsInitialNodes(t *testing.T) {
 }
 
 func TestRunner_DoneClosesOnAbort(t *testing.T) {
-	r := New(WithLogger(testLogger))
+	r := newTestRunner()
 	r.Abort(context.Canceled)
 
 	select {

@@ -8,6 +8,8 @@ import (
 	"strings"
 	"testing"
 	"testing/fstest"
+
+	streampkg "github.com/tsumina/dango/internal/engine/stream"
 )
 
 func writeSkillDir(t *testing.T, content string) string {
@@ -42,7 +44,7 @@ func TestNew_WithDir_ParsesYAMLFrontmatter(t *testing.T) {
 		"---\n" +
 		body
 
-	skill, err := NewSkill(writeSkillDir(t, content), nil, nil)
+	skill, err := NewSkill(writeSkillDir(t, content), DefaultSkillConfig())
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -71,7 +73,7 @@ func TestNew_WithDir_OmitsOptionalLicense(t *testing.T) {
 		"---\n" +
 		"body\n"
 
-	skill, err := NewSkill(writeSkillDir(t, content), nil, nil)
+	skill, err := NewSkill(writeSkillDir(t, content), DefaultSkillConfig())
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -91,7 +93,7 @@ func TestNew_WithDir_AllowsOptionalSubdirectories(t *testing.T) {
 		}
 	}
 
-	skill, err := NewSkill(dir, nil, nil)
+	skill, err := NewSkill(dir, DefaultSkillConfig())
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -106,14 +108,14 @@ func TestNew_WithDir_ErrorWhenPathIsFile(t *testing.T) {
 	if err := os.WriteFile(file, []byte("x"), 0o644); err != nil {
 		t.Fatalf("write file: %v", err)
 	}
-	if _, err := NewSkill(file, nil, nil); err == nil {
+	if _, err := NewSkill(file, DefaultSkillConfig()); err == nil {
 		t.Fatal("expected error for non-directory path, got nil")
 	}
 }
 
 func TestNew_WithDir_ErrorWhenSkillFileMissing(t *testing.T) {
 	dir := t.TempDir()
-	_, err := NewSkill(dir, nil, nil)
+	_, err := NewSkill(dir, DefaultSkillConfig())
 	if err == nil {
 		t.Fatal("expected error when SKILL.md is missing, got nil")
 	}
@@ -128,7 +130,7 @@ func TestNew_WithDir_ErrorWhenSkillFileMissing(t *testing.T) {
 
 func TestNew_WithDir_ErrorOnInvalidFrontmatter(t *testing.T) {
 	content := "---\nname: [unterminated\n---\nbody\n"
-	_, err := NewSkill(writeSkillDir(t, content), nil, nil)
+	_, err := NewSkill(writeSkillDir(t, content), DefaultSkillConfig())
 	if err == nil {
 		t.Fatal("expected error for malformed frontmatter, got nil")
 	}
@@ -138,7 +140,7 @@ func TestNew_WithDir_CarriesBashAllowAndBlock(t *testing.T) {
 	dir := writeSkillDir(t, "---\nname: x\ndescription: d\n---\n")
 	allow := []string{"rg", "fd"}
 	block := []string{"curl", "wget"}
-	sk, err := NewSkill(dir, allow, block)
+	sk, err := NewSkill(dir, SkillConfig{BashAllow: allow, BashBlock: block})
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -166,7 +168,7 @@ func TestNew_WithDir_ParsesMetadataWithoutClient(t *testing.T) {
 		body
 
 	dir := writeSkillDir(t, content)
-	skill, err := NewSkill(dir, nil, nil)
+	skill, err := NewSkill(dir, DefaultSkillConfig())
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -201,7 +203,7 @@ func TestNew_WithFS_ParsesMetadata(t *testing.T) {
 	fsys := fstest.MapFS{
 		"SKILL.md": &fstest.MapFile{Data: []byte("---\nname: embedded\ndescription: Embedded skill.\n---\nembedded body\n")},
 	}
-	skill, err := NewSkill(fsys, nil, nil)
+	skill, err := NewSkill(fsys, DefaultSkillConfig())
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -228,19 +230,19 @@ func TestNew_WithFS_ParsesMetadata(t *testing.T) {
 
 func TestNew_WithDir_AssignsUniqueTempDirs(t *testing.T) {
 	content := "---\nname: x\ndescription: d\n---\nbody\n"
-	first, err := NewSkill(writeSkillDir(t, content), nil, nil)
+	first, err := NewSkill(writeSkillDir(t, content), DefaultSkillConfig())
 	if err != nil {
 		t.Fatalf("first New: %v", err)
 	}
 	cleanupSkillTemp(t, first)
-	second, err := NewSkill(writeSkillDir(t, content), nil, nil)
+	second, err := NewSkill(writeSkillDir(t, content), DefaultSkillConfig())
 	if err != nil {
 		t.Fatalf("second New: %v", err)
 	}
 	cleanupSkillTemp(t, second)
 
 	type customSkillDir string
-	loadedFromAlias, err := NewSkill(customSkillDir(writeSkillDir(t, content)), nil, nil)
+	loadedFromAlias, err := NewSkill(customSkillDir(writeSkillDir(t, content)), DefaultSkillConfig())
 	if err != nil {
 		t.Fatalf("alias New: %v", err)
 	}
@@ -267,21 +269,21 @@ func TestNew_WithDir_AssignsUniqueTempDirs(t *testing.T) {
 }
 
 func TestSkillCopiesPreserveTempDir(t *testing.T) {
-	loaded, err := NewSkill(writeSkillDir(t, "---\nname: x\ndescription: d\n---\nbody\n"), nil, nil)
+	loaded, err := NewSkill(writeSkillDir(t, "---\nname: x\ndescription: d\n---\nbody\n"), DefaultSkillConfig())
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
 	cleanupSkillTemp(t, loaded)
 
-	withTools, err := loaded.WithTools()
+	toolCopy, err := loaded.AddTools()
 	if err != nil {
-		t.Fatalf("WithTools: %v", err)
+		t.Fatalf("AddTools: %v", err)
 	}
-	if withTools.TempDir() != loaded.TempDir() {
-		t.Fatalf("WithTools TempDir() = %q, want %q", withTools.TempDir(), loaded.TempDir())
+	if toolCopy.TempDir() != loaded.TempDir() {
+		t.Fatalf("AddTools TempDir() = %q, want %q", toolCopy.TempDir(), loaded.TempDir())
 	}
 
-	bound, err := loaded.Bind(stubClient(), nil, nil)
+	bound, err := loaded.Bind(stubClient(), DefaultConversationConfig())
 	if err != nil {
 		t.Fatalf("Bind: %v", err)
 	}
@@ -290,8 +292,8 @@ func TestSkillCopiesPreserveTempDir(t *testing.T) {
 	}
 }
 
-func TestWithAccessibleDirsOverwritesAndClearsRuntimeInstruction(t *testing.T) {
-	loaded, err := NewSkill(writeSkillDir(t, "---\nname: x\ndescription: d\n---\nbody\n"), nil, nil)
+func TestSetAccessibleDirsOverwritesAndClearsRuntimeInstruction(t *testing.T) {
+	loaded, err := NewSkill(writeSkillDir(t, "---\nname: x\ndescription: d\n---\nbody\n"), DefaultSkillConfig())
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -300,8 +302,8 @@ func TestWithAccessibleDirsOverwritesAndClearsRuntimeInstruction(t *testing.T) {
 	if err := os.MkdirAll(filepath.Join(firstDir, "nested"), 0o755); err != nil {
 		t.Fatalf("mkdir nested extra dir: %v", err)
 	}
-	if err := loaded.WithAccessibleDirs(firstDir); err != nil {
-		t.Fatalf("WithAccessibleDirs: %v", err)
+	if err := loaded.SetAccessibleDirs(firstDir); err != nil {
+		t.Fatalf("SetAccessibleDirs: %v", err)
 	}
 	gotDirs := loaded.AccessibleDirs()
 	if len(gotDirs) != 1 {
@@ -316,8 +318,8 @@ func TestWithAccessibleDirsOverwritesAndClearsRuntimeInstruction(t *testing.T) {
 	}
 
 	secondDir := t.TempDir()
-	if err := loaded.WithAccessibleDirs(secondDir); err != nil {
-		t.Fatalf("WithAccessibleDirs overwrite: %v", err)
+	if err := loaded.SetAccessibleDirs(secondDir); err != nil {
+		t.Fatalf("SetAccessibleDirs overwrite: %v", err)
 	}
 	realSecondDir, err := filepath.EvalSymlinks(secondDir)
 	if err != nil {
@@ -328,7 +330,7 @@ func TestWithAccessibleDirsOverwritesAndClearsRuntimeInstruction(t *testing.T) {
 		t.Fatalf("AccessibleDirs() after overwrite = %v, want [%s]", gotDirs, realSecondDir)
 	}
 
-	bound, err := loaded.Bind(stubClient(), nil, nil)
+	bound, err := loaded.Bind(stubClient(), DefaultConversationConfig())
 	if err != nil {
 		t.Fatalf("Bind: %v", err)
 	}
@@ -349,50 +351,118 @@ func TestWithAccessibleDirsOverwritesAndClearsRuntimeInstruction(t *testing.T) {
 		t.Fatalf("runtime instructions still contain overwritten dir %q:\n%s", realFirstDir, instructions)
 	}
 
-	cleared, err := loaded.WithTools()
+	cleared, err := loaded.AddTools()
 	if err != nil {
-		t.Fatalf("WithTools: %v", err)
+		t.Fatalf("AddTools: %v", err)
 	}
-	if err := cleared.WithAccessibleDirs(); err != nil {
-		t.Fatalf("WithAccessibleDirs clear: %v", err)
+	if err := cleared.SetAccessibleDirs(); err != nil {
+		t.Fatalf("SetAccessibleDirs clear: %v", err)
 	}
 	if got := cleared.AccessibleDirs(); len(got) != 0 {
 		t.Fatalf("AccessibleDirs() after clear = %v, want none", got)
 	}
 }
 
-func TestWithAccessibleDirsRejectsBoundSkill(t *testing.T) {
-	loaded, err := NewSkill(writeSkillDir(t, "---\nname: x\ndescription: d\n---\nbody\n"), nil, nil)
+func TestSetAccessibleDirsRejectsBoundSkill(t *testing.T) {
+	loaded, err := NewSkill(writeSkillDir(t, "---\nname: x\ndescription: d\n---\nbody\n"), DefaultSkillConfig())
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
 	cleanupSkillTemp(t, loaded)
-	bound, err := loaded.Bind(stubClient(), nil, nil)
+	bound, err := loaded.Bind(stubClient(), DefaultConversationConfig())
 	if err != nil {
 		t.Fatalf("Bind: %v", err)
 	}
-	if err := bound.WithAccessibleDirs(t.TempDir()); err == nil {
-		t.Fatal("expected WithAccessibleDirs to reject a bound skill")
+	if err := bound.SetAccessibleDirs(t.TempDir()); err == nil {
+		t.Fatal("expected SetAccessibleDirs to reject a bound skill")
 	}
 }
 
-func TestWithToolsCopyDoesNotShareAccessibleDirs(t *testing.T) {
-	loaded, err := NewSkill(writeSkillDir(t, "---\nname: x\ndescription: d\n---\nbody\n"), nil, nil)
+func TestRuntimeInstructionPrependsPlatformSystemPrompt(t *testing.T) {
+	loaded, err := NewSkill(writeSkillDir(t, "---\nname: x\ndescription: d\n---\nDO_THE_TASK\n"), DefaultSkillConfig())
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	cleanupSkillTemp(t, loaded)
+	bound, err := loaded.Bind(stubClient(), DefaultConversationConfig())
+	if err != nil {
+		t.Fatalf("Bind: %v", err)
+	}
+	instructions := bound.Conversation().Instructions()
+	for _, want := range []string{
+		"Dango platform conventions",
+		"Two skill roles",
+		"Executor lifecycle: polish → execute → report",
+		"Exchange markdown",
+		"DO_THE_TASK",
+		"Workspace access:",
+	} {
+		if !strings.Contains(instructions, want) {
+			t.Fatalf("runtime instruction missing %q:\n%s", want, instructions)
+		}
+	}
+	systemIdx := strings.Index(instructions, "Dango platform conventions")
+	bodyIdx := strings.Index(instructions, "DO_THE_TASK")
+	workIdx := strings.Index(instructions, "Do not access paths outside these roots.")
+	if !(systemIdx < bodyIdx && bodyIdx < workIdx) {
+		t.Fatalf("expected order: system block < skill body < workspace block; got system=%d body=%d work=%d", systemIdx, bodyIdx, workIdx)
+	}
+}
+
+func TestSetAccessibleDirsAndBuiltinToolsPreservesCustomTools(t *testing.T) {
+	loaded, err := NewSkill(writeSkillDir(t, "---\nname: x\ndescription: d\n---\nbody\n"), DefaultSkillConfig())
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	cleanupSkillTemp(t, loaded)
+	custom := NewFuncTool("custom", "custom tool", map[string]any{"type": "object"}, nil)
+	withCustom, err := loaded.AddTools(custom)
+	if err != nil {
+		t.Fatalf("AddTools: %v", err)
+	}
+	extraDir := t.TempDir()
+	withDirs, err := withCustom.SetAccessibleDirsAndBuiltinTools(extraDir)
+	if err != nil {
+		t.Fatalf("SetAccessibleDirsAndBuiltinTools: %v", err)
+	}
+	realExtraDir, err := filepath.EvalSymlinks(extraDir)
+	if err != nil {
+		t.Fatalf("EvalSymlinks(extraDir): %v", err)
+	}
+	if got := withDirs.AccessibleDirs(); len(got) != 1 || got[0] != realExtraDir {
+		t.Fatalf("AccessibleDirs() = %v, want [%s]", got, realExtraDir)
+	}
+	seen := make(map[string]bool)
+	for _, tool := range withDirs.tools {
+		seen[tool.Name()] = true
+	}
+	for _, name := range []string{"custom", "bash", "read_file", "pwd"} {
+		if !seen[name] {
+			t.Fatalf("tool %q missing from rebuilt skill tools: %v", name, seen)
+		}
+	}
+	if got := loaded.AccessibleDirs(); len(got) != 0 {
+		t.Fatalf("source AccessibleDirs() = %v, want none", got)
+	}
+}
+
+func TestAddToolsCopyDoesNotShareAccessibleDirs(t *testing.T) {
+	loaded, err := NewSkill(writeSkillDir(t, "---\nname: x\ndescription: d\n---\nbody\n"), DefaultSkillConfig())
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
 	cleanupSkillTemp(t, loaded)
 	firstDir := t.TempDir()
-	if err := loaded.WithAccessibleDirs(firstDir); err != nil {
-		t.Fatalf("loaded.WithAccessibleDirs: %v", err)
+	if err := loaded.SetAccessibleDirs(firstDir); err != nil {
+		t.Fatalf("loaded.SetAccessibleDirs: %v", err)
 	}
-	copyWithTools, err := loaded.WithTools()
+	toolCopy, err := loaded.AddTools()
 	if err != nil {
-		t.Fatalf("WithTools: %v", err)
+		t.Fatalf("AddTools: %v", err)
 	}
 	secondDir := t.TempDir()
-	if err := copyWithTools.WithAccessibleDirs(secondDir); err != nil {
-		t.Fatalf("copyWithTools.WithAccessibleDirs: %v", err)
+	if err := toolCopy.SetAccessibleDirs(secondDir); err != nil {
+		t.Fatalf("toolCopy.SetAccessibleDirs: %v", err)
 	}
 	realFirstDir, err := filepath.EvalSymlinks(firstDir)
 	if err != nil {
@@ -405,19 +475,19 @@ func TestWithToolsCopyDoesNotShareAccessibleDirs(t *testing.T) {
 	if got := loaded.AccessibleDirs(); len(got) != 1 || got[0] != realFirstDir {
 		t.Fatalf("loaded.AccessibleDirs() = %v, want [%s]", got, realFirstDir)
 	}
-	if got := copyWithTools.AccessibleDirs(); len(got) != 1 || got[0] != realSecondDir {
-		t.Fatalf("copyWithTools.AccessibleDirs() = %v, want [%s]", got, realSecondDir)
+	if got := toolCopy.AccessibleDirs(); len(got) != 1 || got[0] != realSecondDir {
+		t.Fatalf("toolCopy.AccessibleDirs() = %v, want [%s]", got, realSecondDir)
 	}
 }
 
 func TestBind_BuildsRunnableCopyFromLoadedSkill(t *testing.T) {
 	dir := writeSkillDir(t, "---\nname: loaded\ndescription: d\n---\nbody\n")
-	loaded, err := NewSkill(dir, nil, nil)
+	loaded, err := NewSkill(dir, DefaultSkillConfig())
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
 	client := stubClient()
-	bound, err := loaded.Bind(client, nil, nil)
+	bound, err := loaded.Bind(client, DefaultConversationConfig())
 	if err != nil {
 		t.Fatalf("Bind: %v", err)
 	}
@@ -441,17 +511,44 @@ func TestBind_BuildsRunnableCopyFromLoadedSkill(t *testing.T) {
 	}
 }
 
+func TestBindCreatesSkillOwnedRuntimeStream(t *testing.T) {
+	dir := writeSkillDir(t, "---\nname: loaded\ndescription: d\n---\nbody\n")
+	loaded, err := NewSkill(dir, DefaultSkillConfig())
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	cfg := DefaultConversationConfig()
+	cfg.StreamEvents = true
+	cfg.StreamSource = streampkg.Source{Layer: "skill", ID: "loaded", ParentID: "node-1"}
+	cfg.StreamScope = streampkg.Scope{NodeID: "node-1"}
+
+	bound, err := loaded.Bind(stubClient(), cfg)
+	if err != nil {
+		t.Fatalf("Bind: %v", err)
+	}
+	stream := bound.EventStream()
+	if stream == nil {
+		t.Fatal("EventStream() = nil, want skill-owned runtime stream")
+	}
+	if loaded.EventStream() != nil {
+		t.Fatal("loaded EventStream() changed after Bind")
+	}
+	if got := bound.Conversation().EventStream(); got != stream {
+		t.Fatalf("conversation stream = %p, want skill stream %p", got, stream)
+	}
+}
+
 func TestBind_UsesSkillDirEnvFileWhenClientNil(t *testing.T) {
 	dir := writeSkillDir(t, "---\nname: x\ndescription: d\n---\nbody\n")
 	if err := os.WriteFile(filepath.Join(dir, ".env"), []byte("OPENAI_API_KEY=local-key\nMODEL=local-model\n"), 0o644); err != nil {
 		t.Fatalf("write .env: %v", err)
 	}
 	unsetEnvForTest(t, "OPENAI_API_KEY", "OPENROUTER_API_KEY", "GEMINI_API_KEY", "MODEL", "REASONING_EFFORT", "REASONING_REPLAY")
-	loaded, err := NewSkill(dir, nil, nil)
+	loaded, err := NewSkill(dir, DefaultSkillConfig())
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
-	bound, err := loaded.Bind(nil, nil, nil)
+	bound, err := loaded.Bind(nil, DefaultConversationConfig())
 	if err != nil {
 		t.Fatalf("Bind: %v", err)
 	}
@@ -465,12 +562,12 @@ func TestBind_ExplicitMissingSessionReturnsError(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewJSONStore: %v", err)
 	}
-	loaded, err := NewSkill(writeSkillDir(t, "---\nname: x\ndescription: d\n---\nbody\n"), nil, nil)
+	loaded, err := NewSkill(writeSkillDir(t, "---\nname: x\ndescription: d\n---\nbody\n"), DefaultSkillConfig())
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
 	sessionID := "missing-session"
-	_, err = loaded.Bind(stubClient(), nil, &sessionID, store)
+	_, err = loaded.Bind(stubClient(), DefaultConversationConfig(), WithExistingSession(sessionID, store))
 	if !errors.Is(err, ErrSessionNotFound) {
 		t.Fatalf("Bind error = %v, want ErrSessionNotFound", err)
 	}

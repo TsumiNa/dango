@@ -10,7 +10,7 @@ var defaultAllowlist = []string{
 	// Read-only filesystem / text utilities.
 	"cat", "head", "tail", "wc", "file", "stat", "ls", "find", "du", "df",
 	"echo", "printf", "grep", "egrep", "fgrep", "sed", "awk", "cut",
-	"sort", "uniq", "tr", "tee", "diff", "basename", "dirname", "realpath",
+	"sort", "uniq", "tr", "tee", "diff", "basename", "dirname", "realpath", "set",
 	// Directory / file creation (non-destructive in isolation).
 	"mkdir", "touch", "cp", "ln",
 	// Archives.

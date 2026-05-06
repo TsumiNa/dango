@@ -29,7 +29,12 @@ go.work.sum
 .env.*
 !.env.example
 .dango-demo/
+.venv/
+__pycache__/
+examples/**/uv.lock
+generated_artifacts
+artifacts
 
 # Editor/IDE
-# .idea/
+.idea/
 .vscode/

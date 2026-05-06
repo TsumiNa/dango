@@ -7,75 +7,100 @@ import (
 	"github.com/tsumina/dango/internal/llm"
 )
 
-// Option configures a [Runner] at construction time.
-//
-// Options are applied by [New] in order. They are the only way to set
-// startup-only fields (logger, store, plan) so a Runner becomes immutable
-// with respect to those fields once constructed.
+// Option adjusts a constructed [Runner] before it is returned.
 type Option func(*Runner)
 
-// WithContext sets the base context used by runner-owned lifecycle work when
-// callers do not pass a more specific context.
+// WithContext installs ctx as the Runner's base lifecycle context.
+//
+// The Runner keeps a reference to ctx and observes its cancellation during
+// runner-owned work. A nil context is ignored. The caller remains responsible
+// for canceling the context when the surrounding operation should stop.
 func WithContext(ctx context.Context) Option {
 	return func(r *Runner) {
-		if ctx == nil {
-			ctx = context.Background()
+		if ctx != nil {
+			r.ctx = ctx
 		}
-		r.ctx = ctx
 	}
 }
 
-// WithLogger sets the logger the runner emits engine messages through.
-// Passing nil restores [slog.Default].
+// WithLogger installs logger as the Runner's lifecycle logger.
+//
+// The Runner keeps a reference to logger. slog.Logger values are safe for
+// concurrent use; callers that wrap a handler with additional mutable state are
+// responsible for that handler's synchronization.
 func WithLogger(logger *slog.Logger) Option {
 	return func(r *Runner) {
-		if logger == nil {
-			logger = slog.Default()
+		if logger != nil {
+			r.logger = logger
 		}
-		r.logger = logger
 	}
 }
 
-// WithStore attaches an append-only persistence store to the runner.
-// Passing nil leaves persistence disabled.
+// WithStore installs store as the Runner's persistence sink.
+//
+// The Runner keeps a reference to store and may call it from runner lifecycle
+// goroutines. A nil store disables persistence. If store is shared with other
+// goroutines, callers are responsible for synchronization unless the
+// RunnerStore implementation documents its own concurrency safety.
 func WithStore(store RunnerStore) Option {
 	return func(r *Runner) {
 		r.store = store
 	}
 }
 
-// WithPlan associates a [CoarsePlan] and its materialized node graph with
-// the runner. When set, [Runner.Start] auto-adds the provided nodes to the
-// execution engine and [Runner.View] surfaces the plan to observers.
+// WithInitialPlan installs the initial coarse plan and materialized node graph.
 //
-// The nodes map is keyed by node ID and is expected to contain every node
-// referenced by plan; runner does not validate the mapping.
-func WithPlan(plan *CoarsePlan, nodes map[string]*Node) Option {
+// The Runner clones plan and nodes before storing them, so callers may mutate
+// their originals after construction without changing the Runner.
+func WithInitialPlan(plan *CoarsePlan, nodes map[string]*Node) Option {
 	return func(r *Runner) {
 		r.plan = CloneCoarsePlan(plan)
 		r.initialNodes = cloneNodeMap(nodes)
 	}
 }
 
-// WithPlannerSkill sets the skill the runner uses for review and replan after
-// the initial plan has been created.
-func WithPlannerSkill(sk *llm.Skill) Option {
+// WithPlannerSkill installs the skill used for plan review and replanning.
+//
+// The Runner keeps a reference to skill and binds runtime copies from it during
+// lifecycle work. Callers must not mutate the lightweight skill concurrently
+// with a running Runner unless they provide their own synchronization.
+func WithPlannerSkill(skill *llm.Skill) Option {
 	return func(r *Runner) {
-		r.plannerSkill = sk
+		r.plannerSkill = skill
 	}
 }
 
-// WithSkillSummaries records the skills available to replanning.
+// WithSkillSummaries installs the skill summaries available to replanning.
+//
+// The Runner copies the slice before storing it.
 func WithSkillSummaries(summaries []SkillSummary) Option {
 	return func(r *Runner) {
 		r.skillSummaries = append([]SkillSummary(nil), summaries...)
 	}
 }
 
-// WithPlanNodeBuilder sets the materializer used when the runner replans and
-// needs a fresh node graph for the revised plan.
+// WithPlanNodeBuilder installs builder as the callback used to materialize a
+// node graph after replanning.
+//
+// The Runner keeps a reference to builder and calls it from runner lifecycle
+// work. Callers own any state captured by the callback and are responsible for
+// synchronization if that state is shared concurrently.
 func WithPlanNodeBuilder(builder PlanNodeBuilder) Option {
 	return func(r *Runner) {
 		r.planNodeBuilder = builder
+	}
+}
+
+// WithAllowedResourceRoots restricts which filesystem paths exchange documents
+// may declare as resources. A resolved resource directory is only granted to
+// downstream skills when it is rooted under at least one of roots. Paths
+// outside these roots are silently discarded.
+//
+// Callers should pass the request artifacts directory (and any other trusted
+// roots) so that model-generated exchange documents cannot escalate filesystem
+// access beyond the expected workspace.
+func WithAllowedResourceRoots(roots ...string) Option {
+	return func(r *Runner) {
+		r.allowedResourceRoots = append(r.allowedResourceRoots, roots...)
 	}
 }

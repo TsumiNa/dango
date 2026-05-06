@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/lithammer/shortuuid/v4"
+	streampkg "github.com/tsumina/dango/internal/engine/stream"
 	"github.com/tsumina/dango/internal/llm"
 )
 
@@ -17,10 +18,11 @@ import (
 // surfaces.
 //
 // Runner absorbs the historical ManagedRunner role: it owns the plan, the
-// materialized node graph, a subscriber set for high-level updates, a Done
-// signal for settle-detection, and the engine event loop that dispatches
-// nodes by dependency readiness. Callers construct a Runner with [New] and
-// any number of [Option]s.
+// materialized node graph, the engine event loop that dispatches nodes by
+// dependency readiness, a Done signal for settle-detection, and a structured
+// output stream that publishes lifecycle and node events via
+// [Runner.SubscribeStream]. Callers construct a bare Runner with [New] and can
+// provide startup dependencies through options such as [WithInitialPlan].
 type Runner struct {
 	ctx    context.Context
 	id     string
@@ -28,14 +30,16 @@ type Runner struct {
 
 	// Startup configuration set once via Options.
 	store             RunnerStore
+	eventStream       *streampkg.Stream
 	plan              *CoarsePlan
 	initialNodes      map[string]*Node
 	plannerSkill      *llm.Skill
 	skillSummaries    []SkillSummary
 	planNodeBuilder   PlanNodeBuilder
-	skillSessionStore llm.SessionStore
-	skillSessionIDs   map[string]string
-	skillSessionMu    sync.Mutex
+	skillSessionStore    llm.SessionStore
+	skillSessionIDs      map[string]string
+	skillSessionMu       sync.Mutex
+	allowedResourceRoots []string
 
 	// Engine-level lifecycle state.
 	stateMu sync.RWMutex
@@ -49,7 +53,6 @@ type Runner struct {
 	startErr         error
 	settleOnce       sync.Once
 	done             chan struct{}
-	doneOnce         sync.Once
 	engineErr        error
 	engineErrMu      sync.RWMutex
 	cancelEngine     context.CancelFunc
@@ -64,16 +67,9 @@ type Runner struct {
 	resultCh  chan executionResult
 	queryCh   chan chan<- RunnerSnapshot
 
-	// Low-level event subscribers (RunnerEvent stream).
-	subMutex    sync.RWMutex
-	subscribers []chan<- RunnerEvent
-
-	// High-level managed update subscribers (RunnerUpdate stream).
-	updateMu          sync.Mutex
-	snapshot          RunnerSnapshot
-	stoppedEventSeen  bool
-	nextSubscriberID  uint64
-	updateSubscribers map[uint64]chan RunnerUpdate
+	// Snapshot cache used by View and stream event emission.
+	updateMu sync.Mutex
+	snapshot RunnerSnapshot
 
 	// Phased-lifecycle bookkeeping: results gathered by the polish and
 	// report stages, and the rejection reason captured when a polished
@@ -86,35 +82,34 @@ type Runner struct {
 	replanReason    string
 }
 
-// New constructs a Runner configured by the provided options.
-//
-// Options configure logger, persistence store, and an optional [CoarsePlan]
-// with its materialized node graph. Without [WithPlan], the Runner operates
-// as a bare execution engine: callers drive it by invoking [Runner.AddNodes]
-// after [Runner.Start].
+// New constructs a Runner. Callers can provide options to install startup
+// dependencies such as a logger, persistence store, or initial plan.
 func New(opts ...Option) *Runner {
+	id := shortuuid.New()
 	r := &Runner{
 		ctx:               context.Background(),
-		id:                shortuuid.New(),
+		id:                id,
 		logger:            slog.Default(),
+		eventStream:       streampkg.New(streampkg.Scope{RunnerID: id}, streampkg.DefaultConfig()),
 		state:             RunnerState{Status: RunnerStatusPending},
 		phase:             PhaseCreated,
 		done:              make(chan struct{}),
 		addNodeCh:         make(chan []*Node, 1),
 		resultCh:          make(chan executionResult),
 		queryCh:           make(chan chan<- RunnerSnapshot),
-		subscribers:       make([]chan<- RunnerEvent, 0),
-		updateSubscribers: make(map[uint64]chan RunnerUpdate),
 		skillSessionStore: newMemorySessionStore(),
 		skillSessionIDs:   make(map[string]string),
 	}
 	for _, opt := range opts {
-		opt(r)
+		if opt != nil {
+			opt(r)
+		}
 	}
 	if r.plan != nil && r.plan.RunnerID == "" {
 		r.plan.RunnerID = r.id
 	}
 	r.snapshot = buildInitialRunnerSnapshot(r.initialNodes)
+	r.startSettleObserver()
 	return r
 }
 
@@ -131,6 +126,9 @@ func (r *Runner) runtimeContext(ctx context.Context) context.Context {
 // ID returns the stable identifier assigned to this Runner at creation time.
 func (r *Runner) ID() string { return r.id }
 
+// EventStream returns the runner-owned progress stream.
+func (r *Runner) EventStream() *streampkg.Stream { return r.eventStream }
+
 // State returns the current engine-level lifecycle snapshot.
 func (r *Runner) State() RunnerState {
 	r.stateMu.RLock()
@@ -146,7 +144,7 @@ func (r *Runner) Phase() RunnerPhase {
 }
 
 // Plan returns the [CoarsePlan] the runner was constructed with via
-// [WithPlan], or nil in bare mode.
+// [Setup.Plan], or nil in bare mode.
 func (r *Runner) Plan() *CoarsePlan {
 	r.stateMu.RLock()
 	defer r.stateMu.RUnlock()
@@ -160,7 +158,7 @@ func (r *Runner) PlannerSkill() *llm.Skill {
 	return r.plannerSkill
 }
 
-// Nodes returns the initial node graph supplied via [WithPlan], keyed by
+// Nodes returns the initial node graph supplied via [Setup.Nodes], keyed by
 // node ID, or nil in bare mode.
 func (r *Runner) Nodes() map[string]*Node {
 	r.stateMu.RLock()
@@ -221,61 +219,6 @@ func (r *Runner) Wait(ctx context.Context) error {
 	}
 }
 
-// Subscribe returns a channel that receives low-level [RunnerEvent]s from
-// the engine event loop. The returned channel remains open for the lifetime
-// of the runner; callers are responsible for draining or discarding.
-func (r *Runner) Subscribe(bufferSize int) <-chan RunnerEvent {
-	ch := make(chan RunnerEvent, bufferSize)
-	r.subMutex.Lock()
-	defer r.subMutex.Unlock()
-	r.subscribers = append(r.subscribers, ch)
-	return ch
-}
-
-// SubscribeUpdates returns a channel that receives high-level
-// [RunnerUpdate]s and an unsubscribe function.
-//
-// The first delivery is the current snapshot. If the runner is already in a
-// terminal phase at subscription time, the snapshot is delivered and the
-// channel is closed immediately.
-func (r *Runner) SubscribeUpdates(bufferSize int) (<-chan RunnerUpdate, func()) {
-	if bufferSize < 1 {
-		bufferSize = 1
-	}
-	ch := make(chan RunnerUpdate, bufferSize)
-	state := r.State()
-	phase := r.Phase()
-
-	r.updateMu.Lock()
-	update := RunnerUpdate{
-		RunnerID: r.id,
-		State:    state,
-		Phase:    phase,
-		Snapshot: cloneRunnerSnapshot(r.snapshot),
-	}
-	if IsTerminal(state) {
-		ch <- update
-		close(ch)
-		r.updateMu.Unlock()
-		return ch, func() {}
-	}
-	id := r.nextSubscriberID
-	r.nextSubscriberID++
-	r.updateSubscribers[id] = ch
-	ch <- update
-	r.updateMu.Unlock()
-
-	unsubscribe := func() {
-		r.updateMu.Lock()
-		defer r.updateMu.Unlock()
-		if sub := r.updateSubscribers[id]; sub != nil {
-			delete(r.updateSubscribers, id)
-			close(sub)
-		}
-	}
-	return ch, unsubscribe
-}
-
 // View returns a point-in-time snapshot of the runner suitable for query
 // APIs.
 func (r *Runner) View() *RunnerView {
@@ -319,7 +262,7 @@ func (r *Runner) GetSnapshot(ctx context.Context) (RunnerSnapshot, error) {
 // Start is the bare entry point: it transitions directly from [PhaseCreated]
 // into [PhaseExecuting], skipping [PhasePolishing] and [PhaseAwaitingReview].
 // Callers wiring the full phased lifecycle should use [Runner.StartPolish]
-// followed by [Runner.AcceptPolishedPlan]. When [WithPlan] supplied initial
+// followed by [Runner.AcceptPolishedPlan]. When [Setup.Nodes] supplied initial
 // nodes they are added before the engine event loop begins. The returned
 // error is non-nil only if the runner is not in [PhaseCreated], if it has
 // already been started, or if queueing initial nodes fails; the engine's
@@ -364,9 +307,6 @@ func (r *Runner) launchEngine(ctx context.Context, initialNodes []*Node) error {
 		runCtx, cancel := context.WithCancel(ctx)
 		r.cancelEngine = cancel
 
-		events := r.Subscribe(64)
-
-		go r.forwardEngineEvents(events)
 		go func() {
 			err := r.runEngine(runCtx)
 			r.settle(err)
@@ -387,9 +327,11 @@ func (r *Runner) launchEngine(ctx context.Context, initialNodes []*Node) error {
 	return r.startErr
 }
 
-// Abort marks the runner terminal without running the engine, publishing a
-// final update and closing managed subscribers. It replaces the historical
-// FinishBeforeStart entry point.
+// Abort marks the runner terminal without running the engine and emits a
+// final runner.phase.changed stream event. The settle observer goroutine
+// (started in [New]) reacts to that event by closing the Done channel so any
+// waiters unblock. Abort replaces the historical FinishBeforeStart entry
+// point.
 func (r *Runner) Abort(runErr error) {
 	status := RunnerStatusFailed
 	if errors.Is(runErr, context.Canceled) || errors.Is(runErr, context.DeadlineExceeded) {
@@ -412,8 +354,7 @@ func (r *Runner) Abort(runErr error) {
 	r.stateMu.Unlock()
 
 	r.captureEngineErr(runErr)
-	r.publishTerminalUpdate(nil)
-	r.markDone()
+	r.emitPhaseChangedEvent()
 }
 
 func (r *Runner) transitionPhase(phase RunnerPhase) {
@@ -447,13 +388,47 @@ func (r *Runner) settle(engineErr error) {
 			r.runReportStage(r.runtimeContext(context.Background()))
 		}
 		r.transitionPhase(PhaseSettled)
-		r.publishTerminalUpdate(nil)
-		r.markDone()
+		r.emitPhaseChangedEvent()
 	})
 }
 
-func (r *Runner) markDone() {
-	r.doneOnce.Do(func() { close(r.done) })
+// startSettleObserver subscribes to the runner's own phase-change stream and
+// closes [Runner.done] when the runner transitions into [PhaseSettled]. It is
+// the only closer of the Done channel — both [Runner.Done] and
+// [Runner.Wait] consume the closed-channel signal it produces, while the
+// stream itself is the canonical source of truth.
+//
+// The observer goroutine exits when the runner settles (closing done) or when
+// [Runner.ctx] is canceled. Runners constructed but never started or aborted
+// leak the goroutine the same way the previous design leaked an open done
+// channel; pass a cancelable context via [Setup.Context] to bound the lifetime.
+func (r *Runner) startSettleObserver() {
+	sub, err := r.eventStream.Subscribe(streampkg.Filter{
+		EventTypes: []string{streampkg.EventRunnerPhaseChanged},
+		Scope:      streampkg.Scope{RunnerID: r.id},
+	}, streampkg.WithSubscriberBuffer(32))
+	if err != nil {
+		// eventStream is always non-nil after New, so Subscribe failing is a
+		// programming error in the stream package, not a runtime concern.
+		panic("runner: settle observer subscribe failed: " + err.Error())
+	}
+	go func() {
+		defer sub.Cancel()
+		if r.Phase() == PhaseSettled {
+			close(r.done)
+			return
+		}
+		for {
+			_, ok, err := sub.Next(r.ctx)
+			if err != nil || !ok {
+				return
+			}
+			if r.Phase() == PhaseSettled {
+				close(r.done)
+				return
+			}
+		}
+	}()
 }
 
 func (r *Runner) captureEngineErr(err error) {
@@ -465,96 +440,6 @@ func (r *Runner) captureEngineErr(err error) {
 		r.engineErr = err
 	}
 	r.engineErrMu.Unlock()
-}
-
-func (r *Runner) forwardEngineEvents(events <-chan RunnerEvent) {
-	for ev := range events {
-		event := ev
-		r.publishUpdate(&event)
-		if event.Type == EventEngineStopped {
-			return
-		}
-	}
-}
-
-func (r *Runner) publishUpdate(event *RunnerEvent) {
-	state := r.State()
-	phase := r.Phase()
-	snapshot := r.currentSnapshot(event)
-	update := RunnerUpdate{
-		RunnerID: r.id,
-		State:    state,
-		Phase:    phase,
-		Snapshot: snapshot,
-		Event:    event,
-	}
-
-	r.updateMu.Lock()
-	r.snapshot = cloneRunnerSnapshot(snapshot)
-	if event != nil && event.Type == EventEngineStopped {
-		r.stoppedEventSeen = true
-	}
-	for _, ch := range r.updateSubscribers {
-		select {
-		case ch <- update:
-		default:
-		}
-	}
-	r.updateMu.Unlock()
-}
-
-func (r *Runner) publishTerminalUpdate(event *RunnerEvent) {
-	state := r.State()
-	phase := r.Phase()
-	snapshot := r.currentSnapshot(event)
-	update := RunnerUpdate{
-		RunnerID: r.id,
-		State:    state,
-		Phase:    phase,
-		Snapshot: snapshot,
-		Event:    event,
-	}
-
-	r.updateMu.Lock()
-	r.snapshot = cloneRunnerSnapshot(snapshot)
-	if event != nil && event.Type == EventEngineStopped {
-		r.stoppedEventSeen = true
-	}
-	for id, ch := range r.updateSubscribers {
-		select {
-		case ch <- update:
-		default:
-		}
-		close(ch)
-		delete(r.updateSubscribers, id)
-	}
-	r.updateMu.Unlock()
-}
-
-func (r *Runner) currentSnapshot(event *RunnerEvent) RunnerSnapshot {
-	if event == nil || event.Type == EventEngineStopped {
-		r.updateMu.Lock()
-		defer r.updateMu.Unlock()
-		return cloneRunnerSnapshot(r.snapshot)
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
-	defer cancel()
-	snapshot, err := r.GetSnapshot(ctx)
-	if err != nil {
-		r.updateMu.Lock()
-		defer r.updateMu.Unlock()
-		return cloneRunnerSnapshot(r.snapshot)
-	}
-	return snapshot
-}
-
-func (r *Runner) closeUpdateSubscribers() {
-	r.updateMu.Lock()
-	defer r.updateMu.Unlock()
-	for id, ch := range r.updateSubscribers {
-		close(ch)
-		delete(r.updateSubscribers, id)
-	}
 }
 
 // runEngine is the blocking event loop that drives node execution. It is
@@ -574,6 +459,7 @@ func (r *Runner) runEngine(ctx context.Context) error {
 	}
 	initialState := r.state
 	r.stateMu.Unlock()
+	r.emitPhaseChangedEvent()
 
 	if err := r.appendRecord(store, &RunnerRecord{Kind: RunnerRecordInit}); err != nil {
 		_, _ = r.transitionState(RunnerStatusFailed, err, true)
@@ -594,25 +480,6 @@ func (r *Runner) runEngine(ctx context.Context) error {
 	nodes := make(map[string]*Node)
 	children := make(map[string][]*Node)
 	activeCount := 0
-
-	broadcast := func(event RunnerEvent) {
-		r.subMutex.RLock()
-		defer r.subMutex.RUnlock()
-		for _, ch := range r.subscribers {
-			select {
-			case ch <- event:
-			default:
-			}
-		}
-	}
-
-	emitEvent := func(event RunnerEvent) error {
-		if err := r.appendRecord(store, &RunnerRecord{Kind: RunnerRecordEvent, Event: newStoredRunnerEvent(event)}); err != nil {
-			return err
-		}
-		broadcast(event)
-		return nil
-	}
 
 	buildRuntimeSnapshot := func() RunnerSnapshot {
 		snapshot := RunnerSnapshot{
@@ -641,6 +508,17 @@ func (r *Runner) runEngine(ctx context.Context) error {
 		return snapshot
 	}
 
+	emitEvent := func(event RunnerEvent) error {
+		if err := r.appendRecord(store, &RunnerRecord{Kind: RunnerRecordEvent, Event: newStoredRunnerEvent(event)}); err != nil {
+			return err
+		}
+		r.updateMu.Lock()
+		r.snapshot = cloneRunnerSnapshot(buildRuntimeSnapshot())
+		r.updateMu.Unlock()
+		r.emitNodeStreamEvent(&event)
+		return nil
+	}
+
 	finish := func(status RunnerStatus, runErr error) error {
 		// Snapshot the final engine state onto the runner so the settle path
 		// (including the Report stage) can see dynamic nodes and outputs
@@ -660,6 +538,9 @@ func (r *Runner) runEngine(ctx context.Context) error {
 		for _, p := range n.Parents {
 			inputs[p.Id] = outputs[p.Id]
 		}
+		if err := r.prepareNodeExecutor(n.Id, n.Executor, exchangeResourceDirsFromOutputs(inputs, r.allowedResourceRoots)); err != nil {
+			return err
+		}
 
 		n.UpdatedAt = time.Now()
 		activeCount++
@@ -673,7 +554,20 @@ func (r *Runner) runEngine(ctx context.Context) error {
 		}
 
 		go func() {
+			r.emitExecutorStreamEvent(ctx, streampkg.EventExecutorExecuteStarted, streampkg.StatusRunning, n.Id, n, map[string]any{
+				"stage": "execute",
+			})
 			out, dynNodes, err := n.Executor.Execute(ctx, inputs)
+			if err != nil {
+				r.emitExecutorStreamEvent(ctx, streampkg.EventExecutorExecuteFailed, streampkg.StatusFailed, n.Id, n, map[string]any{
+					"stage": "execute",
+					"error": compactStreamText(err.Error()),
+				})
+			} else {
+				r.emitExecutorStreamEvent(ctx, streampkg.EventExecutorExecuteCompleted, streampkg.StatusCompleted, n.Id, n, map[string]any{
+					"stage": "execute",
+				})
+			}
 			select {
 			case <-ctx.Done():
 			case r.resultCh <- executionResult{nodeID: n.Id, output: out, newNodes: dynNodes, err: err}:
@@ -746,10 +640,12 @@ func (r *Runner) runEngine(ctx context.Context) error {
 				return finish(RunnerStatusFailed, err)
 			}
 
-			outputs[res.nodeID] = res.output
-			if err := emitEvent(RunnerEvent{Type: EventNodeCompleted, NodeID: res.nodeID, Data: res.output}); err != nil {
+			output := r.annotateExchangeOutput(n, res.output)
+			outputs[res.nodeID] = output
+			if err := emitEvent(RunnerEvent{Type: EventNodeCompleted, NodeID: res.nodeID, Data: output}); err != nil {
 				return finish(RunnerStatusFailed, err)
 			}
+			r.emitExchangeDocumentEvents(ctx, n, output)
 
 			for _, child := range children[res.nodeID] {
 				pendingParents[child.Id]--

@@ -3,33 +3,40 @@ module github.com/tsumina/dango
 go 1.26
 
 require (
+	github.com/charmbracelet/lipgloss v1.1.0
+	github.com/charmbracelet/x/ansi v0.8.0
 	github.com/gin-gonic/gin v1.12.0
 	github.com/golang-migrate/migrate/v4 v4.19.1
 	github.com/joho/godotenv v1.5.1
+	github.com/muesli/termenv v0.16.0
 	github.com/openai/openai-go/v3 v3.32.0
 	github.com/spf13/cobra v1.10.2
 	go.opentelemetry.io/otel v1.43.0
 	go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracehttp v1.43.0
 	go.opentelemetry.io/otel/sdk v1.43.0
+	gopkg.in/yaml.v2 v2.4.0
 	modernc.org/sqlite v1.49.1
+	mvdan.cc/sh/v3 v3.13.1
 )
 
 require (
 	github.com/BurntSushi/toml v1.6.0 // indirect
+	github.com/aymanbagabas/go-osc52/v2 v2.0.1 // indirect
+	github.com/charmbracelet/colorprofile v0.2.3-0.20250311203215-f60798e515dc // indirect
+	github.com/charmbracelet/x/cellbuf v0.0.13-0.20250311204145-2c3ea96c31dd // indirect
+	github.com/charmbracelet/x/term v0.2.1 // indirect
 	github.com/dustin/go-humanize v1.0.1 // indirect
-	github.com/hashicorp/golang-lru/v2 v2.0.7 // indirect
+	github.com/lucasb-eyer/go-colorful v1.2.0 // indirect
+	github.com/mattn/go-runewidth v0.0.16 // indirect
 	github.com/ncruces/go-strftime v1.0.0 // indirect
+	github.com/rivo/uniseg v0.4.7 // indirect
 	github.com/tidwall/gjson v1.18.0 // indirect
 	github.com/tidwall/match v1.2.0 // indirect
 	github.com/tidwall/pretty v1.2.1 // indirect
 	github.com/tidwall/sjson v1.2.5 // indirect
-	gopkg.in/yaml.v2 v2.4.0 // indirect
-	modernc.org/cc/v4 v4.27.3 // indirect
-	modernc.org/ccgo/v4 v4.32.4 // indirect
-	modernc.org/gc/v2 v2.6.5 // indirect
-	modernc.org/gc/v3 v3.1.2 // indirect
-	modernc.org/sortutil v1.2.1 // indirect
-	mvdan.cc/sh/v3 v3.13.1 // indirect
+	github.com/xo/terminfo v0.0.0-20220910002029-abceb7e1c41e // indirect
+	golang.org/x/exp v0.0.0-20251023183803-a4bb9ffd2546 // indirect
+	golang.org/x/term v0.42.0 // indirect
 )
 
 require (
@@ -53,7 +60,6 @@ require (
 	github.com/grpc-ecosystem/grpc-gateway/v2 v2.29.0 // indirect
 	github.com/inconshreveable/mousetrap v1.1.0 // indirect
 	github.com/json-iterator/go v1.1.12 // indirect
-	github.com/kballard/go-shellquote v0.0.0-20180428030007-95032a82bc51 // indirect
 	github.com/klauspost/cpuid/v2 v2.3.0 // indirect
 	github.com/leodido/go-urn v1.4.0 // indirect
 	github.com/lithammer/shortuuid/v4 v4.2.0
@@ -75,9 +81,7 @@ require (
 	go.opentelemetry.io/proto/otlp v1.10.0 // indirect
 	golang.org/x/arch v0.26.0 // indirect
 	golang.org/x/crypto v0.50.0 // indirect
-	golang.org/x/mod v0.35.0 // indirect
 	golang.org/x/net v0.53.0 // indirect
-	golang.org/x/sync v0.20.0 // indirect
 	golang.org/x/sys v0.43.0 // indirect
 	golang.org/x/text v0.36.0 // indirect
 	golang.org/x/tools v0.44.0 // indirect
@@ -85,13 +89,8 @@ require (
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20260414002931-afd174a4e478 // indirect
 	google.golang.org/grpc v1.80.0 // indirect
 	google.golang.org/protobuf v1.36.11 // indirect
-	lukechampine.com/uint128 v1.3.0 // indirect
-	modernc.org/cc/v3 v3.41.0 // indirect
-	modernc.org/ccgo/v3 v3.17.0 // indirect
 	modernc.org/libc v1.72.0 // indirect
 	modernc.org/mathutil v1.7.1 // indirect
 	modernc.org/memory v1.11.0 // indirect
 	modernc.org/opt v0.2.0 // indirect
-	modernc.org/strutil v1.2.1 // indirect
-	modernc.org/token v1.1.0 // indirect
 )
