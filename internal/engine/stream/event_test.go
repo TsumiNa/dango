@@ -14,7 +14,7 @@ func TestEventPrepareJSONRoundTripIncludesRequiredFields(t *testing.T) {
 		From:      Source{Layer: "conversation", ID: "conv_1"},
 		Status:    StatusRunning,
 		Delta:     json.RawMessage(`{"text":"hello"}`),
-	}).prepare(Scope{RequestID: "req_1", RunnerID: "run_1"}, 7, func() time.Time {
+	}).prepare(Scope{RequestID: "req_1", RunnerID: "run_1"}, 7, 42, func() time.Time {
 		return now
 	})
 	if err != nil {
@@ -47,6 +47,9 @@ func TestEventPrepareJSONRoundTripIncludesRequiredFields(t *testing.T) {
 	}
 	if decoded.Scope.RequestID != "req_1" || decoded.Scope.RunnerID != "run_1" {
 		t.Errorf("scope = %+v, want request and runner IDs", decoded.Scope)
+	}
+	if decoded.LogicalTime != 42 {
+		t.Errorf("logical_time = %d, want 42", decoded.LogicalTime)
 	}
 	if !decoded.Timestamp.Equal(now) {
 		t.Errorf("timestamp = %s, want %s", decoded.Timestamp, now)
@@ -105,7 +108,7 @@ func TestEventPrepareRejectsInvalidEvents(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			_, err := tt.event.prepare(Scope{}, 1, time.Now)
+			_, err := tt.event.prepare(Scope{}, 1, 1, time.Now)
 			if !errors.Is(err, ErrInvalidEvent) {
 				t.Fatalf("prepare err = %v, want ErrInvalidEvent", err)
 			}
