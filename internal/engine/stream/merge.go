@@ -12,12 +12,21 @@ import (
 // The downstream stream receives each forwarded event with a new downstream
 // sequence number. The original event source is preserved, while the upstream
 // sequence number is copied into metadata for debugging and persistence.
+//
+// When MergeWindowConfig has TickDuration > 0, events are collected into bundles
+// by the merge hub. When TickDuration is 0 (default), events are forwarded directly.
 type Merge struct {
 	cancel context.CancelFunc
 	done   chan struct{}
 
 	errMu sync.RWMutex
 	err   error
+
+	// hub is non-nil when hub mode is enabled via MergeWindowConfig.
+	hub *mergeHub
+
+	// hubIdentity identifies this upstream within the hub.
+	hubIdentity upstreamIdentity
 }
 
 // MergeFrom forwards events from upstream into s until upstream closes, ctx is
@@ -26,7 +35,19 @@ type Merge struct {
 // filter and opts are applied while subscribing to upstream, so a runner can
 // merge only the executor/skill chunks it wants to expose without forcing all
 // child-stream traffic into its own stream.
+//
+// MergeFrom uses direct forwarding (TickDuration = 0). Use MergeFromWithConfig
+// to enable hub mode with tick-based bundling.
 func (s *Stream) MergeFrom(ctx context.Context, upstream *Stream, filter Filter, opts ...SubscribeOption) (*Merge, error) {
+	return s.MergeFromWithConfig(ctx, upstream, filter, DefaultMergeWindowConfig(), opts...)
+}
+
+// MergeFromWithConfig forwards events from upstream into s with configurable
+// hub behavior. When config.TickDuration > 0, events are collected into bundles
+// by a merge hub. When TickDuration is 0, uses direct forwarding (same as MergeFrom).
+//
+// filter and opts are applied while subscribing to upstream.
+func (s *Stream) MergeFromWithConfig(ctx context.Context, upstream *Stream, filter Filter, config MergeWindowConfig, opts ...SubscribeOption) (*Merge, error) {
 	if s == nil || upstream == nil {
 		return nil, ErrInvalidMerge
 	}
@@ -36,20 +57,129 @@ func (s *Stream) MergeFrom(ctx context.Context, upstream *Stream, filter Filter,
 	if ctx == nil {
 		ctx = context.Background()
 	}
+
+	// Subscribe to upstream first, regardless of mode.
 	sub, err := upstream.Subscribe(filter, opts...)
 	if err != nil {
 		return nil, err
 	}
+
 	runCtx, cancel := context.WithCancel(ctx)
 	merge := &Merge{
 		cancel: cancel,
 		done:   make(chan struct{}),
 	}
-	go merge.run(runCtx, s, sub)
+
+	// If hub mode is disabled (TickDuration == 0), use direct forwarding.
+	if config.TickDuration == 0 {
+		go merge.runDirect(runCtx, s, sub)
+		return merge, nil
+	}
+
+	// Hub mode: create hub, read first event to determine upstream identity,
+	// then add upstream to hub.
+	hub := newMergeHub(runCtx, s, config.TickDuration, config.PerUpstreamBufferDepth)
+	merge.hub = hub
+
+	// Start a goroutine to handle hub initialization and feeding.
+	go merge.runHubWithFirstEvent(runCtx, hub, sub)
+
 	return merge, nil
 }
 
-func (m *Merge) run(ctx context.Context, downstream *Stream, sub *Subscription) {
+// runHubWithFirstEvent reads the first event from the subscription to determine
+// the upstream identity, registers it with the hub, and then feeds events.
+func (m *Merge) runHubWithFirstEvent(ctx context.Context, hub *mergeHub, sub *Subscription) {
+	defer close(m.done)
+	defer sub.Cancel()
+
+	// Read the first event to determine upstream identity.
+	firstEvent, ok, err := sub.Next(ctx)
+	if err != nil {
+		m.setErr(err)
+		return
+	}
+	if !ok {
+		// Subscription closed without any events.
+		return
+	}
+
+	// Extract identity from the first event's source.
+	identity := upstreamIdentityOf(firstEvent.From)
+	m.hubIdentity = identity
+
+	// Create a temporary buffer to hold the first event.
+	// We'll feed it to the hub after registering the upstream.
+	tempEvent := firstEvent
+
+	// At this point, the hub is running but this upstream is not yet registered.
+	// We need to register it before feeding events. But we can't call addUpstream
+	// here because addUpstream spawns a goroutine that reads from a subscription.
+	// Instead, we'll manually manage the FIFO and feed loop.
+
+	// Actually, let's use a different approach: create a small buffer that we'll
+	// feed the first event into, then call addUpstream with a custom subscription.
+	eventChan := make(chan Event, 1)
+	eventChan <- tempEvent
+
+	// We can't directly call addUpstream because it expects a Subscription, not a channel.
+	// Instead, let's register the FIFO manually and then feed events.
+
+	// Register FIFO in hub for this upstream.
+	hub.mu.Lock()
+	fifo := newUpstreamFIFO(identity, hub.perUpstreamBufferDepth)
+	hub.fifosByIdentity[identity] = fifo
+	hub.mu.Unlock()
+
+	// Feed the first event and subsequent events from subscription.
+	if fifo.len() > 0 && fifo.tryJoinAtHead(tempEvent) {
+		// Successfully joined - don't enqueue.
+	} else {
+		if err := fifo.enqueue(tempEvent); err != nil {
+			m.setErr(err)
+			return
+		}
+	}
+
+	// Feed remaining events.
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-hub.ctx.Done():
+			return
+		default:
+		}
+
+		event, ok, err := sub.Next(ctx)
+		if err != nil {
+			m.setErr(err)
+			return
+		}
+		if !ok {
+			// Subscription closed.
+			hub.mu.Lock()
+			delete(hub.fifosByIdentity, identity)
+			hub.mu.Unlock()
+			return
+		}
+
+		// Try to join with the head event if the FIFO is not empty.
+		if fifo.len() > 0 && fifo.tryJoinAtHead(event) {
+			// Successfully joined - event was not added to FIFO.
+			continue
+		}
+
+		// Enqueue event into FIFO.
+		if err := fifo.enqueue(event); err != nil {
+			m.setErr(err)
+			return
+		}
+	}
+}
+
+// runDirect is the direct forwarding loop (used when TickDuration == 0).
+func (m *Merge) runDirect(ctx context.Context, downstream *Stream, sub *Subscription) {
 	defer close(m.done)
 	defer sub.Cancel()
 
@@ -85,6 +215,9 @@ func prepareMergedEvent(event Event) Event {
 func (m *Merge) Stop() {
 	if m == nil {
 		return
+	}
+	if m.hub != nil {
+		m.hub.Stop()
 	}
 	m.cancel()
 }
@@ -311,6 +444,9 @@ type mergeHub struct {
 	// tickDuration controls the window size for collecting events.
 	tickDuration time.Duration
 
+	// perUpstreamBufferDepth controls the maximum FIFO depth per upstream.
+	perUpstreamBufferDepth int
+
 	// tickCounter increments on each flush to provide unique tick IDs.
 	// Guarded by mu.
 	tickCounter uint64
@@ -350,13 +486,14 @@ func newMergeHub(ctx context.Context, downstream *Stream, tickDuration time.Dura
 	}
 	hubCtx, cancel := context.WithCancel(ctx)
 	hub := &mergeHub{
-		downstream:      downstream,
-		tickDuration:    tickDuration,
-		fifosByIdentity: make(map[upstreamIdentity]*upstreamFIFO),
-		subscriptions:   make(map[upstreamIdentity]*Subscription),
-		ctx:             hubCtx,
-		cancel:          cancel,
-		done:            make(chan struct{}),
+		downstream:             downstream,
+		tickDuration:           tickDuration,
+		perUpstreamBufferDepth: perUpstreamDepth,
+		fifosByIdentity:        make(map[upstreamIdentity]*upstreamFIFO),
+		subscriptions:          make(map[upstreamIdentity]*Subscription),
+		ctx:                    hubCtx,
+		cancel:                 cancel,
+		done:                   make(chan struct{}),
 	}
 	go hub.run()
 	return hub

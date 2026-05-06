@@ -2,6 +2,7 @@ package stream
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"testing"
@@ -823,5 +824,249 @@ func TestMergeHubKeepsNonJoinableDeltasQueued(t *testing.T) {
 	}
 	if bundle2.NestedEvents[0].EventType != EventLLMReasoningDelta {
 		t.Fatalf("second event type = %q, want reasoning", bundle2.NestedEvents[0].EventType)
+	}
+}
+
+// TestMergeFromDefaultBehaviorUnchanged verifies that MergeFrom without config
+// works exactly as before (direct forwarding, not hub mode).
+func TestMergeFromDefaultBehaviorUnchanged(t *testing.T) {
+	parent := New(Scope{RequestID: "req_1"}, DefaultConfig())
+	child := New(Scope{NodeID: "node_1"}, DefaultConfig())
+	t.Cleanup(parent.Close)
+	t.Cleanup(child.Close)
+
+	sub, err := parent.Subscribe(Filter{})
+	if err != nil {
+		t.Fatalf("Subscribe: %v", err)
+	}
+	merge, err := parent.MergeFrom(t.Context(), child, Filter{})
+	if err != nil {
+		t.Fatalf("MergeFrom: %v", err)
+	}
+	defer merge.Stop()
+
+	// Emit a direct event (not bundled).
+	if err := child.Emit(t.Context(), Event{
+		EventType: EventExecutorExecuteStarted,
+		From:      Source{Layer: "executor", ID: "node_1"},
+		Status:    StatusRunning,
+		Delta:     json.RawMessage(`"hello"`),
+	}); err != nil {
+		t.Fatalf("Emit: %v", err)
+	}
+
+	event, ok, err := sub.Next(t.Context())
+	if err != nil {
+		t.Fatalf("Next: %v", err)
+	}
+	if !ok {
+		t.Fatalf("Next = not ok")
+	}
+
+	// Should be the direct event, not a bundle.
+	if event.EventType != EventExecutorExecuteStarted {
+		t.Fatalf("EventType = %q, want executor.execute.started", event.EventType)
+	}
+	if string(event.Delta) != `"hello"` {
+		t.Fatalf("Delta = %s, want \"hello\"", event.Delta)
+	}
+}
+
+// TestMergeFromWithConfigHubModeEmitsBundles verifies that hub mode (with
+// TickDuration > 0) emits bundle events instead of direct events.
+func TestMergeFromWithConfigHubModeEmitsBundles(t *testing.T) {
+	parent := New(Scope{RequestID: "req_1"}, DefaultConfig())
+	child := New(Scope{NodeID: "node_1"}, DefaultConfig())
+	t.Cleanup(parent.Close)
+	t.Cleanup(child.Close)
+
+	sub, err := parent.Subscribe(Filter{})
+	if err != nil {
+		t.Fatalf("Subscribe: %v", err)
+	}
+
+	config := MergeWindowConfig{
+		TickDuration:           10 * time.Millisecond,
+		PerUpstreamBufferDepth: 1000,
+	}
+	merge, err := parent.MergeFromWithConfig(t.Context(), child, Filter{}, config)
+	if err != nil {
+		t.Fatalf("MergeFromWithConfig: %v", err)
+	}
+	defer merge.Stop()
+
+	// Emit an event.
+	if err := child.Emit(t.Context(), Event{
+		EventType: EventLLMOutputDelta,
+		From:      Source{Layer: "executor", ID: "node_1"},
+		Status:    StatusRunning,
+		Delta:     json.RawMessage(`"hello"`),
+	}); err != nil {
+		t.Fatalf("Emit: %v", err)
+	}
+
+	// Should receive a bundle event (not direct).
+	event, ok, err := sub.Next(t.Context())
+	if err != nil {
+		t.Fatalf("Next: %v", err)
+	}
+	if !ok {
+		t.Fatalf("Next = not ok")
+	}
+
+	// Event should be a bundle event type.
+	if event.EventType != EventMergeBundle {
+		t.Fatalf("EventType = %q, want merge.bundle", event.EventType)
+	}
+
+	// Decode bundle to verify nested event.
+	bundle, err := DecodeBundlePayload(event.Delta)
+	if err != nil {
+		t.Fatalf("DecodeBundlePayload: %v", err)
+	}
+
+	if len(bundle.NestedEvents) != 1 {
+		t.Fatalf("NestedEvents = %d, want 1", len(bundle.NestedEvents))
+	}
+	if bundle.NestedEvents[0].EventType != EventLLMOutputDelta {
+		t.Fatalf("Nested EventType = %q, want llm.output.delta", bundle.NestedEvents[0].EventType)
+	}
+}
+
+// TestMergeFromWithConfigHubRespectsFilters verifies that hub mode respects
+// filters applied to upstream subscriptions.
+func TestMergeFromWithConfigHubRespectsFilters(t *testing.T) {
+	parent := New(Scope{RequestID: "req_1"}, DefaultConfig())
+	child := New(Scope{NodeID: "node_1"}, DefaultConfig())
+	t.Cleanup(parent.Close)
+	t.Cleanup(child.Close)
+
+	sub, err := parent.Subscribe(Filter{})
+	if err != nil {
+		t.Fatalf("Subscribe: %v", err)
+	}
+
+	config := MergeWindowConfig{
+		TickDuration:           10 * time.Millisecond,
+		PerUpstreamBufferDepth: 1000,
+	}
+
+	// Filter to only LLM events.
+	filter := Filter{Prefixes: []string{"llm"}}
+	merge, err := parent.MergeFromWithConfig(t.Context(), child, filter, config)
+	if err != nil {
+		t.Fatalf("MergeFromWithConfig: %v", err)
+	}
+	defer merge.Stop()
+
+	// Emit two events: one LLM (should pass), one executor (should be filtered out).
+	if err := child.Emit(t.Context(), Event{
+		EventType: EventLLMOutputDelta,
+		From:      Source{Layer: "executor", ID: "node_1"},
+		Status:    StatusRunning,
+		Delta:     json.RawMessage(`"llm_delta"`),
+	}); err != nil {
+		t.Fatalf("Emit llm: %v", err)
+	}
+
+	if err := child.Emit(t.Context(), Event{
+		EventType: EventExecutorExecuteStarted,
+		From:      Source{Layer: "executor", ID: "node_1"},
+		Status:    StatusRunning,
+		Delta:     json.RawMessage(`{}`),
+	}); err != nil {
+		t.Fatalf("Emit executor: %v", err)
+	}
+
+	// Should receive only the LLM event in a bundle (executor is filtered).
+	event, ok, err := sub.Next(t.Context())
+	if err != nil {
+		t.Fatalf("Next: %v", err)
+	}
+	if !ok {
+		t.Fatalf("Next = not ok")
+	}
+
+	bundle, err := DecodeBundlePayload(event.Delta)
+	if err != nil {
+		t.Fatalf("DecodeBundlePayload: %v", err)
+	}
+
+	if len(bundle.NestedEvents) != 1 {
+		t.Fatalf("NestedEvents = %d, want 1 (executor filtered out)", len(bundle.NestedEvents))
+	}
+	if bundle.NestedEvents[0].EventType != EventLLMOutputDelta {
+		t.Fatalf("EventType = %q, want llm.output.delta", bundle.NestedEvents[0].EventType)
+	}
+}
+
+// TestMergeFromWithConfigHubContextCancellation verifies that context cancellation
+// stops the hub goroutines.
+func TestMergeFromWithConfigHubContextCancellation(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	parent := New(Scope{RequestID: "req_1"}, DefaultConfig())
+	child := New(Scope{NodeID: "node_1"}, DefaultConfig())
+	t.Cleanup(parent.Close)
+	t.Cleanup(child.Close)
+
+	config := MergeWindowConfig{
+		TickDuration:           10 * time.Millisecond,
+		PerUpstreamBufferDepth: 1000,
+	}
+	merge, err := parent.MergeFromWithConfig(ctx, child, Filter{}, config)
+	if err != nil {
+		t.Fatalf("MergeFromWithConfig: %v", err)
+	}
+
+	// Emit an event to ensure hub is running.
+	if err := child.Emit(ctx, Event{
+		EventType: EventLLMOutputDelta,
+		From:      Source{Layer: "executor", ID: "node_1"},
+		Status:    StatusRunning,
+		Delta:     json.RawMessage(`"test"`),
+	}); err != nil {
+		t.Fatalf("Emit: %v", err)
+	}
+
+	// Cancel context to stop hub.
+	cancel()
+
+	// Wait for merge to finish.
+	select {
+	case <-merge.Done():
+		// Expected: Done closes when context is canceled.
+	case <-time.After(1 * time.Second):
+		t.Fatalf("merge.Done() did not close after context cancellation")
+	}
+}
+
+// TestMergeFromWithConfigMergeStopStopsHub verifies that calling Merge.Stop()
+// stops the hub and its goroutines.
+func TestMergeFromWithConfigMergeStopStopsHub(t *testing.T) {
+	parent := New(Scope{RequestID: "req_1"}, DefaultConfig())
+	child := New(Scope{NodeID: "node_1"}, DefaultConfig())
+	t.Cleanup(parent.Close)
+	t.Cleanup(child.Close)
+
+	config := MergeWindowConfig{
+		TickDuration:           10 * time.Millisecond,
+		PerUpstreamBufferDepth: 1000,
+	}
+	merge, err := parent.MergeFromWithConfig(t.Context(), child, Filter{}, config)
+	if err != nil {
+		t.Fatalf("MergeFromWithConfig: %v", err)
+	}
+
+	// Call Stop to terminate the merge and hub.
+	merge.Stop()
+
+	// Wait for merge to finish.
+	select {
+	case <-merge.Done():
+		// Expected: Done closes when Stop() is called.
+	case <-time.After(1 * time.Second):
+		t.Fatalf("merge.Done() did not close after Stop()")
 	}
 }
