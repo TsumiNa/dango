@@ -36,16 +36,16 @@ type Merge struct {
 // MergeFrom uses direct forwarding (TickDuration = 0). Use MergeFromWithConfig
 // to enable hub mode with tick-based bundling.
 func (s *Stream) MergeFrom(ctx context.Context, upstream *Stream, filter Filter, opts ...SubscribeOption) (*Merge, error) {
-	return s.MergeFromWithConfig(ctx, upstream, filter, DefaultMergeWindowConfig(), opts...)
+	return s.MergeWithConfig(ctx, upstream, filter, DefaultMergeWindowConfig(), opts...)
 }
 
-// MergeFromWithConfig forwards events from upstream into s with configurable
+// MergeWithConfig forwards events from upstream into s with configurable
 // hub behavior. When config.TickDuration > 0, events are collected into bundles
 // by a merge hub. When TickDuration is 0, uses direct forwarding (same as MergeFrom).
 // Negative TickDuration values are rejected with [ErrInvalidMerge].
 //
 // filter and opts are applied while subscribing to upstream.
-func (s *Stream) MergeFromWithConfig(ctx context.Context, upstream *Stream, filter Filter, config MergeWindowConfig, opts ...SubscribeOption) (*Merge, error) {
+func (s *Stream) MergeWithConfig(ctx context.Context, upstream *Stream, filter Filter, config MergeWindowConfig, opts ...SubscribeOption) (*Merge, error) {
 	if s == nil || upstream == nil {
 		return nil, ErrInvalidMerge
 	}

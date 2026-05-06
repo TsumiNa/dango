@@ -261,7 +261,7 @@ func mergeRunnerStream(ctx context.Context, downstream *streampkg.Stream, upstre
 	if downstream == nil || upstream == nil {
 		return nil, nil
 	}
-	merge, err := downstream.MergeFromWithConfig(ctx, upstream, streampkg.Filter{}, streampkg.MergeWindowConfig{
+	merge, err := downstream.MergeWithConfig(ctx, upstream, streampkg.Filter{}, streampkg.MergeWindowConfig{
 		TickDuration: runnerRequestMergeWindow,
 	}, streampkg.WithSubscriberBuffer(4096))
 	if err != nil {
