@@ -57,19 +57,19 @@ func WithStore(store Store) Option {
 // independent of wall-clock time. Each emitted event receives a monotonically
 // increasing LogicalTime before its per-stream sequence number.
 type Stream struct {
-	scope            Scope
-	bufferLimit      int
-	store            Store
-	now              func() time.Time
+	scope       Scope
+	bufferLimit int
+	store       Store
+	now         func() time.Time
 
-	mu               sync.Mutex
-	deliveryMu       sync.Mutex
-	nextSeq          uint64
-	nextLogicalTime  uint64
-	nextSubID        uint64
-	closed           bool
-	buffer           []Event
-	subscribers      map[uint64]*Subscription
+	mu              sync.Mutex
+	deliveryMu      sync.Mutex
+	nextSeq         uint64
+	nextLogicalTime uint64
+	nextSubID       uint64
+	closed          bool
+	buffer          []Event
+	subscribers     map[uint64]*Subscription
 }
 
 // New creates a stream scoped to one request/run/session.
