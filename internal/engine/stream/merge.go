@@ -171,3 +171,109 @@ func isJoinableStringDelta(delta []byte) bool {
 func canJoinDeltas(prevDelta, nextDelta []byte) bool {
 	return isJoinableStringDelta(prevDelta) && isJoinableStringDelta(nextDelta)
 }
+
+// ErrBufferFull is returned when an upstreamFIFO cannot accept more events
+// because it has reached its maximum depth.
+var ErrBufferFull = errors.New("stream: FIFO buffer full")
+
+// upstreamFIFO buffers events from a single upstream within a merge hub.
+//
+// It preserves per-upstream FIFO order and supports same-tick join attempts
+// for consecutive events with the same join key and joinable string deltas.
+type upstreamFIFO struct {
+	// identity uniquely identifies this upstream.
+	identity upstreamIdentity
+
+	// maxDepth limits the number of queued events to prevent unbounded growth.
+	// When full, enqueue returns ErrBufferFull.
+	maxDepth int
+
+	// queue holds pending events in FIFO order.
+	// events[0] is the head (next to be consumed).
+	events []Event
+}
+
+// newUpstreamFIFO creates a new FIFO for the given upstream with a depth limit.
+// maxDepth must be positive; if not, a minimum depth of 1000 is used.
+func newUpstreamFIFO(identity upstreamIdentity, maxDepth int) *upstreamFIFO {
+	if maxDepth <= 0 {
+		maxDepth = 1000
+	}
+	return &upstreamFIFO{
+		identity: identity,
+		maxDepth: maxDepth,
+		events:   make([]Event, 0, maxDepth),
+	}
+}
+
+// enqueue adds an event to the FIFO tail.
+// Returns ErrBufferFull if the FIFO is at capacity.
+func (f *upstreamFIFO) enqueue(event Event) error {
+	if len(f.events) >= f.maxDepth {
+		return ErrBufferFull
+	}
+	f.events = append(f.events, event)
+	return nil
+}
+
+// peek returns the event at the head of the FIFO without removing it.
+// Returns nil and false if the FIFO is empty.
+func (f *upstreamFIFO) peek() (Event, bool) {
+	if len(f.events) == 0 {
+		return Event{}, false
+	}
+	return f.events[0], true
+}
+
+// pop removes and returns the event at the head of the FIFO.
+// Returns an empty event and false if the FIFO is empty.
+func (f *upstreamFIFO) pop() (Event, bool) {
+	if len(f.events) == 0 {
+		return Event{}, false
+	}
+	event := f.events[0]
+	f.events = f.events[1:]
+	return event, true
+}
+
+// len returns the number of events currently in the FIFO.
+func (f *upstreamFIFO) len() int {
+	return len(f.events)
+}
+
+// tryJoinAtHead attempts to join the second event with the first event at the
+// FIFO head by combining their string deltas.
+// If both events have the same join key and both have joinable string deltas,
+// the deltas are combined (merged as JSON strings) and the first event is
+// updated with the combined delta, followed by removal of the second event.
+// Returns true if join succeeded, false otherwise.
+// The FIFO must have at least one event; behavior is undefined if empty.
+func (f *upstreamFIFO) tryJoinAtHead(nextEvent Event) bool {
+	if len(f.events) < 1 {
+		return false
+	}
+
+	head := &f.events[0]
+	headKey := joinKeyOf(*head)
+	nextKey := joinKeyOf(nextEvent)
+
+	// Different join keys cannot be joined.
+	if headKey != nextKey {
+		return false
+	}
+
+	// Only joinable string deltas can be combined.
+	if !canJoinDeltas(head.Delta, nextEvent.Delta) {
+		return false
+	}
+
+	// Combine the deltas as JSON strings:
+	// Remove quotes from both strings and merge the content.
+	// "hello" + " world" => "hello world"
+	prevStr := head.Delta[1 : len(head.Delta)-1]
+	nextStr := nextEvent.Delta[1 : len(nextEvent.Delta)-1]
+	combined := append([]byte(nil), append([]byte(`"`), append(prevStr, append(nextStr, '"')...)...)...)
+	head.Delta = combined
+
+	return true
+}

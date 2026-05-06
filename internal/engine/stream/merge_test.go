@@ -1,6 +1,7 @@
 package stream
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"testing"
@@ -355,5 +356,246 @@ func TestCanJoinDeltasOnlyJoinsStrings(t *testing.T) {
 				t.Fatalf("canJoinDeltas(%q, %q) = %v, want %v", tt.prevDelta, tt.nextDelta, got, tt.wantJoin)
 			}
 		})
+	}
+}
+
+func TestUpstreamFIFOPreservesOrder(t *testing.T) {
+	identity := upstreamIdentity{layer: "executor", id: "node_a"}
+	fifo := newUpstreamFIFO(identity, 10)
+
+	events := []Event{
+		{EventType: EventLLMOutputDelta, From: Source{Layer: "executor", ID: "node_a"}, Status: StatusRunning, Delta: json.RawMessage(`"first"`)},
+		{EventType: EventLLMOutputDelta, From: Source{Layer: "executor", ID: "node_a"}, Status: StatusRunning, Delta: json.RawMessage(`"second"`)},
+		{EventType: EventLLMOutputDelta, From: Source{Layer: "executor", ID: "node_a"}, Status: StatusRunning, Delta: json.RawMessage(`"third"`)},
+	}
+
+	for _, e := range events {
+		if err := fifo.enqueue(e); err != nil {
+			t.Fatalf("enqueue failed: %v", err)
+		}
+	}
+
+	if fifo.len() != 3 {
+		t.Fatalf("len after 3 enqueues = %d, want 3", fifo.len())
+	}
+
+	for i, wantEvent := range events {
+		gotEvent, ok := fifo.pop()
+		if !ok {
+			t.Fatalf("pop %d = not ok", i)
+		}
+		if gotEvent.EventType != wantEvent.EventType || !bytes.Equal(gotEvent.Delta, wantEvent.Delta) {
+			t.Fatalf("pop %d = %+v, want %+v", i, gotEvent, wantEvent)
+		}
+	}
+
+	_, ok := fifo.pop()
+	if ok {
+		t.Fatalf("pop on empty FIFO should return not ok")
+	}
+}
+
+func TestUpstreamFIFOTryJoinAtHeadJoinsStringDeltas(t *testing.T) {
+	identity := upstreamIdentity{layer: "executor", id: "node_a"}
+	fifo := newUpstreamFIFO(identity, 10)
+
+	headEvent := Event{
+		EventType: EventLLMOutputDelta,
+		From:      Source{Layer: "executor", ID: "node_a"},
+		Status:    StatusRunning,
+		Delta:     json.RawMessage(`"hello"`),
+	}
+	nextEvent := Event{
+		EventType: EventLLMOutputDelta,
+		From:      Source{Layer: "executor", ID: "node_a"},
+		Status:    StatusRunning,
+		Delta:     json.RawMessage(`" world"`),
+	}
+
+	if err := fifo.enqueue(headEvent); err != nil {
+		t.Fatalf("enqueue head: %v", err)
+	}
+
+	joined := fifo.tryJoinAtHead(nextEvent)
+	if !joined {
+		t.Fatalf("tryJoinAtHead = false, want true")
+	}
+
+	if fifo.len() != 1 {
+		t.Fatalf("len after join = %d, want 1", fifo.len())
+	}
+
+	result, ok := fifo.peek()
+	if !ok {
+		t.Fatalf("peek after join = not ok")
+	}
+
+	// The joined delta should be "hello world"
+	want := []byte(`"hello world"`)
+	if string(result.Delta) != string(want) {
+		t.Fatalf("joined delta = %s, want %s", result.Delta, want)
+	}
+}
+
+func TestUpstreamFIFOTryJoinRejectsNonStringDeltas(t *testing.T) {
+	identity := upstreamIdentity{layer: "executor", id: "node_a"}
+	fifo := newUpstreamFIFO(identity, 10)
+
+	headEvent := Event{
+		EventType: EventLLMOutputDelta,
+		From:      Source{Layer: "executor", ID: "node_a"},
+		Status:    StatusRunning,
+		Delta:     json.RawMessage(`{"key":"value"}`),
+	}
+	nextEvent := Event{
+		EventType: EventLLMOutputDelta,
+		From:      Source{Layer: "executor", ID: "node_a"},
+		Status:    StatusRunning,
+		Delta:     json.RawMessage(`"text"`),
+	}
+
+	if err := fifo.enqueue(headEvent); err != nil {
+		t.Fatalf("enqueue head: %v", err)
+	}
+
+	joined := fifo.tryJoinAtHead(nextEvent)
+	if joined {
+		t.Fatalf("tryJoinAtHead with non-string = true, want false")
+	}
+
+	if fifo.len() != 1 {
+		t.Fatalf("len after failed join = %d, want 1", fifo.len())
+	}
+}
+
+func TestUpstreamFIFOTryJoinRejectsDifferentJoinKey(t *testing.T) {
+	identity := upstreamIdentity{layer: "executor", id: "node_a"}
+	fifo := newUpstreamFIFO(identity, 10)
+
+	headEvent := Event{
+		EventType: EventLLMOutputDelta,
+		From:      Source{Layer: "executor", ID: "node_a"},
+		Status:    StatusRunning,
+		Delta:     json.RawMessage(`"hello"`),
+	}
+	// Different event type - should not join
+	nextEventDiffType := Event{
+		EventType: EventLLMReasoningDelta,
+		From:      Source{Layer: "executor", ID: "node_a"},
+		Status:    StatusRunning,
+		Delta:     json.RawMessage(`" world"`),
+	}
+	// Different status - should not join
+	nextEventDiffStatus := Event{
+		EventType: EventLLMOutputDelta,
+		From:      Source{Layer: "executor", ID: "node_a"},
+		Status:    StatusCompleted,
+		Delta:     json.RawMessage(`" world"`),
+	}
+	// Different upstream ID - should not join
+	nextEventDiffUpstream := Event{
+		EventType: EventLLMOutputDelta,
+		From:      Source{Layer: "executor", ID: "node_b"},
+		Status:    StatusRunning,
+		Delta:     json.RawMessage(`" world"`),
+	}
+
+	if err := fifo.enqueue(headEvent); err != nil {
+		t.Fatalf("enqueue head: %v", err)
+	}
+
+	testCases := []struct {
+		name      string
+		nextEvent Event
+	}{
+		{"different event type", nextEventDiffType},
+		{"different status", nextEventDiffStatus},
+		{"different upstream", nextEventDiffUpstream},
+	}
+
+	for i, tc := range testCases {
+		fifo := newUpstreamFIFO(identity, 10)
+		if err := fifo.enqueue(headEvent); err != nil {
+			t.Fatalf("enqueue %d: %v", i, err)
+		}
+		joined := fifo.tryJoinAtHead(tc.nextEvent)
+		if joined {
+			t.Fatalf("%s: tryJoinAtHead = true, want false", tc.name)
+		}
+	}
+}
+
+func TestUpstreamFIFORejectsWhenFull(t *testing.T) {
+	identity := upstreamIdentity{layer: "executor", id: "node_a"}
+	fifo := newUpstreamFIFO(identity, 2) // Small buffer for testing
+
+	event1 := Event{EventType: EventStatusProgress, From: Source{Layer: "executor"}, Delta: json.RawMessage(`"1"`)}
+	event2 := Event{EventType: EventStatusProgress, From: Source{Layer: "executor"}, Delta: json.RawMessage(`"2"`)}
+	event3 := Event{EventType: EventStatusProgress, From: Source{Layer: "executor"}, Delta: json.RawMessage(`"3"`)}
+
+	if err := fifo.enqueue(event1); err != nil {
+		t.Fatalf("enqueue 1: %v", err)
+	}
+	if err := fifo.enqueue(event2); err != nil {
+		t.Fatalf("enqueue 2: %v", err)
+	}
+
+	// Third enqueue should fail
+	if err := fifo.enqueue(event3); !errors.Is(err, ErrBufferFull) {
+		t.Fatalf("enqueue 3 = %v, want ErrBufferFull", err)
+	}
+
+	if fifo.len() != 2 {
+		t.Fatalf("len after full buffer = %d, want 2", fifo.len())
+	}
+}
+
+func TestUpstreamFIFODefaultMaxDepth(t *testing.T) {
+	// newUpstreamFIFO should use default depth of 1000 when passed 0 or negative
+	identity := upstreamIdentity{layer: "test", id: "id"}
+
+	fifo0 := newUpstreamFIFO(identity, 0)
+	if fifo0.maxDepth != 1000 {
+		t.Fatalf("maxDepth with 0 = %d, want 1000", fifo0.maxDepth)
+	}
+
+	fifoNeg := newUpstreamFIFO(identity, -5)
+	if fifoNeg.maxDepth != 1000 {
+		t.Fatalf("maxDepth with -5 = %d, want 1000", fifoNeg.maxDepth)
+	}
+}
+
+func TestUpstreamFIFOPeekDoesNotRemove(t *testing.T) {
+	identity := upstreamIdentity{layer: "executor", id: "node_a"}
+	fifo := newUpstreamFIFO(identity, 10)
+
+	event := Event{EventType: EventStatusProgress, From: Source{Layer: "executor"}, Delta: json.RawMessage(`"test"`)}
+	if err := fifo.enqueue(event); err != nil {
+		t.Fatalf("enqueue: %v", err)
+	}
+
+	// Peek multiple times
+	for i := 0; i < 3; i++ {
+		peeked, ok := fifo.peek()
+		if !ok {
+			t.Fatalf("peek %d = not ok", i)
+		}
+		if peeked.EventType != event.EventType {
+			t.Fatalf("peek %d = %+v, want %+v", i, peeked, event)
+		}
+	}
+
+	// FIFO should still have the event
+	if fifo.len() != 1 {
+		t.Fatalf("len after multiple peeks = %d, want 1", fifo.len())
+	}
+
+	// Pop should get the same event
+	popped, ok := fifo.pop()
+	if !ok {
+		t.Fatalf("pop = not ok")
+	}
+	if popped.EventType != event.EventType {
+		t.Fatalf("pop = %+v, want %+v", popped, event)
 	}
 }
