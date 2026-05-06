@@ -56,7 +56,9 @@ func IsValidBundlePayload(bundle BundlePayload) bool {
 // ExpandBundleEvent returns the events a downstream consumer should handle for event.
 // Merge bundle events expand to their nested events in bundle order. Non-bundle
 // events pass through unchanged so callers can consume direct and bundled streams
-// with one code path during migration.
+// with one code path during migration. Expanded nested events inherit missing
+// scope fields from the outer bundle event so scope filters behave like direct
+// merge delivery.
 func ExpandBundleEvent(event Event) ([]Event, error) {
 	if event.EventType != EventMergeBundle {
 		return []Event{event}, nil
@@ -72,6 +74,9 @@ func ExpandBundleEvent(event Event) ([]Event, error) {
 
 	events := make([]Event, len(bundle.NestedEvents))
 	copy(events, bundle.NestedEvents)
+	for i := range events {
+		events[i].Scope = mergeScope(event.Scope, events[i].Scope)
+	}
 	return events, nil
 }
 
