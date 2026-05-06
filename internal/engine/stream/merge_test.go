@@ -889,7 +889,7 @@ func TestMergeFromWithConfigHubModeEmitsBundles(t *testing.T) {
 		TickDuration:           10 * time.Millisecond,
 		PerUpstreamBufferDepth: 1000,
 	}
-	merge, err := parent.MergeFromWithConfig(t.Context(), child, Filter{}, config)
+	merge, err := parent.MergeWithConfig(t.Context(), child, Filter{}, config)
 	if err != nil {
 		t.Fatalf("MergeFromWithConfig: %v", err)
 	}
@@ -953,7 +953,7 @@ func TestMergeFromWithConfigHubRespectsFilters(t *testing.T) {
 
 	// Filter to only LLM events.
 	filter := Filter{Prefixes: []string{"llm"}}
-	merge, err := parent.MergeFromWithConfig(t.Context(), child, filter, config)
+	merge, err := parent.MergeWithConfig(t.Context(), child, filter, config)
 	if err != nil {
 		t.Fatalf("MergeFromWithConfig: %v", err)
 	}
@@ -1015,7 +1015,7 @@ func TestMergeFromWithConfigHubContextCancellation(t *testing.T) {
 		TickDuration:           10 * time.Millisecond,
 		PerUpstreamBufferDepth: 1000,
 	}
-	merge, err := parent.MergeFromWithConfig(ctx, child, Filter{}, config)
+	merge, err := parent.MergeWithConfig(ctx, child, Filter{}, config)
 	if err != nil {
 		t.Fatalf("MergeFromWithConfig: %v", err)
 	}
@@ -1054,7 +1054,7 @@ func TestMergeFromWithConfigMergeStopStopsHub(t *testing.T) {
 		TickDuration:           10 * time.Millisecond,
 		PerUpstreamBufferDepth: 1000,
 	}
-	merge, err := parent.MergeFromWithConfig(t.Context(), child, Filter{}, config)
+	merge, err := parent.MergeWithConfig(t.Context(), child, Filter{}, config)
 	if err != nil {
 		t.Fatalf("MergeFromWithConfig: %v", err)
 	}
@@ -1077,7 +1077,7 @@ func TestMergeFromWithConfigRejectsNegativeTickDuration(t *testing.T) {
 	t.Cleanup(parent.Close)
 	t.Cleanup(child.Close)
 
-	_, err := parent.MergeFromWithConfig(t.Context(), child, Filter{}, MergeWindowConfig{
+	_, err := parent.MergeWithConfig(t.Context(), child, Filter{}, MergeWindowConfig{
 		TickDuration: -time.Millisecond,
 	})
 	if !errors.Is(err, ErrInvalidMerge) {
@@ -1090,7 +1090,7 @@ func TestMergeFromWithConfigHubEmptyUpstreamCloseStopsMerge(t *testing.T) {
 	child := New(Scope{}, DefaultConfig())
 	t.Cleanup(parent.Close)
 
-	merge, err := parent.MergeFromWithConfig(t.Context(), child, Filter{}, MergeWindowConfig{
+	merge, err := parent.MergeWithConfig(t.Context(), child, Filter{}, MergeWindowConfig{
 		TickDuration: time.Hour,
 	})
 	if err != nil {
@@ -1115,7 +1115,7 @@ func TestMergeFromWithConfigHubDrainsBufferedEventsOnUpstreamClose(t *testing.T)
 	if err != nil {
 		t.Fatalf("Subscribe: %v", err)
 	}
-	merge, err := parent.MergeFromWithConfig(t.Context(), child, Filter{}, MergeWindowConfig{
+	merge, err := parent.MergeWithConfig(t.Context(), child, Filter{}, MergeWindowConfig{
 		TickDuration: time.Hour,
 	})
 	if err != nil {
@@ -1174,7 +1174,7 @@ func TestMergeFromWithConfigHubNestedEventsUseMergedScopeAndMetadata(t *testing.
 	if err != nil {
 		t.Fatalf("Subscribe: %v", err)
 	}
-	merge, err := parent.MergeFromWithConfig(t.Context(), child, Filter{}, MergeWindowConfig{
+	merge, err := parent.MergeWithConfig(t.Context(), child, Filter{}, MergeWindowConfig{
 		TickDuration: 10 * time.Millisecond,
 	})
 	if err != nil {
@@ -1216,7 +1216,7 @@ func TestMergeFromWithConfigHubErrorVisibleThroughMergeErr(t *testing.T) {
 	child := New(Scope{}, DefaultConfig())
 	t.Cleanup(child.Close)
 
-	merge, err := parent.MergeFromWithConfig(t.Context(), child, Filter{}, MergeWindowConfig{
+	merge, err := parent.MergeWithConfig(t.Context(), child, Filter{}, MergeWindowConfig{
 		TickDuration: 10 * time.Millisecond,
 	})
 	if err != nil {

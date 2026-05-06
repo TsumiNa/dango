@@ -410,47 +410,58 @@ func TestStartRequest_EmitsRequestStreamEvents(t *testing.T) {
 		sawSettled  bool
 		sawNodeDone bool
 		sawExecutor bool
+		sawBundle   bool
 	)
 	readCtx, cancelRead := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancelRead()
-	for !(sawPlanText && sawCreated && sawSettled && sawNodeDone && sawExecutor) {
-		event, ok, err := sub.Next(readCtx)
+	for !(sawPlanText && sawCreated && sawSettled && sawNodeDone && sawExecutor && sawBundle) {
+		topEvent, ok, err := sub.Next(readCtx)
 		if err != nil {
 			t.Fatalf("request stream event: %v", err)
 		}
 		if !ok {
-			t.Fatalf("request stream closed before expected events: text=%v created=%v settled=%v nodeDone=%v executor=%v",
-				sawPlanText, sawCreated, sawSettled, sawNodeDone, sawExecutor)
+			t.Fatalf("request stream closed before expected events: text=%v created=%v settled=%v nodeDone=%v executor=%v bundle=%v",
+				sawPlanText, sawCreated, sawSettled, sawNodeDone, sawExecutor, sawBundle)
 		}
-		var deltaText string
-		_ = json.Unmarshal(event.Delta, &deltaText)
-		switch event.EventType {
-		case streampkg.EventLLMOutputDelta:
-			if event.From.Layer == "orchestrator" && event.Status == streampkg.StatusCompleted && deltaText == planOutput {
-				sawPlanText = true
-			}
-		case streampkg.EventStatusProgress:
-			if event.From.Layer == "orchestrator" {
+		inBundle := topEvent.EventType == streampkg.EventMergeBundle
+		if inBundle {
+			sawBundle = true
+		}
+		events, err := streampkg.ExpandBundleEvent(topEvent)
+		if err != nil {
+			t.Fatalf("ExpandBundleEvent: %v", err)
+		}
+		for _, event := range events {
+			var deltaText string
+			_ = json.Unmarshal(event.Delta, &deltaText)
+			switch event.EventType {
+			case streampkg.EventLLMOutputDelta:
+				if event.From.Layer == "orchestrator" && event.Status == streampkg.StatusCompleted && deltaText == planOutput {
+					sawPlanText = true
+				}
+			case streampkg.EventStatusProgress:
+				if event.From.Layer == "orchestrator" {
+					var delta map[string]string
+					_ = json.Unmarshal(event.Delta, &delta)
+					if delta["message"] == "runner created" && delta["runner_id"] != "" {
+						runnerID = delta["runner_id"]
+						sawCreated = true
+					}
+				}
+			case streampkg.EventRunnerPhaseChanged:
 				var delta map[string]string
 				_ = json.Unmarshal(event.Delta, &delta)
-				if delta["message"] == "runner created" && delta["runner_id"] != "" {
-					runnerID = delta["runner_id"]
-					sawCreated = true
+				if inBundle && event.Scope.RunnerID == runnerID && delta["phase"] == string(PhaseSettled) && delta["status"] == "idle" {
+					sawSettled = true
 				}
-			}
-		case streampkg.EventRunnerPhaseChanged:
-			var delta map[string]string
-			_ = json.Unmarshal(event.Delta, &delta)
-			if event.Scope.RunnerID == runnerID && delta["phase"] == string(PhaseSettled) && delta["status"] == "idle" {
-				sawSettled = true
-			}
-		case streampkg.EventRunnerNodeCompleted:
-			if event.Scope.RunnerID == runnerID && event.Scope.NodeID == "only" {
-				sawNodeDone = true
-			}
-		case streampkg.EventExecutorExecuteCompleted:
-			if event.Scope.RunnerID == runnerID && event.Scope.NodeID == "only" && event.From.Layer == "executor" {
-				sawExecutor = true
+			case streampkg.EventRunnerNodeCompleted:
+				if inBundle && event.Scope.RunnerID == runnerID && event.Scope.NodeID == "only" {
+					sawNodeDone = true
+				}
+			case streampkg.EventExecutorExecuteCompleted:
+				if inBundle && event.Scope.RunnerID == runnerID && event.Scope.NodeID == "only" && event.From.Layer == "executor" {
+					sawExecutor = true
+				}
 			}
 		}
 	}
@@ -463,9 +474,9 @@ func TestStartRequest_EmitsRequestStreamEvents(t *testing.T) {
 	if err := managedRunner.Wait(waitCtx); err != nil {
 		t.Fatalf("runner Wait: %v", err)
 	}
-	if !sawPlanText || !sawCreated || !sawSettled || !sawNodeDone || !sawExecutor {
-		t.Fatalf("missing stream events: text=%v created=%v settled=%v nodeDone=%v executor=%v",
-			sawPlanText, sawCreated, sawSettled, sawNodeDone, sawExecutor)
+	if !sawPlanText || !sawCreated || !sawSettled || !sawNodeDone || !sawExecutor || !sawBundle {
+		t.Fatalf("missing stream events: text=%v created=%v settled=%v nodeDone=%v executor=%v bundle=%v",
+			sawPlanText, sawCreated, sawSettled, sawNodeDone, sawExecutor, sawBundle)
 	}
 }
 

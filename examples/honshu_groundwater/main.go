@@ -193,6 +193,10 @@ func runHonshuGroundwaterExample(ctx context.Context, cfg exampleConfig) (*runne
 		_ = closeEventStream()
 		return nil, fmt.Errorf("runner did not settle: %+v", view)
 	}
+	if err := waitForRequestRunnerSettled(ctx, resp.Stream, runnerID); err != nil {
+		_ = closeEventStream()
+		return nil, err
+	}
 	logger.Info("runner settled", "runner_id", runnerID, "status", view.State.Status, "phase", view.Phase)
 	if err := closeEventStream(); err != nil {
 		return nil, err
@@ -299,6 +303,40 @@ func waitForRunnerCreated(ctx context.Context, eventStream *streampkg.Stream) (s
 		}
 		if runnerID, _ := values["runner_id"].(string); runnerID != "" {
 			return runnerID, nil
+		}
+	}
+}
+
+func waitForRequestRunnerSettled(ctx context.Context, eventStream *streampkg.Stream, runnerID string) error {
+	if eventStream == nil {
+		return fmt.Errorf("request stream is nil")
+	}
+	sub, err := eventStream.Subscribe(streampkg.Filter{}, streampkg.WithReplayLast(64), streampkg.WithSubscriberBuffer(64))
+	if err != nil {
+		return err
+	}
+	defer sub.Cancel()
+	for {
+		event, ok, err := sub.Next(ctx)
+		if err != nil {
+			return err
+		}
+		if !ok {
+			return fmt.Errorf("request stream closed before runner settled update")
+		}
+		expanded, err := streampkg.ExpandBundleEvent(event)
+		if err != nil {
+			return err
+		}
+		for _, candidate := range expanded {
+			if candidate.EventType != streampkg.EventRunnerPhaseChanged || candidate.Scope.RunnerID != runnerID {
+				continue
+			}
+			values := map[string]any{}
+			_ = json.Unmarshal(candidate.Delta, &values)
+			if phase, _ := values["phase"].(string); phase == string(runnerpkg.PhaseSettled) {
+				return nil
+			}
 		}
 	}
 }

@@ -18,6 +18,7 @@ func FilterBundleEvent(event Event, filter Filter) ([]Event, error)
 `ExpandBundleEvent` gives downstream consumers one path for both merge modes:
 
 - `EventMergeBundle` events decode their `BundlePayload` and return nested events in bundle order.
+- Expanded nested events inherit missing scope fields from the outer bundle event, matching direct merge scope-filter behavior.
 - Non-bundle events return as a single-element slice unchanged.
 - Malformed bundle payloads return an explicit error.
 - Empty bundle payloads return an explicit error because they violate the bundle emission contract.
@@ -58,6 +59,7 @@ Tests in `internal/engine/stream/bundle_test.go` cover:
 
 - Bundle expansion preserves nested event order.
 - Existing filters select matching nested events.
+- Scope filters match nested events after outer bundle scope fields are merged in.
 - Non-bundle events pass through unchanged.
 - Malformed bundle payloads return an error.
 

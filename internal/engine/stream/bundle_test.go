@@ -267,6 +267,40 @@ func TestFilterBundleEventSelectsNestedEvents(t *testing.T) {
 	}
 }
 
+func TestFilterBundleEventMergesBundleScopeBeforeMatching(t *testing.T) {
+	delta, err := EncodeBundlePayload(BundlePayload{
+		TickID: 9,
+		NestedEvents: []Event{{
+			EventType: EventRunnerNodeCompleted,
+			From:      Source{Layer: "runner", ID: "runner_1"},
+			Status:    StatusCompleted,
+			Scope:     Scope{NodeID: "node_1"},
+			Delta:     json.RawMessage(`{"event":"NodeCompleted"}`),
+		}},
+	})
+	if err != nil {
+		t.Fatalf("EncodeBundlePayload: %v", err)
+	}
+
+	events, err := FilterBundleEvent(Event{
+		EventType: EventMergeBundle,
+		From:      Source{Layer: "hub"},
+		Status:    StatusCompleted,
+		Scope:     Scope{RequestID: "request_1", RunnerID: "runner_1"},
+		Delta:     delta,
+	}, Filter{Scope: Scope{RequestID: "request_1", RunnerID: "runner_1", NodeID: "node_1"}})
+	if err != nil {
+		t.Fatalf("FilterBundleEvent: %v", err)
+	}
+
+	if len(events) != 1 {
+		t.Fatalf("filtered events = %d, want 1", len(events))
+	}
+	if events[0].Scope.RequestID != "request_1" || events[0].Scope.RunnerID != "runner_1" || events[0].Scope.NodeID != "node_1" {
+		t.Fatalf("expanded scope = %+v, want request/runner from bundle and node from nested", events[0].Scope)
+	}
+}
+
 func TestExpandBundleEventPassesThroughNonBundleEvents(t *testing.T) {
 	event := Event{
 		EventType: EventStatusProgress,

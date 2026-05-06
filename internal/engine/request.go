@@ -6,11 +6,14 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"time"
 
 	runnerpkg "github.com/tsumina/dango/internal/engine/runner"
 	streampkg "github.com/tsumina/dango/internal/engine/stream"
 	"github.com/tsumina/dango/internal/llm"
 )
+
+const runnerRequestMergeWindow = 10 * time.Millisecond
 
 // RequestRejectedError reports a planner rejection for a request that could
 // not be converted into a runner.
@@ -193,7 +196,7 @@ func (o *Orchestrator) startRequestWithStream(ctx context.Context, req Request, 
 	if err != nil {
 		return resp, err
 	}
-	if merge, err := mergeChildStream(ctx, requestStream, runner.EventStream()); err != nil {
+	if merge, err := mergeRunnerStream(ctx, requestStream, runner.EventStream()); err != nil {
 		return resp, err
 	} else if merge != nil {
 		streamMerges = append(streamMerges, merge)
@@ -250,6 +253,19 @@ func mergeChildStream(ctx context.Context, downstream *streampkg.Stream, upstrea
 	merge, err := downstream.MergeFrom(ctx, upstream, streampkg.Filter{}, streampkg.WithSubscriberBuffer(4096))
 	if err != nil {
 		return nil, fmt.Errorf("orchestrate: merge child stream: %w", err)
+	}
+	return merge, nil
+}
+
+func mergeRunnerStream(ctx context.Context, downstream *streampkg.Stream, upstream *streampkg.Stream) (*streampkg.Merge, error) {
+	if downstream == nil || upstream == nil {
+		return nil, nil
+	}
+	merge, err := downstream.MergeWithConfig(ctx, upstream, streampkg.Filter{}, streampkg.MergeWindowConfig{
+		TickDuration: runnerRequestMergeWindow,
+	}, streampkg.WithSubscriberBuffer(4096))
+	if err != nil {
+		return nil, fmt.Errorf("orchestrate: merge runner stream: %w", err)
 	}
 	return merge, nil
 }
