@@ -69,12 +69,17 @@ var (
 // EventType, From, SequenceNumber, Status, and Delta are required on every
 // emitted event. SequenceNumber is assigned by Stream.Emit so producers do not
 // need to coordinate numbering.
+//
+// LogicalTime is a monotonically increasing timestamp within a stream that
+// provides stable ordering across bundles, replay, and debugging. It is assigned
+// by Stream.Emit before the per-stream sequence number.
 type Event struct {
 	EventType      string          `json:"event_type"`
 	From           Source          `json:"from"`
 	SequenceNumber uint64          `json:"sequence_number"`
 	Status         string          `json:"status"`
 	Delta          json.RawMessage `json:"delta"`
+	LogicalTime    uint64          `json:"logical_time,omitempty"`
 	Timestamp      time.Time       `json:"timestamp,omitempty"`
 	Scope          Scope           `json:"scope,omitempty"`
 	Metadata       map[string]any  `json:"metadata,omitempty"`
@@ -95,7 +100,7 @@ type Scope struct {
 	SessionID string `json:"session_id,omitempty"`
 }
 
-func (ev Event) prepare(scope Scope, sequence uint64, now func() time.Time) (Event, error) {
+func (ev Event) prepare(scope Scope, sequence uint64, logicalTime uint64, now func() time.Time) (Event, error) {
 	if ev.EventType == "" {
 		return Event{}, fmt.Errorf("%w: missing event_type", ErrInvalidEvent)
 	}
@@ -112,6 +117,7 @@ func (ev Event) prepare(scope Scope, sequence uint64, now func() time.Time) (Eve
 		return Event{}, fmt.Errorf("%w: invalid delta JSON", ErrInvalidEvent)
 	}
 	ev.SequenceNumber = sequence
+	ev.LogicalTime = logicalTime
 	if ev.Timestamp.IsZero() {
 		ev.Timestamp = now().UTC()
 	}

@@ -52,19 +52,24 @@ func WithStore(store Store) Option {
 // the channel-shaped communication model used by orchestrator, runner, and
 // skill goroutines. Executors and nodes add context around skill-owned streams
 // and merge them upward rather than forming a separate execution substrate.
+//
+// Stream maintains a logical clock that provides stable event ordering
+// independent of wall-clock time. Each emitted event receives a monotonically
+// increasing LogicalTime before its per-stream sequence number.
 type Stream struct {
 	scope       Scope
 	bufferLimit int
 	store       Store
 	now         func() time.Time
 
-	mu          sync.Mutex
-	deliveryMu  sync.Mutex
-	nextSeq     uint64
-	nextSubID   uint64
-	closed      bool
-	buffer      []Event
-	subscribers map[uint64]*Subscription
+	mu              sync.Mutex
+	deliveryMu      sync.Mutex
+	nextSeq         uint64
+	nextLogicalTime uint64
+	nextSubID       uint64
+	closed          bool
+	buffer          []Event
+	subscribers     map[uint64]*Subscription
 }
 
 // New creates a stream scoped to one request/run/session.
@@ -89,8 +94,8 @@ func New(scope Scope, cfg Config, opts ...Option) *Stream {
 	return s
 }
 
-// Emit appends and delivers one event. It assigns the stream sequence number
-// and fills default scope and timestamp fields before delivery.
+// Emit appends and delivers one event. It assigns the stream sequence number,
+// logical time, and fills default scope and timestamp fields before delivery.
 func (s *Stream) Emit(ctx context.Context, event Event) error {
 	if ctx == nil {
 		ctx = context.Background()
@@ -105,7 +110,8 @@ func (s *Stream) Emit(ctx context.Context, event Event) error {
 		return ErrClosed
 	}
 	sequence := s.nextSeq + 1
-	prepared, err := event.prepare(s.scope, sequence, s.now)
+	logicalTime := s.nextLogicalTime + 1
+	prepared, err := event.prepare(s.scope, sequence, logicalTime, s.now)
 	if err != nil {
 		s.mu.Unlock()
 		return err
@@ -123,6 +129,7 @@ func (s *Stream) Emit(ctx context.Context, event Event) error {
 		}
 	}
 	s.nextSeq = sequence
+	s.nextLogicalTime = logicalTime
 	s.appendBufferLocked(prepared)
 	s.mu.Unlock()
 
