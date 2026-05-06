@@ -7,9 +7,16 @@ applyTo: "**"
 
 When implementing what the user described, follow these principles together. They constrain both the production code and the accompanying tests.
 
+**Key rules at a glance** (refer to the numbered sections below for detailed constraints and examples):
+- Use the most direct structure; avoid extra abstraction layers.
+- Implement only what the description asks for; mention out-of-scope improvements instead of adding them.
+- Constructors follow `New(required..., cfg Cfg, opts ...Opt) *S`; `WithXxx(...)` adjusts final instance fields only.
+- Prefer TDD for new code: write tests first, then implement. Colocate tests in `<source>_test.<ext>`; cover the primary path and the most likely failure patterns.
+- If the user's description conflicts with abstraction or constructor-shape principles, prioritize the description and note the deviation. Scope restrictions (do not add unrequested features, logging, or validation) are not overridden by implicit user intent.
+
 ## 1. Minimal Abstraction
 
-Use the most direct code structure that satisfies the described requirement.
+Use the most direct code structure that satisfies the described requirement. If the user's description conflicts with these principles, prioritize the user's description and document the deviation. If the description is incomplete or contradictory, ask the user to clarify before proceeding.
 
 - Do not introduce interfaces, factories, registries, generics, plugin layers, or extra indirection unless the described requirement actually needs them.
 - Do not split a single concrete implementation into multiple layers "for future flexibility".
@@ -69,7 +76,7 @@ Implement only what the user's description asks for.
 
 - Do not add configuration options, flags, fields, methods, or endpoints that the description does not mention.
 - Do not refactor unrelated code, rename unrelated symbols, or "clean up" nearby files while implementing the requested change.
-- Do not add logging, metrics, retries, caching, or validation beyond what the description or existing surrounding code already implies.
+- Do not add logging, metrics, retries, caching, or validation unless explicitly mentioned in the description or clearly required by the surrounding code.
 - If a related improvement seems valuable but is out of scope, mention it briefly to the user instead of silently adding it.
 
 When in doubt, prefer the smaller change. The user can always ask for more.
@@ -78,9 +85,11 @@ When in doubt, prefer the smaller change. The user can always ask for more.
 
 Every implementation change must ship with at least one test file that exercises the core logic, with priority on the patterns most likely to fail.
 
+When feasible, prefer a test-driven approach: write the test logic first to define the expected behavior, then write the implementation to make the tests pass. This is not always possible (e.g., when modifying existing code with no clear seam), but it should be the default for new functions, constructors, and request/response flows.
+
 - Always generate or update a test file for the code you wrote or modified.
 - Cover the primary success path of the described behavior.
-- Cover the inputs and conditions most likely to break it: empty / missing / malformed input, boundary values, error returns from dependencies, and any explicit precondition the code enforces (for example "must be a directory", "must be non-nil", "must contain required file").
+- Cover the following input categories: empty strings or collections, null/nil values, out-of-range numbers, missing required fields, malformed input, dependency error returns, and any explicit precondition the code enforces (for example "must be a directory", "must be non-nil", "must contain required file").
 - Do not aim for exhaustive coverage of trivial getters, generated code, or thin pass-through wrappers. Aim for the logic that, if broken, would silently produce wrong behavior.
 - Run the new tests and confirm they pass before reporting the task done.
 

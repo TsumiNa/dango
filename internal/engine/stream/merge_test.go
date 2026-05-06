@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"testing"
+	"time"
 )
 
 func TestStreamMergeFromCombinesMultipleUpstreams(t *testing.T) {
@@ -597,5 +598,230 @@ func TestUpstreamFIFOPeekDoesNotRemove(t *testing.T) {
 	}
 	if popped.EventType != event.EventType {
 		t.Fatalf("pop = %+v, want %+v", popped, event)
+	}
+}
+
+func TestMergeHubTickEmitsBundleWithReadyEvents(t *testing.T) {
+	downstream := New(Scope{}, DefaultConfig())
+	t.Cleanup(downstream.Close)
+
+	hub := newMergeHub(t.Context(), downstream, 10*time.Millisecond, 1000)
+	defer hub.Stop()
+
+	upstream1 := New(Scope{}, DefaultConfig())
+	upstream2 := New(Scope{}, DefaultConfig())
+	t.Cleanup(upstream1.Close)
+	t.Cleanup(upstream2.Close)
+
+	// Add upstreams to hub.
+	id1 := upstreamIdentity{layer: "executor", id: "node_1"}
+	id2 := upstreamIdentity{layer: "executor", id: "node_2"}
+
+	if err := hub.addUpstream(t.Context(), upstream1, id1, Filter{}); err != nil {
+		t.Fatalf("addUpstream 1: %v", err)
+	}
+	if err := hub.addUpstream(t.Context(), upstream2, id2, Filter{}); err != nil {
+		t.Fatalf("addUpstream 2: %v", err)
+	}
+
+	// Emit events from upstreams.
+	if err := upstream1.Emit(t.Context(), Event{
+		EventType: EventLLMOutputDelta,
+		From:      Source{Layer: "executor", ID: "node_1"},
+		Status:    StatusRunning,
+		Delta:     json.RawMessage(`"hello"`),
+	}); err != nil {
+		t.Fatalf("Emit upstream1: %v", err)
+	}
+
+	if err := upstream2.Emit(t.Context(), Event{
+		EventType: EventLLMOutputDelta,
+		From:      Source{Layer: "executor", ID: "node_2"},
+		Status:    StatusRunning,
+		Delta:     json.RawMessage(`"world"`),
+	}); err != nil {
+		t.Fatalf("Emit upstream2: %v", err)
+	}
+
+	// Subscribe to downstream to receive bundle.
+	sub, err := downstream.Subscribe(Filter{EventTypes: []string{EventMergeBundle}})
+	if err != nil {
+		t.Fatalf("Subscribe downstream: %v", err)
+	}
+
+	// Wait for bundle event on the next tick.
+	bundleEvent, ok, err := sub.Next(t.Context())
+	if err != nil {
+		t.Fatalf("Next: %v", err)
+	}
+	if !ok {
+		t.Fatalf("Next = not ok, want bundle event")
+	}
+
+	if bundleEvent.EventType != EventMergeBundle {
+		t.Fatalf("event type = %q, want %q", bundleEvent.EventType, EventMergeBundle)
+	}
+
+	// Decode and verify bundle contents.
+	bundle, err := DecodeBundlePayload(bundleEvent.Delta)
+	if err != nil {
+		t.Fatalf("DecodeBundlePayload: %v", err)
+	}
+
+	if len(bundle.NestedEvents) != 2 {
+		t.Fatalf("nested events count = %d, want 2", len(bundle.NestedEvents))
+	}
+
+	if bundle.TickID != 1 {
+		t.Fatalf("tick ID = %d, want 1", bundle.TickID)
+	}
+}
+
+func TestMergeHubJoinsConsecutiveStringDeltas(t *testing.T) {
+	downstream := New(Scope{}, DefaultConfig())
+	t.Cleanup(downstream.Close)
+
+	hub := newMergeHub(t.Context(), downstream, 10*time.Millisecond, 1000)
+	defer hub.Stop()
+
+	upstream := New(Scope{}, DefaultConfig())
+	t.Cleanup(upstream.Close)
+
+	id := upstreamIdentity{layer: "executor", id: "node_a"}
+	if err := hub.addUpstream(t.Context(), upstream, id, Filter{}); err != nil {
+		t.Fatalf("addUpstream: %v", err)
+	}
+
+	// Emit multiple string deltas with same type/status (should join).
+	if err := upstream.Emit(t.Context(), Event{
+		EventType: EventLLMOutputDelta,
+		From:      Source{Layer: "executor", ID: "node_a"},
+		Status:    StatusRunning,
+		Delta:     json.RawMessage(`"hello"`),
+	}); err != nil {
+		t.Fatalf("Emit 1: %v", err)
+	}
+
+	if err := upstream.Emit(t.Context(), Event{
+		EventType: EventLLMOutputDelta,
+		From:      Source{Layer: "executor", ID: "node_a"},
+		Status:    StatusRunning,
+		Delta:     json.RawMessage(`" world"`),
+	}); err != nil {
+		t.Fatalf("Emit 2: %v", err)
+	}
+
+	// Subscribe to downstream.
+	sub, err := downstream.Subscribe(Filter{EventTypes: []string{EventMergeBundle}})
+	if err != nil {
+		t.Fatalf("Subscribe: %v", err)
+	}
+
+	// Wait for bundle.
+	bundleEvent, ok, err := sub.Next(t.Context())
+	if err != nil {
+		t.Fatalf("Next: %v", err)
+	}
+	if !ok {
+		t.Fatalf("Next = not ok")
+	}
+
+	bundle, err := DecodeBundlePayload(bundleEvent.Delta)
+	if err != nil {
+		t.Fatalf("DecodeBundlePayload: %v", err)
+	}
+
+	// Should have one joined event instead of two.
+	if len(bundle.NestedEvents) != 1 {
+		t.Fatalf("nested events count = %d, want 1 (should be joined)", len(bundle.NestedEvents))
+	}
+
+	// Verify the joined delta.
+	wantDelta := []byte(`"hello world"`)
+	if !bytes.Equal(bundle.NestedEvents[0].Delta, wantDelta) {
+		t.Fatalf("joined delta = %s, want %s", bundle.NestedEvents[0].Delta, wantDelta)
+	}
+}
+
+func TestMergeHubKeepsNonJoinableDeltasQueued(t *testing.T) {
+	downstream := New(Scope{}, DefaultConfig())
+	t.Cleanup(downstream.Close)
+
+	hub := newMergeHub(t.Context(), downstream, 10*time.Millisecond, 1000)
+	defer hub.Stop()
+
+	upstream := New(Scope{}, DefaultConfig())
+	t.Cleanup(upstream.Close)
+
+	id := upstreamIdentity{layer: "executor", id: "node_a"}
+	if err := hub.addUpstream(t.Context(), upstream, id, Filter{}); err != nil {
+		t.Fatalf("addUpstream: %v", err)
+	}
+
+	// Emit events with different types (should NOT join).
+	if err := upstream.Emit(t.Context(), Event{
+		EventType: EventLLMOutputDelta,
+		From:      Source{Layer: "executor", ID: "node_a"},
+		Status:    StatusRunning,
+		Delta:     json.RawMessage(`"output"`),
+	}); err != nil {
+		t.Fatalf("Emit output: %v", err)
+	}
+
+	if err := upstream.Emit(t.Context(), Event{
+		EventType: EventLLMReasoningDelta,
+		From:      Source{Layer: "executor", ID: "node_a"},
+		Status:    StatusRunning,
+		Delta:     json.RawMessage(`"reasoning"`),
+	}); err != nil {
+		t.Fatalf("Emit reasoning: %v", err)
+	}
+
+	// Subscribe to downstream.
+	sub, err := downstream.Subscribe(Filter{EventTypes: []string{EventMergeBundle}})
+	if err != nil {
+		t.Fatalf("Subscribe: %v", err)
+	}
+
+	// First tick should have only the output event (first in FIFO).
+	bundleEvent1, ok, err := sub.Next(t.Context())
+	if err != nil {
+		t.Fatalf("Next 1: %v", err)
+	}
+	if !ok {
+		t.Fatalf("Next 1 = not ok")
+	}
+
+	bundle1, err := DecodeBundlePayload(bundleEvent1.Delta)
+	if err != nil {
+		t.Fatalf("DecodeBundlePayload 1: %v", err)
+	}
+
+	if len(bundle1.NestedEvents) != 1 {
+		t.Fatalf("first bundle events = %d, want 1", len(bundle1.NestedEvents))
+	}
+	if bundle1.NestedEvents[0].EventType != EventLLMOutputDelta {
+		t.Fatalf("first event type = %q, want output", bundle1.NestedEvents[0].EventType)
+	}
+
+	// Second tick should have the reasoning event (delayed from previous tick).
+	bundleEvent2, ok, err := sub.Next(t.Context())
+	if err != nil {
+		t.Fatalf("Next 2: %v", err)
+	}
+	if !ok {
+		t.Fatalf("Next 2 = not ok")
+	}
+
+	bundle2, err := DecodeBundlePayload(bundleEvent2.Delta)
+	if err != nil {
+		t.Fatalf("DecodeBundlePayload 2: %v", err)
+	}
+
+	if len(bundle2.NestedEvents) != 1 {
+		t.Fatalf("second bundle events = %d, want 1", len(bundle2.NestedEvents))
+	}
+	if bundle2.NestedEvents[0].EventType != EventLLMReasoningDelta {
+		t.Fatalf("second event type = %q, want reasoning", bundle2.NestedEvents[0].EventType)
 	}
 }
