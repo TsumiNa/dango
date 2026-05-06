@@ -406,6 +406,55 @@ func TestRendererObservedSubscriptionReportsEvents(t *testing.T) {
 	}
 }
 
+func TestRendererExpandsBundleSubscriptionEvents(t *testing.T) {
+	s := streampkg.New(streampkg.Scope{RequestID: "req"}, streampkg.DefaultConfig())
+	sub, err := s.Subscribe(streampkg.Filter{}, streampkg.WithSubscriberBuffer(4))
+	if err != nil {
+		t.Fatalf("Subscribe: %v", err)
+	}
+	bundleDelta, err := streampkg.EncodeBundlePayload(streampkg.BundlePayload{
+		TickID: 1,
+		NestedEvents: []streampkg.Event{{
+			EventType: streampkg.EventRunnerPhaseChanged,
+			From:      streampkg.Source{Layer: "runner", ID: "runner"},
+			Status:    streampkg.StatusCompleted,
+			Scope:     streampkg.Scope{RunnerID: "runner"},
+			Delta:     json.RawMessage(`{"phase":"settled","status":"idle"}`),
+		}},
+	})
+	if err != nil {
+		t.Fatalf("EncodeBundlePayload: %v", err)
+	}
+	if err := s.Emit(context.Background(), streampkg.Event{
+		EventType: streampkg.EventMergeBundle,
+		From:      streampkg.Source{Layer: "hub"},
+		Status:    streampkg.StatusCompleted,
+		Delta:     bundleDelta,
+	}); err != nil {
+		t.Fatalf("Emit: %v", err)
+	}
+	s.Close()
+
+	var out bytes.Buffer
+	var observed []streampkg.Event
+	renderer := New(&out, Config{})
+	if err := renderer.RenderSubscriptionObserved(context.Background(), sub, func(event streampkg.Event) error {
+		observed = append(observed, event)
+		return nil
+	}); err != nil {
+		t.Fatalf("RenderSubscriptionObserved: %v", err)
+	}
+	if len(observed) != 1 || observed[0].EventType != streampkg.EventMergeBundle {
+		t.Fatalf("observed events = %+v, want raw merge bundle", observed)
+	}
+	if !strings.Contains(out.String(), "Runner[runner]") || !strings.Contains(out.String(), "phase=settled") {
+		t.Fatalf("rendered output = %q, want expanded runner phase", out.String())
+	}
+	if strings.Contains(out.String(), "merge.bundle") {
+		t.Fatalf("rendered output should not print raw bundle: %q", out.String())
+	}
+}
+
 func mustJSONString(t *testing.T, text string) json.RawMessage {
 	t.Helper()
 	b, err := json.Marshal(text)
