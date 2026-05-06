@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"sync"
+	"time"
 )
 
 // Merge connects an upstream stream to a downstream stream.
@@ -276,4 +277,269 @@ func (f *upstreamFIFO) tryJoinAtHead(nextEvent Event) bool {
 	head.Delta = combined
 
 	return true
+}
+
+// MergeWindowConfig controls hub behavior for tick-based merging.
+type MergeWindowConfig struct {
+	// TickDuration is the time window for collecting events into a single bundle.
+	// When zero, hub mode is disabled and direct forwarding is used.
+	TickDuration time.Duration
+
+	// PerUpstreamBufferDepth limits events queued per upstream before overflow.
+	// When zero, a default of 1000 is used.
+	PerUpstreamBufferDepth int
+}
+
+// DefaultMergeWindowConfig returns a MergeWindowConfig with direct-forwarding
+// behavior (TickDuration = 0).
+func DefaultMergeWindowConfig() MergeWindowConfig {
+	return MergeWindowConfig{
+		TickDuration:           0,
+		PerUpstreamBufferDepth: 1000,
+	}
+}
+
+// mergeHub owns multiple upstream FIFOs and emits bundles on each tick.
+//
+// The hub collects one ready item per upstream FIFO during each tick window.
+// Items are ready when they are at the FIFO head or can be joined with the head.
+// Non-joinable extra items remain queued for later ticks.
+type mergeHub struct {
+	// downstream receives bundle events.
+	downstream *Stream
+
+	// tickDuration controls the window size for collecting events.
+	tickDuration time.Duration
+
+	// tickCounter increments on each flush to provide unique tick IDs.
+	// Guarded by mu.
+	tickCounter uint64
+
+	// fifosByIdentity maps upstream identity to its FIFO.
+	// Guarded by mu.
+	fifosByIdentity map[upstreamIdentity]*upstreamFIFO
+
+	mu sync.RWMutex
+
+	// subscriptions maps upstream identity to subscription, used to detect closes.
+	// Guarded by mu.
+	subscriptions map[upstreamIdentity]*Subscription
+
+	// ctx is the hub's context, canceled when hub stops.
+	ctx context.Context
+
+	// cancel stops the hub and all its goroutines.
+	cancel context.CancelFunc
+
+	// done closes when the hub has stopped and all goroutines have exited.
+	done chan struct{}
+
+	// errMu guards err.
+	errMu sync.RWMutex
+
+	// err holds the first non-context error encountered.
+	err error
+}
+
+// newMergeHub creates a merge hub that will emit bundles to downstream.
+// The hub runs in a background goroutine and collects upstream events into
+// tick windows. tickDuration of zero disables hub mode.
+func newMergeHub(ctx context.Context, downstream *Stream, tickDuration time.Duration, perUpstreamDepth int) *mergeHub {
+	if perUpstreamDepth <= 0 {
+		perUpstreamDepth = 1000
+	}
+	hubCtx, cancel := context.WithCancel(ctx)
+	hub := &mergeHub{
+		downstream:      downstream,
+		tickDuration:    tickDuration,
+		fifosByIdentity: make(map[upstreamIdentity]*upstreamFIFO),
+		subscriptions:   make(map[upstreamIdentity]*Subscription),
+		ctx:             hubCtx,
+		cancel:          cancel,
+		done:            make(chan struct{}),
+	}
+	go hub.run()
+	return hub
+}
+
+// addUpstream adds a new upstream FIFO to the hub.
+// Returns error if the upstream is already registered.
+func (h *mergeHub) addUpstream(ctx context.Context, upstream *Stream, identity upstreamIdentity, filter Filter, opts ...SubscribeOption) error {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+
+	if _, exists := h.fifosByIdentity[identity]; exists {
+		return errors.New("upstream already registered")
+	}
+
+	sub, err := upstream.Subscribe(filter, opts...)
+	if err != nil {
+		return err
+	}
+
+	bufferDepth := 1000
+	h.fifosByIdentity[identity] = newUpstreamFIFO(identity, bufferDepth)
+	h.subscriptions[identity] = sub
+
+	// Start goroutine to feed events from upstream into the FIFO.
+	go h.feedUpstream(ctx, identity, sub)
+
+	return nil
+}
+
+// feedUpstream reads events from a subscription and enqueues them into the FIFO.
+// It stops when the subscription closes, the hub context is canceled, or an
+// error occurs.
+func (h *mergeHub) feedUpstream(ctx context.Context, identity upstreamIdentity, sub *Subscription) {
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-h.ctx.Done():
+			return
+		default:
+		}
+
+		event, ok, err := sub.Next(ctx)
+		if err != nil {
+			h.setErr(err)
+			return
+		}
+		if !ok {
+			// Subscription closed.
+			h.mu.Lock()
+			delete(h.fifosByIdentity, identity)
+			delete(h.subscriptions, identity)
+			h.mu.Unlock()
+			return
+		}
+
+		// Enqueue event into the FIFO for this upstream.
+		h.mu.Lock()
+		fifo, ok := h.fifosByIdentity[identity]
+		h.mu.Unlock()
+
+		if !ok {
+			// Upstream was removed while we were processing.
+			return
+		}
+
+		// Try to join with the head event if the FIFO is not empty.
+		// If join succeeds, the event is not added to the FIFO.
+		if fifo.len() > 0 && fifo.tryJoinAtHead(event) {
+			// Successfully joined - event was not added to FIFO.
+			continue
+		}
+
+		// Join didn't happen, enqueue the event normally.
+		if err := fifo.enqueue(event); err != nil {
+			h.setErr(err)
+			return
+		}
+	}
+}
+
+// run is the main hub loop that ticks and flushes bundle events.
+func (h *mergeHub) run() {
+	defer close(h.done)
+
+	if h.tickDuration == 0 {
+		// Hub mode disabled; never tick.
+		<-h.ctx.Done()
+		return
+	}
+
+	ticker := time.NewTicker(h.tickDuration)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-h.ctx.Done():
+			return
+		case <-ticker.C:
+			h.flushTick()
+		}
+	}
+}
+
+// flushTick collects one ready item per upstream and emits a bundle event.
+// Ready items are at the FIFO head or have been joined at the head.
+func (h *mergeHub) flushTick() {
+	h.mu.Lock()
+	if len(h.fifosByIdentity) == 0 {
+		h.mu.Unlock()
+		return
+	}
+
+	// Collect one item per FIFO.
+	items := make([]Event, 0, len(h.fifosByIdentity))
+	for _, fifo := range h.fifosByIdentity {
+		event, ok := fifo.pop()
+		if ok {
+			items = append(items, event)
+		}
+	}
+
+	// Increment tick counter for this flush.
+	h.tickCounter++
+	tickID := h.tickCounter
+	h.mu.Unlock()
+
+	if len(items) == 0 {
+		return
+	}
+
+	// Create and encode bundle payload.
+	bundle := BundlePayload{
+		TickID:       tickID,
+		NestedEvents: items,
+	}
+
+	delta, err := EncodeBundlePayload(bundle)
+	if err != nil {
+		h.setErr(err)
+		return
+	}
+
+	// Emit bundle event.
+	bundleEvent := Event{
+		EventType: EventMergeBundle,
+		From: Source{
+			Layer: "hub",
+		},
+		Status: StatusCompleted,
+		Delta:  delta,
+	}
+
+	if err := h.downstream.Emit(h.ctx, bundleEvent); err != nil {
+		h.setErr(err)
+	}
+}
+
+// Stop stops the hub and waits for it to exit.
+func (h *mergeHub) Stop() {
+	if h == nil {
+		return
+	}
+	h.cancel()
+	<-h.done
+}
+
+// Err reports the first non-context error encountered by the hub.
+func (h *mergeHub) Err() error {
+	h.errMu.RLock()
+	defer h.errMu.RUnlock()
+	return h.err
+}
+
+// setErr records the first non-context error.
+func (h *mergeHub) setErr(err error) {
+	if err == nil {
+		return
+	}
+	h.errMu.Lock()
+	defer h.errMu.Unlock()
+	if h.err == nil && !errors.Is(err, context.Canceled) {
+		h.err = err
+	}
 }
