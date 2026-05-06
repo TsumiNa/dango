@@ -1,5 +1,5 @@
 ---
-description: "Use when creating, editing, or reviewing SQLite schema changes, migrations, sqlc query definitions, sqlc.yaml, or justfile database recipes. Follow the repository database workflow: write migrations by hand, keep schema.sql in sync for sqlc, regenerate wrappers, and use the justfile database commands."
+description: "Use when creating, editing, or reviewing SQLite migrations, schema snapshots, sqlc queries, sqlc.yaml, or justfile database recipes."
 applyTo: "{internal/store/sqlite/**,sqlc.yaml,justfile}"
 ---
 
@@ -9,7 +9,7 @@ Treat database changes in this repository as an explicit, reviewable workflow.
 
 - Use hand-written migrations as the runtime source of truth. Do not assume schema diffs are converted into migrations automatically.
 - Keep `internal/store/sqlite/migrations/` authoritative for database evolution at startup. Each schema change should be introduced as a numbered `.up.sql` and `.down.sql` pair.
-- Keep `internal/store/sqlite/schema.sql` aligned with the latest post-migration schema. This file exists primarily as the current schema snapshot for `sqlc`, not as an input for automatic migration generation.
+- Keep `internal/store/sqlite/schema.sql` updated to reflect the schema after applying all migrations. This file is the current schema snapshot for `sqlc`, not an input for automatic migration generation.
 - Keep `internal/store/sqlite/queries.sql` aligned with any schema or query-shape changes that affect reads or writes.
 - Regenerate generated query wrappers after editing `schema.sql` or `queries.sql` by running `just db-generate`.
 - Preserve the package boundary in `internal/store/sqlite/`: generated code lives in `internal/store/sqlite/db`, while the public store package keeps the stable package-facing API and wraps generated types as needed.
@@ -29,6 +29,7 @@ When changing a table, column, index, or constraint:
 
 - Prefer transparent SQL over implicit ORM-style schema mutation.
 - For SQLite, expect some rollback or reshape operations to require table recreation, data copy, drop, and rename sequences rather than single-statement reversals.
+- If a migration fails or the schema snapshot disagrees with the migrations, stop and review the migration SQL and schema snapshot before retrying or regenerating wrappers.
 - Review the exact SQL that will run in production. If an automatically suggested SQL plan is unclear or risky, rewrite it explicitly.
 
 ## justfile Commands

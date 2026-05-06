@@ -5,11 +5,8 @@ applyTo: "**/{README,CONTRIBUTING}.md"
 
 # Repository Documentation Boundaries
 
-Keep `README.md` clean and user-facing. Use it to explain what the project or package does, how to use it, and how to get started quickly.
+Keep `README.md` user-facing and keep `CONTRIBUTING.md` developer-facing.
 
-- Prefer `README.md` for project purpose, intended audience, installation, quick start, CLI or API usage, and concise examples.
-- Keep `README.md` focused on information a user or evaluator needs first. If it grows too large, move developer-facing material out and leave a short link.
-- Do not overload `README.md` with internal package layout, project structure walkthroughs, architecture rationale, implementation notes, coding standards, or development process details.
-- Put developer-facing content in `CONTRIBUTING.md`, including project structure, architecture overview, development workflow, testing instructions, coding conventions, documentation conventions, and contribution expectations.
-- If contributor-oriented guidance becomes substantial and `CONTRIBUTING.md` does not exist yet, create it rather than expanding `README.md` further.
-- Keep README and CONTRIBUTING complementary: `README.md` is the user-facing entrypoint, while `CONTRIBUTING.md` is the developer-facing guide.
+- Step 1: Put user-first content in `README.md` (purpose, audience, install, quick start, CLI/API usage, concise examples).
+- Step 2: Put contributor workflow content in `CONTRIBUTING.md` (project structure, architecture, development/testing workflow, coding and documentation conventions, contribution expectations).
+- Step 3: If `README.md` starts accumulating contributor guidance, move that material to `CONTRIBUTING.md` and leave a short link in `README.md`.
