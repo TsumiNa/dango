@@ -6,7 +6,7 @@ import (
 	"time"
 )
 
-func TestEncodeBundlePayloadRoundTrip(t *testing.T) {
+func TestEncodeEventBatchRoundTrip(t *testing.T) {
 	now := time.Date(2026, 5, 7, 10, 30, 0, 0, time.UTC)
 
 	// Create nested events to include in the bundle
@@ -32,15 +32,15 @@ func TestEncodeBundlePayloadRoundTrip(t *testing.T) {
 		Metadata:       map[string]any{"stage": "processing"},
 	}
 
-	bundle := BundlePayload{
-		TickID:       42,
-		NestedEvents: []Event{nestedEvent1, nestedEvent2},
+	bundle := EventBatch{
+		TickID: 42,
+		Events: []Event{nestedEvent1, nestedEvent2},
 	}
 
 	// Encode the bundle
-	encoded, err := EncodeBundlePayload(bundle)
+	encoded, err := EncodeEventBatch(bundle)
 	if err != nil {
-		t.Fatalf("EncodeBundlePayload: %v", err)
+		t.Fatalf("EncodeEventBatch: %v", err)
 	}
 
 	// Verify it's valid JSON
@@ -49,9 +49,9 @@ func TestEncodeBundlePayloadRoundTrip(t *testing.T) {
 	}
 
 	// Decode it back
-	decoded, err := DecodeBundlePayload(encoded)
+	decoded, err := DecodeEventBatch(encoded)
 	if err != nil {
-		t.Fatalf("DecodeBundlePayload: %v", err)
+		t.Fatalf("DecodeEventBatch: %v", err)
 	}
 
 	// Verify the decoded bundle matches the original
@@ -59,48 +59,48 @@ func TestEncodeBundlePayloadRoundTrip(t *testing.T) {
 		t.Errorf("tick_id = %d, want %d", decoded.TickID, bundle.TickID)
 	}
 
-	if len(decoded.NestedEvents) != len(bundle.NestedEvents) {
-		t.Fatalf("nested_events count = %d, want %d", len(decoded.NestedEvents), len(bundle.NestedEvents))
+	if len(decoded.Events) != len(bundle.Events) {
+		t.Fatalf("events count = %d, want %d", len(decoded.Events), len(bundle.Events))
 	}
 
 	// Check first nested event
-	if decoded.NestedEvents[0].EventType != EventLLMOutputDelta {
-		t.Errorf("nested event[0] event_type = %q, want %q", decoded.NestedEvents[0].EventType, EventLLMOutputDelta)
+	if decoded.Events[0].EventType != EventLLMOutputDelta {
+		t.Errorf("nested event[0] event_type = %q, want %q", decoded.Events[0].EventType, EventLLMOutputDelta)
 	}
-	if decoded.NestedEvents[0].SequenceNumber != 1 {
-		t.Errorf("nested event[0] sequence_number = %d, want 1", decoded.NestedEvents[0].SequenceNumber)
+	if decoded.Events[0].SequenceNumber != 1 {
+		t.Errorf("nested event[0] sequence_number = %d, want 1", decoded.Events[0].SequenceNumber)
 	}
-	if decoded.NestedEvents[0].Status != StatusRunning {
-		t.Errorf("nested event[0] status = %q, want %q", decoded.NestedEvents[0].Status, StatusRunning)
+	if decoded.Events[0].Status != StatusRunning {
+		t.Errorf("nested event[0] status = %q, want %q", decoded.Events[0].Status, StatusRunning)
 	}
-	if !json.Valid(decoded.NestedEvents[0].Delta) {
-		t.Errorf("nested event[0] delta is not valid JSON: %s", decoded.NestedEvents[0].Delta)
+	if !json.Valid(decoded.Events[0].Delta) {
+		t.Errorf("nested event[0] delta is not valid JSON: %s", decoded.Events[0].Delta)
 	}
-	if decoded.NestedEvents[0].From.Layer != "skill" {
-		t.Errorf("nested event[0] from.layer = %q, want skill", decoded.NestedEvents[0].From.Layer)
+	if decoded.Events[0].From.Layer != "skill" {
+		t.Errorf("nested event[0] from.layer = %q, want skill", decoded.Events[0].From.Layer)
 	}
 
 	// Check second nested event
-	if decoded.NestedEvents[1].EventType != EventStatusProgress {
-		t.Errorf("nested event[1] event_type = %q, want %q", decoded.NestedEvents[1].EventType, EventStatusProgress)
+	if decoded.Events[1].EventType != EventStatusProgress {
+		t.Errorf("nested event[1] event_type = %q, want %q", decoded.Events[1].EventType, EventStatusProgress)
 	}
-	if decoded.NestedEvents[1].SequenceNumber != 2 {
-		t.Errorf("nested event[1] sequence_number = %d, want 2", decoded.NestedEvents[1].SequenceNumber)
+	if decoded.Events[1].SequenceNumber != 2 {
+		t.Errorf("nested event[1] sequence_number = %d, want 2", decoded.Events[1].SequenceNumber)
 	}
 }
 
-func TestEmptyBundlePayloadIsInvalid(t *testing.T) {
-	bundle := BundlePayload{
-		TickID:       1,
-		NestedEvents: []Event{},
+func TestEmptyEventBatchIsInvalid(t *testing.T) {
+	bundle := EventBatch{
+		TickID: 1,
+		Events: []Event{},
 	}
 
-	if IsValidBundlePayload(bundle) {
-		t.Errorf("IsValidBundlePayload(empty) = true, want false")
+	if IsValidEventBatch(bundle) {
+		t.Errorf("IsValidEventBatch(empty) = true, want false")
 	}
 
 	// Verify a non-empty bundle is valid
-	bundle.NestedEvents = []Event{
+	bundle.Events = []Event{
 		{
 			EventType: EventStatusProgress,
 			From:      Source{Layer: "test"},
@@ -109,12 +109,12 @@ func TestEmptyBundlePayloadIsInvalid(t *testing.T) {
 		},
 	}
 
-	if !IsValidBundlePayload(bundle) {
-		t.Errorf("IsValidBundlePayload(non-empty) = false, want true")
+	if !IsValidEventBatch(bundle) {
+		t.Errorf("IsValidEventBatch(non-empty) = false, want true")
 	}
 }
 
-func TestBundlePayloadWithNestedFieldsPreservesMetadata(t *testing.T) {
+func TestEventBatchWithNestedFieldsPreservesMetadata(t *testing.T) {
 	now := time.Date(2026, 5, 7, 10, 30, 0, 0, time.UTC)
 
 	nestedEvent := Event{
@@ -136,22 +136,22 @@ func TestBundlePayloadWithNestedFieldsPreservesMetadata(t *testing.T) {
 		},
 	}
 
-	bundle := BundlePayload{
-		TickID:       99,
-		NestedEvents: []Event{nestedEvent},
+	bundle := EventBatch{
+		TickID: 99,
+		Events: []Event{nestedEvent},
 	}
 
-	encoded, err := EncodeBundlePayload(bundle)
+	encoded, err := EncodeEventBatch(bundle)
 	if err != nil {
 		t.Fatalf("encode: %v", err)
 	}
 
-	decoded, err := DecodeBundlePayload(encoded)
+	decoded, err := DecodeEventBatch(encoded)
 	if err != nil {
 		t.Fatalf("decode: %v", err)
 	}
 
-	ev := decoded.NestedEvents[0]
+	ev := decoded.Events[0]
 	if ev.From.ParentID != "parent_orch" {
 		t.Errorf("from.parent_id = %q, want parent_orch", ev.From.ParentID)
 	}
@@ -174,12 +174,12 @@ func TestBundlePayloadWithNestedFieldsPreservesMetadata(t *testing.T) {
 	}
 }
 
-func TestDecodeBundlePayloadWithInvalidJSON(t *testing.T) {
+func TestDecodeEventBatchWithInvalidJSON(t *testing.T) {
 	invalidDelta := json.RawMessage(`{not valid json}`)
 
-	_, err := DecodeBundlePayload(invalidDelta)
+	_, err := DecodeEventBatch(invalidDelta)
 	if err == nil {
-		t.Errorf("DecodeBundlePayload with invalid JSON = nil, want error")
+		t.Errorf("DecodeEventBatch with invalid JSON = nil, want error")
 	}
 }
 
@@ -189,7 +189,7 @@ func TestBundleEventTypeConstantExists(t *testing.T) {
 	}
 }
 
-func TestExpandBundleEventReturnsNestedEventsInOrder(t *testing.T) {
+func TestExpandBundleEventReturnsEventsInOrder(t *testing.T) {
 	first := Event{
 		EventType: EventLLMReasoningDelta,
 		From:      Source{Layer: "skill", ID: "skill_1"},
@@ -202,12 +202,12 @@ func TestExpandBundleEventReturnsNestedEventsInOrder(t *testing.T) {
 		Status:    StatusRunning,
 		Delta:     json.RawMessage(`"answer"`),
 	}
-	delta, err := EncodeBundlePayload(BundlePayload{
-		TickID:       7,
-		NestedEvents: []Event{first, second},
+	delta, err := EncodeEventBatch(EventBatch{
+		TickID: 7,
+		Events: []Event{first, second},
 	})
 	if err != nil {
-		t.Fatalf("EncodeBundlePayload: %v", err)
+		t.Fatalf("EncodeEventBatch: %v", err)
 	}
 
 	events, err := ExpandBundleEvent(Event{
@@ -228,7 +228,7 @@ func TestExpandBundleEventReturnsNestedEventsInOrder(t *testing.T) {
 	}
 }
 
-func TestFilterBundleEventSelectsNestedEvents(t *testing.T) {
+func TestFilterBundleEventSelectsEvents(t *testing.T) {
 	visible := Event{
 		EventType: EventLLMOutputDelta,
 		From:      Source{Layer: "skill", ID: "skill_1"},
@@ -241,12 +241,12 @@ func TestFilterBundleEventSelectsNestedEvents(t *testing.T) {
 		Status:    StatusRunning,
 		Delta:     json.RawMessage(`{"progress":50}`),
 	}
-	delta, err := EncodeBundlePayload(BundlePayload{
-		TickID:       8,
-		NestedEvents: []Event{hidden, visible},
+	delta, err := EncodeEventBatch(EventBatch{
+		TickID: 8,
+		Events: []Event{hidden, visible},
 	})
 	if err != nil {
-		t.Fatalf("EncodeBundlePayload: %v", err)
+		t.Fatalf("EncodeEventBatch: %v", err)
 	}
 
 	events, err := FilterBundleEvent(Event{
@@ -268,9 +268,9 @@ func TestFilterBundleEventSelectsNestedEvents(t *testing.T) {
 }
 
 func TestFilterBundleEventMergesBundleScopeBeforeMatching(t *testing.T) {
-	delta, err := EncodeBundlePayload(BundlePayload{
+	delta, err := EncodeEventBatch(EventBatch{
 		TickID: 9,
-		NestedEvents: []Event{{
+		Events: []Event{{
 			EventType: EventRunnerNodeCompleted,
 			From:      Source{Layer: "runner", ID: "runner_1"},
 			Status:    StatusCompleted,
@@ -279,7 +279,7 @@ func TestFilterBundleEventMergesBundleScopeBeforeMatching(t *testing.T) {
 		}},
 	})
 	if err != nil {
-		t.Fatalf("EncodeBundlePayload: %v", err)
+		t.Fatalf("EncodeEventBatch: %v", err)
 	}
 
 	events, err := FilterBundleEvent(Event{
@@ -329,14 +329,42 @@ func TestExpandBundleEventPassesThroughNonBundleEvents(t *testing.T) {
 	}
 }
 
-func TestExpandBundleEventMalformedBundlePayloadReturnsError(t *testing.T) {
+func TestExpandBundleEventMalformedEventBatchReturnsError(t *testing.T) {
+	delta := json.RawMessage(`{"tick_id":9,"events":`)
 	_, err := ExpandBundleEvent(Event{
 		EventType: EventMergeBundle,
 		From:      Source{Layer: "hub"},
 		Status:    StatusCompleted,
-		Delta:     json.RawMessage(`{"tick_id":9,"nested_events":`),
+		Delta:     delta,
 	})
 	if err == nil {
 		t.Fatalf("ExpandBundleEvent malformed payload error = nil, want error")
+	}
+}
+
+func TestDecodeEventBatchSupportsLegacyNestedEvents(t *testing.T) {
+	legacyJSON := json.RawMessage(`{
+		"tick_id": 42,
+		"nested_events": [
+			{
+				"event_type": "llm.output.delta",
+				"from": {"layer": "skill", "id": "skill_1"}
+			}
+		]
+	}`)
+
+	bundle, err := DecodeEventBatch(legacyJSON)
+	if err != nil {
+		t.Fatalf("DecodeEventBatch(legacyJSON): %v", err)
+	}
+
+	if bundle.TickID != 42 {
+		t.Errorf("TickID = %d, want 42", bundle.TickID)
+	}
+	if len(bundle.Events) != 1 {
+		t.Fatalf("Events count = %d, want 1", len(bundle.Events))
+	}
+	if bundle.Events[0].EventType != EventLLMOutputDelta {
+		t.Errorf("Events[0].EventType = %q, want %q", bundle.Events[0].EventType, EventLLMOutputDelta)
 	}
 }

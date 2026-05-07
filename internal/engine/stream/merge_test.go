@@ -664,13 +664,13 @@ func TestMergeHubTickEmitsBundleWithReadyEvents(t *testing.T) {
 	}
 
 	// Decode and verify bundle contents.
-	bundle, err := DecodeBundlePayload(bundleEvent.Delta)
+	bundle, err := DecodeEventBatch(bundleEvent.Delta)
 	if err != nil {
-		t.Fatalf("DecodeBundlePayload: %v", err)
+		t.Fatalf("DecodeEventBatch: %v", err)
 	}
 
-	if len(bundle.NestedEvents) != 2 {
-		t.Fatalf("nested events count = %d, want 2", len(bundle.NestedEvents))
+	if len(bundle.Events) != 2 {
+		t.Fatalf("events count = %d, want 2", len(bundle.Events))
 	}
 
 	if bundle.TickID != 1 {
@@ -735,23 +735,23 @@ func TestMergeHubJoinsConsecutiveStringDeltas(t *testing.T) {
 		t.Fatalf("Next = not ok")
 	}
 
-	bundle, err := DecodeBundlePayload(bundleEvent.Delta)
+	bundle, err := DecodeEventBatch(bundleEvent.Delta)
 	if err != nil {
-		t.Fatalf("DecodeBundlePayload: %v", err)
+		t.Fatalf("DecodeEventBatch: %v", err)
 	}
 
 	// Should have one joined event instead of three.
-	if len(bundle.NestedEvents) != 1 {
-		t.Fatalf("nested events count = %d, want 1 (should be joined)", len(bundle.NestedEvents))
+	if len(bundle.Events) != 1 {
+		t.Fatalf("events count = %d, want 1 (should be joined)", len(bundle.Events))
 	}
 
 	// Verify the joined delta.
 	wantDelta := []byte(`"hello world!"`)
-	if !bytes.Equal(bundle.NestedEvents[0].Delta, wantDelta) {
-		t.Fatalf("joined delta = %s, want %s", bundle.NestedEvents[0].Delta, wantDelta)
+	if !bytes.Equal(bundle.Events[0].Delta, wantDelta) {
+		t.Fatalf("joined delta = %s, want %s", bundle.Events[0].Delta, wantDelta)
 	}
-	if bundle.NestedEvents[0].LogicalTime != 1 {
-		t.Fatalf("joined logical time = %d, want first event logical time 1", bundle.NestedEvents[0].LogicalTime)
+	if bundle.Events[0].LogicalTime != 1 {
+		t.Fatalf("joined logical time = %d, want first event logical time 1", bundle.Events[0].LogicalTime)
 	}
 }
 
@@ -812,14 +812,14 @@ func TestMergeHubJoinsOnlyAdjacentSameKeyDeltas(t *testing.T) {
 			t.Fatalf("flushTick %d = false, want bundle", tick+1)
 		}
 		bundleEvent := receiveEvent(t, sub.Events())
-		bundle, err := DecodeBundlePayload(bundleEvent.Delta)
+		bundle, err := DecodeEventBatch(bundleEvent.Delta)
 		if err != nil {
-			t.Fatalf("DecodeBundlePayload %d: %v", tick+1, err)
+			t.Fatalf("DecodeEventBatch %d: %v", tick+1, err)
 		}
-		if len(bundle.NestedEvents) != 1 {
-			t.Fatalf("tick %d nested events = %d, want 1", tick+1, len(bundle.NestedEvents))
+		if len(bundle.Events) != 1 {
+			t.Fatalf("tick %d events = %d, want 1", tick+1, len(bundle.Events))
 		}
-		got := bundle.NestedEvents[0]
+		got := bundle.Events[0]
 		if got.EventType != wantEvent.eventType || string(got.Delta) != wantEvent.delta {
 			t.Fatalf("tick %d event = (%s, %s), want (%s, %s)", tick+1, got.EventType, got.Delta, wantEvent.eventType, wantEvent.delta)
 		}
@@ -874,12 +874,12 @@ func TestMergeHubStopsJoiningAtNonStringDelta(t *testing.T) {
 			t.Fatalf("flushTick %d = false, want bundle", tick+1)
 		}
 		bundleEvent := receiveEvent(t, sub.Events())
-		bundle, err := DecodeBundlePayload(bundleEvent.Delta)
+		bundle, err := DecodeEventBatch(bundleEvent.Delta)
 		if err != nil {
-			t.Fatalf("DecodeBundlePayload %d: %v", tick+1, err)
+			t.Fatalf("DecodeEventBatch %d: %v", tick+1, err)
 		}
-		if len(bundle.NestedEvents) != 1 || string(bundle.NestedEvents[0].Delta) != wantDelta {
-			t.Fatalf("tick %d nested events = %+v, want delta %s", tick+1, bundle.NestedEvents, wantDelta)
+		if len(bundle.Events) != 1 || string(bundle.Events[0].Delta) != wantDelta {
+			t.Fatalf("tick %d events = %+v, want delta %s", tick+1, bundle.Events, wantDelta)
 		}
 	}
 }
@@ -933,16 +933,16 @@ func TestMergeHubKeepsNonJoinableDeltasQueued(t *testing.T) {
 		t.Fatalf("Next 1 = not ok")
 	}
 
-	bundle1, err := DecodeBundlePayload(bundleEvent1.Delta)
+	bundle1, err := DecodeEventBatch(bundleEvent1.Delta)
 	if err != nil {
-		t.Fatalf("DecodeBundlePayload 1: %v", err)
+		t.Fatalf("DecodeEventBatch 1: %v", err)
 	}
 
-	if len(bundle1.NestedEvents) != 1 {
-		t.Fatalf("first bundle events = %d, want 1", len(bundle1.NestedEvents))
+	if len(bundle1.Events) != 1 {
+		t.Fatalf("first bundle events = %d, want 1", len(bundle1.Events))
 	}
-	if bundle1.NestedEvents[0].EventType != EventLLMOutputDelta {
-		t.Fatalf("first event type = %q, want output", bundle1.NestedEvents[0].EventType)
+	if bundle1.Events[0].EventType != EventLLMOutputDelta {
+		t.Fatalf("first event type = %q, want output", bundle1.Events[0].EventType)
 	}
 
 	// Second tick should have the reasoning event (delayed from previous tick).
@@ -954,16 +954,16 @@ func TestMergeHubKeepsNonJoinableDeltasQueued(t *testing.T) {
 		t.Fatalf("Next 2 = not ok")
 	}
 
-	bundle2, err := DecodeBundlePayload(bundleEvent2.Delta)
+	bundle2, err := DecodeEventBatch(bundleEvent2.Delta)
 	if err != nil {
-		t.Fatalf("DecodeBundlePayload 2: %v", err)
+		t.Fatalf("DecodeEventBatch 2: %v", err)
 	}
 
-	if len(bundle2.NestedEvents) != 1 {
-		t.Fatalf("second bundle events = %d, want 1", len(bundle2.NestedEvents))
+	if len(bundle2.Events) != 1 {
+		t.Fatalf("second bundle events = %d, want 1", len(bundle2.Events))
 	}
-	if bundle2.NestedEvents[0].EventType != EventLLMReasoningDelta {
-		t.Fatalf("second event type = %q, want reasoning", bundle2.NestedEvents[0].EventType)
+	if bundle2.Events[0].EventType != EventLLMReasoningDelta {
+		t.Fatalf("second event type = %q, want reasoning", bundle2.Events[0].EventType)
 	}
 }
 
@@ -1060,16 +1060,16 @@ func TestMergeFromWithConfigHubModeEmitsBundles(t *testing.T) {
 	}
 
 	// Decode bundle to verify nested event.
-	bundle, err := DecodeBundlePayload(event.Delta)
+	bundle, err := DecodeEventBatch(event.Delta)
 	if err != nil {
-		t.Fatalf("DecodeBundlePayload: %v", err)
+		t.Fatalf("DecodeEventBatch: %v", err)
 	}
 
-	if len(bundle.NestedEvents) != 1 {
-		t.Fatalf("NestedEvents = %d, want 1", len(bundle.NestedEvents))
+	if len(bundle.Events) != 1 {
+		t.Fatalf("Events = %d, want 1", len(bundle.Events))
 	}
-	if bundle.NestedEvents[0].EventType != EventLLMOutputDelta {
-		t.Fatalf("Nested EventType = %q, want llm.output.delta", bundle.NestedEvents[0].EventType)
+	if bundle.Events[0].EventType != EventLLMOutputDelta {
+		t.Fatalf("Nested EventType = %q, want llm.output.delta", bundle.Events[0].EventType)
 	}
 }
 
@@ -1110,9 +1110,9 @@ func TestMergeWithConfigHubModeSharesDownstreamHub(t *testing.T) {
 		t.Fatalf("flushTick = false, want bundle")
 	}
 	bundleEvent := receiveEvent(t, sub.Events())
-	bundle, err := DecodeBundlePayload(bundleEvent.Delta)
+	bundle, err := DecodeEventBatch(bundleEvent.Delta)
 	if err != nil {
-		t.Fatalf("DecodeBundlePayload: %v", err)
+		t.Fatalf("DecodeEventBatch: %v", err)
 	}
 	if bundle.TickID != 1 {
 		t.Fatalf("first tick ID = %d, want 1", bundle.TickID)
@@ -1127,9 +1127,9 @@ func TestMergeWithConfigHubModeSharesDownstreamHub(t *testing.T) {
 		t.Fatalf("second flushTick = false, want bundle")
 	}
 	bundleEvent = receiveEvent(t, sub.Events())
-	bundle, err = DecodeBundlePayload(bundleEvent.Delta)
+	bundle, err = DecodeEventBatch(bundleEvent.Delta)
 	if err != nil {
-		t.Fatalf("DecodeBundlePayload second: %v", err)
+		t.Fatalf("DecodeEventBatch second: %v", err)
 	}
 	if bundle.TickID != 2 {
 		t.Fatalf("second tick ID = %d, want 2", bundle.TickID)
@@ -1180,9 +1180,9 @@ func TestMergeWithConfigStopUnregistersOnlyOneSharedHubUpstream(t *testing.T) {
 		t.Fatalf("flushTick after stopping mergeA = false, want mergeB bundle")
 	}
 	bundleEvent := receiveEvent(t, sub.Events())
-	bundle, err := DecodeBundlePayload(bundleEvent.Delta)
+	bundle, err := DecodeEventBatch(bundleEvent.Delta)
 	if err != nil {
-		t.Fatalf("DecodeBundlePayload: %v", err)
+		t.Fatalf("DecodeEventBatch: %v", err)
 	}
 	assertBundleNodes(t, bundle, "node_b")
 
@@ -1247,16 +1247,16 @@ func TestMergeFromWithConfigHubRespectsFilters(t *testing.T) {
 		t.Fatalf("Next = not ok")
 	}
 
-	bundle, err := DecodeBundlePayload(event.Delta)
+	bundle, err := DecodeEventBatch(event.Delta)
 	if err != nil {
-		t.Fatalf("DecodeBundlePayload: %v", err)
+		t.Fatalf("DecodeEventBatch: %v", err)
 	}
 
-	if len(bundle.NestedEvents) != 1 {
-		t.Fatalf("NestedEvents = %d, want 1 (executor filtered out)", len(bundle.NestedEvents))
+	if len(bundle.Events) != 1 {
+		t.Fatalf("Events = %d, want 1 (executor filtered out)", len(bundle.Events))
 	}
-	if bundle.NestedEvents[0].EventType != EventLLMOutputDelta {
-		t.Fatalf("EventType = %q, want llm.output.delta", bundle.NestedEvents[0].EventType)
+	if bundle.Events[0].EventType != EventLLMOutputDelta {
+		t.Fatalf("EventType = %q, want llm.output.delta", bundle.Events[0].EventType)
 	}
 }
 
@@ -1415,19 +1415,19 @@ func TestMergeFromWithConfigHubDrainsBufferedEventsOnUpstreamClose(t *testing.T)
 
 	first := receiveEvent(t, sub.Events())
 	second := receiveEvent(t, sub.Events())
-	firstBundle, err := DecodeBundlePayload(first.Delta)
+	firstBundle, err := DecodeEventBatch(first.Delta)
 	if err != nil {
 		t.Fatalf("Decode first bundle: %v", err)
 	}
-	secondBundle, err := DecodeBundlePayload(second.Delta)
+	secondBundle, err := DecodeEventBatch(second.Delta)
 	if err != nil {
 		t.Fatalf("Decode second bundle: %v", err)
 	}
-	if len(firstBundle.NestedEvents) != 1 || firstBundle.NestedEvents[0].EventType != EventLLMOutputDelta {
-		t.Fatalf("first drained bundle = %+v, want output", firstBundle.NestedEvents)
+	if len(firstBundle.Events) != 1 || firstBundle.Events[0].EventType != EventLLMOutputDelta {
+		t.Fatalf("first drained bundle = %+v, want output", firstBundle.Events)
 	}
-	if len(secondBundle.NestedEvents) != 1 || secondBundle.NestedEvents[0].EventType != EventLLMReasoningDelta {
-		t.Fatalf("second drained bundle = %+v, want reasoning", secondBundle.NestedEvents)
+	if len(secondBundle.Events) != 1 || secondBundle.Events[0].EventType != EventLLMReasoningDelta {
+		t.Fatalf("second drained bundle = %+v, want reasoning", secondBundle.Events)
 	}
 
 	select {
@@ -1437,7 +1437,7 @@ func TestMergeFromWithConfigHubDrainsBufferedEventsOnUpstreamClose(t *testing.T)
 	}
 }
 
-func TestMergeFromWithConfigHubNestedEventsUseMergedScopeAndMetadata(t *testing.T) {
+func TestMergeFromWithConfigHubEventsUseMergedScopeAndMetadata(t *testing.T) {
 	parent := New(Scope{RequestID: "req_1"}, DefaultConfig())
 	child := New(Scope{NodeID: "node_1"}, DefaultConfig())
 	t.Cleanup(parent.Close)
@@ -1465,14 +1465,14 @@ func TestMergeFromWithConfigHubNestedEventsUseMergedScopeAndMetadata(t *testing.
 	}
 
 	bundleEvent := receiveEvent(t, sub.Events())
-	bundle, err := DecodeBundlePayload(bundleEvent.Delta)
+	bundle, err := DecodeEventBatch(bundleEvent.Delta)
 	if err != nil {
-		t.Fatalf("DecodeBundlePayload: %v", err)
+		t.Fatalf("DecodeEventBatch: %v", err)
 	}
-	if len(bundle.NestedEvents) != 1 {
-		t.Fatalf("NestedEvents = %d, want 1", len(bundle.NestedEvents))
+	if len(bundle.Events) != 1 {
+		t.Fatalf("Events = %d, want 1", len(bundle.Events))
 	}
-	nested := bundle.NestedEvents[0]
+	nested := bundle.Events[0]
 	if nested.Scope.RequestID != "req_1" || nested.Scope.NodeID != "node_1" {
 		t.Fatalf("nested scope = %+v, want parent request and child node", nested.Scope)
 	}
@@ -1555,13 +1555,13 @@ func waitForHubQueuedEventCount(t *testing.T, hub *mergeHub, want int) {
 	}
 }
 
-func assertBundleNodes(t *testing.T, bundle BundlePayload, wantNodeIDs ...string) {
+func assertBundleNodes(t *testing.T, bundle EventBatch, wantNodeIDs ...string) {
 	t.Helper()
-	if len(bundle.NestedEvents) != len(wantNodeIDs) {
-		t.Fatalf("nested events = %d, want %d", len(bundle.NestedEvents), len(wantNodeIDs))
+	if len(bundle.Events) != len(wantNodeIDs) {
+		t.Fatalf("events = %d, want %d", len(bundle.Events), len(wantNodeIDs))
 	}
-	got := make(map[string]bool, len(bundle.NestedEvents))
-	for _, event := range bundle.NestedEvents {
+	got := make(map[string]bool, len(bundle.Events))
+	for _, event := range bundle.Events {
 		got[event.Scope.NodeID] = true
 	}
 	for _, nodeID := range wantNodeIDs {

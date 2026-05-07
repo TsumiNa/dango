@@ -331,9 +331,9 @@ func TestStreamReplayExpandedExpandsStoredBundles(t *testing.T) {
 	s := New(Scope{RequestID: "req_1"}, Config{DisableBuffer: true}, WithStore(store))
 	t.Cleanup(s.Close)
 
-	delta, err := EncodeBundlePayload(BundlePayload{
+	delta, err := EncodeEventBatch(EventBatch{
 		TickID: 1,
-		NestedEvents: []Event{
+		Events: []Event{
 			{
 				EventType: EventLLMReasoningDelta,
 				From:      Source{Layer: "skill", ID: "skill_1"},
@@ -351,7 +351,7 @@ func TestStreamReplayExpandedExpandsStoredBundles(t *testing.T) {
 		},
 	})
 	if err != nil {
-		t.Fatalf("EncodeBundlePayload: %v", err)
+		t.Fatalf("EncodeEventBatch: %v", err)
 	}
 	if err := s.Emit(t.Context(), Event{
 		EventType: EventMergeBundle,

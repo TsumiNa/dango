@@ -9,48 +9,84 @@ import (
 // A merge bundle contains multiple nested stream events emitted within a single merge tick window.
 const EventMergeBundle = "merge.bundle"
 
-// BundlePayload represents a collection of nested stream events emitted during
-// one merge tick window. It includes the tick window metadata and the nested events
-// that became ready for delivery during that tick.
+// EventBatch represents a collection of stream events emitted during one merge
+// tick window. It includes the tick window metadata and the events that became
+// ready for delivery during that tick.
 //
-// A bundle is the intermediate format used by the merge hub to group upstream
-// deltas by tick window. Downstream consumers parse the bundle and select nested
-// events they care about, typically by filtering on event type, source layer, or scope.
-type BundlePayload struct {
+// An EventBatch is the intermediate format used by the merge hub to group
+// upstream deltas by tick window. Downstream consumers parse the batch and
+// select events they care about, typically by filtering on event type, source
+// layer, or scope.
+type EventBatch struct {
 	// TickID is the logical tick identifier for this bundle window.
 	// It can be used for debugging and reconstructing the merge order.
 	TickID uint64 `json:"tick_id"`
 
-	// NestedEvents is the list of stream events ready for delivery in this tick.
-	// The order within NestedEvents matches the per-upstream FIFO order.
-	NestedEvents []Event `json:"nested_events"`
+	// Events is the list of stream events ready for delivery in this tick.
+	// The order within Events matches the per-upstream FIFO order.
+	Events []Event `json:"events"`
 }
 
-// EncodeBundlePayload serializes a BundlePayload into JSON-encoded raw message form
-// suitable for use as an Event.Delta field. Returns an error if the bundle cannot
+// UnmarshalJSON handles backward-compatible decoding for EventBatch payloads.
+// It prioritizes the modern "events" field but falls back to decoding legacy
+// payloads that used "nested_events".
+func (b *EventBatch) UnmarshalJSON(data []byte) error {
+	type rawBatch struct {
+		TickID       uint64           `json:"tick_id"`
+		Events       *json.RawMessage `json:"events"`
+		NestedEvents []Event          `json:"nested_events"`
+	}
+
+	var raw rawBatch
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return err
+	}
+
+	b.TickID = raw.TickID
+	// Only treat the "events" key as authoritative when it decodes to a
+	// non-nil, non-empty slice.  A JSON null or an explicit empty array is
+	// treated as absent so that legacy payloads using "nested_events" are
+	// still handled correctly.
+	if raw.Events != nil {
+		var evs []Event
+		if err := json.Unmarshal(*raw.Events, &evs); err != nil {
+			return err
+		}
+		if len(evs) > 0 {
+			b.Events = evs
+			return nil
+		}
+	}
+	b.Events = raw.NestedEvents
+
+	return nil
+}
+
+// EncodeEventBatch serializes an EventBatch into JSON-encoded raw message form
+// suitable for use as an Event.Delta field. Returns an error if the batch cannot
 // be marshaled.
-func EncodeBundlePayload(bundle BundlePayload) (json.RawMessage, error) {
+func EncodeEventBatch(bundle EventBatch) (json.RawMessage, error) {
 	data, err := json.Marshal(bundle)
 	if err != nil {
-		return nil, fmt.Errorf("encode bundle: %w", err)
+		return nil, fmt.Errorf("encode event batch: %w", err)
 	}
 	return json.RawMessage(data), nil
 }
 
-// DecodeBundlePayload deserializes a JSON-encoded bundle delta into a BundlePayload struct.
+// DecodeEventBatch deserializes a JSON-encoded batch delta into an EventBatch struct.
 // Returns an error if the delta is not valid JSON or does not match the expected shape.
-func DecodeBundlePayload(delta json.RawMessage) (BundlePayload, error) {
-	var bundle BundlePayload
+func DecodeEventBatch(delta json.RawMessage) (EventBatch, error) {
+	var bundle EventBatch
 	if err := json.Unmarshal(delta, &bundle); err != nil {
-		return BundlePayload{}, fmt.Errorf("decode bundle: %w", err)
+		return EventBatch{}, fmt.Errorf("decode event batch: %w", err)
 	}
 	return bundle, nil
 }
 
-// IsValidBundlePayload reports whether a bundle is valid for emission.
-// An empty bundle (no nested events) is not valid and should not be emitted.
-func IsValidBundlePayload(bundle BundlePayload) bool {
-	return len(bundle.NestedEvents) > 0
+// IsValidEventBatch reports whether a batch is valid for emission.
+// An empty batch (no events) is not valid and should not be emitted.
+func IsValidEventBatch(bundle EventBatch) bool {
+	return len(bundle.Events) > 0
 }
 
 // ExpandBundleEvent returns the events a downstream consumer should handle for event.
@@ -64,16 +100,16 @@ func ExpandBundleEvent(event Event) ([]Event, error) {
 		return []Event{event}, nil
 	}
 
-	bundle, err := DecodeBundlePayload(event.Delta)
+	bundle, err := DecodeEventBatch(event.Delta)
 	if err != nil {
 		return nil, fmt.Errorf("expand bundle event: %w", err)
 	}
-	if !IsValidBundlePayload(bundle) {
-		return nil, fmt.Errorf("expand bundle event: empty bundle")
+	if !IsValidEventBatch(bundle) {
+		return nil, fmt.Errorf("expand bundle event: empty event batch")
 	}
 
-	events := make([]Event, len(bundle.NestedEvents))
-	copy(events, bundle.NestedEvents)
+	events := make([]Event, len(bundle.Events))
+	copy(events, bundle.Events)
 	for i := range events {
 		events[i].Scope = mergeScope(event.Scope, events[i].Scope)
 	}
