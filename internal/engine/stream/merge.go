@@ -14,7 +14,8 @@ import (
 // sequence number is copied into metadata for debugging and persistence.
 //
 // When MergeWindowConfig has TickDuration > 0, events are collected into bundles
-// by the merge hub. When TickDuration is 0 (default), events are forwarded directly.
+// by the downstream stream's shared merge hub. When TickDuration is 0 (default),
+// events are forwarded directly.
 type Merge struct {
 	cancel context.CancelFunc
 	done   chan struct{}
@@ -41,8 +42,9 @@ func (s *Stream) MergeFrom(ctx context.Context, upstream *Stream, filter Filter,
 
 // MergeWithConfig forwards events from upstream into s with configurable
 // hub behavior. When config.TickDuration > 0, events are collected into bundles
-// by a merge hub. When TickDuration is 0, uses direct forwarding (same as MergeFrom).
-// Negative TickDuration values are rejected with [ErrInvalidMerge].
+// by a downstream-owned merge hub shared with compatible hub-mode merges. When
+// TickDuration is 0, uses direct forwarding (same as MergeFrom). Negative
+// TickDuration values are rejected with [ErrInvalidMerge].
 //
 // filter and opts are applied while subscribing to upstream.
 func (s *Stream) MergeWithConfig(ctx context.Context, upstream *Stream, filter Filter, config MergeWindowConfig, opts ...SubscribeOption) (*Merge, error) {
@@ -58,6 +60,7 @@ func (s *Stream) MergeWithConfig(ctx context.Context, upstream *Stream, filter F
 	if config.TickDuration < 0 {
 		return nil, ErrInvalidMerge
 	}
+	config = normalizeMergeWindowConfig(config)
 
 	sub, err := upstream.Subscribe(filter, opts...)
 	if err != nil {
@@ -75,7 +78,8 @@ func (s *Stream) MergeWithConfig(ctx context.Context, upstream *Stream, filter F
 		return merge, nil
 	}
 
-	hub := newMergeHub(runCtx, s, config.TickDuration, config.PerUpstreamBufferDepth)
+	hub := s.mergeHub(config)
+	hub.beginRegistration()
 	merge.hub = hub
 	go merge.runHubWithFirstEvent(runCtx, hub, sub)
 
@@ -85,59 +89,68 @@ func (s *Stream) MergeWithConfig(ctx context.Context, upstream *Stream, filter F
 // runHubWithFirstEvent reads the first event from the subscription to determine
 // the upstream identity, registers it with the hub, and then feeds events.
 func (m *Merge) runHubWithFirstEvent(ctx context.Context, hub *mergeHub, sub *Subscription) {
+	readCtx, cancelRead := context.WithCancel(ctx)
+	go func() {
+		select {
+		case <-readCtx.Done():
+		case <-hub.ctx.Done():
+			cancelRead()
+		}
+	}()
 	defer func() {
+		cancelRead()
 		m.setErr(hub.Err())
 		close(m.done)
 	}()
 	defer sub.Cancel()
 
-	firstEvent, ok, err := sub.Next(ctx)
+	firstEvent, ok, err := sub.Next(readCtx)
 	if err != nil {
 		m.setErr(err)
-		hub.Stop()
+		hub.cancelPendingRegistration()
 		return
 	}
 	if !ok {
-		hub.Stop()
+		hub.cancelPendingRegistration()
 		return
 	}
 
 	identity := upstreamIdentityOf(firstEvent.From)
-	if err := hub.registerUpstream(identity, sub); err != nil {
+	if err := hub.registerPendingUpstream(identity, sub); err != nil {
 		m.setErr(err)
-		hub.Stop()
+		hub.stopIfIdle()
 		return
 	}
 	if err := hub.enqueue(identity, firstEvent); err != nil {
 		m.setErr(err)
-		hub.Stop()
+		hub.unregisterUpstream(identity)
 		return
 	}
 
 	for {
 		select {
-		case <-ctx.Done():
-			hub.Stop()
+		case <-readCtx.Done():
+			hub.unregisterUpstream(identity)
 			return
 		case <-hub.ctx.Done():
 			return
 		default:
 		}
 
-		event, ok, err := sub.Next(ctx)
+		event, ok, err := sub.Next(readCtx)
 		if err != nil {
 			m.setErr(err)
-			hub.Stop()
+			hub.unregisterUpstream(identity)
 			return
 		}
 		if !ok {
-			hub.drainAndStop(identity)
+			hub.drainClosedUpstream(identity)
 			return
 		}
 
 		if err := hub.enqueue(identity, event); err != nil {
 			m.setErr(err)
-			hub.Stop()
+			hub.unregisterUpstream(identity)
 			return
 		}
 	}
@@ -188,10 +201,6 @@ func (m *Merge) Stop() {
 		return
 	}
 	m.cancel()
-	if m.hub != nil {
-		m.hub.Stop()
-		m.setErr(m.hub.Err())
-	}
 }
 
 // Done closes when the merge stops.
@@ -458,6 +467,54 @@ func DefaultHubMergeWindowConfig() MergeWindowConfig {
 	}
 }
 
+type mergeHubKey struct {
+	tickDuration           time.Duration
+	perUpstreamBufferDepth int
+}
+
+func normalizeMergeWindowConfig(config MergeWindowConfig) MergeWindowConfig {
+	if config.PerUpstreamBufferDepth <= 0 {
+		config.PerUpstreamBufferDepth = DefaultMergePerUpstreamBufferDepth
+	}
+	return config
+}
+
+func mergeHubKeyOf(config MergeWindowConfig) mergeHubKey {
+	config = normalizeMergeWindowConfig(config)
+	return mergeHubKey{
+		tickDuration:           config.TickDuration,
+		perUpstreamBufferDepth: config.PerUpstreamBufferDepth,
+	}
+}
+
+func (s *Stream) mergeHub(config MergeWindowConfig) *mergeHub {
+	key := mergeHubKeyOf(config)
+
+	s.mergeMu.Lock()
+	defer s.mergeMu.Unlock()
+	if hub := s.mergeHubs[key]; hub != nil && hub.active() {
+		return hub
+	}
+	hub := newMergeHub(context.Background(), s, config.TickDuration, config.PerUpstreamBufferDepth)
+	s.mergeHubs[key] = hub
+	return hub
+}
+
+func (s *Stream) stopMergeHubs() {
+	s.mergeMu.Lock()
+	hubs := make([]*mergeHub, 0, len(s.mergeHubs))
+	for _, hub := range s.mergeHubs {
+		hubs = append(hubs, hub)
+	}
+	s.mergeHubs = make(map[mergeHubKey]*mergeHub)
+	s.mergeMu.Unlock()
+
+	for _, hub := range hubs {
+		hub.setErr(ErrClosed)
+		hub.Stop()
+	}
+}
+
 // mergeHub owns multiple upstream FIFOs and emits bundles on each tick.
 //
 // The hub collects one ready item per upstream FIFO during each tick window.
@@ -487,6 +544,11 @@ type mergeHub struct {
 	// subscriptions maps upstream identity to subscription, used to detect closes.
 	// Guarded by mu.
 	subscriptions map[upstreamIdentity]*Subscription
+
+	// pendingRegistrations counts merge feeders that have subscribed but have not
+	// seen their first upstream event yet.
+	// Guarded by mu.
+	pendingRegistrations int
 
 	// ctx is the hub's context, canceled when hub stops.
 	ctx context.Context
@@ -548,6 +610,49 @@ func (h *mergeHub) registerUpstream(identity upstreamIdentity, sub *Subscription
 	h.mu.Lock()
 	defer h.mu.Unlock()
 
+	select {
+	case <-h.ctx.Done():
+		return context.Canceled
+	default:
+	}
+	if _, exists := h.fifosByIdentity[identity]; exists {
+		return errors.New("upstream already registered")
+	}
+	h.fifosByIdentity[identity] = newUpstreamFIFO(identity, h.perUpstreamBufferDepth)
+	h.subscriptions[identity] = sub
+	return nil
+}
+
+func (h *mergeHub) beginRegistration() {
+	h.mu.Lock()
+	h.pendingRegistrations++
+	h.mu.Unlock()
+}
+
+func (h *mergeHub) cancelPendingRegistration() {
+	h.mu.Lock()
+	if h.pendingRegistrations > 0 {
+		h.pendingRegistrations--
+	}
+	stop := h.idleLocked()
+	h.mu.Unlock()
+	if stop {
+		h.cancel()
+	}
+}
+
+func (h *mergeHub) registerPendingUpstream(identity upstreamIdentity, sub *Subscription) error {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+
+	if h.pendingRegistrations > 0 {
+		h.pendingRegistrations--
+	}
+	select {
+	case <-h.ctx.Done():
+		return context.Canceled
+	default:
+	}
 	if _, exists := h.fifosByIdentity[identity]; exists {
 		return errors.New("upstream already registered")
 	}
@@ -574,18 +679,52 @@ func (h *mergeHub) closeUpstream(identity upstreamIdentity) {
 	if fifo, ok := h.fifosByIdentity[identity]; ok && fifo.len() == 0 {
 		delete(h.fifosByIdentity, identity)
 	}
-	stop := len(h.subscriptions) == 0 && len(h.fifosByIdentity) == 0
+	stop := h.idleLocked()
 	h.mu.Unlock()
 	if stop {
 		h.cancel()
 	}
 }
 
-func (h *mergeHub) drainAndStop(identity upstreamIdentity) {
-	h.closeUpstream(identity)
-	for h.flushTick() {
+func (h *mergeHub) unregisterUpstream(identity upstreamIdentity) {
+	h.mu.Lock()
+	delete(h.subscriptions, identity)
+	delete(h.fifosByIdentity, identity)
+	stop := h.idleLocked()
+	h.mu.Unlock()
+	if stop {
+		h.cancel()
 	}
-	h.Stop()
+}
+
+func (h *mergeHub) drainClosedUpstream(identity upstreamIdentity) {
+	h.closeUpstream(identity)
+	for h.hasFIFO(identity) {
+		if !h.flushTick() {
+			break
+		}
+	}
+	h.stopIfIdle()
+}
+
+func (h *mergeHub) hasFIFO(identity upstreamIdentity) bool {
+	h.mu.RLock()
+	_, ok := h.fifosByIdentity[identity]
+	h.mu.RUnlock()
+	return ok
+}
+
+func (h *mergeHub) stopIfIdle() {
+	h.mu.Lock()
+	stop := h.idleLocked()
+	h.mu.Unlock()
+	if stop {
+		h.cancel()
+	}
+}
+
+func (h *mergeHub) idleLocked() bool {
+	return h.pendingRegistrations == 0 && len(h.subscriptions) == 0 && len(h.fifosByIdentity) == 0
 }
 
 // feedUpstream reads events from a subscription and enqueues them into the FIFO.
@@ -665,7 +804,7 @@ func (h *mergeHub) flushTick() bool {
 		}
 	}
 
-	stop := len(h.subscriptions) == 0 && len(h.fifosByIdentity) == 0
+	stop := h.idleLocked()
 
 	// Increment tick counter for this flush.
 	h.tickCounter++
@@ -724,6 +863,15 @@ func (h *mergeHub) Stop() {
 	}
 	h.cancel()
 	<-h.done
+}
+
+func (h *mergeHub) active() bool {
+	select {
+	case <-h.ctx.Done():
+		return false
+	default:
+		return true
+	}
 }
 
 // Err reports the first non-context error encountered by the hub.

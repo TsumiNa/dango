@@ -64,12 +64,14 @@ type Stream struct {
 
 	mu              sync.Mutex
 	deliveryMu      sync.Mutex
+	mergeMu         sync.Mutex
 	nextSeq         uint64
 	nextLogicalTime uint64
 	nextSubID       uint64
 	closed          bool
 	buffer          []Event
 	subscribers     map[uint64]*Subscription
+	mergeHubs       map[mergeHubKey]*mergeHub
 }
 
 // New creates a stream scoped to one request/run/session.
@@ -85,6 +87,7 @@ func New(scope Scope, cfg Config, opts ...Option) *Stream {
 		bufferLimit: bufferLimit,
 		now:         time.Now,
 		subscribers: make(map[uint64]*Subscription),
+		mergeHubs:   make(map[mergeHubKey]*mergeHub),
 	}
 	for _, opt := range opts {
 		if opt != nil {
@@ -171,6 +174,7 @@ func (s *Stream) Close() {
 	for _, sub := range subs {
 		sub.closeDone()
 	}
+	s.stopMergeHubs()
 
 	s.deliveryMu.Lock()
 	defer s.deliveryMu.Unlock()
