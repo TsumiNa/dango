@@ -33,7 +33,7 @@ func TestEncodeEventBatchRoundTrip(t *testing.T) {
 	}
 
 	bundle := EventBatch{
-		TickID:       42,
+		TickID: 42,
 		Events: []Event{nestedEvent1, nestedEvent2},
 	}
 
@@ -91,7 +91,7 @@ func TestEncodeEventBatchRoundTrip(t *testing.T) {
 
 func TestEmptyEventBatchIsInvalid(t *testing.T) {
 	bundle := EventBatch{
-		TickID:       1,
+		TickID: 1,
 		Events: []Event{},
 	}
 
@@ -137,7 +137,7 @@ func TestEventBatchWithNestedFieldsPreservesMetadata(t *testing.T) {
 	}
 
 	bundle := EventBatch{
-		TickID:       99,
+		TickID: 99,
 		Events: []Event{nestedEvent},
 	}
 
@@ -203,7 +203,7 @@ func TestExpandBundleEventReturnsEventsInOrder(t *testing.T) {
 		Delta:     json.RawMessage(`"answer"`),
 	}
 	delta, err := EncodeEventBatch(EventBatch{
-		TickID:       7,
+		TickID: 7,
 		Events: []Event{first, second},
 	})
 	if err != nil {
@@ -242,7 +242,7 @@ func TestFilterBundleEventSelectsEvents(t *testing.T) {
 		Delta:     json.RawMessage(`{"progress":50}`),
 	}
 	delta, err := EncodeEventBatch(EventBatch{
-		TickID:       8,
+		TickID: 8,
 		Events: []Event{hidden, visible},
 	})
 	if err != nil {
