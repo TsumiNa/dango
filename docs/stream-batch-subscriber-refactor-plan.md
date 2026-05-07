@@ -72,7 +72,7 @@ Keep the current public behavior, but make the raw payload vocabulary clearer.
 ### Changes
 
 1. Rename the payload type from bundle-oriented naming to batch-oriented naming,
-   for example `EventBatch` to `EventBatch` or `BatchPayload`.
+   for example `BundlePayload` to `EventBatch` or `BatchPayload`.
 2. Rename the JSON field from `nested_events` to `events`.
 3. Keep backward-compatible decoding for old persisted/debug payloads that still
    contain `nested_events`.

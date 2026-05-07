@@ -670,7 +670,7 @@ func TestMergeHubTickEmitsBundleWithReadyEvents(t *testing.T) {
 	}
 
 	if len(bundle.Events) != 2 {
-		t.Fatalf("nested events count = %d, want 2", len(bundle.Events))
+		t.Fatalf("events count = %d, want 2", len(bundle.Events))
 	}
 
 	if bundle.TickID != 1 {
@@ -742,7 +742,7 @@ func TestMergeHubJoinsConsecutiveStringDeltas(t *testing.T) {
 
 	// Should have one joined event instead of three.
 	if len(bundle.Events) != 1 {
-		t.Fatalf("nested events count = %d, want 1 (should be joined)", len(bundle.Events))
+		t.Fatalf("events count = %d, want 1 (should be joined)", len(bundle.Events))
 	}
 
 	// Verify the joined delta.
@@ -1558,7 +1558,7 @@ func waitForHubQueuedEventCount(t *testing.T, hub *mergeHub, want int) {
 func assertBundleNodes(t *testing.T, bundle EventBatch, wantNodeIDs ...string) {
 	t.Helper()
 	if len(bundle.Events) != len(wantNodeIDs) {
-		t.Fatalf("nested events = %d, want %d", len(bundle.Events), len(wantNodeIDs))
+		t.Fatalf("events = %d, want %d", len(bundle.Events), len(wantNodeIDs))
 	}
 	got := make(map[string]bool, len(bundle.Events))
 	for _, event := range bundle.Events {

@@ -31,9 +31,9 @@ type EventBatch struct {
 // payloads that used "nested_events".
 func (b *EventBatch) UnmarshalJSON(data []byte) error {
 	type rawBatch struct {
-		TickID       uint64  `json:"tick_id"`
-		Events       []Event `json:"events"`
-		NestedEvents []Event `json:"nested_events"`
+		TickID       uint64           `json:"tick_id"`
+		Events       *json.RawMessage `json:"events"`
+		NestedEvents []Event          `json:"nested_events"`
 	}
 
 	var raw rawBatch
@@ -42,8 +42,10 @@ func (b *EventBatch) UnmarshalJSON(data []byte) error {
 	}
 
 	b.TickID = raw.TickID
-	if len(raw.Events) > 0 {
-		b.Events = raw.Events
+	if raw.Events != nil {
+		if err := json.Unmarshal(*raw.Events, &b.Events); err != nil {
+			return err
+		}
 	} else {
 		b.Events = raw.NestedEvents
 	}
@@ -51,7 +53,7 @@ func (b *EventBatch) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
-// EncodeEventBatch serializes a EventBatch into JSON-encoded raw message form
+// EncodeEventBatch serializes an EventBatch into JSON-encoded raw message form
 // suitable for use as an Event.Delta field. Returns an error if the bundle cannot
 // be marshaled.
 func EncodeEventBatch(bundle EventBatch) (json.RawMessage, error) {
@@ -72,8 +74,8 @@ func DecodeEventBatch(delta json.RawMessage) (EventBatch, error) {
 	return bundle, nil
 }
 
-// IsValidEventBatch reports whether a bundle is valid for emission.
-// An empty bundle (no nested events) is not valid and should not be emitted.
+// IsValidEventBatch reports whether a batch is valid for emission.
+// An empty batch (no events) is not valid and should not be emitted.
 func IsValidEventBatch(bundle EventBatch) bool {
 	return len(bundle.Events) > 0
 }
