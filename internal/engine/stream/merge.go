@@ -307,10 +307,10 @@ type upstreamFIFO struct {
 }
 
 // newUpstreamFIFO creates a new FIFO for the given upstream with a depth limit.
-// maxDepth must be positive; if not, a minimum depth of 1000 is used.
+// maxDepth must be positive; if not, [DefaultMergePerUpstreamBufferDepth] is used.
 func newUpstreamFIFO(identity upstreamIdentity, maxDepth int) *upstreamFIFO {
 	if maxDepth <= 0 {
-		maxDepth = 1000
+		maxDepth = DefaultMergePerUpstreamBufferDepth
 	}
 	return &upstreamFIFO{
 		identity: identity,
@@ -398,7 +398,7 @@ type MergeWindowConfig struct {
 	TickDuration time.Duration
 
 	// PerUpstreamBufferDepth limits events queued per upstream before overflow.
-	// When zero, a default of 1000 is used.
+	// When zero, [DefaultMergePerUpstreamBufferDepth] is used.
 	PerUpstreamBufferDepth int
 }
 
@@ -406,12 +406,16 @@ type MergeWindowConfig struct {
 // stream merges.
 const DefaultMergeTickDuration = 10 * time.Millisecond
 
+// DefaultMergePerUpstreamBufferDepth is the standard per-upstream FIFO depth
+// used by hub-mode stream merges.
+const DefaultMergePerUpstreamBufferDepth = 4096
+
 // DefaultMergeWindowConfig returns a MergeWindowConfig with direct-forwarding
 // behavior (TickDuration = 0).
 func DefaultMergeWindowConfig() MergeWindowConfig {
 	return MergeWindowConfig{
 		TickDuration:           0,
-		PerUpstreamBufferDepth: 1000,
+		PerUpstreamBufferDepth: DefaultMergePerUpstreamBufferDepth,
 	}
 }
 
@@ -420,7 +424,7 @@ func DefaultMergeWindowConfig() MergeWindowConfig {
 func DefaultHubMergeWindowConfig() MergeWindowConfig {
 	return MergeWindowConfig{
 		TickDuration:           DefaultMergeTickDuration,
-		PerUpstreamBufferDepth: 1000,
+		PerUpstreamBufferDepth: DefaultMergePerUpstreamBufferDepth,
 	}
 }
 
@@ -474,7 +478,7 @@ type mergeHub struct {
 // tick windows. tickDuration of zero disables hub mode.
 func newMergeHub(ctx context.Context, downstream *Stream, tickDuration time.Duration, perUpstreamDepth int) *mergeHub {
 	if perUpstreamDepth <= 0 {
-		perUpstreamDepth = 1000
+		perUpstreamDepth = DefaultMergePerUpstreamBufferDepth
 	}
 	hubCtx, cancel := context.WithCancel(ctx)
 	hub := &mergeHub{

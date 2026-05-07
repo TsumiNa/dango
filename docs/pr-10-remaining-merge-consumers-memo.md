@@ -14,7 +14,9 @@ All production stream merge paths now use hub mode:
 
 Each path uses `stream.DefaultHubMergeWindowConfig`, whose shared tick is
 `stream.DefaultMergeTickDuration`, and keeps the existing upstream subscription
-buffer size.
+buffer size. The shared hub config uses `stream.DefaultMergePerUpstreamBufferDepth`
+for per-upstream FIFO buffering, currently sized to match the 4096-event
+subscription buffers used by migrated runtime merges.
 
 ### Consumer Pattern
 
