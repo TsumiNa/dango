@@ -28,12 +28,8 @@ func nextExpandedStreamEventWithin(t *testing.T, sub *streampkg.Subscription, fi
 		if !ok {
 			t.Fatal("stream closed before expanded event")
 		}
-		events, err := streampkg.FilterBundleEvent(event, filter)
-		if err != nil {
-			t.Fatalf("FilterBundleEvent: %v", err)
-		}
-		if len(events) > 0 {
-			return events[0], true
+		if filter.Match(event) {
+			return event, true
 		}
 	}
 }
@@ -212,7 +208,7 @@ func TestRunnerEmitsArtifactCreatedEventsFromExchangeOutput(t *testing.T) {
 
 	r := newTestRunner()
 	eventStream := r.EventStream()
-	sub, err := eventStream.Subscribe(streampkg.Filter{EventTypes: []string{streampkg.EventArtifactCreated, streampkg.EventMergeBundle}}, streampkg.WithSubscriberBuffer(8))
+	sub, err := eventStream.Subscribe(streampkg.Filter{EventTypes: []string{streampkg.EventArtifactCreated}}, streampkg.WithSubscriberBuffer(8))
 	if err != nil {
 		t.Fatalf("Subscribe: %v", err)
 	}
@@ -281,7 +277,7 @@ func TestRunnerEmitsSkillMemoEventsFromExchangeOutput(t *testing.T) {
 
 	r := newTestRunner()
 	eventStream := r.EventStream()
-	sub, err := eventStream.Subscribe(streampkg.Filter{EventTypes: []string{streampkg.EventSkillMemoDelta, streampkg.EventMergeBundle}}, streampkg.WithSubscriberBuffer(8))
+	sub, err := eventStream.Subscribe(streampkg.Filter{EventTypes: []string{streampkg.EventSkillMemoDelta}}, streampkg.WithSubscriberBuffer(8))
 	if err != nil {
 		t.Fatalf("Subscribe: %v", err)
 	}
@@ -341,7 +337,7 @@ func TestRunnerDoesNotEmitSkillMemoWithoutMemo(t *testing.T) {
 
 	r := newTestRunner()
 	eventStream := r.EventStream()
-	sub, err := eventStream.Subscribe(streampkg.Filter{EventTypes: []string{streampkg.EventSkillMemoDelta, streampkg.EventMergeBundle}}, streampkg.WithSubscriberBuffer(8))
+	sub, err := eventStream.Subscribe(streampkg.Filter{EventTypes: []string{streampkg.EventSkillMemoDelta}}, streampkg.WithSubscriberBuffer(8))
 	if err != nil {
 		t.Fatalf("Subscribe: %v", err)
 	}
@@ -378,7 +374,7 @@ func TestRunnerDoesNotEmitArtifactCreatedWithoutResources(t *testing.T) {
 
 	r := newTestRunner()
 	eventStream := r.EventStream()
-	sub, err := eventStream.Subscribe(streampkg.Filter{EventTypes: []string{streampkg.EventArtifactCreated, streampkg.EventMergeBundle}}, streampkg.WithSubscriberBuffer(8))
+	sub, err := eventStream.Subscribe(streampkg.Filter{EventTypes: []string{streampkg.EventArtifactCreated}}, streampkg.WithSubscriberBuffer(8))
 	if err != nil {
 		t.Fatalf("Subscribe: %v", err)
 	}
