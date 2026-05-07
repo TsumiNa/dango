@@ -49,7 +49,7 @@ or more logical `Event` values:
 
 ```go
 type EventBatch struct {
-    TickID uint64  `json:"tick_id,omitempty"`
+    TickID uint64  `json:"tick_id"` // omitempty planned for a later cleanup
     Events []Event `json:"events"`
 }
 ```

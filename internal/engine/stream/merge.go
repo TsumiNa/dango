@@ -818,7 +818,7 @@ func (h *mergeHub) flushTick() bool {
 		return false
 	}
 
-	// Create and encode bundle payload.
+	// Create and encode the event batch for this tick.
 	bundle := EventBatch{
 		TickID:       tickID,
 		Events: items,

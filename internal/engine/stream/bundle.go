@@ -43,13 +43,21 @@ func (b *EventBatch) UnmarshalJSON(data []byte) error {
 	}
 
 	b.TickID = raw.TickID
+	// Only treat the "events" key as authoritative when it decodes to a
+	// non-nil, non-empty slice.  A JSON null or an explicit empty array is
+	// treated as absent so that legacy payloads using "nested_events" are
+	// still handled correctly.
 	if raw.Events != nil {
-		if err := json.Unmarshal(*raw.Events, &b.Events); err != nil {
+		var evs []Event
+		if err := json.Unmarshal(*raw.Events, &evs); err != nil {
 			return err
 		}
-	} else {
-		b.Events = raw.NestedEvents
+		if len(evs) > 0 {
+			b.Events = evs
+			return nil
+		}
 	}
+	b.Events = raw.NestedEvents
 
 	return nil
 }
@@ -97,7 +105,7 @@ func ExpandBundleEvent(event Event) ([]Event, error) {
 		return nil, fmt.Errorf("expand bundle event: %w", err)
 	}
 	if !IsValidEventBatch(bundle) {
-		return nil, fmt.Errorf("expand bundle event: empty bundle")
+		return nil, fmt.Errorf("expand bundle event: empty event batch")
 	}
 
 	events := make([]Event, len(bundle.Events))
