@@ -299,6 +299,14 @@ func (s *Stream) Replay(filter Filter, opts ...SubscribeOption) ([]Event, error)
 // replayLogicalLocked replays events from the buffer or store, expanding merge
 // bundle events into their nested events and applying filter per logical event.
 // It must be called with s.mu held.
+//
+// Store reads always use an empty filter because a merge.bundle carrier must be
+// loaded to expand its nested events, even when the caller's filter is narrow.
+// Passing the caller's filter to the store would silently drop bundles whose
+// carrier event type does not match the filter. The expansion and filtering
+// therefore happen entirely in memory after loading. For store-backed streams
+// with a large history and a narrow filter, prefer [WithRawStream] and manual
+// bundle expansion if store IO is a concern.
 func (s *Stream) replayLogicalLocked(filter Filter, settings subscribeSettings) ([]Event, error) {
 	raw, err := s.replayLocked(Filter{}, settings)
 	if err != nil {
