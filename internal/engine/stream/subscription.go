@@ -84,6 +84,7 @@ type Subscription struct {
 	id             uint64
 	stream         *Stream
 	filter         Filter
+	logical        bool
 	events         chan Event
 	done           chan struct{}
 	overflowPolicy OverflowPolicy
@@ -133,6 +134,9 @@ func (sub *Subscription) Cancel() {
 }
 
 func (sub *Subscription) send(ctx context.Context, event Event) error {
+	if sub.logical && event.EventType == EventMergeBundle {
+		return sub.sendLogicalBundle(ctx, event)
+	}
 	select {
 	case sub.events <- event:
 		return nil
@@ -146,6 +150,31 @@ func (sub *Subscription) send(ctx context.Context, event Event) error {
 		}
 		return nil
 	}
+}
+
+// sendLogicalBundle expands a merge.bundle event and delivers each nested
+// event that matches the subscription filter. Events that do not match are
+// silently dropped. The order of delivery matches the bundle's per-upstream
+// FIFO order.
+func (sub *Subscription) sendLogicalBundle(ctx context.Context, event Event) error {
+	events, err := FilterBundleEvent(event, sub.filter)
+	if err != nil {
+		return err
+	}
+	for _, e := range events {
+		select {
+		case sub.events <- e:
+		case <-sub.done:
+			return nil
+		case <-ctx.Done():
+			return ctx.Err()
+		default:
+			if sub.overflowPolicy == OverflowError {
+				return ErrSubscriberOverflow
+			}
+		}
+	}
+	return nil
 }
 
 func (sub *Subscription) closeDone() {

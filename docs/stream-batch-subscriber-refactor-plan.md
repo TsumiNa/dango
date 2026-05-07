@@ -26,8 +26,8 @@ tick produced one event or several.
 - Rename `nested_events` to `events` in the batch payload shape so the debug/raw
   representation describes what it contains directly.
 - Make ordinary subscribe and replay APIs deliver logical events by default.
-- Keep explicit raw/debug APIs for subscribers, persistence tests, and tools that
-  need to inspect tick frames.
+- Keep explicit raw/debug opt-in behavior for subscribers, persistence tests,
+  and tools that need to inspect tick frames.
 - Reduce duplicated bundle expansion logic in renderer, examples, runner, and
   request-waiting consumers.
 
@@ -58,7 +58,7 @@ Direct forwarding is a frame with one event and no meaningful tick ID. Hub-mode
 merge ticks are frames with a tick ID and one or more events. Public logical
 subscribers should not have to care which transport path produced the frame.
 
-Raw/debug subscribers may still observe stored frames, including tick metadata,
+Raw/debug subscribers may still opt in to stored frames, including tick metadata,
 for diagnostics and persistence verification.
 
 ## PR 1: Rename Batch Payload Vocabulary
@@ -111,54 +111,68 @@ without changing default subscriber behavior yet.
 - Frame normalization preserves event source, scope, status, logical time,
   timestamps, metadata, and upstream sequence metadata.
 
-## PR 3: Add Logical Subscribe And Replay Paths
+## PR 3: Refactor Subscribe And Replay To Expanded By Default
 
 ### Scope
 
-Move bundle/batch expansion into the stream package so consumers can opt into
-logical events without open-coding expansion.
+Move bundle/batch expansion into the stream package and make the ordinary
+`Subscribe` and `Replay` APIs return expanded logical events by default.
+Callers that need to inspect raw transport frames opt in through
+`SubscribeOption`, for example `WithRawStream`.
 
 ### Changes
 
-1. Add explicit logical replay and subscription paths if needed, or evolve the
-   existing `Subscribe`/`Replay` implementation behind a compatibility layer.
-2. Apply filters to logical events inside a batch, not only to the raw carrier.
-3. Preserve raw replay/subscription helpers for debug and persistence inspection,
-   such as `SubscribeRaw`, `ReplayRaw`, or equivalent local naming.
-4. Keep ordering deterministic: raw stream order first, batch event order within
+1. Keep a single public `Subscribe(filter, opts...)` API. By default it expands
+   batch frames and applies filters to the logical events inside a batch, not to
+   the raw carrier.
+2. Keep a single public `Replay(filter, opts...)` API with the same default
+   expanded behavior.
+3. Add a `SubscribeOption` such as `WithRawStream` that makes `Subscribe` and
+   `Replay` return raw transport frames for debug and persistence inspection.
+4. Do not expose `SubscribeLogical`, `ReplayExpanded`, or other public API names
+   containing "logical"; the term may remain only in private implementation
+   details where it helps describe the internal path.
+5. Keep ordering deterministic: raw stream order first, batch event order within
    each frame second.
+6. Document subscriber buffer semantics for expanded events, because one raw
+   batch may expand into more than one delivered event. Raw-stream opt-in keeps
+   the existing raw frame replay behavior.
+7. Remove legacy `nested_events` decoding and tests immediately. New and raw
+  debug payloads use only the `events` field.
 
 ### Tests
 
-- A logical subscriber receives one event for a single-event batch and multiple
+- A default subscriber receives one event for a single-event batch and multiple
   events for a multi-event batch.
 - Filters select matching events inside a batch and drop non-matching events.
-- Replay returns logical events in the same order as live subscription.
-- Raw replay/subscription still exposes the batch frame for debug consumers.
+- Default replay returns expanded events in the same order as live subscription.
+- `WithRawStream` replay/subscription still exposes the batch frame for debug
+  consumers.
+- The public stream package surface does not expose `SubscribeLogical` or
+  `ReplayExpanded`.
 
-## PR 4: Make Ordinary Subscribers Logical By Default
+## PR 4: Migrate Runtime Consumers To Default Expanded Streams
 
 ### Scope
 
-Flip the ordinary consumer-facing APIs to logical-event delivery and migrate
-runtime callers off manual expansion.
+Migrate runtime callers to the refactored default-expanded `Subscribe` and
+`Replay` APIs, and keep only true debug/persistence consumers on raw stream
+mode.
 
 ### Changes
 
-1. Make `Subscribe` and ordinary replay APIs return logical events by default,
-   if PR 3 introduced temporary parallel logical APIs.
-2. Move raw/debug consumers to the explicit raw APIs.
-3. Remove manual calls to batch expansion from examples, stream renderer,
+1. Move raw/debug consumers to `WithRawStream`.
+2. Remove manual calls to batch expansion from examples, stream renderer,
    request waiting helpers, runner consumers, and tests that are not validating
    raw persistence.
-4. Ensure subscriber buffer semantics are documented for logical events, because
-   one raw batch may expand into more than one delivered event.
+3. Remove any temporary compatibility naming left from PR 3 if implementation
+  staging required it within the branch.
 
 ### Tests
 
 - Existing runtime consumers pass without knowing about `merge.bundle`.
 - Renderer subscription tests observe logical events and still preserve raw debug
-  logging through the raw observation path.
+  logging through `WithRawStream`.
 - Request and runner waiting helpers no longer need to expand bundle events.
 - Subscriber buffer and overflow behavior is clear when one raw batch expands to
   multiple logical events.
@@ -173,18 +187,15 @@ Remove or narrow the old bundle-specific API after consumers have migrated.
 
 1. Rename or deprecate bundle-specific helpers that now describe raw batch
    behavior poorly, such as `ExpandBundleEvent` and `FilterBundleEvent`.
-2. Keep legacy decoders only where persisted data compatibility requires them.
-3. Update docs and debug output examples to use `events` instead of
+2. Update docs and debug output examples to use `events` instead of
    `nested_events`.
-4. Revisit whether the raw event type should remain `merge.bundle` or move to a
+3. Revisit whether the raw event type should remain `merge.bundle` or move to a
    clearer raw/internal name in a later API cleanup.
 
 ### Tests
 
 - No production consumer depends on `merge.bundle` in ordinary subscribe/replay
   paths.
-- Legacy persisted/debug batch payloads with `nested_events` still decode if the
-  repository needs to read old stream archives.
 - New debug output uses the `events` field.
 
 ## Validation Plan
@@ -201,13 +212,22 @@ The Honshu groundwater example should be rerun after PR 4 or PR 5 to confirm
 that ordinary progress rendering no longer exposes `merge.bundle` mechanics,
 while debug/raw output still makes tick frames inspectable.
 
-## Open Questions
+## Decisions
 
-- Should raw frame subscribers receive `EventBatch` values directly, or keep a
-  raw `Event` carrier for persistence compatibility?
-- Should `tick_id` be part of logical event metadata after expansion, or remain
-  visible only in raw/debug frames?
-- Should subscriber buffer limits count raw frames, logical events, or both?
-- How long should legacy `nested_events` decoding remain supported?
-- Should direct non-merge emissions be stored as raw one-event frames eventually,
-  or is the frame abstraction only needed at merge boundaries?
+- Raw stream subscribers receive raw `Event` carriers, not `EventBatch` values
+  directly. This keeps `Subscribe`, `Replay`, storage, and raw debug inspection
+  on one event-shaped API. Callers that need batch details decode the
+  `EventBatch` from the raw carrier's `Delta`.
+- `tick_id` remains visible only in raw/debug frames. Expanded logical events do
+  not inherit tick metadata, because tick IDs describe transport batching rather
+  than logical event content.
+- Subscriber buffer limits count delivered values. Default expanded subscribers
+  count logical events after batch expansion; raw-stream subscribers count raw
+  frames. The stream replay buffer and durable store continue to count persisted
+  raw events/frames.
+- Legacy `nested_events` compatibility is not required and should be removed
+  immediately. New payloads and debug output use only `events`.
+- Direct non-merge emissions remain stored as plain events for now. The internal
+  frame abstraction is needed at merge boundaries; storing every direct emission
+  as a one-event frame would expand persistence scope without improving ordinary
+  subscriber behavior.

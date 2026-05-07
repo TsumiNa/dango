@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"sync"
 	"testing"
 	"time"
@@ -380,6 +381,300 @@ func TestStreamReplayExpandedExpandsStoredBundles(t *testing.T) {
 	if expanded[0].EventType != EventLLMOutputDelta || expanded[0].Scope.RequestID != "req_1" || expanded[0].Scope.NodeID != "node_1" {
 		t.Fatalf("expanded replay event = %+v, want output with merged request/node scope", expanded[0])
 	}
+}
+
+func makeBundleEvent(t *testing.T, tickID uint64, nested ...Event) Event {
+	t.Helper()
+	delta, err := EncodeEventBatch(EventBatch{TickID: tickID, Events: nested})
+	if err != nil {
+		t.Fatalf("makeBundleEvent: %v", err)
+	}
+	return Event{
+		EventType: EventMergeBundle,
+		From:      Source{Layer: "hub"},
+		Status:    StatusCompleted,
+		Delta:     delta,
+	}
+}
+
+func TestSubscribeLogicalExpandsSingleEventBatch(t *testing.T) {
+	s := New(Scope{RequestID: "req_1"}, DefaultConfig())
+	t.Cleanup(s.Close)
+
+	sub, err := s.SubscribeLogical(Filter{}, WithNoReplay())
+	if err != nil {
+		t.Fatalf("SubscribeLogical: %v", err)
+	}
+	defer sub.Cancel()
+
+	nested := Event{
+		EventType: EventLLMOutputDelta,
+		From:      Source{Layer: "skill", ID: "sk_1"},
+		Status:    StatusRunning,
+		Delta:     json.RawMessage(`"answer"`),
+	}
+	if err := s.Emit(t.Context(), makeBundleEvent(t, 1, nested)); err != nil {
+		t.Fatalf("Emit: %v", err)
+	}
+
+	got := receiveEvent(t, sub.Events())
+	if got.EventType != EventLLMOutputDelta {
+		t.Errorf("event type = %q, want %q", got.EventType, EventLLMOutputDelta)
+	}
+	if string(got.Delta) != `"answer"` {
+		t.Errorf("delta = %s, want \"answer\"", got.Delta)
+	}
+	assertNoEvent(t, sub.Events())
+}
+
+func TestSubscribeLogicalExpandsMultiEventBatch(t *testing.T) {
+	s := New(Scope{RequestID: "req_1"}, DefaultConfig())
+	t.Cleanup(s.Close)
+
+	sub, err := s.SubscribeLogical(Filter{}, WithNoReplay())
+	if err != nil {
+		t.Fatalf("SubscribeLogical: %v", err)
+	}
+	defer sub.Cancel()
+
+	n1 := Event{EventType: EventLLMReasoningDelta, From: Source{Layer: "skill"}, Status: StatusRunning, Delta: json.RawMessage(`"think"`)}
+	n2 := Event{EventType: EventLLMOutputDelta, From: Source{Layer: "skill"}, Status: StatusRunning, Delta: json.RawMessage(`"answer"`)}
+	if err := s.Emit(t.Context(), makeBundleEvent(t, 2, n1, n2)); err != nil {
+		t.Fatalf("Emit: %v", err)
+	}
+
+	first := receiveEvent(t, sub.Events())
+	second := receiveEvent(t, sub.Events())
+	if first.EventType != EventLLMReasoningDelta {
+		t.Errorf("first type = %q, want reasoning", first.EventType)
+	}
+	if second.EventType != EventLLMOutputDelta {
+		t.Errorf("second type = %q, want output", second.EventType)
+	}
+	assertNoEvent(t, sub.Events())
+}
+
+func TestSubscribeLogicalFilterSelectsMatchingNestedEvents(t *testing.T) {
+	s := New(Scope{RequestID: "req_1"}, DefaultConfig())
+	t.Cleanup(s.Close)
+
+	filter := Filter{EventTypes: []string{EventLLMOutputDelta}}
+	sub, err := s.SubscribeLogical(filter, WithNoReplay())
+	if err != nil {
+		t.Fatalf("SubscribeLogical: %v", err)
+	}
+	defer sub.Cancel()
+
+	n1 := Event{EventType: EventLLMReasoningDelta, From: Source{Layer: "skill"}, Status: StatusRunning, Delta: json.RawMessage(`"think"`)}
+	n2 := Event{EventType: EventLLMOutputDelta, From: Source{Layer: "skill"}, Status: StatusRunning, Delta: json.RawMessage(`"answer"`)}
+	n3 := Event{EventType: EventStatusProgress, From: Source{Layer: "skill"}, Status: StatusRunning, Delta: json.RawMessage(`"progress"`)}
+	if err := s.Emit(t.Context(), makeBundleEvent(t, 3, n1, n2, n3)); err != nil {
+		t.Fatalf("Emit: %v", err)
+	}
+
+	got := receiveEvent(t, sub.Events())
+	if got.EventType != EventLLMOutputDelta {
+		t.Errorf("event type = %q, want output", got.EventType)
+	}
+	assertNoEvent(t, sub.Events())
+}
+
+func TestSubscribeLogicalPassesThroughDirectEvents(t *testing.T) {
+	s := New(Scope{RequestID: "req_1"}, DefaultConfig())
+	t.Cleanup(s.Close)
+
+	sub, err := s.SubscribeLogical(Filter{Prefixes: []string{"llm."}}, WithNoReplay())
+	if err != nil {
+		t.Fatalf("SubscribeLogical: %v", err)
+	}
+	defer sub.Cancel()
+
+	if err := s.Emit(t.Context(), Event{
+		EventType: EventStatusProgress,
+		From:      Source{Layer: "orchestrator"},
+		Status:    StatusRunning,
+		Delta:     json.RawMessage(`"skip"`),
+	}); err != nil {
+		t.Fatalf("Emit status: %v", err)
+	}
+	if err := s.Emit(t.Context(), Event{
+		EventType: EventLLMOutputDelta,
+		From:      Source{Layer: "skill"},
+		Status:    StatusRunning,
+		Delta:     json.RawMessage(`"answer"`),
+	}); err != nil {
+		t.Fatalf("Emit llm: %v", err)
+	}
+
+	got := receiveEvent(t, sub.Events())
+	if got.EventType != EventLLMOutputDelta {
+		t.Errorf("event type = %q, want output", got.EventType)
+	}
+	assertNoEvent(t, sub.Events())
+}
+
+func TestSubscribeLogicalReplayExpandsBundlesFromBuffer(t *testing.T) {
+	s := New(Scope{RequestID: "req_1"}, DefaultConfig())
+	t.Cleanup(s.Close)
+
+	n1 := Event{EventType: EventLLMReasoningDelta, From: Source{Layer: "skill"}, Status: StatusRunning, Scope: Scope{NodeID: "nd_1"}, Delta: json.RawMessage(`"think"`)}
+	n2 := Event{EventType: EventLLMOutputDelta, From: Source{Layer: "skill"}, Status: StatusRunning, Scope: Scope{NodeID: "nd_1"}, Delta: json.RawMessage(`"answer"`)}
+	if err := s.Emit(t.Context(), makeBundleEvent(t, 1, n1, n2)); err != nil {
+		t.Fatalf("Emit bundle: %v", err)
+	}
+
+	sub, err := s.SubscribeLogical(Filter{EventTypes: []string{EventLLMOutputDelta}}, WithReplayFrom(1))
+	if err != nil {
+		t.Fatalf("SubscribeLogical: %v", err)
+	}
+	defer sub.Cancel()
+
+	got := receiveEvent(t, sub.Events())
+	if got.EventType != EventLLMOutputDelta {
+		t.Errorf("event type = %q, want output", got.EventType)
+	}
+	// Scope from outer bundle event is merged onto nested event.
+	if got.Scope.RequestID != "req_1" {
+		t.Errorf("Scope.RequestID = %q, want req_1", got.Scope.RequestID)
+	}
+	if got.Scope.NodeID != "nd_1" {
+		t.Errorf("Scope.NodeID = %q, want nd_1", got.Scope.NodeID)
+	}
+	assertNoEvent(t, sub.Events())
+}
+
+func TestSubscribeLogicalReplayExpandsBundlesFromStore(t *testing.T) {
+	store := &recordingStore{}
+	s := New(Scope{RequestID: "req_store"}, Config{DisableBuffer: true}, WithStore(store))
+	t.Cleanup(s.Close)
+
+	n1 := Event{EventType: EventLLMReasoningDelta, From: Source{Layer: "skill"}, Status: StatusRunning, Delta: json.RawMessage(`"think"`)}
+	n2 := Event{EventType: EventLLMOutputDelta, From: Source{Layer: "skill"}, Status: StatusRunning, Delta: json.RawMessage(`"answer"`)}
+	if err := s.Emit(t.Context(), makeBundleEvent(t, 1, n1, n2)); err != nil {
+		t.Fatalf("Emit bundle: %v", err)
+	}
+
+	sub, err := s.SubscribeLogical(Filter{EventTypes: []string{EventLLMOutputDelta}}, WithReplayFrom(1))
+	if err != nil {
+		t.Fatalf("SubscribeLogical: %v", err)
+	}
+	defer sub.Cancel()
+
+	got := receiveEvent(t, sub.Events())
+	if got.EventType != EventLLMOutputDelta {
+		t.Errorf("event type = %q, want output", got.EventType)
+	}
+	if got.Scope.RequestID != "req_store" {
+		t.Errorf("Scope.RequestID = %q, want req_store", got.Scope.RequestID)
+	}
+	assertNoEvent(t, sub.Events())
+}
+
+func TestSubscribeLogicalReplayOrderMatchesLiveSubscription(t *testing.T) {
+	s := New(Scope{RequestID: "req_1"}, DefaultConfig())
+	t.Cleanup(s.Close)
+
+	// Emit a direct event then a bundle then another direct event.
+	if err := s.Emit(t.Context(), Event{
+		EventType: EventStatusProgress,
+		From:      Source{Layer: "orchestrator"},
+		Status:    StatusRunning,
+		Delta:     json.RawMessage(`"start"`),
+	}); err != nil {
+		t.Fatalf("Emit direct 1: %v", err)
+	}
+	n1 := Event{EventType: EventLLMReasoningDelta, From: Source{Layer: "skill"}, Status: StatusRunning, Delta: json.RawMessage(`"think"`)}
+	n2 := Event{EventType: EventLLMOutputDelta, From: Source{Layer: "skill"}, Status: StatusRunning, Delta: json.RawMessage(`"answer"`)}
+	if err := s.Emit(t.Context(), makeBundleEvent(t, 1, n1, n2)); err != nil {
+		t.Fatalf("Emit bundle: %v", err)
+	}
+	if err := s.Emit(t.Context(), Event{
+		EventType: EventStatusProgress,
+		From:      Source{Layer: "orchestrator"},
+		Status:    StatusCompleted,
+		Delta:     json.RawMessage(`"done"`),
+	}); err != nil {
+		t.Fatalf("Emit direct 2: %v", err)
+	}
+
+	sub, err := s.SubscribeLogical(Filter{}, WithReplayFrom(1))
+	if err != nil {
+		t.Fatalf("SubscribeLogical: %v", err)
+	}
+	defer sub.Cancel()
+
+	wantTypes := []string{EventStatusProgress, EventLLMReasoningDelta, EventLLMOutputDelta, EventStatusProgress}
+	for i, want := range wantTypes {
+		got := receiveEvent(t, sub.Events())
+		if got.EventType != want {
+			t.Errorf("event[%d] type = %q, want %q", i, got.EventType, want)
+		}
+	}
+	assertNoEvent(t, sub.Events())
+}
+
+func TestSubscribeLogicalRawSubscribeStillSeesBundle(t *testing.T) {
+	s := New(Scope{RequestID: "req_1"}, DefaultConfig())
+	t.Cleanup(s.Close)
+
+	rawSub, err := s.Subscribe(Filter{}, WithNoReplay())
+	if err != nil {
+		t.Fatalf("Subscribe raw: %v", err)
+	}
+	defer rawSub.Cancel()
+
+	n1 := Event{EventType: EventLLMOutputDelta, From: Source{Layer: "skill"}, Status: StatusRunning, Delta: json.RawMessage(`"out"`)}
+	if err := s.Emit(t.Context(), makeBundleEvent(t, 1, n1)); err != nil {
+		t.Fatalf("Emit: %v", err)
+	}
+
+	got := receiveEvent(t, rawSub.Events())
+	if got.EventType != EventMergeBundle {
+		t.Errorf("raw sub event type = %q, want %q", got.EventType, EventMergeBundle)
+	}
+}
+
+func TestSubscribeLogicalRejectsClosedStream(t *testing.T) {
+	s := New(Scope{}, DefaultConfig())
+	s.Close()
+
+	if _, err := s.SubscribeLogical(Filter{}); !errors.Is(err, ErrClosed) {
+		t.Fatalf("SubscribeLogical err = %v, want ErrClosed", err)
+	}
+}
+
+func TestSubscribeLogicalReplayDropsWhenBufferFull(t *testing.T) {
+	// Verify that replay events beyond the channel buffer are dropped under the
+	// default OverflowDropNewest policy rather than causing OOM-scale allocations.
+	s := New(Scope{RequestID: "req_1"}, DefaultConfig())
+	t.Cleanup(s.Close)
+
+	// Emit a bundle with 4 nested events.
+	var nested []Event
+	for i := range 4 {
+		nested = append(nested, Event{
+			EventType: EventLLMOutputDelta,
+			From:      Source{Layer: "skill"},
+			Status:    StatusRunning,
+			Delta:     json.RawMessage(`"out"`),
+			Scope:     Scope{NodeID: fmt.Sprintf("nd_%d", i)},
+		})
+	}
+	if err := s.Emit(t.Context(), makeBundleEvent(t, 1, nested...)); err != nil {
+		t.Fatalf("Emit bundle: %v", err)
+	}
+
+	// Buffer is intentionally smaller than the 4 replay events.
+	sub, err := s.SubscribeLogical(Filter{}, WithReplayFrom(1), WithSubscriberBuffer(2))
+	if err != nil {
+		t.Fatalf("SubscribeLogical: %v", err)
+	}
+	defer sub.Cancel()
+
+	// Only the first 2 replay events fit; the rest are silently dropped.
+	receiveEvent(t, sub.Events())
+	receiveEvent(t, sub.Events())
+	assertNoEvent(t, sub.Events())
 }
 
 type recordingStore struct {
