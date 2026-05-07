@@ -190,10 +190,12 @@ func (r *Renderer) RenderSubscription(ctx context.Context, sub *streampkg.Subscr
 }
 
 // RenderSubscriptionObserved drains sub and calls observe for each event
-// before rendering it. The subscription should use default expanded delivery
-// so each event is a logical event rather than a raw merge batch frame.
-// Use [streampkg.WithRawStream] on the subscription to observe raw debug
-// traffic while still rendering logical events from a second subscriber.
+// before rendering it. It renders exactly the events delivered by sub, so
+// callers that want logical event rendering should pass a subscription using
+// the default expanded delivery rather than a raw merge-bundle stream.
+// Callers that also want raw debug traffic should observe a separate
+// subscription created with [streampkg.WithRawStream]. Passing a raw
+// subscription here causes raw frames to be rendered.
 func (r *Renderer) RenderSubscriptionObserved(ctx context.Context, sub *streampkg.Subscription, observe func(streampkg.Event) error) error {
 	if sub == nil {
 		return nil
