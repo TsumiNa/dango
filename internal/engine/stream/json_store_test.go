@@ -65,7 +65,7 @@ func TestJSONStorePersistsReplayAcrossReopen(t *testing.T) {
 	assertNoEvent(t, sub.Events())
 }
 
-func TestJSONStorePersistsBundleEventsWithNestedEvents(t *testing.T) {
+func TestJSONStorePersistsBundleEventsWithEvents(t *testing.T) {
 	dir := t.TempDir()
 	store, err := NewJSONStore(dir)
 	if err != nil {
@@ -74,9 +74,9 @@ func TestJSONStorePersistsBundleEventsWithNestedEvents(t *testing.T) {
 	stream := New(Scope{RequestID: "req_1"}, Config{DisableBuffer: true}, WithStore(store))
 	t.Cleanup(stream.Close)
 
-	delta, err := EncodeBundlePayload(BundlePayload{
+	delta, err := EncodeEventBatch(EventBatch{
 		TickID: 3,
-		NestedEvents: []Event{
+		Events: []Event{
 			{
 				EventType: EventLLMReasoningDelta,
 				From:      Source{Layer: "skill", ID: "skill_1"},
@@ -94,7 +94,7 @@ func TestJSONStorePersistsBundleEventsWithNestedEvents(t *testing.T) {
 		},
 	})
 	if err != nil {
-		t.Fatalf("EncodeBundlePayload: %v", err)
+		t.Fatalf("EncodeEventBatch: %v", err)
 	}
 	if err := stream.Emit(t.Context(), Event{
 		EventType: EventMergeBundle,
@@ -119,12 +119,12 @@ func TestJSONStorePersistsBundleEventsWithNestedEvents(t *testing.T) {
 	if len(raw) != 1 || raw[0].EventType != EventMergeBundle {
 		t.Fatalf("raw replay = %+v, want one bundle event", raw)
 	}
-	bundle, err := DecodeBundlePayload(raw[0].Delta)
+	bundle, err := DecodeEventBatch(raw[0].Delta)
 	if err != nil {
-		t.Fatalf("DecodeBundlePayload: %v", err)
+		t.Fatalf("DecodeEventBatch: %v", err)
 	}
-	if len(bundle.NestedEvents) != 2 || bundle.NestedEvents[0].EventType != EventLLMReasoningDelta || bundle.NestedEvents[1].EventType != EventLLMOutputDelta {
-		t.Fatalf("nested events = %+v, want reasoning then output", bundle.NestedEvents)
+	if len(bundle.Events) != 2 || bundle.Events[0].EventType != EventLLMReasoningDelta || bundle.Events[1].EventType != EventLLMOutputDelta {
+		t.Fatalf("nested events = %+v, want reasoning then output", bundle.Events)
 	}
 
 	expanded, err := replayStream.ReplayExpanded(Filter{Prefixes: []string{"llm."}}, WithReplayFrom(1))

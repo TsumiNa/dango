@@ -412,9 +412,9 @@ func TestRendererExpandsBundleSubscriptionEvents(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Subscribe: %v", err)
 	}
-	bundleDelta, err := streampkg.EncodeBundlePayload(streampkg.BundlePayload{
+	bundleDelta, err := streampkg.EncodeEventBatch(streampkg.EventBatch{
 		TickID: 1,
-		NestedEvents: []streampkg.Event{{
+		Events: []streampkg.Event{{
 			EventType: streampkg.EventRunnerPhaseChanged,
 			From:      streampkg.Source{Layer: "runner", ID: "runner"},
 			Status:    streampkg.StatusCompleted,
@@ -423,7 +423,7 @@ func TestRendererExpandsBundleSubscriptionEvents(t *testing.T) {
 		}},
 	})
 	if err != nil {
-		t.Fatalf("EncodeBundlePayload: %v", err)
+		t.Fatalf("EncodeEventBatch: %v", err)
 	}
 	if err := s.Emit(context.Background(), streampkg.Event{
 		EventType: streampkg.EventMergeBundle,

@@ -819,12 +819,12 @@ func (h *mergeHub) flushTick() bool {
 	}
 
 	// Create and encode bundle payload.
-	bundle := BundlePayload{
+	bundle := EventBatch{
 		TickID:       tickID,
-		NestedEvents: items,
+		Events: items,
 	}
 
-	delta, err := EncodeBundlePayload(bundle)
+	delta, err := EncodeEventBatch(bundle)
 	if err != nil {
 		h.setErr(err)
 		if stop {
