@@ -78,6 +78,7 @@ Repository-specific rules live in `.github/instructions/`:
 - `go-file-organization.instructions.md`
 - `go-docs.instructions.md`
 - `repository-doc-boundaries.instructions.md`
+- `shell-environment.instructions.md`
 
 `AGENTS.md`, `CLAUDE.md`, and `GEMINI.md` point to these files as canonical guidance.
 
