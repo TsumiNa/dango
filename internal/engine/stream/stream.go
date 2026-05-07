@@ -121,7 +121,15 @@ func (s *Stream) Emit(ctx context.Context, event Event) error {
 	}
 	matches := make([]*Subscription, 0, len(s.subscribers))
 	for _, sub := range s.subscribers {
-		if sub.filter.Match(prepared) {
+		var matched bool
+		if sub.logical && prepared.EventType == EventMergeBundle {
+			// Logical subscribers always receive bundle events so send can
+			// expand and filter the nested events on delivery.
+			matched = true
+		} else {
+			matched = sub.filter.Match(prepared)
+		}
+		if matched {
 			matches = append(matches, sub)
 		}
 	}
@@ -265,6 +273,65 @@ func (s *Stream) Replay(filter Filter, opts ...SubscribeOption) ([]Event, error)
 	return s.replayLocked(filter, settings)
 }
 
+// SubscribeLogical attaches a logical subscriber that receives expanded logical
+// events. Merge bundle events are expanded into their nested events before
+// filter is applied; only nested events that match filter are delivered.
+// Non-bundle events pass through filter directly.
+//
+// Use [Stream.Subscribe] when the raw frame shape is needed for debugging or
+// persistence inspection.
+func (s *Stream) SubscribeLogical(filter Filter, opts ...SubscribeOption) (*Subscription, error) {
+	settings := subscribeSettings{
+		buffer:         defaultSubscriberBuffer,
+		overflowPolicy: OverflowDropNewest,
+	}
+	for _, opt := range opts {
+		opt(&settings)
+	}
+	if settings.buffer < 0 {
+		settings.buffer = 0
+	}
+
+	s.deliveryMu.Lock()
+	defer s.deliveryMu.Unlock()
+
+	s.mu.Lock()
+	if s.closed {
+		s.mu.Unlock()
+		return nil, ErrClosed
+	}
+	id := s.nextSubID + 1
+	replay, err := s.replayLogicalLocked(filter, settings)
+	if err != nil {
+		s.mu.Unlock()
+		return nil, err
+	}
+	buffer := settings.buffer
+	if buffer < len(replay) {
+		buffer = len(replay)
+	}
+	sub := &Subscription{
+		id:             id,
+		stream:         s,
+		filter:         filter,
+		logical:        true,
+		events:         make(chan Event, buffer),
+		done:           make(chan struct{}),
+		overflowPolicy: settings.overflowPolicy,
+	}
+	s.nextSubID = id
+	s.subscribers[id] = sub
+	s.mu.Unlock()
+
+	for _, event := range replay {
+		if err := sub.send(context.Background(), event); err != nil {
+			sub.Cancel()
+			return nil, err
+		}
+	}
+	return sub, nil
+}
+
 // ReplayExpanded returns a replay snapshot with merge bundle events expanded
 // into their nested events before filter is applied. Non-bundle events pass
 // through the same filter. Use [Stream.Replay] when callers need the raw bundle
@@ -283,6 +350,25 @@ func (s *Stream) ReplayExpanded(filter Filter, opts ...SubscribeOption) ([]Event
 		replay = append(replay, events...)
 	}
 	return replay, nil
+}
+
+// replayLogicalLocked replays events from the buffer or store, expanding merge
+// bundle events into their nested events and applying filter per logical event.
+// It must be called with s.mu held.
+func (s *Stream) replayLogicalLocked(filter Filter, settings subscribeSettings) ([]Event, error) {
+	raw, err := s.replayLocked(Filter{}, settings)
+	if err != nil {
+		return nil, err
+	}
+	var result []Event
+	for _, event := range raw {
+		events, err := FilterBundleEvent(event, filter)
+		if err != nil {
+			return nil, err
+		}
+		result = append(result, events...)
+	}
+	return result, nil
 }
 
 func (s *Stream) replayLocked(filter Filter, settings subscribeSettings) ([]Event, error) {
