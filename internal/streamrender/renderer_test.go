@@ -444,8 +444,8 @@ func TestRendererExpandsBundleSubscriptionEvents(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("RenderSubscriptionObserved: %v", err)
 	}
-	if len(observed) != 1 || observed[0].EventType != streampkg.EventMergeBundle {
-		t.Fatalf("observed events = %+v, want raw merge bundle", observed)
+	if len(observed) != 1 || observed[0].EventType != streampkg.EventRunnerPhaseChanged {
+		t.Fatalf("observed events = %+v, want expanded runner phase event", observed)
 	}
 	if !strings.Contains(out.String(), "Runner[runner]") || !strings.Contains(out.String(), "phase=settled") {
 		t.Fatalf("rendered output = %q, want expanded runner phase", out.String())

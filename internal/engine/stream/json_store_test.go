@@ -48,7 +48,7 @@ func TestJSONStorePersistsReplayAcrossReopen(t *testing.T) {
 	replayStream := New(Scope{RunnerID: "run_1"}, Config{DisableBuffer: true}, WithStore(reopenedStore))
 	t.Cleanup(replayStream.Close)
 
-	sub, err := replayStream.Subscribe(Filter{Prefixes: []string{"llm."}}, WithReplayFrom(2), WithSubscriberBuffer(0))
+	sub, err := replayStream.Subscribe(Filter{Prefixes: []string{"llm."}}, WithReplayFrom(2))
 	if err != nil {
 		t.Fatalf("Subscribe: %v", err)
 	}
@@ -112,7 +112,7 @@ func TestJSONStorePersistsBundleEventsWithEvents(t *testing.T) {
 	replayStream := New(Scope{RequestID: "req_1"}, Config{DisableBuffer: true}, WithStore(reopenedStore))
 	t.Cleanup(replayStream.Close)
 
-	raw, err := replayStream.Replay(Filter{}, WithReplayFrom(1))
+	raw, err := replayStream.Replay(Filter{}, WithReplayFrom(1), WithRawStream())
 	if err != nil {
 		t.Fatalf("Replay raw: %v", err)
 	}
@@ -127,9 +127,9 @@ func TestJSONStorePersistsBundleEventsWithEvents(t *testing.T) {
 		t.Fatalf("events = %+v, want reasoning then output", bundle.Events)
 	}
 
-	expanded, err := replayStream.ReplayExpanded(Filter{Prefixes: []string{"llm."}}, WithReplayFrom(1))
+	expanded, err := replayStream.Replay(Filter{Prefixes: []string{"llm."}}, WithReplayFrom(1))
 	if err != nil {
-		t.Fatalf("ReplayExpanded: %v", err)
+		t.Fatalf("Replay: %v", err)
 	}
 	if len(expanded) != 2 || expanded[0].Delta == nil || expanded[1].Delta == nil {
 		t.Fatalf("expanded replay = %+v, want two logical events", expanded)
