@@ -402,11 +402,24 @@ type MergeWindowConfig struct {
 	PerUpstreamBufferDepth int
 }
 
+// DefaultMergeTickDuration is the standard tick window for production hub-mode
+// stream merges.
+const DefaultMergeTickDuration = 10 * time.Millisecond
+
 // DefaultMergeWindowConfig returns a MergeWindowConfig with direct-forwarding
 // behavior (TickDuration = 0).
 func DefaultMergeWindowConfig() MergeWindowConfig {
 	return MergeWindowConfig{
 		TickDuration:           0,
+		PerUpstreamBufferDepth: 1000,
+	}
+}
+
+// DefaultHubMergeWindowConfig returns a MergeWindowConfig with hub-mode
+// bundling enabled using the standard production tick window.
+func DefaultHubMergeWindowConfig() MergeWindowConfig {
+	return MergeWindowConfig{
+		TickDuration:           DefaultMergeTickDuration,
 		PerUpstreamBufferDepth: 1000,
 	}
 }

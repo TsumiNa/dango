@@ -18,8 +18,6 @@ type eventStreamProvider interface {
 	EventStream() *streampkg.Stream
 }
 
-const executorRunnerMergeWindow = 10 * time.Millisecond
-
 type memorySessionStore struct {
 	mu       sync.Mutex
 	sessions map[string][]llm.Event
@@ -205,7 +203,7 @@ func (r *Runner) mergeExecutorStream(id string, executor Executor) error {
 		r.runtimeContext(context.Background()),
 		upstream,
 		streampkg.Filter{},
-		streampkg.MergeWindowConfig{TickDuration: executorRunnerMergeWindow},
+		streampkg.DefaultHubMergeWindowConfig(),
 		streampkg.WithSubscriberBuffer(4096),
 	)
 	if err != nil {

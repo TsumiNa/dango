@@ -1085,6 +1085,19 @@ func TestMergeFromWithConfigRejectsNegativeTickDuration(t *testing.T) {
 	}
 }
 
+func TestDefaultHubMergeWindowConfigEnablesHubMode(t *testing.T) {
+	config := DefaultHubMergeWindowConfig()
+	if config.TickDuration != DefaultMergeTickDuration {
+		t.Fatalf("TickDuration = %v, want %v", config.TickDuration, DefaultMergeTickDuration)
+	}
+	if config.TickDuration <= 0 {
+		t.Fatalf("TickDuration = %v, want hub mode enabled", config.TickDuration)
+	}
+	if config.PerUpstreamBufferDepth != DefaultMergeWindowConfig().PerUpstreamBufferDepth {
+		t.Fatalf("PerUpstreamBufferDepth = %d, want default depth", config.PerUpstreamBufferDepth)
+	}
+}
+
 func TestMergeFromWithConfigHubEmptyUpstreamCloseStopsMerge(t *testing.T) {
 	parent := New(Scope{}, DefaultConfig())
 	child := New(Scope{}, DefaultConfig())

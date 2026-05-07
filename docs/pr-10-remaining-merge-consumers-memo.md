@@ -12,8 +12,9 @@ All production stream merge paths now use hub mode:
 - Runner stream to request stream through `mergeRunnerStream`.
 - Executor-owned stream to runner stream through `Runner.mergeExecutorStream`.
 
-Each path uses a private `10 * time.Millisecond` merge window and keeps the
-existing upstream subscription buffer size.
+Each path uses `stream.DefaultHubMergeWindowConfig`, whose shared tick is
+`stream.DefaultMergeTickDuration`, and keeps the existing upstream subscription
+buffer size.
 
 ### Consumer Pattern
 
