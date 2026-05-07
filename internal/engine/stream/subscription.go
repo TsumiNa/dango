@@ -3,7 +3,6 @@ package stream
 import (
 	"context"
 	"errors"
-	"fmt"
 	"sync"
 )
 
@@ -160,7 +159,7 @@ func (sub *Subscription) send(ctx context.Context, event Event) error {
 func (sub *Subscription) sendLogicalBundle(ctx context.Context, event Event) error {
 	events, err := FilterBundleEvent(event, sub.filter)
 	if err != nil {
-		return fmt.Errorf("logical subscribe: %w", err)
+		return err
 	}
 	for _, e := range events {
 		select {

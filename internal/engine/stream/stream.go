@@ -278,6 +278,14 @@ func (s *Stream) Replay(filter Filter, opts ...SubscribeOption) ([]Event, error)
 // filter is applied; only nested events that match filter are delivered.
 // Non-bundle events pass through filter directly.
 //
+// The subscription channel is sized to settings.buffer (default
+// defaultSubscriberBuffer). Initial replay events are delivered into that
+// fixed-size channel under the subscriber's overflow policy; with the default
+// OverflowDropNewest policy, replay events that would overflow are silently
+// dropped. Use [WithSubscriberBuffer] with a larger value or
+// [WithOverflowPolicy](OverflowError) when losing replay events is not
+// acceptable.
+//
 // Use [Stream.Subscribe] when the raw frame shape is needed for debugging or
 // persistence inspection.
 func (s *Stream) SubscribeLogical(filter Filter, opts ...SubscribeOption) (*Subscription, error) {
@@ -306,16 +314,12 @@ func (s *Stream) SubscribeLogical(filter Filter, opts ...SubscribeOption) (*Subs
 		s.mu.Unlock()
 		return nil, err
 	}
-	buffer := settings.buffer
-	if buffer < len(replay) {
-		buffer = len(replay)
-	}
 	sub := &Subscription{
 		id:             id,
 		stream:         s,
 		filter:         filter,
 		logical:        true,
-		events:         make(chan Event, buffer),
+		events:         make(chan Event, settings.buffer),
 		done:           make(chan struct{}),
 		overflowPolicy: settings.overflowPolicy,
 	}

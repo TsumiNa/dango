@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"sync"
 	"testing"
 	"time"
@@ -640,6 +641,40 @@ func TestSubscribeLogicalRejectsClosedStream(t *testing.T) {
 	if _, err := s.SubscribeLogical(Filter{}); !errors.Is(err, ErrClosed) {
 		t.Fatalf("SubscribeLogical err = %v, want ErrClosed", err)
 	}
+}
+
+func TestSubscribeLogicalReplayDropsWhenBufferFull(t *testing.T) {
+	// Verify that replay events beyond the channel buffer are dropped under the
+	// default OverflowDropNewest policy rather than causing OOM-scale allocations.
+	s := New(Scope{RequestID: "req_1"}, DefaultConfig())
+	t.Cleanup(s.Close)
+
+	// Emit a bundle with 4 nested events.
+	var nested []Event
+	for i := range 4 {
+		nested = append(nested, Event{
+			EventType: EventLLMOutputDelta,
+			From:      Source{Layer: "skill"},
+			Status:    StatusRunning,
+			Delta:     json.RawMessage(`"out"`),
+			Scope:     Scope{NodeID: fmt.Sprintf("nd_%d", i)},
+		})
+	}
+	if err := s.Emit(t.Context(), makeBundleEvent(t, 1, nested...)); err != nil {
+		t.Fatalf("Emit bundle: %v", err)
+	}
+
+	// Buffer is intentionally smaller than the 4 replay events.
+	sub, err := s.SubscribeLogical(Filter{}, WithReplayFrom(1), WithSubscriberBuffer(2))
+	if err != nil {
+		t.Fatalf("SubscribeLogical: %v", err)
+	}
+	defer sub.Cancel()
+
+	// Only the first 2 replay events fit; the rest are silently dropped.
+	receiveEvent(t, sub.Events())
+	receiveEvent(t, sub.Events())
+	assertNoEvent(t, sub.Events())
 }
 
 type recordingStore struct {
