@@ -137,6 +137,8 @@ Callers that need to inspect raw transport frames opt in through
 6. Document subscriber buffer semantics for expanded events, because one raw
    batch may expand into more than one delivered event. Raw-stream opt-in keeps
    the existing raw frame replay behavior.
+7. Remove legacy `nested_events` decoding and tests immediately. New and raw
+  debug payloads use only the `events` field.
 
 ### Tests
 
@@ -185,18 +187,15 @@ Remove or narrow the old bundle-specific API after consumers have migrated.
 
 1. Rename or deprecate bundle-specific helpers that now describe raw batch
    behavior poorly, such as `ExpandBundleEvent` and `FilterBundleEvent`.
-2. Keep legacy decoders only where persisted data compatibility requires them.
-3. Update docs and debug output examples to use `events` instead of
+2. Update docs and debug output examples to use `events` instead of
    `nested_events`.
-4. Revisit whether the raw event type should remain `merge.bundle` or move to a
+3. Revisit whether the raw event type should remain `merge.bundle` or move to a
    clearer raw/internal name in a later API cleanup.
 
 ### Tests
 
 - No production consumer depends on `merge.bundle` in ordinary subscribe/replay
   paths.
-- Legacy persisted/debug batch payloads with `nested_events` still decode if the
-  repository needs to read old stream archives.
 - New debug output uses the `events` field.
 
 ## Validation Plan
@@ -213,13 +212,22 @@ The Honshu groundwater example should be rerun after PR 4 or PR 5 to confirm
 that ordinary progress rendering no longer exposes `merge.bundle` mechanics,
 while debug/raw output still makes tick frames inspectable.
 
-## Open Questions
+## Decisions
 
-- Should raw frame subscribers receive `EventBatch` values directly, or keep a
-  raw `Event` carrier for persistence compatibility?
-- Should `tick_id` be part of logical event metadata after expansion, or remain
-  visible only in raw/debug frames?
-- Should subscriber buffer limits count raw frames, logical events, or both?
-- How long should legacy `nested_events` decoding remain supported?
-- Should direct non-merge emissions be stored as raw one-event frames eventually,
-  or is the frame abstraction only needed at merge boundaries?
+- Raw stream subscribers receive raw `Event` carriers, not `EventBatch` values
+  directly. This keeps `Subscribe`, `Replay`, storage, and raw debug inspection
+  on one event-shaped API. Callers that need batch details decode the
+  `EventBatch` from the raw carrier's `Delta`.
+- `tick_id` remains visible only in raw/debug frames. Expanded logical events do
+  not inherit tick metadata, because tick IDs describe transport batching rather
+  than logical event content.
+- Subscriber buffer limits count delivered values. Default expanded subscribers
+  count logical events after batch expansion; raw-stream subscribers count raw
+  frames. The stream replay buffer and durable store continue to count persisted
+  raw events/frames.
+- Legacy `nested_events` compatibility is not required and should be removed
+  immediately. New payloads and debug output use only `events`.
+- Direct non-merge emissions remain stored as plain events for now. The internal
+  frame abstraction is needed at merge boundaries; storing every direct emission
+  as a one-event frame would expand persistence scope without improving ordinary
+  subscriber behavior.
