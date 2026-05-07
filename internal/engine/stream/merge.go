@@ -345,6 +345,7 @@ func (f *upstreamFIFO) pop() (Event, bool) {
 		return Event{}, false
 	}
 	event := f.events[0]
+	f.events[0] = Event{}
 	f.events = f.events[1:]
 	return event, true
 }
@@ -356,13 +357,30 @@ func (f *upstreamFIFO) popJoinedHead() (Event, bool) {
 	if !ok {
 		return Event{}, false
 	}
-	for len(f.events) > 0 {
-		next := f.events[0]
-		if !joinEventDelta(&event, next) {
+	joinCount := 0
+	innerLen := len(event.Delta) - 2
+	for joinCount < len(f.events) {
+		next := f.events[joinCount]
+		if !canJoinEvents(event, next) {
 			break
 		}
-		f.events = f.events[1:]
+		innerLen += len(next.Delta) - 2
+		joinCount++
 	}
+	if joinCount == 0 {
+		return event, true
+	}
+	joined := make([]byte, 0, innerLen+2)
+	joined = append(joined, '"')
+	joined = append(joined, event.Delta[1:len(event.Delta)-1]...)
+	for i := 0; i < joinCount; i++ {
+		next := f.events[i]
+		joined = append(joined, next.Delta[1:len(next.Delta)-1]...)
+		f.events[i] = Event{}
+	}
+	joined = append(joined, '"')
+	event.Delta = joined
+	f.events = f.events[joinCount:]
 	return event, true
 }
 
@@ -376,7 +394,6 @@ func (f *upstreamFIFO) len() int {
 // If both events have the same join key and both have joinable string deltas,
 // the deltas are combined (merged as JSON strings) into the first event.
 // Returns true if join succeeded, false otherwise.
-// The FIFO must have at least one event; behavior is undefined if empty.
 func (f *upstreamFIFO) tryJoinAtHead(nextEvent Event) bool {
 	if len(f.events) < 1 {
 		return false
@@ -385,16 +402,7 @@ func (f *upstreamFIFO) tryJoinAtHead(nextEvent Event) bool {
 }
 
 func joinEventDelta(base *Event, next Event) bool {
-	headKey := joinKeyOf(*base)
-	nextKey := joinKeyOf(next)
-
-	// Different join keys cannot be joined.
-	if headKey != nextKey {
-		return false
-	}
-
-	// Only joinable string deltas can be combined.
-	if !canJoinDeltas(base.Delta, next.Delta) {
+	if !canJoinEvents(*base, next) {
 		return false
 	}
 
@@ -407,6 +415,10 @@ func joinEventDelta(base *Event, next Event) bool {
 	base.Delta = combined
 
 	return true
+}
+
+func canJoinEvents(base Event, next Event) bool {
+	return joinKeyOf(base) == joinKeyOf(next) && canJoinDeltas(base.Delta, next.Delta)
 }
 
 // MergeWindowConfig controls hub behavior for tick-based merging.
