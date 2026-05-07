@@ -349,6 +349,23 @@ func (f *upstreamFIFO) pop() (Event, bool) {
 	return event, true
 }
 
+// popJoinedHead removes the FIFO head and joins any immediately adjacent
+// same-key string deltas behind it into the returned event.
+func (f *upstreamFIFO) popJoinedHead() (Event, bool) {
+	event, ok := f.pop()
+	if !ok {
+		return Event{}, false
+	}
+	for len(f.events) > 0 {
+		next := f.events[0]
+		if !joinEventDelta(&event, next) {
+			break
+		}
+		f.events = f.events[1:]
+	}
+	return event, true
+}
+
 // len returns the number of events currently in the FIFO.
 func (f *upstreamFIFO) len() int {
 	return len(f.events)
@@ -357,18 +374,19 @@ func (f *upstreamFIFO) len() int {
 // tryJoinAtHead attempts to join the second event with the first event at the
 // FIFO head by combining their string deltas.
 // If both events have the same join key and both have joinable string deltas,
-// the deltas are combined (merged as JSON strings) and the first event is
-// updated with the combined delta, followed by removal of the second event.
+// the deltas are combined (merged as JSON strings) into the first event.
 // Returns true if join succeeded, false otherwise.
 // The FIFO must have at least one event; behavior is undefined if empty.
 func (f *upstreamFIFO) tryJoinAtHead(nextEvent Event) bool {
 	if len(f.events) < 1 {
 		return false
 	}
+	return joinEventDelta(&f.events[0], nextEvent)
+}
 
-	head := &f.events[0]
-	headKey := joinKeyOf(*head)
-	nextKey := joinKeyOf(nextEvent)
+func joinEventDelta(base *Event, next Event) bool {
+	headKey := joinKeyOf(*base)
+	nextKey := joinKeyOf(next)
 
 	// Different join keys cannot be joined.
 	if headKey != nextKey {
@@ -376,17 +394,17 @@ func (f *upstreamFIFO) tryJoinAtHead(nextEvent Event) bool {
 	}
 
 	// Only joinable string deltas can be combined.
-	if !canJoinDeltas(head.Delta, nextEvent.Delta) {
+	if !canJoinDeltas(base.Delta, next.Delta) {
 		return false
 	}
 
 	// Combine the deltas as JSON strings:
 	// Remove quotes from both strings and merge the content.
 	// "hello" + " world" => "hello world"
-	prevStr := head.Delta[1 : len(head.Delta)-1]
-	nextStr := nextEvent.Delta[1 : len(nextEvent.Delta)-1]
+	prevStr := base.Delta[1 : len(base.Delta)-1]
+	nextStr := next.Delta[1 : len(next.Delta)-1]
 	combined := append([]byte(nil), append([]byte(`"`), append(prevStr, append(nextStr, '"')...)...)...)
-	head.Delta = combined
+	base.Delta = combined
 
 	return true
 }
@@ -431,7 +449,8 @@ func DefaultHubMergeWindowConfig() MergeWindowConfig {
 // mergeHub owns multiple upstream FIFOs and emits bundles on each tick.
 //
 // The hub collects one ready item per upstream FIFO during each tick window.
-// Items are ready when they are at the FIFO head or can be joined with the head.
+// Items are ready when they are at the FIFO head or can be joined with adjacent
+// same-key events behind the head.
 // Non-joinable extra items remain queued for later ticks.
 type mergeHub struct {
 	// downstream receives bundle events.
@@ -534,9 +553,6 @@ func (h *mergeHub) enqueue(identity upstreamIdentity, event Event) error {
 		return ErrInvalidMerge
 	}
 	event = prepareBundledMergedEvent(event, h.downstream.scope)
-	if fifo.len() > 0 && fifo.tryJoinAtHead(event) {
-		return nil
-	}
 	return fifo.enqueue(event)
 }
 
@@ -626,7 +642,7 @@ func (h *mergeHub) flushTick() bool {
 	// Collect one item per FIFO.
 	items := make([]Event, 0, len(h.fifosByIdentity))
 	for identity, fifo := range h.fifosByIdentity {
-		event, ok := fifo.pop()
+		event, ok := fifo.popJoinedHead()
 		if ok {
 			items = append(items, event)
 		}
