@@ -326,6 +326,62 @@ func TestStreamSubscribeReturnsStoreLoadError(t *testing.T) {
 	}
 }
 
+func TestStreamReplayExpandedExpandsStoredBundles(t *testing.T) {
+	store := &recordingStore{}
+	s := New(Scope{RequestID: "req_1"}, Config{DisableBuffer: true}, WithStore(store))
+	t.Cleanup(s.Close)
+
+	delta, err := EncodeBundlePayload(BundlePayload{
+		TickID: 1,
+		NestedEvents: []Event{
+			{
+				EventType: EventLLMReasoningDelta,
+				From:      Source{Layer: "skill", ID: "skill_1"},
+				Status:    StatusRunning,
+				Scope:     Scope{NodeID: "node_1"},
+				Delta:     json.RawMessage(`"think"`),
+			},
+			{
+				EventType: EventLLMOutputDelta,
+				From:      Source{Layer: "skill", ID: "skill_1"},
+				Status:    StatusRunning,
+				Scope:     Scope{NodeID: "node_1"},
+				Delta:     json.RawMessage(`"answer"`),
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("EncodeBundlePayload: %v", err)
+	}
+	if err := s.Emit(t.Context(), Event{
+		EventType: EventMergeBundle,
+		From:      Source{Layer: "hub"},
+		Status:    StatusCompleted,
+		Delta:     delta,
+	}); err != nil {
+		t.Fatalf("Emit bundle: %v", err)
+	}
+
+	raw, err := s.Replay(Filter{}, WithReplayFrom(1))
+	if err != nil {
+		t.Fatalf("Replay raw: %v", err)
+	}
+	if len(raw) != 1 || raw[0].EventType != EventMergeBundle {
+		t.Fatalf("raw replay = %+v, want one bundle event", raw)
+	}
+
+	expanded, err := s.ReplayExpanded(Filter{EventTypes: []string{EventLLMOutputDelta}}, WithReplayFrom(1))
+	if err != nil {
+		t.Fatalf("ReplayExpanded: %v", err)
+	}
+	if len(expanded) != 1 {
+		t.Fatalf("expanded replay = %d events, want 1", len(expanded))
+	}
+	if expanded[0].EventType != EventLLMOutputDelta || expanded[0].Scope.RequestID != "req_1" || expanded[0].Scope.NodeID != "node_1" {
+		t.Fatalf("expanded replay event = %+v, want output with merged request/node scope", expanded[0])
+	}
+}
+
 type recordingStore struct {
 	mu        sync.Mutex
 	events    []Event

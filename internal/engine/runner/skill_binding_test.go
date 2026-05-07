@@ -100,7 +100,7 @@ func (e *streamingBindExecutor) Report(ctx context.Context, output any) (any, er
 func TestRunner_PrepareNodeExecutor_MergesExecutorOwnedStream(t *testing.T) {
 	exec := &streamingBindExecutor{}
 	r := newTestRunner()
-	sub, err := r.SubscribeStream(streampkg.Filter{EventTypes: []string{streampkg.EventLLMOutputDelta}}, streampkg.WithSubscriberBuffer(4))
+	sub, err := r.SubscribeStream(streampkg.Filter{EventTypes: []string{streampkg.EventMergeBundle}}, streampkg.WithSubscriberBuffer(4))
 	if err != nil {
 		t.Fatalf("SubscribeStream: %v", err)
 	}
@@ -124,10 +124,21 @@ func TestRunner_PrepareNodeExecutor_MergesExecutorOwnedStream(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
-	event, ok, err := sub.Next(ctx)
+	topEvent, ok, err := sub.Next(ctx)
 	if err != nil || !ok {
 		t.Fatalf("Next = (_, %v, %v), want merged event", ok, err)
 	}
+	if topEvent.EventType != streampkg.EventMergeBundle {
+		t.Fatalf("merged top event = %q, want bundle", topEvent.EventType)
+	}
+	events, err := streampkg.FilterBundleEvent(topEvent, streampkg.Filter{EventTypes: []string{streampkg.EventLLMOutputDelta}})
+	if err != nil {
+		t.Fatalf("FilterBundleEvent: %v", err)
+	}
+	if len(events) != 1 {
+		t.Fatalf("expanded events = %d, want 1", len(events))
+	}
+	event := events[0]
 	if event.Scope.RunnerID != r.ID() || event.Scope.NodeID != "owned-node" || event.From.ID != "owned-skill" {
 		t.Fatalf("merged event = %+v, want runner and node scope preserved", event)
 	}

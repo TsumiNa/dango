@@ -240,6 +240,47 @@ func (s *Stream) Subscribe(filter Filter, opts ...SubscribeOption) (*Subscriptio
 	return sub, nil
 }
 
+// Replay returns a snapshot of buffered or stored events that match filter.
+// It uses the same replay range options as [Stream.Subscribe] but does not
+// attach a live subscriber. Merge bundle events are returned raw so debugging
+// callers can inspect the persisted stream exactly as it was emitted.
+func (s *Stream) Replay(filter Filter, opts ...SubscribeOption) ([]Event, error) {
+	if s == nil {
+		return nil, ErrClosed
+	}
+	settings := subscribeSettings{}
+	for _, opt := range opts {
+		opt(&settings)
+	}
+
+	s.deliveryMu.Lock()
+	defer s.deliveryMu.Unlock()
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.replayLocked(filter, settings)
+}
+
+// ReplayExpanded returns a replay snapshot with merge bundle events expanded
+// into their nested events before filter is applied. Non-bundle events pass
+// through the same filter. Use [Stream.Replay] when callers need the raw bundle
+// events for stream debugging or persistence inspection.
+func (s *Stream) ReplayExpanded(filter Filter, opts ...SubscribeOption) ([]Event, error) {
+	raw, err := s.Replay(Filter{}, opts...)
+	if err != nil {
+		return nil, err
+	}
+	var replay []Event
+	for _, event := range raw {
+		events, err := FilterBundleEvent(event, filter)
+		if err != nil {
+			return nil, err
+		}
+		replay = append(replay, events...)
+	}
+	return replay, nil
+}
+
 func (s *Stream) replayLocked(filter Filter, settings subscribeSettings) ([]Event, error) {
 	from := s.replayStartLocked(settings)
 	if from == 0 {

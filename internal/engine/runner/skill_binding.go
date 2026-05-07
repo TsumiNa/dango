@@ -199,10 +199,11 @@ func (r *Runner) mergeExecutorStream(id string, executor Executor) error {
 	if upstream == nil {
 		return nil
 	}
-	_, err := r.eventStream.MergeFrom(
+	_, err := r.eventStream.MergeWithConfig(
 		r.runtimeContext(context.Background()),
 		upstream,
 		streampkg.Filter{},
+		streampkg.DefaultHubMergeWindowConfig(),
 		streampkg.WithSubscriberBuffer(4096),
 	)
 	if err != nil {

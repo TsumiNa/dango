@@ -553,17 +553,17 @@ func TestUpstreamFIFORejectsWhenFull(t *testing.T) {
 }
 
 func TestUpstreamFIFODefaultMaxDepth(t *testing.T) {
-	// newUpstreamFIFO should use default depth of 1000 when passed 0 or negative
+	// newUpstreamFIFO should use the default depth when passed 0 or negative.
 	identity := upstreamIdentity{layer: "test", id: "id"}
 
 	fifo0 := newUpstreamFIFO(identity, 0)
-	if fifo0.maxDepth != 1000 {
-		t.Fatalf("maxDepth with 0 = %d, want 1000", fifo0.maxDepth)
+	if fifo0.maxDepth != DefaultMergePerUpstreamBufferDepth {
+		t.Fatalf("maxDepth with 0 = %d, want %d", fifo0.maxDepth, DefaultMergePerUpstreamBufferDepth)
 	}
 
 	fifoNeg := newUpstreamFIFO(identity, -5)
-	if fifoNeg.maxDepth != 1000 {
-		t.Fatalf("maxDepth with -5 = %d, want 1000", fifoNeg.maxDepth)
+	if fifoNeg.maxDepth != DefaultMergePerUpstreamBufferDepth {
+		t.Fatalf("maxDepth with -5 = %d, want %d", fifoNeg.maxDepth, DefaultMergePerUpstreamBufferDepth)
 	}
 }
 
@@ -606,7 +606,7 @@ func TestMergeHubTickEmitsBundleWithReadyEvents(t *testing.T) {
 	downstream := New(Scope{}, DefaultConfig())
 	t.Cleanup(downstream.Close)
 
-	hub := newMergeHub(t.Context(), downstream, 10*time.Millisecond, 1000)
+	hub := newMergeHub(t.Context(), downstream, 10*time.Millisecond, DefaultMergePerUpstreamBufferDepth)
 	defer hub.Stop()
 
 	upstream1 := New(Scope{}, DefaultConfig())
@@ -682,7 +682,7 @@ func TestMergeHubJoinsConsecutiveStringDeltas(t *testing.T) {
 	downstream := New(Scope{}, DefaultConfig())
 	t.Cleanup(downstream.Close)
 
-	hub := newMergeHub(t.Context(), downstream, 10*time.Millisecond, 1000)
+	hub := newMergeHub(t.Context(), downstream, 10*time.Millisecond, DefaultMergePerUpstreamBufferDepth)
 	defer hub.Stop()
 
 	upstream := New(Scope{}, DefaultConfig())
@@ -748,7 +748,7 @@ func TestMergeHubKeepsNonJoinableDeltasQueued(t *testing.T) {
 	downstream := New(Scope{}, DefaultConfig())
 	t.Cleanup(downstream.Close)
 
-	hub := newMergeHub(t.Context(), downstream, 10*time.Millisecond, 1000)
+	hub := newMergeHub(t.Context(), downstream, 10*time.Millisecond, DefaultMergePerUpstreamBufferDepth)
 	defer hub.Stop()
 
 	upstream := New(Scope{}, DefaultConfig())
@@ -887,7 +887,7 @@ func TestMergeFromWithConfigHubModeEmitsBundles(t *testing.T) {
 
 	config := MergeWindowConfig{
 		TickDuration:           10 * time.Millisecond,
-		PerUpstreamBufferDepth: 1000,
+		PerUpstreamBufferDepth: DefaultMergePerUpstreamBufferDepth,
 	}
 	merge, err := parent.MergeWithConfig(t.Context(), child, Filter{}, config)
 	if err != nil {
@@ -948,7 +948,7 @@ func TestMergeFromWithConfigHubRespectsFilters(t *testing.T) {
 
 	config := MergeWindowConfig{
 		TickDuration:           10 * time.Millisecond,
-		PerUpstreamBufferDepth: 1000,
+		PerUpstreamBufferDepth: DefaultMergePerUpstreamBufferDepth,
 	}
 
 	// Filter to only LLM events.
@@ -1013,7 +1013,7 @@ func TestMergeFromWithConfigHubContextCancellation(t *testing.T) {
 
 	config := MergeWindowConfig{
 		TickDuration:           10 * time.Millisecond,
-		PerUpstreamBufferDepth: 1000,
+		PerUpstreamBufferDepth: DefaultMergePerUpstreamBufferDepth,
 	}
 	merge, err := parent.MergeWithConfig(ctx, child, Filter{}, config)
 	if err != nil {
@@ -1052,7 +1052,7 @@ func TestMergeFromWithConfigMergeStopStopsHub(t *testing.T) {
 
 	config := MergeWindowConfig{
 		TickDuration:           10 * time.Millisecond,
-		PerUpstreamBufferDepth: 1000,
+		PerUpstreamBufferDepth: DefaultMergePerUpstreamBufferDepth,
 	}
 	merge, err := parent.MergeWithConfig(t.Context(), child, Filter{}, config)
 	if err != nil {
@@ -1082,6 +1082,19 @@ func TestMergeFromWithConfigRejectsNegativeTickDuration(t *testing.T) {
 	})
 	if !errors.Is(err, ErrInvalidMerge) {
 		t.Fatalf("MergeFromWithConfig negative tick err = %v, want ErrInvalidMerge", err)
+	}
+}
+
+func TestDefaultHubMergeWindowConfigEnablesHubMode(t *testing.T) {
+	config := DefaultHubMergeWindowConfig()
+	if config.TickDuration != DefaultMergeTickDuration {
+		t.Fatalf("TickDuration = %v, want %v", config.TickDuration, DefaultMergeTickDuration)
+	}
+	if config.TickDuration <= 0 {
+		t.Fatalf("TickDuration = %v, want hub mode enabled", config.TickDuration)
+	}
+	if config.PerUpstreamBufferDepth != DefaultMergeWindowConfig().PerUpstreamBufferDepth {
+		t.Fatalf("PerUpstreamBufferDepth = %d, want default depth", config.PerUpstreamBufferDepth)
 	}
 }
 

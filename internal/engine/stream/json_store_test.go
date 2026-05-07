@@ -1,6 +1,7 @@
 package stream
 
 import (
+	"encoding/json"
 	"os"
 	"testing"
 )
@@ -62,6 +63,77 @@ func TestJSONStorePersistsReplayAcrossReopen(t *testing.T) {
 		t.Fatalf("second replay = %+v, want seq 3 output for node n2", second)
 	}
 	assertNoEvent(t, sub.Events())
+}
+
+func TestJSONStorePersistsBundleEventsWithNestedEvents(t *testing.T) {
+	dir := t.TempDir()
+	store, err := NewJSONStore(dir)
+	if err != nil {
+		t.Fatalf("NewJSONStore: %v", err)
+	}
+	stream := New(Scope{RequestID: "req_1"}, Config{DisableBuffer: true}, WithStore(store))
+	t.Cleanup(stream.Close)
+
+	delta, err := EncodeBundlePayload(BundlePayload{
+		TickID: 3,
+		NestedEvents: []Event{
+			{
+				EventType: EventLLMReasoningDelta,
+				From:      Source{Layer: "skill", ID: "skill_1"},
+				Status:    StatusRunning,
+				Scope:     Scope{NodeID: "node_1"},
+				Delta:     json.RawMessage(`"first"`),
+			},
+			{
+				EventType: EventLLMOutputDelta,
+				From:      Source{Layer: "skill", ID: "skill_1"},
+				Status:    StatusCompleted,
+				Scope:     Scope{NodeID: "node_1"},
+				Delta:     json.RawMessage(`"second"`),
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("EncodeBundlePayload: %v", err)
+	}
+	if err := stream.Emit(t.Context(), Event{
+		EventType: EventMergeBundle,
+		From:      Source{Layer: "hub"},
+		Status:    StatusCompleted,
+		Delta:     delta,
+	}); err != nil {
+		t.Fatalf("Emit bundle: %v", err)
+	}
+
+	reopenedStore, err := NewJSONStore(dir)
+	if err != nil {
+		t.Fatalf("NewJSONStore(reopen): %v", err)
+	}
+	replayStream := New(Scope{RequestID: "req_1"}, Config{DisableBuffer: true}, WithStore(reopenedStore))
+	t.Cleanup(replayStream.Close)
+
+	raw, err := replayStream.Replay(Filter{}, WithReplayFrom(1))
+	if err != nil {
+		t.Fatalf("Replay raw: %v", err)
+	}
+	if len(raw) != 1 || raw[0].EventType != EventMergeBundle {
+		t.Fatalf("raw replay = %+v, want one bundle event", raw)
+	}
+	bundle, err := DecodeBundlePayload(raw[0].Delta)
+	if err != nil {
+		t.Fatalf("DecodeBundlePayload: %v", err)
+	}
+	if len(bundle.NestedEvents) != 2 || bundle.NestedEvents[0].EventType != EventLLMReasoningDelta || bundle.NestedEvents[1].EventType != EventLLMOutputDelta {
+		t.Fatalf("nested events = %+v, want reasoning then output", bundle.NestedEvents)
+	}
+
+	expanded, err := replayStream.ReplayExpanded(Filter{Prefixes: []string{"llm."}}, WithReplayFrom(1))
+	if err != nil {
+		t.Fatalf("ReplayExpanded: %v", err)
+	}
+	if len(expanded) != 2 || expanded[0].Delta == nil || expanded[1].Delta == nil {
+		t.Fatalf("expanded replay = %+v, want two nested events", expanded)
+	}
 }
 
 func TestJSONStoreLoadToleratesPartialTrailingLine(t *testing.T) {
