@@ -54,12 +54,16 @@ func IsValidEventBatch(bundle EventBatch) bool {
 	return len(bundle.Events) > 0
 }
 
-// ExpandBundleEvent returns the events a downstream consumer should handle for event.
-// Merge bundle events expand to their nested events in bundle order. Non-bundle
-// events pass through unchanged so callers can consume direct and bundled streams
-// with one code path during migration. Expanded nested events inherit missing
-// scope fields from the outer bundle event so scope filters behave like direct
-// merge delivery.
+// ExpandBundleEvent expands a raw merge bundle event carrier into its nested
+// logical events. It is intended for raw stream consumers that receive
+// merge.bundle frames via [WithRawStream] and need to inspect or iterate the
+// contained events. Non-bundle events pass through unchanged so the same code
+// path can handle both plain and bundle frames when working with raw streams.
+// Expanded nested events inherit missing scope fields from the outer bundle
+// event so that scope comparisons behave consistently with direct delivery.
+//
+// Ordinary [Stream.Subscribe] and [Stream.Replay] callers do not need this
+// function; they receive already-expanded logical events by default.
 func ExpandBundleEvent(event Event) ([]Event, error) {
 	if event.EventType != EventMergeBundle {
 		return []Event{event}, nil
@@ -81,8 +85,10 @@ func ExpandBundleEvent(event Event) ([]Event, error) {
 	return events, nil
 }
 
-// FilterBundleEvent expands event with [ExpandBundleEvent] and returns only the
-// resulting events that match filter.
+// FilterBundleEvent expands a raw bundle event with [ExpandBundleEvent] and
+// returns only the events that match filter. Like [ExpandBundleEvent], this
+// function is for raw stream consumers that opt into merge.bundle frame
+// delivery via [WithRawStream]. Ordinary subscribers do not need it.
 func FilterBundleEvent(event Event, filter Filter) ([]Event, error) {
 	events, err := ExpandBundleEvent(event)
 	if err != nil {

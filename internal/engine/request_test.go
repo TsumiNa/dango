@@ -323,31 +323,25 @@ func TestStartRequest_StreamsPlannerReasoningAndPlanningExchange(t *testing.T) {
 		if err != nil || !ok {
 			break
 		}
-		events, expandErr := streampkg.ExpandBundleEvent(event)
-		if expandErr != nil {
-			t.Fatalf("ExpandBundleEvent: %v", expandErr)
+		if event.From.Layer != "orchestrator" {
+			continue
 		}
-		for _, expanded := range events {
-			if expanded.From.Layer != "orchestrator" {
+		var delta string
+		if err := json.Unmarshal(event.Delta, &delta); err != nil {
+			continue
+		}
+		switch event.EventType {
+		case streampkg.EventLLMReasoningDelta:
+			if strings.Contains(delta, "checked the available skills") {
+				sawReasoning = true
+			}
+		case streampkg.EventLLMOutputDelta:
+			doc, err := runnerpkg.ParseExchangeMarkdown(delta)
+			if err != nil {
 				continue
 			}
-			var delta string
-			if err := json.Unmarshal(expanded.Delta, &delta); err != nil {
-				continue
-			}
-			switch expanded.EventType {
-			case streampkg.EventLLMReasoningDelta:
-				if strings.Contains(delta, "checked the available skills") {
-					sawReasoning = true
-				}
-			case streampkg.EventLLMOutputDelta:
-				doc, err := runnerpkg.ParseExchangeMarkdown(delta)
-				if err != nil {
-					continue
-				}
-				if doc.Stage == runnerpkg.ExchangeStage("planning") && doc.SkillName == "orchestrator" && doc.TaskDescription == "run a single node" && doc.Handoff == planOutput && strings.Contains(doc.Reasoning, "checked the available skills") {
-					sawPlanningExchange = true
-				}
+			if doc.Stage == runnerpkg.ExchangeStage("planning") && doc.SkillName == "orchestrator" && doc.TaskDescription == "run a single node" && doc.Handoff == planOutput && strings.Contains(doc.Reasoning, "checked the available skills") {
+				sawPlanningExchange = true
 			}
 		}
 	}

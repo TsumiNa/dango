@@ -189,10 +189,13 @@ func (r *Renderer) RenderSubscription(ctx context.Context, sub *streampkg.Subscr
 	return r.RenderSubscriptionObserved(ctx, sub, nil)
 }
 
-// RenderSubscriptionObserved drains sub and calls observe for each raw event
-// before rendering it. Merge bundle events are expanded for rendering after
-// observation, so debug logs can preserve raw stream traffic while terminal
-// output shows the nested logical events.
+// RenderSubscriptionObserved drains sub and calls observe for each event
+// before rendering it. It renders exactly the events delivered by sub, so
+// callers that want logical event rendering should pass a subscription using
+// the default expanded delivery rather than a raw merge-bundle stream.
+// Callers that also want raw debug traffic should observe a separate
+// subscription created with [streampkg.WithRawStream]. Passing a raw
+// subscription here causes raw frames to be rendered.
 func (r *Renderer) RenderSubscriptionObserved(ctx context.Context, sub *streampkg.Subscription, observe func(streampkg.Event) error) error {
 	if sub == nil {
 		return nil
@@ -213,14 +216,8 @@ func (r *Renderer) RenderSubscriptionObserved(ctx context.Context, sub *streampk
 					return err
 				}
 			}
-			events, err := streampkg.ExpandBundleEvent(event)
-			if err != nil {
+			if err := r.RenderEvent(event); err != nil {
 				return err
-			}
-			for _, expanded := range events {
-				if err := r.RenderEvent(expanded); err != nil {
-					return err
-				}
 			}
 		case <-ticker.C:
 			if err := r.refreshLiveLine(); err != nil {

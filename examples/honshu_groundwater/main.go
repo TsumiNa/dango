@@ -324,19 +324,13 @@ func waitForRequestRunnerSettled(ctx context.Context, eventStream *streampkg.Str
 		if !ok {
 			return fmt.Errorf("request stream closed before runner settled update")
 		}
-		expanded, err := streampkg.ExpandBundleEvent(event)
-		if err != nil {
-			return err
+		if event.EventType != streampkg.EventRunnerPhaseChanged || event.Scope.RunnerID != runnerID {
+			continue
 		}
-		for _, candidate := range expanded {
-			if candidate.EventType != streampkg.EventRunnerPhaseChanged || candidate.Scope.RunnerID != runnerID {
-				continue
-			}
-			values := map[string]any{}
-			_ = json.Unmarshal(candidate.Delta, &values)
-			if phase, _ := values["phase"].(string); phase == string(runnerpkg.PhaseSettled) {
-				return nil
-			}
+		values := map[string]any{}
+		_ = json.Unmarshal(event.Delta, &values)
+		if phase, _ := values["phase"].(string); phase == string(runnerpkg.PhaseSettled) {
+			return nil
 		}
 	}
 }
