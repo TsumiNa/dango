@@ -212,7 +212,7 @@ func TestRunnerEmitsArtifactCreatedEventsFromExchangeOutput(t *testing.T) {
 
 	r := newTestRunner()
 	eventStream := r.EventStream()
-	sub, err := eventStream.Subscribe(streampkg.Filter{}, streampkg.WithSubscriberBuffer(8))
+	sub, err := eventStream.Subscribe(streampkg.Filter{EventTypes: []string{streampkg.EventArtifactCreated, streampkg.EventMergeBundle}}, streampkg.WithSubscriberBuffer(8))
 	if err != nil {
 		t.Fatalf("Subscribe: %v", err)
 	}
@@ -281,7 +281,7 @@ func TestRunnerEmitsSkillMemoEventsFromExchangeOutput(t *testing.T) {
 
 	r := newTestRunner()
 	eventStream := r.EventStream()
-	sub, err := eventStream.Subscribe(streampkg.Filter{}, streampkg.WithSubscriberBuffer(8))
+	sub, err := eventStream.Subscribe(streampkg.Filter{EventTypes: []string{streampkg.EventSkillMemoDelta, streampkg.EventMergeBundle}}, streampkg.WithSubscriberBuffer(8))
 	if err != nil {
 		t.Fatalf("Subscribe: %v", err)
 	}
@@ -341,7 +341,7 @@ func TestRunnerDoesNotEmitSkillMemoWithoutMemo(t *testing.T) {
 
 	r := newTestRunner()
 	eventStream := r.EventStream()
-	sub, err := eventStream.Subscribe(streampkg.Filter{}, streampkg.WithSubscriberBuffer(8))
+	sub, err := eventStream.Subscribe(streampkg.Filter{EventTypes: []string{streampkg.EventSkillMemoDelta, streampkg.EventMergeBundle}}, streampkg.WithSubscriberBuffer(8))
 	if err != nil {
 		t.Fatalf("Subscribe: %v", err)
 	}
@@ -378,7 +378,7 @@ func TestRunnerDoesNotEmitArtifactCreatedWithoutResources(t *testing.T) {
 
 	r := newTestRunner()
 	eventStream := r.EventStream()
-	sub, err := eventStream.Subscribe(streampkg.Filter{}, streampkg.WithSubscriberBuffer(8))
+	sub, err := eventStream.Subscribe(streampkg.Filter{EventTypes: []string{streampkg.EventArtifactCreated, streampkg.EventMergeBundle}}, streampkg.WithSubscriberBuffer(8))
 	if err != nil {
 		t.Fatalf("Subscribe: %v", err)
 	}

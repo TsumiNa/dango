@@ -100,7 +100,7 @@ func (e *streamingBindExecutor) Report(ctx context.Context, output any) (any, er
 func TestRunner_PrepareNodeExecutor_MergesExecutorOwnedStream(t *testing.T) {
 	exec := &streamingBindExecutor{}
 	r := newTestRunner()
-	sub, err := r.SubscribeStream(streampkg.Filter{}, streampkg.WithSubscriberBuffer(4))
+	sub, err := r.SubscribeStream(streampkg.Filter{EventTypes: []string{streampkg.EventMergeBundle}}, streampkg.WithSubscriberBuffer(4))
 	if err != nil {
 		t.Fatalf("SubscribeStream: %v", err)
 	}
