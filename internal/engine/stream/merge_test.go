@@ -645,7 +645,7 @@ func TestMergeHubTickEmitsBundleWithReadyEvents(t *testing.T) {
 	}
 
 	// Subscribe to downstream to receive bundle.
-	sub, err := downstream.Subscribe(Filter{EventTypes: []string{EventMergeBundle}})
+	sub, err := downstream.Subscribe(Filter{EventTypes: []string{EventMergeBundle}}, WithRawStream())
 	if err != nil {
 		t.Fatalf("Subscribe downstream: %v", err)
 	}
@@ -721,7 +721,7 @@ func TestMergeHubJoinsConsecutiveStringDeltas(t *testing.T) {
 	}
 
 	// Subscribe to downstream.
-	sub, err := downstream.Subscribe(Filter{EventTypes: []string{EventMergeBundle}})
+	sub, err := downstream.Subscribe(Filter{EventTypes: []string{EventMergeBundle}}, WithRawStream())
 	if err != nil {
 		t.Fatalf("Subscribe: %v", err)
 	}
@@ -767,7 +767,7 @@ func TestMergeHubJoinsOnlyAdjacentSameKeyDeltas(t *testing.T) {
 		t.Fatalf("registerUpstream: %v", err)
 	}
 
-	sub, err := downstream.Subscribe(Filter{EventTypes: []string{EventMergeBundle}})
+	sub, err := downstream.Subscribe(Filter{EventTypes: []string{EventMergeBundle}}, WithRawStream())
 	if err != nil {
 		t.Fatalf("Subscribe: %v", err)
 	}
@@ -838,7 +838,7 @@ func TestMergeHubStopsJoiningAtNonStringDelta(t *testing.T) {
 		t.Fatalf("registerUpstream: %v", err)
 	}
 
-	sub, err := downstream.Subscribe(Filter{EventTypes: []string{EventMergeBundle}})
+	sub, err := downstream.Subscribe(Filter{EventTypes: []string{EventMergeBundle}}, WithRawStream())
 	if err != nil {
 		t.Fatalf("Subscribe: %v", err)
 	}
@@ -919,7 +919,7 @@ func TestMergeHubKeepsNonJoinableDeltasQueued(t *testing.T) {
 	}
 
 	// Subscribe to downstream.
-	sub, err := downstream.Subscribe(Filter{EventTypes: []string{EventMergeBundle}})
+	sub, err := downstream.Subscribe(Filter{EventTypes: []string{EventMergeBundle}}, WithRawStream())
 	if err != nil {
 		t.Fatalf("Subscribe: %v", err)
 	}
@@ -1020,7 +1020,7 @@ func TestMergeFromWithConfigHubModeEmitsBundles(t *testing.T) {
 	t.Cleanup(parent.Close)
 	t.Cleanup(child.Close)
 
-	sub, err := parent.Subscribe(Filter{})
+	sub, err := parent.Subscribe(Filter{}, WithRawStream())
 	if err != nil {
 		t.Fatalf("Subscribe: %v", err)
 	}
@@ -1081,7 +1081,7 @@ func TestMergeWithConfigHubModeSharesDownstreamHub(t *testing.T) {
 	t.Cleanup(childA.Close)
 	t.Cleanup(childB.Close)
 
-	sub, err := parent.Subscribe(Filter{EventTypes: []string{EventMergeBundle}})
+	sub, err := parent.Subscribe(Filter{EventTypes: []string{EventMergeBundle}}, WithRawStream())
 	if err != nil {
 		t.Fatalf("Subscribe: %v", err)
 	}
@@ -1145,7 +1145,7 @@ func TestMergeWithConfigStopUnregistersOnlyOneSharedHubUpstream(t *testing.T) {
 	t.Cleanup(childA.Close)
 	t.Cleanup(childB.Close)
 
-	sub, err := parent.Subscribe(Filter{EventTypes: []string{EventMergeBundle}})
+	sub, err := parent.Subscribe(Filter{EventTypes: []string{EventMergeBundle}}, WithRawStream())
 	if err != nil {
 		t.Fatalf("Subscribe: %v", err)
 	}
@@ -1201,7 +1201,7 @@ func TestMergeFromWithConfigHubRespectsFilters(t *testing.T) {
 	t.Cleanup(parent.Close)
 	t.Cleanup(child.Close)
 
-	sub, err := parent.Subscribe(Filter{})
+	sub, err := parent.Subscribe(Filter{}, WithRawStream())
 	if err != nil {
 		t.Fatalf("Subscribe: %v", err)
 	}
@@ -1384,7 +1384,7 @@ func TestMergeFromWithConfigHubDrainsBufferedEventsOnUpstreamClose(t *testing.T)
 	child := New(Scope{NodeID: "node_1"}, DefaultConfig())
 	t.Cleanup(parent.Close)
 
-	sub, err := parent.Subscribe(Filter{EventTypes: []string{EventMergeBundle}})
+	sub, err := parent.Subscribe(Filter{EventTypes: []string{EventMergeBundle}}, WithRawStream())
 	if err != nil {
 		t.Fatalf("Subscribe: %v", err)
 	}
@@ -1443,7 +1443,7 @@ func TestMergeFromWithConfigHubEventsUseMergedScopeAndMetadata(t *testing.T) {
 	t.Cleanup(parent.Close)
 	t.Cleanup(child.Close)
 
-	sub, err := parent.Subscribe(Filter{EventTypes: []string{EventMergeBundle}})
+	sub, err := parent.Subscribe(Filter{EventTypes: []string{EventMergeBundle}}, WithRawStream())
 	if err != nil {
 		t.Fatalf("Subscribe: %v", err)
 	}

@@ -32,6 +32,7 @@ type subscribeSettings struct {
 	noReplay       bool
 	buffer         int
 	overflowPolicy OverflowPolicy
+	rawStream      bool
 }
 
 // WithReplayFrom replays buffered or stored events whose sequence number is at
@@ -78,13 +79,25 @@ func WithOverflowPolicy(policy OverflowPolicy) SubscribeOption {
 	}
 }
 
+// WithRawStream opts the subscriber into raw transport frame delivery.
+// By default [Stream.Subscribe] and [Stream.Replay] expand merge batch frames
+// into their logical events before applying the filter. WithRawStream disables
+// that expansion so callers receive the raw carrier events, including
+// merge.bundle frames with their tick metadata intact. Use this for debug
+// consumers, persistence inspection, and tests that verify raw stream storage.
+func WithRawStream() SubscribeOption {
+	return func(settings *subscribeSettings) {
+		settings.rawStream = true
+	}
+}
+
 // Subscription receives events from a stream until cancelled or until the
 // stream closes.
 type Subscription struct {
 	id             uint64
 	stream         *Stream
 	filter         Filter
-	logical        bool
+	expanded       bool
 	events         chan Event
 	done           chan struct{}
 	overflowPolicy OverflowPolicy
@@ -134,8 +147,8 @@ func (sub *Subscription) Cancel() {
 }
 
 func (sub *Subscription) send(ctx context.Context, event Event) error {
-	if sub.logical && event.EventType == EventMergeBundle {
-		return sub.sendLogicalBundle(ctx, event)
+	if sub.expanded && event.EventType == EventMergeBundle {
+		return sub.sendExpanded(ctx, event)
 	}
 	select {
 	case sub.events <- event:
@@ -152,11 +165,10 @@ func (sub *Subscription) send(ctx context.Context, event Event) error {
 	}
 }
 
-// sendLogicalBundle expands a merge.bundle event and delivers each nested
-// event that matches the subscription filter. Events that do not match are
-// silently dropped. The order of delivery matches the bundle's per-upstream
-// FIFO order.
-func (sub *Subscription) sendLogicalBundle(ctx context.Context, event Event) error {
+// sendExpanded expands a merge.bundle event and delivers each nested event
+// that matches the subscription filter. Events that do not match are silently
+// dropped. The order of delivery matches the bundle's per-upstream FIFO order.
+func (sub *Subscription) sendExpanded(ctx context.Context, event Event) error {
 	events, err := FilterBundleEvent(event, sub.filter)
 	if err != nil {
 		return err

@@ -66,7 +66,7 @@ func TestStreamSubscribeFiltersAndReplay(t *testing.T) {
 	emit(EventLLMReasoningDelta, `"think"`)
 	emit(EventLLMOutputDelta, `"answer"`)
 
-	sub, err := s.Subscribe(Filter{Prefixes: []string{"llm."}}, WithReplayFrom(2), WithSubscriberBuffer(0))
+	sub, err := s.Subscribe(Filter{Prefixes: []string{"llm."}}, WithReplayFrom(2))
 	if err != nil {
 		t.Fatalf("Subscribe: %v", err)
 	}
@@ -242,7 +242,7 @@ func TestStreamSubscribeLoadsReplayFromStoreBeyondBuffer(t *testing.T) {
 	emit(EventLLMReasoningDelta, `"think"`)
 	emit(EventLLMOutputDelta, `"answer"`)
 
-	sub, err := s.Subscribe(Filter{Prefixes: []string{"llm."}}, WithReplayFrom(2), WithSubscriberBuffer(0))
+	sub, err := s.Subscribe(Filter{Prefixes: []string{"llm."}}, WithReplayFrom(2))
 	if err != nil {
 		t.Fatalf("Subscribe: %v", err)
 	}
@@ -286,7 +286,7 @@ func TestStreamSubscribeReplayLastLoadsFromStoreWhenBufferDisabled(t *testing.T)
 		}
 	}
 
-	sub, err := s.Subscribe(Filter{}, WithReplayLast(2), WithSubscriberBuffer(0))
+	sub, err := s.Subscribe(Filter{}, WithReplayLast(2))
 	if err != nil {
 		t.Fatalf("Subscribe: %v", err)
 	}
@@ -327,7 +327,7 @@ func TestStreamSubscribeReturnsStoreLoadError(t *testing.T) {
 	}
 }
 
-func TestStreamReplayExpandedExpandsStoredBundles(t *testing.T) {
+func TestStreamReplayExpandsStoredBundles(t *testing.T) {
 	store := &recordingStore{}
 	s := New(Scope{RequestID: "req_1"}, Config{DisableBuffer: true}, WithStore(store))
 	t.Cleanup(s.Close)
@@ -363,7 +363,7 @@ func TestStreamReplayExpandedExpandsStoredBundles(t *testing.T) {
 		t.Fatalf("Emit bundle: %v", err)
 	}
 
-	raw, err := s.Replay(Filter{}, WithReplayFrom(1))
+	raw, err := s.Replay(Filter{}, WithReplayFrom(1), WithRawStream())
 	if err != nil {
 		t.Fatalf("Replay raw: %v", err)
 	}
@@ -371,9 +371,9 @@ func TestStreamReplayExpandedExpandsStoredBundles(t *testing.T) {
 		t.Fatalf("raw replay = %+v, want one bundle event", raw)
 	}
 
-	expanded, err := s.ReplayExpanded(Filter{EventTypes: []string{EventLLMOutputDelta}}, WithReplayFrom(1))
+	expanded, err := s.Replay(Filter{EventTypes: []string{EventLLMOutputDelta}}, WithReplayFrom(1))
 	if err != nil {
-		t.Fatalf("ReplayExpanded: %v", err)
+		t.Fatalf("Replay: %v", err)
 	}
 	if len(expanded) != 1 {
 		t.Fatalf("expanded replay = %d events, want 1", len(expanded))
@@ -397,13 +397,13 @@ func makeBundleEvent(t *testing.T, tickID uint64, nested ...Event) Event {
 	}
 }
 
-func TestSubscribeLogicalExpandsSingleEventBatch(t *testing.T) {
+func TestSubscribeExpandsSingleEventBatch(t *testing.T) {
 	s := New(Scope{RequestID: "req_1"}, DefaultConfig())
 	t.Cleanup(s.Close)
 
-	sub, err := s.SubscribeLogical(Filter{}, WithNoReplay())
+	sub, err := s.Subscribe(Filter{}, WithNoReplay())
 	if err != nil {
-		t.Fatalf("SubscribeLogical: %v", err)
+		t.Fatalf("Subscribe: %v", err)
 	}
 	defer sub.Cancel()
 
@@ -427,13 +427,13 @@ func TestSubscribeLogicalExpandsSingleEventBatch(t *testing.T) {
 	assertNoEvent(t, sub.Events())
 }
 
-func TestSubscribeLogicalExpandsMultiEventBatch(t *testing.T) {
+func TestSubscribeExpandsMultiEventBatch(t *testing.T) {
 	s := New(Scope{RequestID: "req_1"}, DefaultConfig())
 	t.Cleanup(s.Close)
 
-	sub, err := s.SubscribeLogical(Filter{}, WithNoReplay())
+	sub, err := s.Subscribe(Filter{}, WithNoReplay())
 	if err != nil {
-		t.Fatalf("SubscribeLogical: %v", err)
+		t.Fatalf("Subscribe: %v", err)
 	}
 	defer sub.Cancel()
 
@@ -454,14 +454,14 @@ func TestSubscribeLogicalExpandsMultiEventBatch(t *testing.T) {
 	assertNoEvent(t, sub.Events())
 }
 
-func TestSubscribeLogicalFilterSelectsMatchingNestedEvents(t *testing.T) {
+func TestSubscribeFilterSelectsMatchingNestedEvents(t *testing.T) {
 	s := New(Scope{RequestID: "req_1"}, DefaultConfig())
 	t.Cleanup(s.Close)
 
 	filter := Filter{EventTypes: []string{EventLLMOutputDelta}}
-	sub, err := s.SubscribeLogical(filter, WithNoReplay())
+	sub, err := s.Subscribe(filter, WithNoReplay())
 	if err != nil {
-		t.Fatalf("SubscribeLogical: %v", err)
+		t.Fatalf("Subscribe: %v", err)
 	}
 	defer sub.Cancel()
 
@@ -479,13 +479,13 @@ func TestSubscribeLogicalFilterSelectsMatchingNestedEvents(t *testing.T) {
 	assertNoEvent(t, sub.Events())
 }
 
-func TestSubscribeLogicalPassesThroughDirectEvents(t *testing.T) {
+func TestSubscribePassesThroughDirectEvents(t *testing.T) {
 	s := New(Scope{RequestID: "req_1"}, DefaultConfig())
 	t.Cleanup(s.Close)
 
-	sub, err := s.SubscribeLogical(Filter{Prefixes: []string{"llm."}}, WithNoReplay())
+	sub, err := s.Subscribe(Filter{Prefixes: []string{"llm."}}, WithNoReplay())
 	if err != nil {
-		t.Fatalf("SubscribeLogical: %v", err)
+		t.Fatalf("Subscribe: %v", err)
 	}
 	defer sub.Cancel()
 
@@ -513,7 +513,7 @@ func TestSubscribeLogicalPassesThroughDirectEvents(t *testing.T) {
 	assertNoEvent(t, sub.Events())
 }
 
-func TestSubscribeLogicalReplayExpandsBundlesFromBuffer(t *testing.T) {
+func TestSubscribeReplayExpandsBundlesFromBuffer(t *testing.T) {
 	s := New(Scope{RequestID: "req_1"}, DefaultConfig())
 	t.Cleanup(s.Close)
 
@@ -523,9 +523,9 @@ func TestSubscribeLogicalReplayExpandsBundlesFromBuffer(t *testing.T) {
 		t.Fatalf("Emit bundle: %v", err)
 	}
 
-	sub, err := s.SubscribeLogical(Filter{EventTypes: []string{EventLLMOutputDelta}}, WithReplayFrom(1))
+	sub, err := s.Subscribe(Filter{EventTypes: []string{EventLLMOutputDelta}}, WithReplayFrom(1))
 	if err != nil {
-		t.Fatalf("SubscribeLogical: %v", err)
+		t.Fatalf("Subscribe: %v", err)
 	}
 	defer sub.Cancel()
 
@@ -543,7 +543,7 @@ func TestSubscribeLogicalReplayExpandsBundlesFromBuffer(t *testing.T) {
 	assertNoEvent(t, sub.Events())
 }
 
-func TestSubscribeLogicalReplayExpandsBundlesFromStore(t *testing.T) {
+func TestSubscribeReplayExpandsBundlesFromStore(t *testing.T) {
 	store := &recordingStore{}
 	s := New(Scope{RequestID: "req_store"}, Config{DisableBuffer: true}, WithStore(store))
 	t.Cleanup(s.Close)
@@ -554,9 +554,9 @@ func TestSubscribeLogicalReplayExpandsBundlesFromStore(t *testing.T) {
 		t.Fatalf("Emit bundle: %v", err)
 	}
 
-	sub, err := s.SubscribeLogical(Filter{EventTypes: []string{EventLLMOutputDelta}}, WithReplayFrom(1))
+	sub, err := s.Subscribe(Filter{EventTypes: []string{EventLLMOutputDelta}}, WithReplayFrom(1))
 	if err != nil {
-		t.Fatalf("SubscribeLogical: %v", err)
+		t.Fatalf("Subscribe: %v", err)
 	}
 	defer sub.Cancel()
 
@@ -570,7 +570,7 @@ func TestSubscribeLogicalReplayExpandsBundlesFromStore(t *testing.T) {
 	assertNoEvent(t, sub.Events())
 }
 
-func TestSubscribeLogicalReplayOrderMatchesLiveSubscription(t *testing.T) {
+func TestSubscribeReplayOrderMatchesLiveSubscription(t *testing.T) {
 	s := New(Scope{RequestID: "req_1"}, DefaultConfig())
 	t.Cleanup(s.Close)
 
@@ -597,9 +597,9 @@ func TestSubscribeLogicalReplayOrderMatchesLiveSubscription(t *testing.T) {
 		t.Fatalf("Emit direct 2: %v", err)
 	}
 
-	sub, err := s.SubscribeLogical(Filter{}, WithReplayFrom(1))
+	sub, err := s.Subscribe(Filter{}, WithReplayFrom(1))
 	if err != nil {
-		t.Fatalf("SubscribeLogical: %v", err)
+		t.Fatalf("Subscribe: %v", err)
 	}
 	defer sub.Cancel()
 
@@ -613,11 +613,11 @@ func TestSubscribeLogicalReplayOrderMatchesLiveSubscription(t *testing.T) {
 	assertNoEvent(t, sub.Events())
 }
 
-func TestSubscribeLogicalRawSubscribeStillSeesBundle(t *testing.T) {
+func TestWithRawStreamSubscriberSeesBundleFrame(t *testing.T) {
 	s := New(Scope{RequestID: "req_1"}, DefaultConfig())
 	t.Cleanup(s.Close)
 
-	rawSub, err := s.Subscribe(Filter{}, WithNoReplay())
+	rawSub, err := s.Subscribe(Filter{}, WithNoReplay(), WithRawStream())
 	if err != nil {
 		t.Fatalf("Subscribe raw: %v", err)
 	}
@@ -634,16 +634,16 @@ func TestSubscribeLogicalRawSubscribeStillSeesBundle(t *testing.T) {
 	}
 }
 
-func TestSubscribeLogicalRejectsClosedStream(t *testing.T) {
+func TestSubscribeRejectsClosedStream(t *testing.T) {
 	s := New(Scope{}, DefaultConfig())
 	s.Close()
 
-	if _, err := s.SubscribeLogical(Filter{}); !errors.Is(err, ErrClosed) {
-		t.Fatalf("SubscribeLogical err = %v, want ErrClosed", err)
+	if _, err := s.Subscribe(Filter{}); !errors.Is(err, ErrClosed) {
+		t.Fatalf("Subscribe err = %v, want ErrClosed", err)
 	}
 }
 
-func TestSubscribeLogicalReplayDropsWhenBufferFull(t *testing.T) {
+func TestSubscribeReplayDropsWhenBufferFull(t *testing.T) {
 	// Verify that replay events beyond the channel buffer are dropped under the
 	// default OverflowDropNewest policy rather than causing OOM-scale allocations.
 	s := New(Scope{RequestID: "req_1"}, DefaultConfig())
@@ -665,9 +665,9 @@ func TestSubscribeLogicalReplayDropsWhenBufferFull(t *testing.T) {
 	}
 
 	// Buffer is intentionally smaller than the 4 replay events.
-	sub, err := s.SubscribeLogical(Filter{}, WithReplayFrom(1), WithSubscriberBuffer(2))
+	sub, err := s.Subscribe(Filter{}, WithReplayFrom(1), WithSubscriberBuffer(2))
 	if err != nil {
-		t.Fatalf("SubscribeLogical: %v", err)
+		t.Fatalf("Subscribe: %v", err)
 	}
 	defer sub.Cancel()
 

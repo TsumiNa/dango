@@ -122,8 +122,8 @@ func (s *Stream) Emit(ctx context.Context, event Event) error {
 	matches := make([]*Subscription, 0, len(s.subscribers))
 	for _, sub := range s.subscribers {
 		var matched bool
-		if sub.logical && prepared.EventType == EventMergeBundle {
-			// Logical subscribers always receive bundle events so send can
+		if sub.expanded && prepared.EventType == EventMergeBundle {
+			// Expanded subscribers always receive bundle events so send can
 			// expand and filter the nested events on delivery.
 			matched = true
 		} else {
@@ -195,12 +195,19 @@ func (s *Stream) Close() {
 	}
 }
 
-// Subscribe attaches a consumer to the stream. Replay comes from the in-memory
-// buffer when possible and falls back to the configured store when the
-// requested range is older than the current buffer window. By default, live
-// events that would block on a full subscriber channel are dropped for that
-// subscriber; use [WithOverflowPolicy] to request an immediate overflow error
-// instead.
+// Subscribe attaches a consumer to the stream. By default merge batch frames
+// are expanded into their logical events before the filter is applied; callers
+// receive individual events from the batch rather than the raw transport carrier.
+// Use [WithRawStream] to opt into raw frame delivery for debug and persistence
+// inspection.
+//
+// Replay comes from the in-memory buffer when possible and falls back to the
+// configured store when the requested range is older than the current buffer
+// window. By default, live events that would block on a full subscriber channel
+// are dropped for that subscriber; use [WithOverflowPolicy] to request an
+// immediate overflow error instead. Because one raw batch may expand into
+// multiple delivered events, the subscriber buffer counts logical events after
+// expansion for default expanded subscribers.
 func (s *Stream) Subscribe(filter Filter, opts ...SubscribeOption) (*Subscription, error) {
 	settings := subscribeSettings{
 		buffer:         defaultSubscriberBuffer,
@@ -222,19 +229,30 @@ func (s *Stream) Subscribe(filter Filter, opts ...SubscribeOption) (*Subscriptio
 		return nil, ErrClosed
 	}
 	id := s.nextSubID + 1
-	replay, err := s.replayLocked(filter, settings)
+
+	var replay []Event
+	var err error
+	if settings.rawStream {
+		replay, err = s.replayLocked(filter, settings)
+	} else {
+		replay, err = s.replayLogicalLocked(filter, settings)
+	}
 	if err != nil {
 		s.mu.Unlock()
 		return nil, err
 	}
+
 	buffer := settings.buffer
-	if buffer < len(replay) {
+	if settings.rawStream && buffer < len(replay) {
+		// For raw subscribers, size the channel to hold all replay events so
+		// the catch-up phase never drops frames.
 		buffer = len(replay)
 	}
 	sub := &Subscription{
 		id:             id,
 		stream:         s,
 		filter:         filter,
+		expanded:       !settings.rawStream,
 		events:         make(chan Event, buffer),
 		done:           make(chan struct{}),
 		overflowPolicy: settings.overflowPolicy,
@@ -253,9 +271,11 @@ func (s *Stream) Subscribe(filter Filter, opts ...SubscribeOption) (*Subscriptio
 }
 
 // Replay returns a snapshot of buffered or stored events that match filter.
-// It uses the same replay range options as [Stream.Subscribe] but does not
-// attach a live subscriber. Merge bundle events are returned raw so debugging
-// callers can inspect the persisted stream exactly as it was emitted.
+// By default merge batch frames are expanded into their logical events before
+// the filter is applied, matching the default behavior of [Stream.Subscribe].
+// Use [WithRawStream] to receive raw transport frames for debug and persistence
+// inspection. It uses the same replay range options as [Stream.Subscribe] but
+// does not attach a live subscriber.
 func (s *Stream) Replay(filter Filter, opts ...SubscribeOption) ([]Event, error) {
 	if s == nil {
 		return nil, ErrClosed
@@ -270,95 +290,23 @@ func (s *Stream) Replay(filter Filter, opts ...SubscribeOption) ([]Event, error)
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.replayLocked(filter, settings)
-}
-
-// SubscribeLogical attaches a logical subscriber that receives expanded logical
-// events. Merge bundle events are expanded into their nested events before
-// filter is applied; only nested events that match filter are delivered.
-// Non-bundle events pass through filter directly.
-//
-// The subscription channel is sized to settings.buffer (default
-// defaultSubscriberBuffer). Initial replay events are delivered into that
-// fixed-size channel under the subscriber's overflow policy; with the default
-// OverflowDropNewest policy, replay events that would overflow are silently
-// dropped. Use [WithSubscriberBuffer] with a larger value or
-// [WithOverflowPolicy](OverflowError) when losing replay events is not
-// acceptable.
-//
-// Use [Stream.Subscribe] when the raw frame shape is needed for debugging or
-// persistence inspection.
-func (s *Stream) SubscribeLogical(filter Filter, opts ...SubscribeOption) (*Subscription, error) {
-	settings := subscribeSettings{
-		buffer:         defaultSubscriberBuffer,
-		overflowPolicy: OverflowDropNewest,
+	if settings.rawStream {
+		return s.replayLocked(filter, settings)
 	}
-	for _, opt := range opts {
-		opt(&settings)
-	}
-	if settings.buffer < 0 {
-		settings.buffer = 0
-	}
-
-	s.deliveryMu.Lock()
-	defer s.deliveryMu.Unlock()
-
-	s.mu.Lock()
-	if s.closed {
-		s.mu.Unlock()
-		return nil, ErrClosed
-	}
-	id := s.nextSubID + 1
-	replay, err := s.replayLogicalLocked(filter, settings)
-	if err != nil {
-		s.mu.Unlock()
-		return nil, err
-	}
-	sub := &Subscription{
-		id:             id,
-		stream:         s,
-		filter:         filter,
-		logical:        true,
-		events:         make(chan Event, settings.buffer),
-		done:           make(chan struct{}),
-		overflowPolicy: settings.overflowPolicy,
-	}
-	s.nextSubID = id
-	s.subscribers[id] = sub
-	s.mu.Unlock()
-
-	for _, event := range replay {
-		if err := sub.send(context.Background(), event); err != nil {
-			sub.Cancel()
-			return nil, err
-		}
-	}
-	return sub, nil
-}
-
-// ReplayExpanded returns a replay snapshot with merge bundle events expanded
-// into their nested events before filter is applied. Non-bundle events pass
-// through the same filter. Use [Stream.Replay] when callers need the raw bundle
-// events for stream debugging or persistence inspection.
-func (s *Stream) ReplayExpanded(filter Filter, opts ...SubscribeOption) ([]Event, error) {
-	raw, err := s.Replay(Filter{}, opts...)
-	if err != nil {
-		return nil, err
-	}
-	var replay []Event
-	for _, event := range raw {
-		events, err := FilterBundleEvent(event, filter)
-		if err != nil {
-			return nil, err
-		}
-		replay = append(replay, events...)
-	}
-	return replay, nil
+	return s.replayLogicalLocked(filter, settings)
 }
 
 // replayLogicalLocked replays events from the buffer or store, expanding merge
 // bundle events into their nested events and applying filter per logical event.
 // It must be called with s.mu held.
+//
+// Store reads always use an empty filter because a merge.bundle carrier must be
+// loaded to expand its nested events, even when the caller's filter is narrow.
+// Passing the caller's filter to the store would silently drop bundles whose
+// carrier event type does not match the filter. The expansion and filtering
+// therefore happen entirely in memory after loading. For store-backed streams
+// with a large history and a narrow filter, prefer [WithRawStream] and manual
+// bundle expansion if store IO is a concern.
 func (s *Stream) replayLogicalLocked(filter Filter, settings subscribeSettings) ([]Event, error) {
 	raw, err := s.replayLocked(Filter{}, settings)
 	if err != nil {

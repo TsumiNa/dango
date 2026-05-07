@@ -341,30 +341,3 @@ func TestExpandBundleEventMalformedEventBatchReturnsError(t *testing.T) {
 		t.Fatalf("ExpandBundleEvent malformed payload error = nil, want error")
 	}
 }
-
-func TestDecodeEventBatchSupportsLegacyNestedEvents(t *testing.T) {
-	legacyJSON := json.RawMessage(`{
-		"tick_id": 42,
-		"nested_events": [
-			{
-				"event_type": "llm.output.delta",
-				"from": {"layer": "skill", "id": "skill_1"}
-			}
-		]
-	}`)
-
-	bundle, err := DecodeEventBatch(legacyJSON)
-	if err != nil {
-		t.Fatalf("DecodeEventBatch(legacyJSON): %v", err)
-	}
-
-	if bundle.TickID != 42 {
-		t.Errorf("TickID = %d, want 42", bundle.TickID)
-	}
-	if len(bundle.Events) != 1 {
-		t.Fatalf("Events count = %d, want 1", len(bundle.Events))
-	}
-	if bundle.Events[0].EventType != EventLLMOutputDelta {
-		t.Errorf("Events[0].EventType = %q, want %q", bundle.Events[0].EventType, EventLLMOutputDelta)
-	}
-}

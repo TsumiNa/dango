@@ -179,7 +179,7 @@ func TestEmitFrameHubPathEmitsBundleEvent(t *testing.T) {
 	downstream := New(Scope{RequestID: "req_hub"}, DefaultConfig())
 	t.Cleanup(downstream.Close)
 
-	sub, err := downstream.Subscribe(Filter{})
+	sub, err := downstream.Subscribe(Filter{}, WithRawStream())
 	if err != nil {
 		t.Fatalf("Subscribe: %v", err)
 	}
@@ -223,7 +223,7 @@ func TestEmitFrameSingleEventHubTickEmitsBundleNotPlain(t *testing.T) {
 	downstream := New(Scope{RequestID: "req_hub_single"}, DefaultConfig())
 	t.Cleanup(downstream.Close)
 
-	sub, err := downstream.Subscribe(Filter{})
+	sub, err := downstream.Subscribe(Filter{}, WithRawStream())
 	if err != nil {
 		t.Fatalf("Subscribe: %v", err)
 	}
@@ -323,7 +323,7 @@ func TestFlushTickUsesFrameNormalization(t *testing.T) {
 	t.Cleanup(parent.Close)
 	t.Cleanup(child.Close)
 
-	sub, err := parent.Subscribe(Filter{})
+	sub, err := parent.Subscribe(Filter{}, WithRawStream())
 	if err != nil {
 		t.Fatalf("Subscribe parent: %v", err)
 	}

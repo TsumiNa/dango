@@ -27,41 +27,6 @@ type EventBatch struct {
 	Events []Event `json:"events"`
 }
 
-// UnmarshalJSON handles backward-compatible decoding for EventBatch payloads.
-// It prioritizes the modern "events" field but falls back to decoding legacy
-// payloads that used "nested_events".
-func (b *EventBatch) UnmarshalJSON(data []byte) error {
-	type rawBatch struct {
-		TickID       uint64           `json:"tick_id"`
-		Events       *json.RawMessage `json:"events"`
-		NestedEvents []Event          `json:"nested_events"`
-	}
-
-	var raw rawBatch
-	if err := json.Unmarshal(data, &raw); err != nil {
-		return err
-	}
-
-	b.TickID = raw.TickID
-	// Only treat the "events" key as authoritative when it decodes to a
-	// non-nil, non-empty slice.  A JSON null or an explicit empty array is
-	// treated as absent so that legacy payloads using "nested_events" are
-	// still handled correctly.
-	if raw.Events != nil {
-		var evs []Event
-		if err := json.Unmarshal(*raw.Events, &evs); err != nil {
-			return err
-		}
-		if len(evs) > 0 {
-			b.Events = evs
-			return nil
-		}
-	}
-	b.Events = raw.NestedEvents
-
-	return nil
-}
-
 // EncodeEventBatch serializes an EventBatch into JSON-encoded raw message form
 // suitable for use as an Event.Delta field. Returns an error if the batch cannot
 // be marshaled.
