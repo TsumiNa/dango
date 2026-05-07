@@ -711,6 +711,14 @@ func TestMergeHubJoinsConsecutiveStringDeltas(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("Emit 2: %v", err)
 	}
+	if err := upstream.Emit(t.Context(), Event{
+		EventType: EventLLMOutputDelta,
+		From:      Source{Layer: "executor", ID: "node_a"},
+		Status:    StatusRunning,
+		Delta:     json.RawMessage(`"!"`),
+	}); err != nil {
+		t.Fatalf("Emit 3: %v", err)
+	}
 
 	// Subscribe to downstream.
 	sub, err := downstream.Subscribe(Filter{EventTypes: []string{EventMergeBundle}})
@@ -732,15 +740,147 @@ func TestMergeHubJoinsConsecutiveStringDeltas(t *testing.T) {
 		t.Fatalf("DecodeBundlePayload: %v", err)
 	}
 
-	// Should have one joined event instead of two.
+	// Should have one joined event instead of three.
 	if len(bundle.NestedEvents) != 1 {
 		t.Fatalf("nested events count = %d, want 1 (should be joined)", len(bundle.NestedEvents))
 	}
 
 	// Verify the joined delta.
-	wantDelta := []byte(`"hello world"`)
+	wantDelta := []byte(`"hello world!"`)
 	if !bytes.Equal(bundle.NestedEvents[0].Delta, wantDelta) {
 		t.Fatalf("joined delta = %s, want %s", bundle.NestedEvents[0].Delta, wantDelta)
+	}
+	if bundle.NestedEvents[0].LogicalTime != 1 {
+		t.Fatalf("joined logical time = %d, want first event logical time 1", bundle.NestedEvents[0].LogicalTime)
+	}
+}
+
+func TestMergeHubJoinsOnlyAdjacentSameKeyDeltas(t *testing.T) {
+	downstream := New(Scope{}, DefaultConfig())
+	t.Cleanup(downstream.Close)
+
+	hub := newMergeHub(t.Context(), downstream, time.Hour, DefaultMergePerUpstreamBufferDepth)
+	defer hub.Stop()
+
+	identity := upstreamIdentity{layer: "executor", id: "node_a"}
+	if err := hub.registerUpstream(identity, nil); err != nil {
+		t.Fatalf("registerUpstream: %v", err)
+	}
+
+	sub, err := downstream.Subscribe(Filter{EventTypes: []string{EventMergeBundle}})
+	if err != nil {
+		t.Fatalf("Subscribe: %v", err)
+	}
+	defer sub.Cancel()
+
+	for _, event := range []Event{
+		{
+			EventType: EventLLMOutputDelta,
+			From:      Source{Layer: "executor", ID: "node_a"},
+			Status:    StatusRunning,
+			Delta:     json.RawMessage(`"hello "`),
+		},
+		{
+			EventType: EventLLMReasoningDelta,
+			From:      Source{Layer: "executor", ID: "node_a"},
+			Status:    StatusRunning,
+			Delta:     json.RawMessage(`"thinking"`),
+		},
+		{
+			EventType: EventLLMOutputDelta,
+			From:      Source{Layer: "executor", ID: "node_a"},
+			Status:    StatusRunning,
+			Delta:     json.RawMessage(`"world"`),
+		},
+	} {
+		if err := hub.enqueue(identity, event); err != nil {
+			t.Fatalf("enqueue %s: %v", event.EventType, err)
+		}
+	}
+
+	want := []struct {
+		eventType string
+		delta     string
+	}{
+		{EventLLMOutputDelta, `"hello "`},
+		{EventLLMReasoningDelta, `"thinking"`},
+		{EventLLMOutputDelta, `"world"`},
+	}
+
+	for tick, wantEvent := range want {
+		if !hub.flushTick() {
+			t.Fatalf("flushTick %d = false, want bundle", tick+1)
+		}
+		bundleEvent := receiveEvent(t, sub.Events())
+		bundle, err := DecodeBundlePayload(bundleEvent.Delta)
+		if err != nil {
+			t.Fatalf("DecodeBundlePayload %d: %v", tick+1, err)
+		}
+		if len(bundle.NestedEvents) != 1 {
+			t.Fatalf("tick %d nested events = %d, want 1", tick+1, len(bundle.NestedEvents))
+		}
+		got := bundle.NestedEvents[0]
+		if got.EventType != wantEvent.eventType || string(got.Delta) != wantEvent.delta {
+			t.Fatalf("tick %d event = (%s, %s), want (%s, %s)", tick+1, got.EventType, got.Delta, wantEvent.eventType, wantEvent.delta)
+		}
+	}
+}
+
+func TestMergeHubStopsJoiningAtNonStringDelta(t *testing.T) {
+	downstream := New(Scope{}, DefaultConfig())
+	t.Cleanup(downstream.Close)
+
+	hub := newMergeHub(t.Context(), downstream, time.Hour, DefaultMergePerUpstreamBufferDepth)
+	defer hub.Stop()
+
+	identity := upstreamIdentity{layer: "executor", id: "node_a"}
+	if err := hub.registerUpstream(identity, nil); err != nil {
+		t.Fatalf("registerUpstream: %v", err)
+	}
+
+	sub, err := downstream.Subscribe(Filter{EventTypes: []string{EventMergeBundle}})
+	if err != nil {
+		t.Fatalf("Subscribe: %v", err)
+	}
+	defer sub.Cancel()
+
+	for _, event := range []Event{
+		{
+			EventType: EventLLMOutputDelta,
+			From:      Source{Layer: "executor", ID: "node_a"},
+			Status:    StatusRunning,
+			Delta:     json.RawMessage(`"first"`),
+		},
+		{
+			EventType: EventLLMOutputDelta,
+			From:      Source{Layer: "executor", ID: "node_a"},
+			Status:    StatusRunning,
+			Delta:     json.RawMessage(`{"text":"object"}`),
+		},
+		{
+			EventType: EventLLMOutputDelta,
+			From:      Source{Layer: "executor", ID: "node_a"},
+			Status:    StatusRunning,
+			Delta:     json.RawMessage(`"third"`),
+		},
+	} {
+		if err := hub.enqueue(identity, event); err != nil {
+			t.Fatalf("enqueue %s: %v", event.EventType, err)
+		}
+	}
+
+	for tick, wantDelta := range []string{`"first"`, `{"text":"object"}`, `"third"`} {
+		if !hub.flushTick() {
+			t.Fatalf("flushTick %d = false, want bundle", tick+1)
+		}
+		bundleEvent := receiveEvent(t, sub.Events())
+		bundle, err := DecodeBundlePayload(bundleEvent.Delta)
+		if err != nil {
+			t.Fatalf("DecodeBundlePayload %d: %v", tick+1, err)
+		}
+		if len(bundle.NestedEvents) != 1 || string(bundle.NestedEvents[0].Delta) != wantDelta {
+			t.Fatalf("tick %d nested events = %+v, want delta %s", tick+1, bundle.NestedEvents, wantDelta)
+		}
 	}
 }
 
