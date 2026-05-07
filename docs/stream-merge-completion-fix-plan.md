@@ -113,6 +113,8 @@ contiguous span in FIFO order.
 
 ## PR 11: Preserve same-upstream FIFO adjacency during joins
 
+**Status:** Completed in https://github.com/TsumiNa/dango/pull/36.
+
 ### Scope
 
 Fix the per-upstream FIFO join algorithm without changing public merge APIs or
@@ -149,13 +151,29 @@ PR 11 implementation decision:
 
 - Hub enqueue now only prepares and appends events to the upstream FIFO.
 - Tick flush pops the FIFO head and joins only the immediately adjacent queued
-   events that share the same join key and have JSON string deltas.
+  events that share the same join key and have JSON string deltas.
 - Joining stops at the first different join key or non-string JSON payload.
+- The flush path scans the contiguous joinable run first, precomputes the joined
+  JSON string capacity, and assigns the joined delta once. This avoids repeated
+  copying of the accumulated payload for long adjacent delta runs.
 - The joined event keeps the first event's timestamp, logical time, source,
-   scope, status, and metadata. This is valid because the joined span is now
-   guaranteed to be contiguous in that upstream FIFO.
+  scope, status, and metadata. This is valid because the joined span is now
+  guaranteed to be contiguous in that upstream FIFO.
+- FIFO pop and joined-run consumption clear removed `Event` slots before slicing
+  so large deltas, maps, and slices are not retained by the backing array longer
+  than needed.
 - Buffer depth is checked before enqueue and join no longer bypasses the depth
-   limit before a tick flush.
+  limit before a tick flush.
+
+PR 11 validation:
+
+- `go test ./internal/engine/stream ./internal/engine/runner ./internal/engine ./internal/streamrender`
+- `go test ./...`
+
+Remaining follow-up:
+
+- PR 12 still needs to make hub mode shared per downstream stream. PR 11 only
+   fixes per-upstream FIFO adjacency and does not change hub ownership.
 
 ## PR 12: Share hub mode per downstream stream
 
