@@ -13,6 +13,31 @@ import (
 	streampkg "github.com/tsumina/dango/internal/engine/stream"
 )
 
+func nextExpandedStreamEventWithin(t *testing.T, sub *streampkg.Subscription, filter streampkg.Filter, timeout time.Duration) (streampkg.Event, bool) {
+	t.Helper()
+	readCtx, cancelRead := context.WithTimeout(context.Background(), timeout)
+	defer cancelRead()
+	for {
+		event, ok, err := sub.Next(readCtx)
+		if errors.Is(err, context.DeadlineExceeded) {
+			return streampkg.Event{}, false
+		}
+		if err != nil {
+			t.Fatalf("Next: %v", err)
+		}
+		if !ok {
+			t.Fatal("stream closed before expanded event")
+		}
+		events, err := streampkg.FilterBundleEvent(event, filter)
+		if err != nil {
+			t.Fatalf("FilterBundleEvent: %v", err)
+		}
+		if len(events) > 0 {
+			return events[0], true
+		}
+	}
+}
+
 func TestSubscribeStreamReplaysRunnerOwnedPhaseEvents(t *testing.T) {
 	r := newTestRunner()
 	r.stateMu.Lock()
@@ -187,7 +212,7 @@ func TestRunnerEmitsArtifactCreatedEventsFromExchangeOutput(t *testing.T) {
 
 	r := newTestRunner()
 	eventStream := r.EventStream()
-	sub, err := eventStream.Subscribe(streampkg.Filter{EventTypes: []string{streampkg.EventArtifactCreated}}, streampkg.WithSubscriberBuffer(8))
+	sub, err := eventStream.Subscribe(streampkg.Filter{}, streampkg.WithSubscriberBuffer(8))
 	if err != nil {
 		t.Fatalf("Subscribe: %v", err)
 	}
@@ -210,12 +235,7 @@ func TestRunnerEmitsArtifactCreatedEventsFromExchangeOutput(t *testing.T) {
 		t.Fatalf("AddNodes: %v", err)
 	}
 
-	readCtx, cancelRead := context.WithTimeout(context.Background(), 2*time.Second)
-	defer cancelRead()
-	event, ok, err := sub.Next(readCtx)
-	if err != nil {
-		t.Fatalf("Next: %v", err)
-	}
+	event, ok := nextExpandedStreamEventWithin(t, sub, streampkg.Filter{EventTypes: []string{streampkg.EventArtifactCreated}}, 2*time.Second)
 	if !ok {
 		t.Fatal("stream closed before artifact event")
 	}
@@ -261,7 +281,7 @@ func TestRunnerEmitsSkillMemoEventsFromExchangeOutput(t *testing.T) {
 
 	r := newTestRunner()
 	eventStream := r.EventStream()
-	sub, err := eventStream.Subscribe(streampkg.Filter{EventTypes: []string{streampkg.EventSkillMemoDelta}}, streampkg.WithSubscriberBuffer(8))
+	sub, err := eventStream.Subscribe(streampkg.Filter{}, streampkg.WithSubscriberBuffer(8))
 	if err != nil {
 		t.Fatalf("Subscribe: %v", err)
 	}
@@ -285,12 +305,7 @@ func TestRunnerEmitsSkillMemoEventsFromExchangeOutput(t *testing.T) {
 		t.Fatalf("AddNodes: %v", err)
 	}
 
-	readCtx, cancelRead := context.WithTimeout(context.Background(), 2*time.Second)
-	defer cancelRead()
-	event, ok, err := sub.Next(readCtx)
-	if err != nil {
-		t.Fatalf("Next: %v", err)
-	}
+	event, ok := nextExpandedStreamEventWithin(t, sub, streampkg.Filter{EventTypes: []string{streampkg.EventSkillMemoDelta}}, 2*time.Second)
 	if !ok {
 		t.Fatal("stream closed before memo event")
 	}
@@ -326,7 +341,7 @@ func TestRunnerDoesNotEmitSkillMemoWithoutMemo(t *testing.T) {
 
 	r := newTestRunner()
 	eventStream := r.EventStream()
-	sub, err := eventStream.Subscribe(streampkg.Filter{EventTypes: []string{streampkg.EventSkillMemoDelta}}, streampkg.WithSubscriberBuffer(8))
+	sub, err := eventStream.Subscribe(streampkg.Filter{}, streampkg.WithSubscriberBuffer(8))
 	if err != nil {
 		t.Fatalf("Subscribe: %v", err)
 	}
@@ -350,10 +365,8 @@ func TestRunnerDoesNotEmitSkillMemoWithoutMemo(t *testing.T) {
 	}
 	waitForRunnerEvent(t, r, EventNodeCompleted, node.Id)
 
-	readCtx, cancelRead := context.WithTimeout(context.Background(), 100*time.Millisecond)
-	defer cancelRead()
-	if _, ok, err := sub.Next(readCtx); !errors.Is(err, context.DeadlineExceeded) || ok {
-		t.Fatalf("Next = (_, %v, %v), want context deadline exceeded and no event", ok, err)
+	if event, ok := nextExpandedStreamEventWithin(t, sub, streampkg.Filter{EventTypes: []string{streampkg.EventSkillMemoDelta}}, 100*time.Millisecond); ok {
+		t.Fatalf("unexpected skill memo event: %+v", event)
 	}
 }
 
@@ -365,7 +378,7 @@ func TestRunnerDoesNotEmitArtifactCreatedWithoutResources(t *testing.T) {
 
 	r := newTestRunner()
 	eventStream := r.EventStream()
-	sub, err := eventStream.Subscribe(streampkg.Filter{EventTypes: []string{streampkg.EventArtifactCreated}}, streampkg.WithSubscriberBuffer(8))
+	sub, err := eventStream.Subscribe(streampkg.Filter{}, streampkg.WithSubscriberBuffer(8))
 	if err != nil {
 		t.Fatalf("Subscribe: %v", err)
 	}
@@ -389,9 +402,7 @@ func TestRunnerDoesNotEmitArtifactCreatedWithoutResources(t *testing.T) {
 	}
 	waitForRunnerEvent(t, r, EventNodeCompleted, node.Id)
 
-	readCtx, cancelRead := context.WithTimeout(context.Background(), 100*time.Millisecond)
-	defer cancelRead()
-	if _, ok, err := sub.Next(readCtx); !errors.Is(err, context.DeadlineExceeded) || ok {
-		t.Fatalf("Next = (_, %v, %v), want context deadline exceeded and no event", ok, err)
+	if event, ok := nextExpandedStreamEventWithin(t, sub, streampkg.Filter{EventTypes: []string{streampkg.EventArtifactCreated}}, 100*time.Millisecond); ok {
+		t.Fatalf("unexpected artifact event: %+v", event)
 	}
 }

@@ -13,7 +13,7 @@ import (
 	"github.com/tsumina/dango/internal/llm"
 )
 
-const runnerRequestMergeWindow = 10 * time.Millisecond
+const requestMergeWindow = 10 * time.Millisecond
 
 // RequestRejectedError reports a planner rejection for a request that could
 // not be converted into a runner.
@@ -250,7 +250,9 @@ func mergeChildStream(ctx context.Context, downstream *streampkg.Stream, upstrea
 	if downstream == nil || upstream == nil {
 		return nil, nil
 	}
-	merge, err := downstream.MergeFrom(ctx, upstream, streampkg.Filter{}, streampkg.WithSubscriberBuffer(4096))
+	merge, err := downstream.MergeWithConfig(ctx, upstream, streampkg.Filter{}, streampkg.MergeWindowConfig{
+		TickDuration: requestMergeWindow,
+	}, streampkg.WithSubscriberBuffer(4096))
 	if err != nil {
 		return nil, fmt.Errorf("orchestrate: merge child stream: %w", err)
 	}
@@ -262,7 +264,7 @@ func mergeRunnerStream(ctx context.Context, downstream *streampkg.Stream, upstre
 		return nil, nil
 	}
 	merge, err := downstream.MergeWithConfig(ctx, upstream, streampkg.Filter{}, streampkg.MergeWindowConfig{
-		TickDuration: runnerRequestMergeWindow,
+		TickDuration: requestMergeWindow,
 	}, streampkg.WithSubscriberBuffer(4096))
 	if err != nil {
 		return nil, fmt.Errorf("orchestrate: merge runner stream: %w", err)

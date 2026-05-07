@@ -188,46 +188,54 @@ func TestStartRequest_ReturnsReplayableRequestStream(t *testing.T) {
 		t.Fatal("StartRequest response stream is nil")
 	}
 
-	sub, err := resp.Stream.Subscribe(streampkg.Filter{
-		EventTypes: []string{
-			streampkg.EventLLMOutputDelta,
-			streampkg.EventStatusCompleted,
-		},
-	}, streampkg.WithSubscriberBuffer(64))
+	sub, err := resp.Stream.Subscribe(streampkg.Filter{}, streampkg.WithSubscriberBuffer(64))
 	if err != nil {
 		t.Fatalf("Subscribe: %v", err)
 	}
 	defer sub.Cancel()
 
 	deadline := time.Now().Add(2 * time.Second)
-	var sawPlanText, sawCompletedStatus bool
-	for time.Now().Before(deadline) && !(sawPlanText && sawCompletedStatus) {
+	var sawPlanText, sawCompletedStatus, sawPlanBundle bool
+	for time.Now().Before(deadline) && !(sawPlanText && sawCompletedStatus && sawPlanBundle) {
 		readCtx, cancel := context.WithTimeout(context.Background(), time.Until(deadline))
 		event, ok, err := sub.Next(readCtx)
 		cancel()
 		if err != nil || !ok {
 			break
 		}
-		if event.From.Layer != "orchestrator" {
-			continue
+		events, expandErr := streampkg.ExpandBundleEvent(event)
+		if expandErr != nil {
+			t.Fatalf("ExpandBundleEvent: %v", expandErr)
 		}
-		var delta string
-		if jsonErr := json.Unmarshal(event.Delta, &delta); jsonErr != nil {
-			continue
-		}
-		switch event.EventType {
-		case streampkg.EventLLMOutputDelta:
-			if delta == planOutput {
-				sawPlanText = true
+		inBundle := event.EventType == streampkg.EventMergeBundle
+		for _, expanded := range events {
+			if expanded.From.Layer != "orchestrator" {
+				continue
 			}
-		case streampkg.EventStatusCompleted:
-			if delta == "orchestrator planning completed" {
-				sawCompletedStatus = true
+			var delta string
+			if jsonErr := json.Unmarshal(expanded.Delta, &delta); jsonErr != nil {
+				continue
+			}
+			switch expanded.EventType {
+			case streampkg.EventLLMOutputDelta:
+				if delta == planOutput {
+					sawPlanText = true
+					if inBundle {
+						sawPlanBundle = true
+					}
+				}
+			case streampkg.EventStatusCompleted:
+				if delta == "orchestrator planning completed" {
+					sawCompletedStatus = true
+				}
 			}
 		}
 	}
 	if !sawPlanText {
 		t.Fatal("missing planner text delta stream event from orchestrator planning")
+	}
+	if !sawPlanBundle {
+		t.Fatal("missing bundled planner text delta stream event from orchestrator planning")
 	}
 	if !sawCompletedStatus {
 		t.Fatal("missing planning-completed status stream event from orchestrator planning")
@@ -313,12 +321,7 @@ func TestStartRequest_StreamsPlannerReasoningAndPlanningExchange(t *testing.T) {
 	if err != nil {
 		t.Fatalf("StartRequest: %v", err)
 	}
-	sub, err := resp.Stream.Subscribe(streampkg.Filter{
-		EventTypes: []string{
-			streampkg.EventLLMReasoningDelta,
-			streampkg.EventLLMOutputDelta,
-		},
-	}, streampkg.WithSubscriberBuffer(64))
+	sub, err := resp.Stream.Subscribe(streampkg.Filter{}, streampkg.WithSubscriberBuffer(64))
 	if err != nil {
 		t.Fatalf("Subscribe: %v", err)
 	}
@@ -333,25 +336,31 @@ func TestStartRequest_StreamsPlannerReasoningAndPlanningExchange(t *testing.T) {
 		if err != nil || !ok {
 			break
 		}
-		if event.From.Layer != "orchestrator" {
-			continue
+		events, expandErr := streampkg.ExpandBundleEvent(event)
+		if expandErr != nil {
+			t.Fatalf("ExpandBundleEvent: %v", expandErr)
 		}
-		var delta string
-		if err := json.Unmarshal(event.Delta, &delta); err != nil {
-			continue
-		}
-		switch event.EventType {
-		case streampkg.EventLLMReasoningDelta:
-			if strings.Contains(delta, "checked the available skills") {
-				sawReasoning = true
-			}
-		case streampkg.EventLLMOutputDelta:
-			doc, err := runnerpkg.ParseExchangeMarkdown(delta)
-			if err != nil {
+		for _, expanded := range events {
+			if expanded.From.Layer != "orchestrator" {
 				continue
 			}
-			if doc.Stage == runnerpkg.ExchangeStage("planning") && doc.SkillName == "orchestrator" && doc.TaskDescription == "run a single node" && doc.Handoff == planOutput && strings.Contains(doc.Reasoning, "checked the available skills") {
-				sawPlanningExchange = true
+			var delta string
+			if err := json.Unmarshal(expanded.Delta, &delta); err != nil {
+				continue
+			}
+			switch expanded.EventType {
+			case streampkg.EventLLMReasoningDelta:
+				if strings.Contains(delta, "checked the available skills") {
+					sawReasoning = true
+				}
+			case streampkg.EventLLMOutputDelta:
+				doc, err := runnerpkg.ParseExchangeMarkdown(delta)
+				if err != nil {
+					continue
+				}
+				if doc.Stage == runnerpkg.ExchangeStage("planning") && doc.SkillName == "orchestrator" && doc.TaskDescription == "run a single node" && doc.Handoff == planOutput && strings.Contains(doc.Reasoning, "checked the available skills") {
+					sawPlanningExchange = true
+				}
 			}
 		}
 	}
