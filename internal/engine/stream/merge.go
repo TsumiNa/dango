@@ -170,7 +170,8 @@ func (m *Merge) runDirect(ctx context.Context, downstream *Stream, sub *Subscrip
 		if !ok {
 			return
 		}
-		if err := downstream.Emit(ctx, prepareMergedEvent(event)); err != nil {
+		frame := normalizeDirectFrame(event)
+		if err := emitFrame(ctx, downstream, frame); err != nil {
 			m.setErr(err)
 			return
 		}
@@ -818,32 +819,9 @@ func (h *mergeHub) flushTick() bool {
 		return false
 	}
 
-	// Create and encode the event batch for this tick.
-	bundle := EventBatch{
-		TickID: tickID,
-		Events: items,
-	}
-
-	delta, err := EncodeEventBatch(bundle)
-	if err != nil {
-		h.setErr(err)
-		if stop {
-			h.cancel()
-		}
-		return false
-	}
-
-	// Emit bundle event.
-	bundleEvent := Event{
-		EventType: EventMergeBundle,
-		From: Source{
-			Layer: "hub",
-		},
-		Status: StatusCompleted,
-		Delta:  delta,
-	}
-
-	if err := h.downstream.Emit(h.ctx, bundleEvent); err != nil {
+	// Normalize and emit the tick frame.
+	frame := normalizeTickFrame(items, tickID)
+	if err := emitFrame(h.ctx, h.downstream, frame); err != nil {
 		h.setErr(err)
 		if stop {
 			h.cancel()
