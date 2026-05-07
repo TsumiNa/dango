@@ -2,6 +2,8 @@
 
 ## Completed: PR 9 - Add replay and persistence handling for bundles
 
+**PR**: https://github.com/TsumiNa/dango/pull/35
+
 ### Replay Modes
 
 Streams now expose two explicit replay snapshot helpers:

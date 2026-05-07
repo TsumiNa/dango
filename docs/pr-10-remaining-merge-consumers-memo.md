@@ -2,6 +2,8 @@
 
 ## Completed: PR 10 - Migrate remaining merge consumers
 
+**PR**: https://github.com/TsumiNa/dango/pull/35
+
 ### Migrated Paths
 
 All production stream merge paths now use hub mode:
