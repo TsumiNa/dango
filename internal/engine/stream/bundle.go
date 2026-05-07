@@ -59,7 +59,7 @@ func (b *EventBatch) UnmarshalJSON(data []byte) error {
 func EncodeEventBatch(bundle EventBatch) (json.RawMessage, error) {
 	data, err := json.Marshal(bundle)
 	if err != nil {
-		return nil, fmt.Errorf("encode bundle: %w", err)
+		return nil, fmt.Errorf("encode event batch: %w", err)
 	}
 	return json.RawMessage(data), nil
 }
@@ -69,7 +69,7 @@ func EncodeEventBatch(bundle EventBatch) (json.RawMessage, error) {
 func DecodeEventBatch(delta json.RawMessage) (EventBatch, error) {
 	var bundle EventBatch
 	if err := json.Unmarshal(delta, &bundle); err != nil {
-		return EventBatch{}, fmt.Errorf("decode bundle: %w", err)
+		return EventBatch{}, fmt.Errorf("decode event batch: %w", err)
 	}
 	return bundle, nil
 }

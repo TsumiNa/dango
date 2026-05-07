@@ -343,12 +343,12 @@ func TestExpandBundleEventMalformedEventBatchReturnsError(t *testing.T) {
 }
 
 func TestDecodeEventBatchSupportsLegacyNestedEvents(t *testing.T) {
-	legacyJSON := []byte(`{
+	legacyJSON := json.RawMessage(`{
 		"tick_id": 42,
 		"nested_events": [
 			{
 				"event_type": "llm.output.delta",
-				"source": {"layer": "skill", "id": "skill_1"}
+				"from": {"layer": "skill", "id": "skill_1"}
 			}
 		]
 	}`)
