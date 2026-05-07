@@ -18,6 +18,12 @@ buffer size. The shared hub config uses `stream.DefaultMergePerUpstreamBufferDep
 for per-upstream FIFO buffering, currently sized to match the 4096-event
 subscription buffers used by migrated runtime merges.
 
+PR 12 follow-up: compatible hub-mode merges into the same downstream stream now
+reuse one downstream-owned hub instead of creating one hub per `MergeWithConfig`
+call. Planner, runner, and executor merge paths therefore share downstream-scoped
+tick IDs and can emit one bundle containing ready items from multiple upstreams
+within the same tick window.
+
 ### Consumer Pattern
 
 Live subscribers on migrated streams observe raw `merge.bundle` events. Consumers

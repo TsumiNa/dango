@@ -1073,6 +1073,126 @@ func TestMergeFromWithConfigHubModeEmitsBundles(t *testing.T) {
 	}
 }
 
+func TestMergeWithConfigHubModeSharesDownstreamHub(t *testing.T) {
+	parent := New(Scope{RequestID: "req_1"}, DefaultConfig())
+	childA := New(Scope{NodeID: "node_a"}, DefaultConfig())
+	childB := New(Scope{NodeID: "node_b"}, DefaultConfig())
+	t.Cleanup(parent.Close)
+	t.Cleanup(childA.Close)
+	t.Cleanup(childB.Close)
+
+	sub, err := parent.Subscribe(Filter{EventTypes: []string{EventMergeBundle}})
+	if err != nil {
+		t.Fatalf("Subscribe: %v", err)
+	}
+
+	config := MergeWindowConfig{TickDuration: time.Hour}
+	mergeA, err := parent.MergeWithConfig(t.Context(), childA, Filter{}, config)
+	if err != nil {
+		t.Fatalf("MergeWithConfig childA: %v", err)
+	}
+	defer mergeA.Stop()
+	mergeB, err := parent.MergeWithConfig(t.Context(), childB, Filter{}, config)
+	if err != nil {
+		t.Fatalf("MergeWithConfig childB: %v", err)
+	}
+	defer mergeB.Stop()
+
+	if mergeA.hub == nil || mergeA.hub != mergeB.hub {
+		t.Fatalf("hub pointers = %p, %p; want shared downstream hub", mergeA.hub, mergeB.hub)
+	}
+
+	emitHubTestEvent(t, childA, "node_a", EventLLMOutputDelta, `"a1"`)
+	emitHubTestEvent(t, childB, "node_b", EventLLMReasoningDelta, `"b1"`)
+	waitForHubQueuedEventCount(t, mergeA.hub, 2)
+
+	if !mergeA.hub.flushTick() {
+		t.Fatalf("flushTick = false, want bundle")
+	}
+	bundleEvent := receiveEvent(t, sub.Events())
+	bundle, err := DecodeBundlePayload(bundleEvent.Delta)
+	if err != nil {
+		t.Fatalf("DecodeBundlePayload: %v", err)
+	}
+	if bundle.TickID != 1 {
+		t.Fatalf("first tick ID = %d, want 1", bundle.TickID)
+	}
+	assertBundleNodes(t, bundle, "node_a", "node_b")
+	assertNoEvent(t, sub.Events())
+
+	emitHubTestEvent(t, childA, "node_a", EventLLMOutputDelta, `"a2"`)
+	emitHubTestEvent(t, childB, "node_b", EventLLMReasoningDelta, `"b2"`)
+	waitForHubQueuedEventCount(t, mergeA.hub, 2)
+	if !mergeA.hub.flushTick() {
+		t.Fatalf("second flushTick = false, want bundle")
+	}
+	bundleEvent = receiveEvent(t, sub.Events())
+	bundle, err = DecodeBundlePayload(bundleEvent.Delta)
+	if err != nil {
+		t.Fatalf("DecodeBundlePayload second: %v", err)
+	}
+	if bundle.TickID != 2 {
+		t.Fatalf("second tick ID = %d, want 2", bundle.TickID)
+	}
+	assertBundleNodes(t, bundle, "node_a", "node_b")
+}
+
+func TestMergeWithConfigStopUnregistersOnlyOneSharedHubUpstream(t *testing.T) {
+	parent := New(Scope{RequestID: "req_1"}, DefaultConfig())
+	childA := New(Scope{NodeID: "node_a"}, DefaultConfig())
+	childB := New(Scope{NodeID: "node_b"}, DefaultConfig())
+	t.Cleanup(parent.Close)
+	t.Cleanup(childA.Close)
+	t.Cleanup(childB.Close)
+
+	sub, err := parent.Subscribe(Filter{EventTypes: []string{EventMergeBundle}})
+	if err != nil {
+		t.Fatalf("Subscribe: %v", err)
+	}
+
+	config := MergeWindowConfig{TickDuration: time.Hour}
+	mergeA, err := parent.MergeWithConfig(t.Context(), childA, Filter{}, config)
+	if err != nil {
+		t.Fatalf("MergeWithConfig childA: %v", err)
+	}
+	mergeB, err := parent.MergeWithConfig(t.Context(), childB, Filter{}, config)
+	if err != nil {
+		t.Fatalf("MergeWithConfig childB: %v", err)
+	}
+	defer mergeB.Stop()
+
+	emitHubTestEvent(t, childA, "node_a", EventLLMOutputDelta, `"drop me"`)
+	waitForHubQueuedEventCount(t, mergeA.hub, 1)
+	mergeA.Stop()
+
+	select {
+	case <-mergeA.Done():
+	case <-time.After(time.Second):
+		t.Fatalf("mergeA.Done() did not close after Stop")
+	}
+	if mergeA.hub.flushTick() {
+		t.Fatalf("flushTick emitted stopped upstream event")
+	}
+
+	emitHubTestEvent(t, childB, "node_b", EventLLMOutputDelta, `"keep me"`)
+	waitForHubQueuedEventCount(t, mergeB.hub, 1)
+	if !mergeB.hub.flushTick() {
+		t.Fatalf("flushTick after stopping mergeA = false, want mergeB bundle")
+	}
+	bundleEvent := receiveEvent(t, sub.Events())
+	bundle, err := DecodeBundlePayload(bundleEvent.Delta)
+	if err != nil {
+		t.Fatalf("DecodeBundlePayload: %v", err)
+	}
+	assertBundleNodes(t, bundle, "node_b")
+
+	select {
+	case <-mergeB.Done():
+		t.Fatalf("mergeB.Done() closed after stopping mergeA")
+	default:
+	}
+}
+
 // TestMergeFromWithConfigHubRespectsFilters verifies that hub mode respects
 // filters applied to upstream subscriptions.
 func TestMergeFromWithConfigHubRespectsFilters(t *testing.T) {
@@ -1396,6 +1516,57 @@ func TestMergeFromWithConfigHubErrorVisibleThroughMergeErr(t *testing.T) {
 		case <-deadline:
 			t.Fatalf("merge.Err() = %v, want ErrClosed", merge.Err())
 		case <-time.After(10 * time.Millisecond):
+		}
+	}
+}
+
+func emitHubTestEvent(t *testing.T, s *Stream, nodeID string, eventType string, delta string) {
+	t.Helper()
+	if err := s.Emit(t.Context(), Event{
+		EventType: eventType,
+		From:      Source{Layer: "executor", ID: nodeID},
+		Status:    StatusRunning,
+		Delta:     json.RawMessage(delta),
+	}); err != nil {
+		t.Fatalf("Emit %s: %v", nodeID, err)
+	}
+}
+
+func waitForHubQueuedEventCount(t *testing.T, hub *mergeHub, want int) {
+	t.Helper()
+	deadline := time.After(time.Second)
+	ticker := time.NewTicker(time.Millisecond)
+	defer ticker.Stop()
+	for {
+		hub.mu.RLock()
+		got := 0
+		for _, fifo := range hub.fifosByIdentity {
+			got += fifo.len()
+		}
+		hub.mu.RUnlock()
+		if got >= want {
+			return
+		}
+		select {
+		case <-deadline:
+			t.Fatalf("queued hub events = %d, want at least %d", got, want)
+		case <-ticker.C:
+		}
+	}
+}
+
+func assertBundleNodes(t *testing.T, bundle BundlePayload, wantNodeIDs ...string) {
+	t.Helper()
+	if len(bundle.NestedEvents) != len(wantNodeIDs) {
+		t.Fatalf("nested events = %d, want %d", len(bundle.NestedEvents), len(wantNodeIDs))
+	}
+	got := make(map[string]bool, len(bundle.NestedEvents))
+	for _, event := range bundle.NestedEvents {
+		got[event.Scope.NodeID] = true
+	}
+	for _, nodeID := range wantNodeIDs {
+		if !got[nodeID] {
+			t.Fatalf("bundle nodes = %v, missing %s", got, nodeID)
 		}
 	}
 }

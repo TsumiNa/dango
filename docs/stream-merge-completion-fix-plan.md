@@ -159,6 +159,8 @@ PR 11 implementation decision:
 
 ## PR 12: Share hub mode per downstream stream
 
+**Status:** Implemented on `fix/stream-merge-downstream-hub`.
+
 ### Scope
 
 Make hub mode match the switch-hub design for production `MergeWithConfig`
@@ -200,6 +202,28 @@ callers while preserving direct forwarding when `TickDuration == 0`.
 Update `docs/pr-10-remaining-merge-consumers-memo.md` after this PR to record
 that production hub-mode merges now share downstream-owned hubs, not one hub per
 merge call.
+
+PR 12 implementation decision:
+
+- `Stream` now owns a hub registry keyed by normalized hub-mode merge window configuration.
+- Compatible `MergeWithConfig` calls into the same downstream stream reuse the
+   same `mergeHub`; `TickDuration == 0` still uses direct forwarding.
+- A hub feeder keeps a pending registration until it sees the first upstream
+   event, then registers the upstream identity derived from that event source.
+- `Merge.Stop` cancels only that merge feeder. If the upstream was registered,
+   its FIFO and subscription are removed from the shared hub while other upstreams
+   continue using the hub.
+- Natural upstream close still drains that upstream's queued events before the
+   merge `Done` channel closes. The shared hub stops only when there are no
+   pending registrations, active subscriptions, or queued FIFOs left.
+- Downstream `Stream.Close` stops all downstream-owned shared hubs.
+- Hub tick IDs are scoped to the downstream-owned hub, so multi-upstream bundles
+   share one monotonically increasing tick sequence.
+
+PR 12 validation:
+
+- `go test ./internal/engine/stream ./internal/engine/runner ./internal/engine ./internal/streamrender`
+- `go test ./...`
 
 ## Completion check after both PRs
 
