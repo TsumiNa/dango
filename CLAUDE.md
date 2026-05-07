@@ -14,6 +14,7 @@ Current instruction files:
 - `.github/instructions/in-branch-api-compat.instructions.md`
 - `.github/instructions/implementation-and-tests.instructions.md`
 - `.github/instructions/repository-doc-boundaries.instructions.md`
+- `.github/instructions/shell-environment.instructions.md`
 
 Working rules:
 
