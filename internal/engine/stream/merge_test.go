@@ -817,7 +817,7 @@ func TestMergeHubJoinsOnlyAdjacentSameKeyDeltas(t *testing.T) {
 			t.Fatalf("DecodeEventBatch %d: %v", tick+1, err)
 		}
 		if len(bundle.Events) != 1 {
-			t.Fatalf("tick %d nested events = %d, want 1", tick+1, len(bundle.Events))
+			t.Fatalf("tick %d events = %d, want 1", tick+1, len(bundle.Events))
 		}
 		got := bundle.Events[0]
 		if got.EventType != wantEvent.eventType || string(got.Delta) != wantEvent.delta {
@@ -879,7 +879,7 @@ func TestMergeHubStopsJoiningAtNonStringDelta(t *testing.T) {
 			t.Fatalf("DecodeEventBatch %d: %v", tick+1, err)
 		}
 		if len(bundle.Events) != 1 || string(bundle.Events[0].Delta) != wantDelta {
-			t.Fatalf("tick %d nested events = %+v, want delta %s", tick+1, bundle.Events, wantDelta)
+			t.Fatalf("tick %d events = %+v, want delta %s", tick+1, bundle.Events, wantDelta)
 		}
 	}
 }

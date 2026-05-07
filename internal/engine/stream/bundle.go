@@ -9,13 +9,14 @@ import (
 // A merge bundle contains multiple nested stream events emitted within a single merge tick window.
 const EventMergeBundle = "merge.bundle"
 
-// EventBatch represents a collection of nested stream events emitted during
-// one merge tick window. It includes the tick window metadata and the nested events
-// that became ready for delivery during that tick.
+// EventBatch represents a collection of stream events emitted during one merge
+// tick window. It includes the tick window metadata and the events that became
+// ready for delivery during that tick.
 //
-// A bundle is the intermediate format used by the merge hub to group upstream
-// deltas by tick window. Downstream consumers parse the bundle and select nested
-// events they care about, typically by filtering on event type, source layer, or scope.
+// An EventBatch is the intermediate format used by the merge hub to group
+// upstream deltas by tick window. Downstream consumers parse the batch and
+// select events they care about, typically by filtering on event type, source
+// layer, or scope.
 type EventBatch struct {
 	// TickID is the logical tick identifier for this bundle window.
 	// It can be used for debugging and reconstructing the merge order.
@@ -54,7 +55,7 @@ func (b *EventBatch) UnmarshalJSON(data []byte) error {
 }
 
 // EncodeEventBatch serializes an EventBatch into JSON-encoded raw message form
-// suitable for use as an Event.Delta field. Returns an error if the bundle cannot
+// suitable for use as an Event.Delta field. Returns an error if the batch cannot
 // be marshaled.
 func EncodeEventBatch(bundle EventBatch) (json.RawMessage, error) {
 	data, err := json.Marshal(bundle)
@@ -64,7 +65,7 @@ func EncodeEventBatch(bundle EventBatch) (json.RawMessage, error) {
 	return json.RawMessage(data), nil
 }
 
-// DecodeEventBatch deserializes a JSON-encoded bundle delta into a EventBatch struct.
+// DecodeEventBatch deserializes a JSON-encoded batch delta into an EventBatch struct.
 // Returns an error if the delta is not valid JSON or does not match the expected shape.
 func DecodeEventBatch(delta json.RawMessage) (EventBatch, error) {
 	var bundle EventBatch

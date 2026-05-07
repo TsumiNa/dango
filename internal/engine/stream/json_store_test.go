@@ -124,7 +124,7 @@ func TestJSONStorePersistsBundleEventsWithEvents(t *testing.T) {
 		t.Fatalf("DecodeEventBatch: %v", err)
 	}
 	if len(bundle.Events) != 2 || bundle.Events[0].EventType != EventLLMReasoningDelta || bundle.Events[1].EventType != EventLLMOutputDelta {
-		t.Fatalf("nested events = %+v, want reasoning then output", bundle.Events)
+		t.Fatalf("events = %+v, want reasoning then output", bundle.Events)
 	}
 
 	expanded, err := replayStream.ReplayExpanded(Filter{Prefixes: []string{"llm."}}, WithReplayFrom(1))
@@ -132,7 +132,7 @@ func TestJSONStorePersistsBundleEventsWithEvents(t *testing.T) {
 		t.Fatalf("ReplayExpanded: %v", err)
 	}
 	if len(expanded) != 2 || expanded[0].Delta == nil || expanded[1].Delta == nil {
-		t.Fatalf("expanded replay = %+v, want two nested events", expanded)
+		t.Fatalf("expanded replay = %+v, want two logical events", expanded)
 	}
 }
 
