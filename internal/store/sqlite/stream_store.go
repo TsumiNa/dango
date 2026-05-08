@@ -62,14 +62,61 @@ func (s *StreamStore) AppendEvent(ctx context.Context, event streampkg.Event) er
 		Timestamp:      event.Timestamp.UTC().Format(time.RFC3339Nano),
 		RawEventJson:   string(raw),
 	}); err != nil {
+		return s.retryLockedInsert(ctx, event, raw, err)
+	}
+	return nil
+}
+
+func (s *StreamStore) retryLockedInsert(ctx context.Context, event streampkg.Event, raw []byte, firstErr error) error {
+	if !isSQLiteLockError(firstErr) {
 		return fmt.Errorf(
 			"sqlite: insert request stream event %q/%d: %w",
 			event.Scope.RequestID,
 			event.SequenceNumber,
-			err,
+			firstErr,
 		)
 	}
-	return nil
+	params := sqldb.InsertRequestStreamEventParams{
+		RequestID:      event.Scope.RequestID,
+		SequenceNumber: int64(event.SequenceNumber),
+		LogicalTime:    int64(event.LogicalTime),
+		EventType:      event.EventType,
+		SourceLayer:    event.From.Layer,
+		SourceID:       nullableString(event.From.ID),
+		SourceParentID: nullableString(event.From.ParentID),
+		RunnerID:       nullableString(event.Scope.RunnerID),
+		NodeID:         nullableString(event.Scope.NodeID),
+		SessionID:      nullableString(event.Scope.SessionID),
+		Status:         event.Status,
+		Timestamp:      event.Timestamp.UTC().Format(time.RFC3339Nano),
+		RawEventJson:   string(raw),
+	}
+	for {
+		timer := time.NewTimer(runnerStoreLockRetryDelay)
+		select {
+		case <-ctx.Done():
+			if !timer.Stop() {
+				<-timer.C
+			}
+			return fmt.Errorf(
+				"sqlite: insert request stream event %q/%d: %w",
+				event.Scope.RequestID,
+				event.SequenceNumber,
+				ctx.Err(),
+			)
+		case <-timer.C:
+		}
+		if err := s.store.queries.InsertRequestStreamEvent(ctx, params); err == nil {
+			return nil
+		} else if !isSQLiteLockError(err) {
+			return fmt.Errorf(
+				"sqlite: insert request stream event %q/%d: %w",
+				event.Scope.RequestID,
+				event.SequenceNumber,
+				err,
+			)
+		}
+	}
 }
 
 // LoadEvents returns request-scoped events in ascending sequence order.
@@ -98,7 +145,10 @@ func (s *StreamStore) LoadEvents(ctx context.Context, scope streampkg.Scope, fro
 		SourceParentID:     optionalSourceParentID(filter),
 	})
 	if err != nil {
-		return nil, fmt.Errorf("sqlite: load request stream events for %q: %w", scope.RequestID, err)
+		rows, err = s.retryLockedLoadEvents(ctx, scope.RequestID, from, loadScope, filter, err)
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	requestScope := streampkg.Filter{Scope: scope}
@@ -121,6 +171,43 @@ func (s *StreamStore) LoadEvents(ctx context.Context, scope streampkg.Scope, fro
 		}
 	}
 	return out, nil
+}
+
+func (s *StreamStore) retryLockedLoadEvents(ctx context.Context, requestID string, from uint64, loadScope streampkg.Scope, filter streampkg.Filter, firstErr error) ([]sqldb.ListRequestStreamEventsRow, error) {
+	if !isSQLiteLockError(firstErr) {
+		return nil, fmt.Errorf("sqlite: load request stream events for %q: %w", requestID, firstErr)
+	}
+	params := sqldb.ListRequestStreamEventsParams{
+		RequestID:          requestID,
+		FromSequenceNumber: int64(normalizeFrom(from)),
+		RunnerID:           nullableString(loadScope.RunnerID),
+		NodeID:             nullableString(loadScope.NodeID),
+		SessionID:          nullableString(loadScope.SessionID),
+		Status:             optionalSingleValue(filter.Statuses),
+		EventType:          optionalExactEventType(filter),
+		EventTypePrefix:    optionalEventTypePrefix(filter),
+		SourceLayer:        optionalSourceLayer(filter),
+		SourceID:           optionalSourceID(filter),
+		SourceParentID:     optionalSourceParentID(filter),
+	}
+	for {
+		timer := time.NewTimer(runnerStoreLockRetryDelay)
+		select {
+		case <-ctx.Done():
+			if !timer.Stop() {
+				<-timer.C
+			}
+			return nil, fmt.Errorf("sqlite: load request stream events for %q: %w", requestID, ctx.Err())
+		case <-timer.C:
+		}
+		rows, err := s.store.queries.ListRequestStreamEvents(ctx, params)
+		if err == nil {
+			return rows, nil
+		}
+		if !isSQLiteLockError(err) {
+			return nil, fmt.Errorf("sqlite: load request stream events for %q: %w", requestID, err)
+		}
+	}
 }
 
 func validateStoredStreamEvent(event streampkg.Event) error {

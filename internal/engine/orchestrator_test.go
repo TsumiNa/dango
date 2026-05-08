@@ -583,6 +583,31 @@ func TestLoadRunnerRecords_RequiresConfiguredStore(t *testing.T) {
 	}
 }
 
+func TestLoadRunnerRecords_LoadsPersistedLogWithoutLiveRunner(t *testing.T) {
+	o := newOrchestrator(testLogger)
+	store := mustNewRunnerStore(t, t.TempDir())
+	if err := o.SetRunnerStore(store); err != nil {
+		t.Fatalf("SetRunnerStore: %v", err)
+	}
+	if _, err := store.Append(context.Background(), "runner_persisted_only", &runnerpkg.RunnerRecord{Kind: runnerpkg.RunnerRecordInit}); err != nil {
+		t.Fatalf("Append(init): %v", err)
+	}
+	if _, err := store.Append(context.Background(), "runner_persisted_only", &runnerpkg.RunnerRecord{Kind: runnerpkg.RunnerRecordStatus, Status: runnerpkg.RunnerStatusIdle}); err != nil {
+		t.Fatalf("Append(status): %v", err)
+	}
+
+	records, err := o.LoadRunnerRecords(context.Background(), "runner_persisted_only")
+	if err != nil {
+		t.Fatalf("LoadRunnerRecords: %v", err)
+	}
+	if len(records) != 2 {
+		t.Fatalf("len(records) = %d, want 2", len(records))
+	}
+	if records[0].Kind != runnerpkg.RunnerRecordInit {
+		t.Fatalf("records[0].Kind = %q, want init", records[0].Kind)
+	}
+}
+
 func TestStartRunner_ForwardsStreamAndQueryState(t *testing.T) {
 	o := newOrchestrator(testLogger)
 	started := make(chan struct{})

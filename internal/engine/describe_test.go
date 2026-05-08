@@ -196,10 +196,65 @@ func TestReplayDescribeViewMarksStatusFailedAfterPhaseUpdate(t *testing.T) {
 	}
 }
 
+func TestDescribeRequest_RebuildsViewAndSavesCursor(t *testing.T) {
+	t.Parallel()
+
+	const requestID = "req_describe_method"
+	const runnerID = "run_describe_method"
+	eventLog := &stubEventLogStore{events: map[string][]streampkg.Event{
+		requestID: {
+			rawEvent(requestID, 1, streampkg.EventStatusProgress, streampkg.Source{Layer: "orchestrator", ID: "orchestrator"}, streampkg.StatusRunning, map[string]any{
+				"message":   "runner created",
+				"runner_id": runnerID,
+			}),
+			rawBundleEvent(requestID, 2,
+				logicalEvent(streampkg.EventRunnerPhaseChanged, streampkg.Source{Layer: "runner", ID: runnerID}, streampkg.StatusCompleted, streampkg.Scope{RunnerID: runnerID}, map[string]any{
+					"phase":  string(runnerpkg.PhaseSettled),
+					"status": string(runnerpkg.RunnerStatusIdle),
+				}),
+			),
+		},
+	}}
+	cursorStore := &stubSnapshotCursorStore{}
+	o := newOrchestrator(testLogger)
+	if err := o.SetEventLogStore(eventLog); err != nil {
+		t.Fatalf("SetEventLogStore: %v", err)
+	}
+	if err := o.SetSnapshotCursorStore(cursorStore); err != nil {
+		t.Fatalf("SetSnapshotCursorStore: %v", err)
+	}
+
+	view, err := o.DescribeRequest(context.Background(), requestID)
+	if err != nil {
+		t.Fatalf("DescribeRequest: %v", err)
+	}
+	if view.RequestID != requestID {
+		t.Fatalf("RequestID = %q, want %q", view.RequestID, requestID)
+	}
+	if view.RunnerID != runnerID {
+		t.Fatalf("RunnerID = %q, want %q", view.RunnerID, runnerID)
+	}
+	if cursorStore.saved.RequestID != requestID {
+		t.Fatalf("saved cursor requestID = %q, want %q", cursorStore.saved.RequestID, requestID)
+	}
+	if cursorStore.saved.EventSequence != 2 {
+		t.Fatalf("saved cursor event sequence = %d, want 2", cursorStore.saved.EventSequence)
+	}
+	if eventLog.lastFrom != 1 {
+		t.Fatalf("event log from = %d, want 1", eventLog.lastFrom)
+	}
+}
+
 type stubEventLogStore struct {
 	events    map[string][]streampkg.Event
 	lastFrom  uint64
 	lastScope streampkg.Scope
+}
+
+type stubSnapshotCursorStore struct {
+	saved storepkg.SnapshotCursor
+	load  storepkg.SnapshotCursor
+	err   error
 }
 
 func (s *stubEventLogStore) AppendEvent(context.Context, streampkg.Event) error {
@@ -220,6 +275,18 @@ func (s *stubEventLogStore) LoadEvents(_ context.Context, scope streampkg.Scope,
 		}
 	}
 	return out, nil
+}
+
+func (s *stubSnapshotCursorStore) SaveCursor(_ context.Context, cursor storepkg.SnapshotCursor) error {
+	s.saved = cursor
+	return s.err
+}
+
+func (s *stubSnapshotCursorStore) LoadCursor(context.Context, string) (storepkg.SnapshotCursor, error) {
+	if s.err != nil {
+		return storepkg.SnapshotCursor{}, s.err
+	}
+	return s.load, nil
 }
 
 func rawEvent(requestID string, sequence uint64, eventType string, source streampkg.Source, status string, delta map[string]any) streampkg.Event {

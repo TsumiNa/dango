@@ -11,6 +11,7 @@ import (
 	runnerpkg "github.com/tsumina/dango/internal/engine/runner"
 	streampkg "github.com/tsumina/dango/internal/engine/stream"
 	"github.com/tsumina/dango/internal/llm"
+	storepkg "github.com/tsumina/dango/internal/store"
 )
 
 // Orchestrator is a runner factory that bridges external user requests to
@@ -27,16 +28,18 @@ type Orchestrator struct {
 	envClient         *llm.Client
 	envClientErr      error
 
-	mu                sync.RWMutex
-	configLocked      bool
-	runnerStore       runnerpkg.RunnerStore
-	maxRunningRunners int
-	skills            map[string]SkillRegistration
-	runners           map[string]*runnerpkg.Runner
-	runningRunnerIDs  map[string]struct{}
-	queuedRunnerByID  map[string]*queuedRunner
-	queuedRunners     runnerStartQueue
-	nextQueueOrder    uint64
+	mu                  sync.RWMutex
+	configLocked        bool
+	eventLogStore       storepkg.EventLogStore
+	runnerStore         runnerpkg.RunnerStore
+	snapshotCursorStore storepkg.SnapshotCursorStore
+	maxRunningRunners   int
+	skills              map[string]SkillRegistration
+	runners             map[string]*runnerpkg.Runner
+	runningRunnerIDs    map[string]struct{}
+	queuedRunnerByID    map[string]*queuedRunner
+	queuedRunners       runnerStartQueue
+	nextQueueOrder      uint64
 }
 
 // OrchestratorOption adjusts a constructed [Orchestrator] before it is returned.
@@ -80,6 +83,10 @@ var ErrRunnerActive = errors.New("orchestrate: runner is still active")
 // ErrRunnerStoreNotConfigured is returned when persisted runner records are
 // requested without a configured runner store.
 var ErrRunnerStoreNotConfigured = errors.New("orchestrate: runner store not configured")
+
+// ErrEventLogStoreNotConfigured is returned when request-level describe replay
+// is requested without a configured event-log store.
+var ErrEventLogStoreNotConfigured = errors.New("orchestrate: event log store not configured")
 
 // ErrRunnerPlanNotAwaitingReview is returned when callers try to accept or
 // reject a plan while the runner is not waiting for review.
@@ -388,6 +395,37 @@ func (o *Orchestrator) SetRunnerStore(store runnerpkg.RunnerStore) error {
 	return nil
 }
 
+// SetEventLogStore configures the request event-log store used by StartRequest
+// persistence workers and describe replay.
+//
+// Passing nil disables request event-log persistence and replay. Like the
+// other Orchestrator configuration entry points, it can only be called during
+// startup.
+func (o *Orchestrator) SetEventLogStore(store storepkg.EventLogStore) error {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	if o.configLocked {
+		return fmt.Errorf("orchestrate: SetEventLogStore can only be called during startup")
+	}
+	o.eventLogStore = store
+	return nil
+}
+
+// SetSnapshotCursorStore configures the store used to persist describe replay
+// cursors after a describe rebuild completes.
+//
+// Passing nil disables cursor persistence. Like the other Orchestrator
+// configuration entry points, it can only be called during startup.
+func (o *Orchestrator) SetSnapshotCursorStore(store storepkg.SnapshotCursorStore) error {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	if o.configLocked {
+		return fmt.Errorf("orchestrate: SetSnapshotCursorStore can only be called during startup")
+	}
+	o.snapshotCursorStore = store
+	return nil
+}
+
 // SetMaxRunningRunners configures how many runners may execute at once for
 // StartRequest submissions.
 //
@@ -620,11 +658,7 @@ func (o *Orchestrator) LoadRunnerRecords(ctx context.Context, id string) ([]runn
 
 	o.mu.RLock()
 	store := o.runnerStore
-	_, ok := o.runners[id]
 	o.mu.RUnlock()
-	if !ok {
-		return nil, ErrRunnerNotFound
-	}
 	if store == nil {
 		return nil, ErrRunnerStoreNotConfigured
 	}

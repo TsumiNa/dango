@@ -11,6 +11,38 @@ import (
 	storepkg "github.com/tsumina/dango/internal/store"
 )
 
+// DescribeRequest rebuilds the current request describe view from the
+// configured request event log.
+//
+// The current implementation replays from the beginning of the persisted event
+// log, then saves the resulting cursor when a snapshot cursor store is
+// configured. Resume-from-cursor optimization remains a later persistence step.
+func (o *Orchestrator) DescribeRequest(ctx context.Context, requestID string) (*DescribeView, error) {
+	ctx = o.operationContext(ctx)
+	if strings.TrimSpace(requestID) == "" {
+		return nil, fmt.Errorf("orchestrate: request id must not be empty")
+	}
+
+	o.mu.RLock()
+	eventLog := o.eventLogStore
+	cursorStore := o.snapshotCursorStore
+	o.mu.RUnlock()
+	if eventLog == nil {
+		return nil, ErrEventLogStoreNotConfigured
+	}
+
+	view, err := ReplayDescribeView(ctx, requestID, nil, storepkg.SnapshotCursor{}, eventLog)
+	if err != nil {
+		return nil, err
+	}
+	if cursorStore != nil {
+		if err := cursorStore.SaveCursor(ctx, view.SnapshotCursor()); err != nil {
+			return nil, fmt.Errorf("orchestrate: save describe cursor %q: %w", requestID, err)
+		}
+	}
+	return view, nil
+}
+
 // DescribeNode is the describe-facing projection of one runner node.
 type DescribeNode struct {
 	ID              string   `json:"id" yaml:"id"`
