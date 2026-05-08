@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"sync"
 
 	"github.com/lithammer/shortuuid/v4"
 	runnerpkg "github.com/tsumina/dango/internal/engine/runner"
@@ -141,17 +142,41 @@ func startRequestEventLogPersistence(ctx context.Context, logger *slog.Logger, r
 	if err != nil {
 		return fmt.Errorf("orchestrate: subscribe request event log: %w", err)
 	}
-	go persistRequestEventLog(ctx, logger, sub, eventLog)
+	queue := newRequestEventLogQueue()
+	go drainRequestEventLogSubscription(ctx, logger, sub, queue)
+	go persistQueuedRequestEventLog(ctx, logger, queue, eventLog)
 	return nil
 }
 
-func persistRequestEventLog(ctx context.Context, logger *slog.Logger, sub *streampkg.Subscription, eventLog storepkg.EventLogStore) {
+func drainRequestEventLogSubscription(ctx context.Context, logger *slog.Logger, sub *streampkg.Subscription, queue *requestEventLogQueue) {
 	defer sub.Cancel()
+	defer queue.Close()
 	for {
 		event, ok, err := sub.Next(ctx)
 		if err != nil {
 			if !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded) {
 				logger.Error("request event log subscription failed", "err", err)
+			}
+			return
+		}
+		if !ok {
+			return
+		}
+		if !queue.Enqueue(event) {
+			return
+		}
+		if requestStreamTerminal(event) {
+			return
+		}
+	}
+}
+
+func persistQueuedRequestEventLog(ctx context.Context, logger *slog.Logger, queue *requestEventLogQueue, eventLog storepkg.EventLogStore) {
+	for {
+		event, ok, err := queue.Next(ctx)
+		if err != nil {
+			if !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded) {
+				logger.Error("request event log queue failed", "err", err)
 			}
 			return
 		}
@@ -166,9 +191,83 @@ func persistRequestEventLog(ctx context.Context, logger *slog.Logger, sub *strea
 				"err", err,
 			)
 		}
-		if requestStreamTerminal(event) {
-			return
+	}
+}
+
+type requestEventLogQueue struct {
+	mu     sync.Mutex
+	events []streampkg.Event
+	head   int
+	closed bool
+	wake   chan struct{}
+}
+
+func newRequestEventLogQueue() *requestEventLogQueue {
+	return &requestEventLogQueue{wake: make(chan struct{}, 1)}
+}
+
+func (q *requestEventLogQueue) Enqueue(event streampkg.Event) bool {
+	if q == nil {
+		return false
+	}
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	if q.closed {
+		return false
+	}
+	q.events = append(q.events, event)
+	q.signalLocked()
+	return true
+}
+
+func (q *requestEventLogQueue) Close() {
+	if q == nil {
+		return
+	}
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	if q.closed {
+		return
+	}
+	q.closed = true
+	q.signalLocked()
+}
+
+func (q *requestEventLogQueue) Next(ctx context.Context) (streampkg.Event, bool, error) {
+	for {
+		q.mu.Lock()
+		if q.head < len(q.events) {
+			event := q.events[q.head]
+			q.events[q.head] = streampkg.Event{}
+			q.head++
+			if q.head == len(q.events) {
+				q.events = q.events[:0]
+				q.head = 0
+			} else if q.head >= 1024 && q.head*2 >= len(q.events) {
+				remaining := append([]streampkg.Event(nil), q.events[q.head:]...)
+				q.events = remaining
+				q.head = 0
+			}
+			q.mu.Unlock()
+			return event, true, nil
 		}
+		closed := q.closed
+		q.mu.Unlock()
+		if closed {
+			return streampkg.Event{}, false, nil
+		}
+		select {
+		case <-ctx.Done():
+			return streampkg.Event{}, false, ctx.Err()
+		case <-q.wake:
+		}
+	}
+}
+
+func (q *requestEventLogQueue) signalLocked() {
+	select {
+	case q.wake <- struct{}{}:
+	default:
 	}
 }
 

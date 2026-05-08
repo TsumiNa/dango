@@ -309,6 +309,43 @@ func TestStartRequest_PersistsRawRequestFramesWithoutBlockingSubscribers(t *test
 	}
 }
 
+func TestStartRequestEventLogPersistence_DrainsSubscriptionWithoutDropsWhenStoreBlocked(t *testing.T) {
+	stream := streampkg.New(streampkg.Scope{RequestID: "req_overflow"}, streampkg.DefaultConfig())
+	eventLog := newBlockingEventLogStore()
+	if err := startRequestEventLogPersistence(context.Background(), testLogger, stream, eventLog); err != nil {
+		t.Fatalf("startRequestEventLogPersistence: %v", err)
+	}
+	const total = 9000
+	for i := 0; i < total; i++ {
+		if err := stream.Emit(context.Background(), streampkg.Event{
+			EventType: streampkg.EventStatusProgress,
+			From:      streampkg.Source{Layer: "orchestrator", ID: "orchestrator"},
+			Status:    streampkg.StatusRunning,
+			Delta:     json.RawMessage("null"),
+		}); err != nil {
+			t.Fatalf("Emit(%d): %v", i, err)
+		}
+	}
+	if err := stream.Emit(context.Background(), streampkg.Event{
+		EventType: streampkg.EventRunnerPhaseChanged,
+		From:      streampkg.Source{Layer: "runner", ID: "runner_overflow"},
+		Status:    streampkg.StatusCompleted,
+		Scope:     streampkg.Scope{RunnerID: "runner_overflow"},
+		Delta:     json.RawMessage(`{"phase":"settled","status":"idle"}`),
+	}); err != nil {
+		t.Fatalf("Emit(terminal): %v", err)
+	}
+	eventLog.Unblock()
+	stored := eventLog.WaitForAtLeast(t, total+1)
+	if len(stored) != total+1 {
+		t.Fatalf("len(stored) = %d, want %d", len(stored), total+1)
+	}
+	if stored[len(stored)-1].EventType != streampkg.EventRunnerPhaseChanged {
+		t.Fatalf("last stored event type = %q, want %q", stored[len(stored)-1].EventType, streampkg.EventRunnerPhaseChanged)
+	}
+	stream.Close()
+}
+
 func TestStartRequestStreamsBeforeRunnerCreation(t *testing.T) {
 	clearLLMEnv(t)
 	o := newOrchestrator(testLogger)

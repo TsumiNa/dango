@@ -7,7 +7,6 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"sync"
 	"time"
 )
 
@@ -16,10 +15,8 @@ import (
 // The store is safe for concurrent use within one process. Saves and loads for
 // the same request id are serialized through a per-request mutex.
 type JSONSnapshotCursorStore struct {
-	root string
-
-	mu     sync.Mutex
-	states map[string]*sync.Mutex
+	root  string
+	locks stripedStoreLocks
 }
 
 // NewJSONSnapshotCursorStore returns a JSON-backed snapshot cursor store
@@ -31,7 +28,7 @@ func NewJSONSnapshotCursorStore(dir string) (*JSONSnapshotCursorStore, error) {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return nil, fmt.Errorf("store: JSONSnapshotCursorStore mkdir %q: %w", dir, err)
 	}
-	return &JSONSnapshotCursorStore{root: dir, states: make(map[string]*sync.Mutex)}, nil
+	return &JSONSnapshotCursorStore{root: dir, locks: newStripedStoreLocks(defaultStripedStoreLockCount)}, nil
 }
 
 // Root returns the directory backing the store.
@@ -54,9 +51,8 @@ func (s *JSONSnapshotCursorStore) SaveCursor(_ context.Context, cursor SnapshotC
 	if err != nil {
 		return err
 	}
-	lock := s.getState(cursor.RequestID)
-	lock.Lock()
-	defer lock.Unlock()
+	unlock := s.locks.Lock(cursor.RequestID)
+	defer unlock()
 	if cursor.UpdatedAt.IsZero() {
 		cursor.UpdatedAt = time.Now().UTC()
 	}
@@ -98,9 +94,8 @@ func (s *JSONSnapshotCursorStore) LoadCursor(_ context.Context, requestID string
 	if err != nil {
 		return SnapshotCursor{}, err
 	}
-	lock := s.getState(requestID)
-	lock.Lock()
-	defer lock.Unlock()
+	unlock := s.locks.Lock(requestID)
+	defer unlock()
 	data, err := os.ReadFile(path)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -120,17 +115,6 @@ func (s *JSONSnapshotCursorStore) path(requestID string) (string, error) {
 		return "", err
 	}
 	return filepath.Join(s.root, requestID+".json"), nil
-}
-
-func (s *JSONSnapshotCursorStore) getState(requestID string) *sync.Mutex {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if lock, ok := s.states[requestID]; ok {
-		return lock
-	}
-	lock := &sync.Mutex{}
-	s.states[requestID] = lock
-	return lock
 }
 
 func validateJSONSnapshotCursor(cursor SnapshotCursor) error {

@@ -1,13 +1,14 @@
 package store
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
-	"sync"
 
 	streampkg "github.com/tsumina/dango/internal/engine/stream"
 )
@@ -18,10 +19,8 @@ import (
 // The store is safe for concurrent use within one process. Appends and loads
 // for the same request id are serialized through a per-request mutex.
 type JSONEventLogStore struct {
-	root string
-
-	mu     sync.Mutex
-	states map[string]*sync.Mutex
+	root  string
+	locks stripedStoreLocks
 }
 
 // NewJSONEventLogStore returns a JSON-backed request event-log store rooted at
@@ -33,7 +32,7 @@ func NewJSONEventLogStore(dir string) (*JSONEventLogStore, error) {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return nil, fmt.Errorf("store: JSONEventLogStore mkdir %q: %w", dir, err)
 	}
-	return &JSONEventLogStore{root: dir, states: make(map[string]*sync.Mutex)}, nil
+	return &JSONEventLogStore{root: dir, locks: newStripedStoreLocks(defaultStripedStoreLockCount)}, nil
 }
 
 // Root returns the directory backing the store.
@@ -56,9 +55,8 @@ func (s *JSONEventLogStore) AppendEvent(_ context.Context, event streampkg.Event
 	if err != nil {
 		return err
 	}
-	lock := s.getState(event.Scope.RequestID)
-	lock.Lock()
-	defer lock.Unlock()
+	unlock := s.locks.Lock(event.Scope.RequestID)
+	defer unlock()
 
 	file, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
 	if err != nil {
@@ -91,29 +89,29 @@ func (s *JSONEventLogStore) LoadEvents(_ context.Context, scope streampkg.Scope,
 	if err != nil {
 		return nil, err
 	}
-	lock := s.getState(scope.RequestID)
-	lock.Lock()
-	defer lock.Unlock()
-	data, err := os.ReadFile(path)
+	unlock := s.locks.Lock(scope.RequestID)
+	defer unlock()
+	file, err := os.Open(path)
 	if err != nil {
 		if os.IsNotExist(err) {
 			return nil, nil
 		}
 		return nil, fmt.Errorf("store: read event log %q: %w", path, err)
 	}
+	defer file.Close()
 	start := from
 	if start == 0 {
 		start = 1
 	}
-	lines := strings.Split(string(data), "\n")
-	out := make([]streampkg.Event, 0, len(lines))
-	for i, line := range lines {
-		if strings.TrimSpace(line) == "" {
-			continue
-		}
+	decoder := json.NewDecoder(bufio.NewReader(file))
+	out := make([]streampkg.Event, 0, 16)
+	for i := 1; ; i++ {
 		var event streampkg.Event
-		if err := json.Unmarshal([]byte(line), &event); err != nil {
-			return nil, fmt.Errorf("store: decode event log %q line %d: %w", scope.RequestID, i+1, err)
+		if err := decoder.Decode(&event); err != nil {
+			if err == io.EOF {
+				break
+			}
+			return nil, fmt.Errorf("store: decode event log %q entry %d: %w", scope.RequestID, i, err)
 		}
 		if event.SequenceNumber < start {
 			continue
@@ -130,17 +128,6 @@ func (s *JSONEventLogStore) path(requestID string) (string, error) {
 		return "", err
 	}
 	return filepath.Join(s.root, requestID+".jsonl"), nil
-}
-
-func (s *JSONEventLogStore) getState(requestID string) *sync.Mutex {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if lock, ok := s.states[requestID]; ok {
-		return lock
-	}
-	lock := &sync.Mutex{}
-	s.states[requestID] = lock
-	return lock
 }
 
 func validateJSONEventLogEvent(event streampkg.Event) error {
