@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log/slog"
 
+	"github.com/lithammer/shortuuid/v4"
 	runnerpkg "github.com/tsumina/dango/internal/engine/runner"
 	streampkg "github.com/tsumina/dango/internal/engine/stream"
 	"github.com/tsumina/dango/internal/llm"
@@ -56,12 +57,14 @@ type Request struct {
 // Response is returned by [Orchestrator.StartRequest].
 //
 // Stream is the request-scoped event stream created for this orchestration
-// attempt. StartRequest returns before planning finishes, so RunnerID is empty
-// in the initial response. The materialized runner ID is emitted on Stream in
-// the orchestrator "runner created" progress event.
+// attempt. RequestID is stable from the first emitted event onward. StartRequest
+// returns before planning finishes, so RunnerID is empty in the initial
+// response. The materialized runner ID is emitted on Stream in the orchestrator
+// "runner created" progress event.
 type Response struct {
-	Stream   *streampkg.Stream
-	RunnerID string
+	Stream    *streampkg.Stream
+	RequestID string
+	RunnerID  string
 }
 
 // RejectReason explains why a request cannot currently be turned into a plan.
@@ -90,10 +93,11 @@ type requestStartup struct {
 // explicit query APIs.
 func (o *Orchestrator) StartRequest(ctx context.Context, req Request) (*Response, error) {
 	ctx = o.operationContext(ctx)
+	requestID := shortuuid.New()
 	if !req.Priority.valid() {
 		return nil, fmt.Errorf("orchestrate: request priority must be between %d and %d", RequestPriorityDefault, RequestPriorityHighest)
 	}
-	requestStream := streampkg.New(streampkg.Scope{}, streampkg.DefaultConfig())
+	requestStream := streampkg.New(streampkg.Scope{RequestID: requestID}, streampkg.DefaultConfig())
 
 	o.mu.Lock()
 	o.configLocked = true
@@ -106,7 +110,7 @@ func (o *Orchestrator) StartRequest(ctx context.Context, req Request) (*Response
 	o.mu.Unlock()
 
 	go func() {
-		if _, err := o.startRequestWithStream(ctx, req, requestStream, startup); err != nil {
+		if _, err := o.startRequestWithStream(ctx, req, requestID, requestStream, startup); err != nil {
 			emitEngineStreamEvent(ctx, requestStream,
 				streamSourceOrchestrator(),
 				streampkg.EventStatusFailed,
@@ -117,11 +121,11 @@ func (o *Orchestrator) StartRequest(ctx context.Context, req Request) (*Response
 			)
 		}
 	}()
-	return &Response{Stream: requestStream}, nil
+	return &Response{Stream: requestStream, RequestID: requestID}, nil
 }
 
-func (o *Orchestrator) startRequestWithStream(ctx context.Context, req Request, requestStream *streampkg.Stream, startup requestStartup) (*Response, error) {
-	resp := &Response{Stream: requestStream}
+func (o *Orchestrator) startRequestWithStream(ctx context.Context, req Request, requestID string, requestStream *streampkg.Stream, startup requestStartup) (*Response, error) {
+	resp := &Response{Stream: requestStream, RequestID: requestID}
 	var streamMerges []*streampkg.Merge
 	cleanupMerges := true
 	defer func() {
