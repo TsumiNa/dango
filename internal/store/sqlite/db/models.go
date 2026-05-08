@@ -45,6 +45,14 @@ type RequestStreamEvent struct {
 	RawEventJson   string         `json:"raw_event_json"`
 }
 
+type RunnerRecord struct {
+	RunnerID       string `json:"runner_id"`
+	SequenceNumber int64  `json:"sequence_number"`
+	Kind           string `json:"kind"`
+	Timestamp      string `json:"timestamp"`
+	RecordJson     string `json:"record_json"`
+}
+
 type Task struct {
 	ID      string         `json:"id"`
 	Status  string         `json:"status"`

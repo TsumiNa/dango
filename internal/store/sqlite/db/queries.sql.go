@@ -37,6 +37,19 @@ func (q *Queries) CreateTask(ctx context.Context, arg CreateTaskParams) error {
 	return err
 }
 
+const deleteRunnerRecords = `-- name: DeleteRunnerRecords :execrows
+DELETE FROM runner_records
+WHERE runner_id = ?1
+`
+
+func (q *Queries) DeleteRunnerRecords(ctx context.Context, runnerID string) (int64, error) {
+	result, err := q.db.ExecContext(ctx, deleteRunnerRecords, runnerID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
 const deleteTool = `-- name: DeleteTool :execrows
 DELETE FROM tools
 WHERE name = ?1
@@ -48,6 +61,26 @@ func (q *Queries) DeleteTool(ctx context.Context, name string) (int64, error) {
 		return 0, err
 	}
 	return result.RowsAffected()
+}
+
+const getRunnerRecordState = `-- name: GetRunnerRecordState :one
+SELECT
+  CAST(COALESCE(MAX(sequence_number), 0) AS INTEGER) AS last_sequence_number,
+  CAST(COALESCE(MAX(CASE WHEN kind = 'init' THEN 1 ELSE 0 END), 0) AS INTEGER) AS has_init
+FROM runner_records
+WHERE runner_id = ?1
+`
+
+type GetRunnerRecordStateRow struct {
+	LastSequenceNumber int64 `json:"last_sequence_number"`
+	HasInit            int64 `json:"has_init"`
+}
+
+func (q *Queries) GetRunnerRecordState(ctx context.Context, runnerID string) (GetRunnerRecordStateRow, error) {
+	row := q.db.QueryRowContext(ctx, getRunnerRecordState, runnerID)
+	var i GetRunnerRecordStateRow
+	err := row.Scan(&i.LastSequenceNumber, &i.HasInit)
+	return i, err
 }
 
 const getTask = `-- name: GetTask :one
@@ -173,6 +206,41 @@ func (q *Queries) InsertRequestStreamEvent(ctx context.Context, arg InsertReques
 	return err
 }
 
+const insertRunnerRecord = `-- name: InsertRunnerRecord :exec
+INSERT INTO runner_records (
+  runner_id,
+  sequence_number,
+  kind,
+  timestamp,
+  record_json
+) VALUES (
+  ?1,
+  ?2,
+  ?3,
+  ?4,
+  ?5
+)
+`
+
+type InsertRunnerRecordParams struct {
+	RunnerID       string `json:"runner_id"`
+	SequenceNumber int64  `json:"sequence_number"`
+	Kind           string `json:"kind"`
+	Timestamp      string `json:"timestamp"`
+	RecordJson     string `json:"record_json"`
+}
+
+func (q *Queries) InsertRunnerRecord(ctx context.Context, arg InsertRunnerRecordParams) error {
+	_, err := q.db.ExecContext(ctx, insertRunnerRecord,
+		arg.RunnerID,
+		arg.SequenceNumber,
+		arg.Kind,
+		arg.Timestamp,
+		arg.RecordJson,
+	)
+	return err
+}
+
 const listRequestStreamEvents = `-- name: ListRequestStreamEvents :many
 SELECT sequence_number, raw_event_json
 FROM request_stream_events
@@ -231,6 +299,42 @@ func (q *Queries) ListRequestStreamEvents(ctx context.Context, arg ListRequestSt
 	for rows.Next() {
 		var i ListRequestStreamEventsRow
 		if err := rows.Scan(&i.SequenceNumber, &i.RawEventJson); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listRunnerRecords = `-- name: ListRunnerRecords :many
+SELECT sequence_number, kind, record_json
+FROM runner_records
+WHERE runner_id = ?1
+ORDER BY sequence_number ASC
+`
+
+type ListRunnerRecordsRow struct {
+	SequenceNumber int64  `json:"sequence_number"`
+	Kind           string `json:"kind"`
+	RecordJson     string `json:"record_json"`
+}
+
+func (q *Queries) ListRunnerRecords(ctx context.Context, runnerID string) ([]ListRunnerRecordsRow, error) {
+	rows, err := q.db.QueryContext(ctx, listRunnerRecords, runnerID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListRunnerRecordsRow
+	for rows.Next() {
+		var i ListRunnerRecordsRow
+		if err := rows.Scan(&i.SequenceNumber, &i.Kind, &i.RecordJson); err != nil {
 			return nil, err
 		}
 		items = append(items, i)

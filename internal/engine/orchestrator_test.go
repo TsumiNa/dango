@@ -12,6 +12,7 @@ import (
 	runnerpkg "github.com/tsumina/dango/internal/engine/runner"
 	streampkg "github.com/tsumina/dango/internal/engine/stream"
 	"github.com/tsumina/dango/internal/llm"
+	sqlitepkg "github.com/tsumina/dango/internal/store/sqlite"
 )
 
 func TestNewOrchestrator_ReturnsIndependentInstances(t *testing.T) {
@@ -663,11 +664,38 @@ func TestStartRunner_ForwardsStreamAndQueryState(t *testing.T) {
 }
 
 func TestLoadRunnerRecords_LoadsPersistedLog(t *testing.T) {
+	testLoadRunnerRecordsLoadsPersistedLog(t, func(t *testing.T, o *Orchestrator) {
+		t.Helper()
+		store := mustNewRunnerStore(t, t.TempDir())
+		if err := o.SetRunnerStore(store); err != nil {
+			t.Fatalf("SetRunnerStore: %v", err)
+		}
+	})
+}
+
+func TestLoadRunnerRecords_LoadsPersistedSQLiteLog(t *testing.T) {
+	testLoadRunnerRecordsLoadsPersistedLog(t, func(t *testing.T, o *Orchestrator) {
+		t.Helper()
+		dbStore, err := sqlitepkg.Open(filepath.Join(t.TempDir(), "dango.db"))
+		if err != nil {
+			t.Fatalf("Open sqlite store: %v", err)
+		}
+		t.Cleanup(func() {
+			if err := dbStore.Close(); err != nil {
+				t.Fatalf("Close sqlite store: %v", err)
+			}
+		})
+		if err := o.SetRunnerStore(sqlitepkg.NewRunnerStore(dbStore)); err != nil {
+			t.Fatalf("SetRunnerStore: %v", err)
+		}
+	})
+}
+
+func testLoadRunnerRecordsLoadsPersistedLog(t *testing.T, configureStore func(t *testing.T, o *Orchestrator)) {
+	t.Helper()
+
 	o := newOrchestrator(testLogger)
-	store := mustNewRunnerStore(t, t.TempDir())
-	if err := o.SetRunnerStore(store); err != nil {
-		t.Fatalf("SetRunnerStore: %v", err)
-	}
+	configureStore(t, o)
 	mustAddSkills(t, o, newTestSkillRegistration(t, "single", "Single-step runner.", nil))
 	if err := o.SetOrchestratorSkill(bindTestOrchestratorSkill(t, mustPlanJSON(t, &CoarsePlan{
 		Request: "run a single node",
