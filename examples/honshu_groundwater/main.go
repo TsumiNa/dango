@@ -346,20 +346,20 @@ type runnerRecordSummaryEntry struct {
 }
 
 type persistenceSummary struct {
-	RequestID                string                  `json:"request_id"`
-	RunnerID                 string                  `json:"runner_id,omitempty"`
-	Phase                    runnerpkg.RunnerPhase   `json:"phase,omitempty"`
-	Status                   runnerpkg.RunnerStatus  `json:"status,omitempty"`
-	PersistencePath          string                  `json:"persistence_path"`
-	StreamEventsPath         string                  `json:"stream_events_path"`
-	DescribeViewPath         string                  `json:"describe_view_path"`
-	RunnerRecordsPath        string                  `json:"runner_records_path"`
-	DescribeNodeCount        int                     `json:"describe_node_count"`
-	DescribeArtifactCount    int                     `json:"describe_artifact_count"`
-	RunnerRecordCount        int                     `json:"runner_record_count"`
-	LatestCheckpointSequence int64                   `json:"latest_checkpoint_sequence,omitempty"`
-	LatestEventSequence      uint64                  `json:"latest_event_sequence,omitempty"`
-	Cursor                   snapshotCursorSummary   `json:"cursor"`
+	RequestID                string                 `json:"request_id"`
+	RunnerID                 string                 `json:"runner_id,omitempty"`
+	Phase                    runnerpkg.RunnerPhase  `json:"phase,omitempty"`
+	Status                   runnerpkg.RunnerStatus `json:"status,omitempty"`
+	PersistencePath          string                 `json:"persistence_path"`
+	StreamEventsPath         string                 `json:"stream_events_path"`
+	DescribeViewPath         string                 `json:"describe_view_path"`
+	RunnerRecordsPath        string                 `json:"runner_records_path"`
+	DescribeNodeCount        int                    `json:"describe_node_count"`
+	DescribeArtifactCount    int                    `json:"describe_artifact_count"`
+	RunnerRecordCount        int                    `json:"runner_record_count"`
+	LatestCheckpointSequence int64                  `json:"latest_checkpoint_sequence,omitempty"`
+	LatestEventSequence      uint64                 `json:"latest_event_sequence,omitempty"`
+	Cursor                   snapshotCursorSummary  `json:"cursor"`
 }
 
 type snapshotCursorSummary struct {
