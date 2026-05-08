@@ -18,6 +18,7 @@ import (
 	runnerpkg "github.com/tsumina/dango/internal/engine/runner"
 	streampkg "github.com/tsumina/dango/internal/engine/stream"
 	"github.com/tsumina/dango/internal/llm"
+	storepkg "github.com/tsumina/dango/internal/store"
 	runtimepkg "github.com/tsumina/dango/internal/store/runtime"
 	"github.com/tsumina/dango/internal/streamrender"
 	"golang.org/x/term"
@@ -223,7 +224,7 @@ func runHonshuGroundwaterExample(ctx context.Context, cfg exampleConfig) (_ *exa
 		_ = closeEventStream()
 		return nil, err
 	}
-	if err := waitForPersistedTerminalRunnerState(ctx, persistence, resp.RequestID, runnerID); err != nil {
+	if err := waitForPersistedTerminalRunnerState(ctx, persistence.EventLogStore(), resp.RequestID, runnerID); err != nil {
 		_ = closeEventStream()
 		return nil, err
 	}
@@ -372,17 +373,23 @@ func waitForRequestRunnerSettled(ctx context.Context, eventStream *streampkg.Str
 	}
 }
 
-func waitForPersistedTerminalRunnerState(ctx context.Context, persistence *runtimepkg.Persistence, requestID string, runnerID string) error {
-	if persistence == nil || persistence.EventLogStore() == nil {
+func waitForPersistedTerminalRunnerState(ctx context.Context, eventLog storepkg.EventLogStore, requestID string, runnerID string) error {
+	if eventLog == nil {
 		return fmt.Errorf("runtime persistence event log store is nil")
 	}
 	if strings.TrimSpace(requestID) == "" {
 		return fmt.Errorf("request id must not be empty")
 	}
+	ticker := time.NewTicker(10 * time.Millisecond)
+	defer ticker.Stop()
+	nextSequence := uint64(1)
 	for {
-		events, err := persistence.EventLogStore().LoadEvents(ctx, streampkg.Scope{RequestID: requestID}, 1, streampkg.Filter{})
+		events, err := eventLog.LoadEvents(ctx, streampkg.Scope{RequestID: requestID}, nextSequence, streampkg.Filter{})
 		if err != nil {
 			return err
+		}
+		if len(events) > 0 {
+			nextSequence = events[len(events)-1].SequenceNumber + 1
 		}
 		if hasPersistedTerminalRunnerState(events, runnerID) {
 			return nil
@@ -390,7 +397,7 @@ func waitForPersistedTerminalRunnerState(ctx context.Context, persistence *runti
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
-		case <-time.After(10 * time.Millisecond):
+		case <-ticker.C:
 		}
 	}
 }

@@ -22,6 +22,7 @@ import (
 	runnerpkg "github.com/tsumina/dango/internal/engine/runner"
 	streampkg "github.com/tsumina/dango/internal/engine/stream"
 	"github.com/tsumina/dango/internal/llm"
+	storepkg "github.com/tsumina/dango/internal/store"
 	runtimepkg "github.com/tsumina/dango/internal/store/runtime"
 	"github.com/tsumina/dango/internal/streamrender"
 )
@@ -349,7 +350,7 @@ func TestRunHonshuGroundwaterExamplePersistsTerminalRequestState(t *testing.T) {
 		}
 	}()
 
-	if err := waitForPersistedTerminalRunnerState(ctx, reopened, result.RequestID, result.RunnerID); err != nil {
+	if err := waitForPersistedTerminalRunnerState(ctx, reopened.EventLogStore(), result.RequestID, result.RunnerID); err != nil {
 		t.Fatalf("waitForPersistedTerminalRunnerState: %v", err)
 	}
 	rawEvents, err := reopened.EventLogStore().LoadEvents(ctx, streampkg.Scope{RequestID: result.RequestID}, 1, streampkg.Filter{})
@@ -360,6 +361,61 @@ func TestRunHonshuGroundwaterExamplePersistsTerminalRequestState(t *testing.T) {
 		t.Fatal("persisted request event log is empty")
 	}
 }
+
+func TestWaitForPersistedTerminalRunnerStateLoadsOnlyNewEvents(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	store := &recordingEventLogStore{
+		loads: [][]streampkg.Event{
+			{{
+				SequenceNumber: 1,
+				EventType:      streampkg.EventStatusProgress,
+				Scope:          streampkg.Scope{RequestID: "req-1", RunnerID: "runner-1"},
+			}},
+			{{
+				SequenceNumber: 2,
+				EventType:      streampkg.EventRunnerPhaseChanged,
+				Scope:          streampkg.Scope{RequestID: "req-1", RunnerID: "runner-1"},
+				Delta:          json.RawMessage(`{"phase":"settled","status":"idle"}`),
+			}},
+		},
+	}
+	if err := waitForPersistedTerminalRunnerState(ctx, store, "req-1", "runner-1"); err != nil {
+		t.Fatalf("waitForPersistedTerminalRunnerState: %v", err)
+	}
+	want := []uint64{1, 2}
+	if len(store.froms) != len(want) {
+		t.Fatalf("LoadEvents called with %v, want %v", store.froms, want)
+	}
+	for i, got := range store.froms {
+		if got != want[i] {
+			t.Fatalf("LoadEvents from[%d] = %d, want %d", i, got, want[i])
+		}
+	}
+}
+
+type recordingEventLogStore struct {
+	loads [][]streampkg.Event
+	froms []uint64
+	call  int
+}
+
+func (s *recordingEventLogStore) AppendEvent(ctx context.Context, event streampkg.Event) error {
+	return nil
+}
+
+func (s *recordingEventLogStore) LoadEvents(ctx context.Context, scope streampkg.Scope, from uint64, filter streampkg.Filter) ([]streampkg.Event, error) {
+	s.froms = append(s.froms, from)
+	if s.call >= len(s.loads) {
+		s.call++
+		return nil, nil
+	}
+	events := append([]streampkg.Event(nil), s.loads[s.call]...)
+	s.call++
+	return events, nil
+}
+
+var _ storepkg.EventLogStore = (*recordingEventLogStore)(nil)
 
 func readStreamEvents(t *testing.T, path string) []streampkg.Event {
 	t.Helper()
