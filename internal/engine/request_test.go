@@ -46,7 +46,18 @@ func TestStartRequest_StreamsRejectedRequestWithoutPlanner(t *testing.T) {
 	if resp == nil || resp.Stream == nil {
 		t.Fatal("StartRequest response stream is nil")
 	}
-	failed := mustReadOrchestratorFailure(t, resp.Stream)
+	if resp.RequestID == "" {
+		t.Fatal("StartRequest returned empty requestID")
+	}
+	failedEvent := mustReadOrchestratorFailureEvent(t, resp.Stream)
+	if failedEvent.Scope.RequestID != resp.RequestID {
+		t.Fatalf("failure scope.request_id = %q, want %q", failedEvent.Scope.RequestID, resp.RequestID)
+	}
+	var failed string
+	_ = json.Unmarshal(failedEvent.Delta, &failed)
+	if failed == "" {
+		failed = string(failedEvent.Delta)
+	}
 	if !strings.Contains(failed, "request rejected") {
 		t.Fatalf("failure = %q, want request rejection", failed)
 	}
@@ -263,28 +274,109 @@ func TestStartRequestStreamsBeforeRunnerCreation(t *testing.T) {
 	if resp == nil || resp.Stream == nil {
 		t.Fatal("StartRequest returned nil stream")
 	}
+	if resp.RequestID == "" {
+		t.Fatal("StartRequest returned empty requestID")
+	}
 	if resp.RunnerID != "" {
 		t.Fatalf("StartRequest returned runnerID %q before stream synchronization", resp.RunnerID)
 	}
-	sub, err := resp.Stream.Subscribe(streampkg.Filter{EventTypes: []string{streampkg.EventStatusStarted}}, streampkg.WithSubscriberBuffer(16))
+	sub, err := resp.Stream.Subscribe(streampkg.Filter{EventTypes: []string{streampkg.EventStatusStarted, streampkg.EventStatusProgress}}, streampkg.WithSubscriberBuffer(16))
 	if err != nil {
 		t.Fatalf("Subscribe: %v", err)
 	}
 	defer sub.Cancel()
 
-	readCtx, cancelRead := context.WithTimeout(context.Background(), 2*time.Second)
-	event, ok, err := sub.Next(readCtx)
-	cancelRead()
-	if err != nil || !ok {
-		t.Fatalf("initial async stream event ok=%v err=%v", ok, err)
+	deadline := time.Now().Add(2 * time.Second)
+	var sawStarted bool
+	var runnerID string
+	for time.Now().Before(deadline) && (!sawStarted || runnerID == "") {
+		readCtx, cancelRead := context.WithTimeout(context.Background(), time.Until(deadline))
+		event, ok, err := sub.Next(readCtx)
+		cancelRead()
+		if err != nil || !ok {
+			t.Fatalf("request stream event ok=%v err=%v", ok, err)
+		}
+		if event.Scope.RequestID != resp.RequestID {
+			t.Fatalf("event scope.request_id = %q, want %q", event.Scope.RequestID, resp.RequestID)
+		}
+		switch event.EventType {
+		case streampkg.EventStatusStarted:
+			if event.From.Layer == "orchestrator" {
+				sawStarted = true
+			}
+		case streampkg.EventStatusProgress:
+			if event.From.Layer != "orchestrator" {
+				continue
+			}
+			var delta map[string]string
+			_ = json.Unmarshal(event.Delta, &delta)
+			if delta["message"] == "runner created" && delta["runner_id"] != "" {
+				runnerID = delta["runner_id"]
+				if event.Scope.RunnerID != runnerID {
+					t.Fatalf("runner-created scope.runner_id = %q, want %q", event.Scope.RunnerID, runnerID)
+				}
+			}
+		}
 	}
-	if event.EventType != streampkg.EventStatusStarted || event.From.Layer != "orchestrator" {
-		t.Fatalf("initial async event = %+v, want orchestrator status started", event)
+	if !sawStarted {
+		t.Fatal("missing orchestrator started event")
 	}
-
-	runnerID := mustReadRunnerCreated(t, resp.Stream)
 	if runnerID == "" {
 		t.Fatal("runnerID is empty")
+	}
+}
+
+func TestStartRequest_ReplayPreservesRequestIdentity(t *testing.T) {
+	clearLLMEnv(t)
+	o := newOrchestrator(testLogger)
+	mustAddSkills(t, o, newTestSkillRegistration(t, "single", "Single-step runner.", nil))
+	planOutput := mustPlanJSON(t, &CoarsePlan{
+		Request: "run a single node",
+		Nodes: []CoarsePlanNode{{
+			ID:              "only",
+			SkillName:       "single",
+			TaskDescription: "Run the only node.",
+		}},
+	})
+	if err := o.SetOrchestratorSkill(bindTestOrchestratorSkill(t, planOutput, mustReviewJSON(t, true, ""))); err != nil {
+		t.Fatalf("SetOrchestratorSkill(test planner): %v", err)
+	}
+
+	resp, err := o.StartRequest(context.Background(), Request{Input: "run a single node"})
+	if err != nil {
+		t.Fatalf("StartRequest: %v", err)
+	}
+	if resp.RequestID == "" {
+		t.Fatal("StartRequest returned empty requestID")
+	}
+	runnerID := mustReadRunnerCreated(t, resp.Stream)
+
+	replayed, err := resp.Stream.Replay(streampkg.Filter{}, streampkg.WithReplayFrom(1))
+	if err != nil {
+		t.Fatalf("Replay: %v", err)
+	}
+	if len(replayed) == 0 {
+		t.Fatal("Replay returned no events")
+	}
+	var sawRunnerCreated bool
+	for _, event := range replayed {
+		if event.Scope.RequestID != resp.RequestID {
+			t.Fatalf("replayed scope.request_id = %q, want %q", event.Scope.RequestID, resp.RequestID)
+		}
+		if event.EventType != streampkg.EventStatusProgress || event.From.Layer != "orchestrator" {
+			continue
+		}
+		var delta map[string]string
+		_ = json.Unmarshal(event.Delta, &delta)
+		if delta["message"] == "runner created" && delta["runner_id"] == runnerID {
+			sawRunnerCreated = true
+			if event.Scope.RunnerID != runnerID {
+				t.Fatalf("replayed runner-created scope.runner_id = %q, want %q", event.Scope.RunnerID, runnerID)
+			}
+		}
+	}
+	if !sawRunnerCreated {
+		t.Fatal("replay missing runner-created event")
 	}
 }
 
@@ -411,6 +503,9 @@ func TestStartRequest_EmitsRequestStreamEvents(t *testing.T) {
 		if !ok {
 			t.Fatalf("request stream closed before expected events: text=%v created=%v settled=%v nodeDone=%v executor=%v",
 				sawPlanText, sawCreated, sawSettled, sawNodeDone, sawExecutor)
+		}
+		if event.Scope.RequestID != resp.RequestID {
+			t.Fatalf("event scope.request_id = %q, want %q", event.Scope.RequestID, resp.RequestID)
 		}
 		var deltaText string
 		_ = json.Unmarshal(event.Delta, &deltaText)

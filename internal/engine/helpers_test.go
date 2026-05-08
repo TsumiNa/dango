@@ -489,7 +489,7 @@ func mustReadRunnerCreated(t *testing.T, eventStream *streampkg.Stream) string {
 	}
 }
 
-func mustReadOrchestratorFailure(t *testing.T, eventStream *streampkg.Stream) string {
+func mustReadOrchestratorFailureEvent(t *testing.T, eventStream *streampkg.Stream) streampkg.Event {
 	t.Helper()
 	sub, err := eventStream.Subscribe(streampkg.Filter{EventTypes: []string{streampkg.EventStatusFailed}}, streampkg.WithSubscriberBuffer(64))
 	if err != nil {
@@ -509,13 +509,19 @@ func mustReadOrchestratorFailure(t *testing.T, eventStream *streampkg.Stream) st
 		if event.From.Layer != "orchestrator" {
 			continue
 		}
-		var text string
-		_ = json.Unmarshal(event.Delta, &text)
-		if text != "" {
-			return text
-		}
-		return string(event.Delta)
+		return event
 	}
+}
+
+func mustReadOrchestratorFailure(t *testing.T, eventStream *streampkg.Stream) string {
+	t.Helper()
+	event := mustReadOrchestratorFailureEvent(t, eventStream)
+	var text string
+	_ = json.Unmarshal(event.Delta, &text)
+	if text != "" {
+		return text
+	}
+	return string(event.Delta)
 }
 
 func mustNewRunnerStore(t *testing.T, dir string) *runnerpkg.JSONRunnerStore {

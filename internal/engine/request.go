@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log/slog"
 
+	"github.com/lithammer/shortuuid/v4"
 	runnerpkg "github.com/tsumina/dango/internal/engine/runner"
 	streampkg "github.com/tsumina/dango/internal/engine/stream"
 	"github.com/tsumina/dango/internal/llm"
@@ -56,12 +57,14 @@ type Request struct {
 // Response is returned by [Orchestrator.StartRequest].
 //
 // Stream is the request-scoped event stream created for this orchestration
-// attempt. StartRequest returns before planning finishes, so RunnerID is empty
-// in the initial response. The materialized runner ID is emitted on Stream in
-// the orchestrator "runner created" progress event.
+// attempt. RequestID is stable from the first emitted event onward. StartRequest
+// returns before planning finishes, so RunnerID is empty in the initial
+// response. The materialized runner ID is emitted on Stream in the orchestrator
+// "runner created" progress event.
 type Response struct {
-	Stream   *streampkg.Stream
-	RunnerID string
+	Stream    *streampkg.Stream
+	RequestID string
+	RunnerID  string
 }
 
 // RejectReason explains why a request cannot currently be turned into a plan.
@@ -90,10 +93,11 @@ type requestStartup struct {
 // explicit query APIs.
 func (o *Orchestrator) StartRequest(ctx context.Context, req Request) (*Response, error) {
 	ctx = o.operationContext(ctx)
+	requestID := shortuuid.New()
 	if !req.Priority.valid() {
 		return nil, fmt.Errorf("orchestrate: request priority must be between %d and %d", RequestPriorityDefault, RequestPriorityHighest)
 	}
-	requestStream := streampkg.New(streampkg.Scope{}, streampkg.DefaultConfig())
+	requestStream := streampkg.New(streampkg.Scope{RequestID: requestID}, streampkg.DefaultConfig())
 
 	o.mu.Lock()
 	o.configLocked = true
@@ -106,7 +110,7 @@ func (o *Orchestrator) StartRequest(ctx context.Context, req Request) (*Response
 	o.mu.Unlock()
 
 	go func() {
-		if _, err := o.startRequestWithStream(ctx, req, requestStream, startup); err != nil {
+		if err := o.startRequestWithStream(ctx, req, requestStream, startup); err != nil {
 			emitEngineStreamEvent(ctx, requestStream,
 				streamSourceOrchestrator(),
 				streampkg.EventStatusFailed,
@@ -117,11 +121,10 @@ func (o *Orchestrator) StartRequest(ctx context.Context, req Request) (*Response
 			)
 		}
 	}()
-	return &Response{Stream: requestStream}, nil
+	return &Response{Stream: requestStream, RequestID: requestID}, nil
 }
 
-func (o *Orchestrator) startRequestWithStream(ctx context.Context, req Request, requestStream *streampkg.Stream, startup requestStartup) (*Response, error) {
-	resp := &Response{Stream: requestStream}
+func (o *Orchestrator) startRequestWithStream(ctx context.Context, req Request, requestStream *streampkg.Stream, startup requestStartup) error {
 	var streamMerges []*streampkg.Merge
 	cleanupMerges := true
 	defer func() {
@@ -134,12 +137,12 @@ func (o *Orchestrator) startRequestWithStream(ctx context.Context, req Request, 
 	planningSkill, err := runtimeOrchestrator(startup.orchestratorSkill, envClient, envClientErr, planningConversationConfig())
 	if err != nil {
 		if errors.Is(err, errOrchestratorSkillUnconfigured) {
-			return resp, &RequestRejectedError{Reason: rejectUnconfiguredPlan(&req, cloneSkillMap(startup.skillConfigs), startup.orchestratorSkill)}
+			return &RequestRejectedError{Reason: rejectUnconfiguredPlan(&req, cloneSkillMap(startup.skillConfigs), startup.orchestratorSkill)}
 		}
-		return resp, err
+		return err
 	}
 	if merge, err := mergeChildStream(ctx, requestStream, planningSkill.EventStream()); err != nil {
-		return resp, err
+		return err
 	} else if merge != nil {
 		streamMerges = append(streamMerges, merge)
 	}
@@ -163,7 +166,7 @@ func (o *Orchestrator) startRequestWithStream(ctx context.Context, req Request, 
 			streampkg.Scope{},
 			nil,
 		)
-		return resp, err
+		return err
 	}
 	if reject != nil {
 		emitEngineStreamEvent(ctx, requestStream,
@@ -174,27 +177,27 @@ func (o *Orchestrator) startRequestWithStream(ctx context.Context, req Request, 
 			streampkg.Scope{},
 			map[string]any{"reason": reject.Analysis},
 		)
-		return resp, &RequestRejectedError{Reason: reject}
+		return &RequestRejectedError{Reason: reject}
 	}
 	if plan == nil {
-		return resp, fmt.Errorf("orchestrate: planner returned neither a plan nor a reject reason")
+		return fmt.Errorf("orchestrate: planner returned neither a plan nor a reject reason")
 	}
 	plannerSkill, err := bindOrchestratorSkillWithConfig(startup.orchestratorSkill, planningSkill.Client(), runnerPlannerConversationConfig())
 	if err != nil {
-		return resp, err
+		return err
 	}
 	if merge, err := mergeChildStream(ctx, requestStream, plannerSkill.EventStream()); err != nil {
-		return resp, err
+		return err
 	} else if merge != nil {
 		streamMerges = append(streamMerges, merge)
 	}
 
 	runner, err := newRunnerFromPlan(ctx, startup.logger, startup.runnerStore, req, plan, startup.skillConfigs, plannerSkill, skillSummaries)
 	if err != nil {
-		return resp, err
+		return err
 	}
 	if merge, err := mergeRunnerStream(ctx, requestStream, runner.EventStream()); err != nil {
-		return resp, err
+		return err
 	} else if merge != nil {
 		streamMerges = append(streamMerges, merge)
 	}
@@ -213,12 +216,11 @@ func (o *Orchestrator) startRequestWithStream(ctx context.Context, req Request, 
 	)
 
 	if err := o.submitManagedRunner(ctx, runner, req.Priority); err != nil {
-		return resp, err
+		return err
 	}
 	cleanupMerges = false
 	go o.watchRunnerDone(runner)
-	resp.RunnerID = runnerID
-	return resp, nil
+	return nil
 }
 
 func streamSourceOrchestrator() streampkg.Source {
