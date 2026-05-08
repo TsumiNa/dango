@@ -140,16 +140,13 @@ func runHonshuGroundwaterExample(ctx context.Context, cfg exampleConfig) (_ *exa
 		"measurements_bytes", len(cfg.MeasurementsJSON),
 		"stream_events_log", streamLogPath,
 	)
-	orchestrator := orchestrate.NewOrchestrator(orchestrate.WithOrchestratorContext(ctx), orchestrate.WithOrchestratorLogger(logger))
-	if err := orchestrator.SetEventLogStore(persistence.EventLogStore()); err != nil {
-		return nil, err
-	}
-	if err := orchestrator.SetRunnerStore(persistence.RunnerStore()); err != nil {
-		return nil, err
-	}
-	if err := orchestrator.SetSnapshotCursorStore(persistence.SnapshotCursorStore()); err != nil {
-		return nil, err
-	}
+	orchestrator := orchestrate.NewOrchestrator(
+		orchestrate.WithOrchestratorContext(ctx),
+		orchestrate.WithOrchestratorLogger(logger),
+		orchestrate.WithEventLogStore(persistence.EventLogStore()),
+		orchestrate.WithRunnerStore(persistence.RunnerStore()),
+		orchestrate.WithSnapshotCursorStore(persistence.SnapshotCursorStore()),
+	)
 	if cfg.LLMClient != nil {
 		logger.Info("using configured llm client",
 			"provider", cfg.LLMClient.Provider(),

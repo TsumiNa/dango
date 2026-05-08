@@ -48,9 +48,9 @@ Implement this plan only on a branch that contains the Phase 7 engine surface:
 
 - `internal/store/runtime.Open` and its `EventLogStore`, `RunnerStore`, and
   `SnapshotCursorStore` accessors
-- `Orchestrator.SetEventLogStore`
-- `Orchestrator.SetRunnerStore`
-- `Orchestrator.SetSnapshotCursorStore`
+- `WithEventLogStore`
+- `WithRunnerStore`
+- `WithSnapshotCursorStore`
 - `Orchestrator.DescribeRequest`
 - `Orchestrator.LoadRunnerRecords` support for persisted runner records without
   requiring a live in-memory runner
@@ -188,8 +188,8 @@ startup code.
   `artifacts/persistence/dango.db`.
 - Open `internal/store/runtime` before constructing or configuring the
   orchestrator stores.
-- Configure `SetEventLogStore`, `SetRunnerStore`, and
-  `SetSnapshotCursorStore` before `StartRequest`.
+- Construct the orchestrator with `WithEventLogStore`, `WithRunnerStore`, and
+  `WithSnapshotCursorStore` before `StartRequest`.
 - Close persistence only after the request event log has observed terminal
   runner state. Do not rely on `Runner.Wait` alone as evidence that the async
   request event-log worker has flushed.
