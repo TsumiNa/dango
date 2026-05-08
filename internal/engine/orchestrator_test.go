@@ -103,11 +103,23 @@ func TestSetLogger_RejectsChangesAfterStartup(t *testing.T) {
 	}
 }
 
-func TestSetRunnerStore_RejectsChangesAfterStartup(t *testing.T) {
-	o := newOrchestrator(testLogger)
-	mustRejectStartRequest(t, o)
-	if err := o.SetRunnerStore(mustNewRunnerStore(t, t.TempDir())); err == nil {
-		t.Fatal("expected SetRunnerStore to fail after startup")
+func TestNewOrchestrator_InstallsPersistenceStoresFromOptions(t *testing.T) {
+	runnerStore := mustNewRunnerStore(t, t.TempDir())
+	eventLogStore := newBlockingEventLogStore()
+	cursorStore := &stubSnapshotCursorStore{}
+	o := newOrchestrator(testLogger,
+		WithRunnerStore(runnerStore),
+		WithEventLogStore(eventLogStore),
+		WithSnapshotCursorStore(cursorStore),
+	)
+	if o.runnerStore != runnerStore {
+		t.Fatalf("runnerStore = %v, want %v", o.runnerStore, runnerStore)
+	}
+	if o.eventLogStore != eventLogStore {
+		t.Fatalf("eventLogStore = %v, want %v", o.eventLogStore, eventLogStore)
+	}
+	if o.snapshotCursorStore != cursorStore {
+		t.Fatalf("snapshotCursorStore = %v, want %v", o.snapshotCursorStore, cursorStore)
 	}
 }
 
@@ -584,11 +596,8 @@ func TestLoadRunnerRecords_RequiresConfiguredStore(t *testing.T) {
 }
 
 func TestLoadRunnerRecords_LoadsPersistedLogWithoutLiveRunner(t *testing.T) {
-	o := newOrchestrator(testLogger)
 	store := mustNewRunnerStore(t, t.TempDir())
-	if err := o.SetRunnerStore(store); err != nil {
-		t.Fatalf("SetRunnerStore: %v", err)
-	}
+	o := newOrchestrator(testLogger, WithRunnerStore(store))
 	if _, err := store.Append(context.Background(), "runner_persisted_only", &runnerpkg.RunnerRecord{Kind: runnerpkg.RunnerRecordInit}); err != nil {
 		t.Fatalf("Append(init): %v", err)
 	}
@@ -689,17 +698,15 @@ func TestStartRunner_ForwardsStreamAndQueryState(t *testing.T) {
 }
 
 func TestLoadRunnerRecords_LoadsPersistedLog(t *testing.T) {
-	testLoadRunnerRecordsLoadsPersistedLog(t, func(t *testing.T, o *Orchestrator) {
+	testLoadRunnerRecordsLoadsPersistedLog(t, func(t *testing.T) OrchestratorOption {
 		t.Helper()
 		store := mustNewRunnerStore(t, t.TempDir())
-		if err := o.SetRunnerStore(store); err != nil {
-			t.Fatalf("SetRunnerStore: %v", err)
-		}
+		return WithRunnerStore(store)
 	})
 }
 
 func TestLoadRunnerRecords_LoadsPersistedSQLiteLog(t *testing.T) {
-	testLoadRunnerRecordsLoadsPersistedLog(t, func(t *testing.T, o *Orchestrator) {
+	testLoadRunnerRecordsLoadsPersistedLog(t, func(t *testing.T) OrchestratorOption {
 		t.Helper()
 		dbStore, err := sqlitepkg.Open(filepath.Join(t.TempDir(), "dango.db"))
 		if err != nil {
@@ -710,17 +717,14 @@ func TestLoadRunnerRecords_LoadsPersistedSQLiteLog(t *testing.T) {
 				t.Fatalf("Close sqlite store: %v", err)
 			}
 		})
-		if err := o.SetRunnerStore(sqlitepkg.NewRunnerStore(dbStore)); err != nil {
-			t.Fatalf("SetRunnerStore: %v", err)
-		}
+		return WithRunnerStore(sqlitepkg.NewRunnerStore(dbStore))
 	})
 }
 
-func testLoadRunnerRecordsLoadsPersistedLog(t *testing.T, configureStore func(t *testing.T, o *Orchestrator)) {
+func testLoadRunnerRecordsLoadsPersistedLog(t *testing.T, configureStore func(t *testing.T) OrchestratorOption) {
 	t.Helper()
 
-	o := newOrchestrator(testLogger)
-	configureStore(t, o)
+	o := newOrchestrator(testLogger, configureStore(t))
 	mustAddSkills(t, o, newTestSkillRegistration(t, "single", "Single-step runner.", nil))
 	if err := o.SetOrchestratorSkill(bindTestOrchestratorSkill(t, mustPlanJSON(t, &CoarsePlan{
 		Request: "run a single node",
@@ -760,11 +764,8 @@ func testLoadRunnerRecordsLoadsPersistedLog(t *testing.T, configureStore func(t 
 }
 
 func TestRemoveRunner_RejectsActiveRunner(t *testing.T) {
-	o := newOrchestrator(testLogger)
 	store := mustNewRunnerStore(t, t.TempDir())
-	if err := o.SetRunnerStore(store); err != nil {
-		t.Fatalf("SetRunnerStore: %v", err)
-	}
+	o := newOrchestrator(testLogger, WithRunnerStore(store))
 	started := make(chan struct{})
 	release := make(chan struct{})
 	managedRunner := newManagedQueueTestRunner(t, "active", func(ctx context.Context, parentOutputs map[string]any) (any, []*Node, error) {
@@ -796,11 +797,8 @@ func TestRemoveRunner_RejectsActiveRunner(t *testing.T) {
 }
 
 func TestRemoveRunner_DeletesTerminalRunnerAndLog(t *testing.T) {
-	o := newOrchestrator(testLogger)
 	store := mustNewRunnerStore(t, t.TempDir())
-	if err := o.SetRunnerStore(store); err != nil {
-		t.Fatalf("SetRunnerStore: %v", err)
-	}
+	o := newOrchestrator(testLogger, WithRunnerStore(store))
 	managedRunner := newManagedQueueTestRunner(t, "failing", func(ctx context.Context, parentOutputs map[string]any) (any, []*Node, error) {
 		return nil, nil, errors.New("boom")
 	})

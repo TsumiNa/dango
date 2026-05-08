@@ -71,13 +71,10 @@ func TestStartRequest_StreamsRejectedRequestWithoutPlanner(t *testing.T) {
 
 func TestStartRequest_BuildsRunnerFromPlanAndReturnsID(t *testing.T) {
 	clearLLMEnv(t)
-	o := newOrchestrator(testLogger)
 	perSkillClient := &llm.Client{}
 	executeClient := &llm.Client{}
 	store := mustNewRunnerStore(t, t.TempDir())
-	if err := o.SetRunnerStore(store); err != nil {
-		t.Fatalf("SetRunnerStore: %v", err)
-	}
+	o := newOrchestrator(testLogger, WithRunnerStore(store))
 	mustAddSkills(t, o,
 		newTestSkillRegistration(t, "plan", "Draft a plan.", perSkillClient),
 		newTestSkillRegistration(t, "execute", "Execute a plan.", executeClient),
@@ -256,11 +253,8 @@ func TestStartRequest_ReturnsReplayableRequestStream(t *testing.T) {
 
 func TestStartRequest_PersistsRawRequestFramesWithoutBlockingSubscribers(t *testing.T) {
 	clearLLMEnv(t)
-	o := newOrchestrator(testLogger)
 	eventLog := newBlockingEventLogStore()
-	if err := o.SetEventLogStore(eventLog); err != nil {
-		t.Fatalf("SetEventLogStore: %v", err)
-	}
+	o := newOrchestrator(testLogger, WithEventLogStore(eventLog))
 	mustAddSkills(t, o, newTestSkillRegistration(t, "single", "Single-step runner.", nil))
 	if err := o.SetOrchestratorSkill(bindTestOrchestratorSkill(t,
 		mustPlanJSON(t, &CoarsePlan{

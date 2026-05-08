@@ -18,6 +18,8 @@ import (
 	runnerpkg "github.com/tsumina/dango/internal/engine/runner"
 	streampkg "github.com/tsumina/dango/internal/engine/stream"
 	"github.com/tsumina/dango/internal/llm"
+	storepkg "github.com/tsumina/dango/internal/store"
+	runtimepkg "github.com/tsumina/dango/internal/store/runtime"
 	"github.com/tsumina/dango/internal/streamrender"
 	"golang.org/x/term"
 )
@@ -33,6 +35,14 @@ type exampleConfig struct {
 	Out              io.Writer
 	Logger           *slog.Logger
 	LLMClient        *llm.Client
+}
+
+type exampleRunResult struct {
+	RequestID       string
+	RunnerID        string
+	ArtifactsDir    string
+	PersistencePath string
+	FinalRunnerView *runnerpkg.RunnerView
 }
 
 func main() {
@@ -80,7 +90,7 @@ func main() {
 	}
 }
 
-func runHonshuGroundwaterExample(ctx context.Context, cfg exampleConfig) (*runnerpkg.RunnerView, error) {
+func runHonshuGroundwaterExample(ctx context.Context, cfg exampleConfig) (_ *exampleRunResult, err error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -105,6 +115,16 @@ func runHonshuGroundwaterExample(ctx context.Context, cfg exampleConfig) (*runne
 	if err := os.MkdirAll(artifactsDir, 0o755); err != nil {
 		return nil, err
 	}
+	persistencePath := filepath.Join(artifactsDir, "persistence", "dango.db")
+	persistence, err := runtimepkg.Open(runtimepkg.Config{SQLitePath: persistencePath})
+	if err != nil {
+		return nil, err
+	}
+	defer func() {
+		if closeErr := persistence.Close(); closeErr != nil && err == nil {
+			err = closeErr
+		}
+	}()
 	streamLog, streamLogPath, err := createArtifactLog(filepath.Join(artifactsDir, "debug"), "stream_events.jsonl")
 	if err != nil {
 		return nil, err
@@ -117,10 +137,17 @@ func runHonshuGroundwaterExample(ctx context.Context, cfg exampleConfig) (*runne
 	logger.Info("honshu groundwater example starting",
 		"example_root", root,
 		"artifacts_dir", artifactsDir,
+		"persistence_db", persistencePath,
 		"measurements_bytes", len(cfg.MeasurementsJSON),
 		"stream_events_log", streamLogPath,
 	)
-	orchestrator := orchestrate.NewOrchestrator(orchestrate.WithOrchestratorContext(ctx), orchestrate.WithOrchestratorLogger(logger))
+	orchestrator := orchestrate.NewOrchestrator(
+		orchestrate.WithOrchestratorContext(ctx),
+		orchestrate.WithOrchestratorLogger(logger),
+		orchestrate.WithEventLogStore(persistence.EventLogStore()),
+		orchestrate.WithRunnerStore(persistence.RunnerStore()),
+		orchestrate.WithSnapshotCursorStore(persistence.SnapshotCursorStore()),
+	)
 	if cfg.LLMClient != nil {
 		logger.Info("using configured llm client",
 			"provider", cfg.LLMClient.Provider(),
@@ -197,18 +224,29 @@ func runHonshuGroundwaterExample(ctx context.Context, cfg exampleConfig) (*runne
 		_ = closeEventStream()
 		return nil, err
 	}
+	if err := waitForPersistedTerminalRunnerState(ctx, persistence.EventLogStore(), resp.RequestID, runnerID); err != nil {
+		_ = closeEventStream()
+		return nil, err
+	}
 	logger.Info("runner settled", "runner_id", runnerID, "status", view.State.Status, "phase", view.Phase)
 	if err := closeEventStream(); err != nil {
 		return nil, err
+	}
+	result := &exampleRunResult{
+		RequestID:       resp.RequestID,
+		RunnerID:        runnerID,
+		ArtifactsDir:    artifactsDir,
+		PersistencePath: persistencePath,
+		FinalRunnerView: view,
 	}
 	if view.State.Status == runnerpkg.RunnerStatusFailed {
 		errText := strings.TrimSpace(view.State.Error)
 		if errText == "" {
 			errText = "no error context recorded"
 		}
-		return view, fmt.Errorf("runner settled with failure: %s", errText)
+		return result, fmt.Errorf("runner settled with failure: %s", errText)
 	}
-	return view, nil
+	return result, nil
 }
 
 func newExampleLogger(out io.Writer, level string) (*slog.Logger, error) {
@@ -333,6 +371,67 @@ func waitForRequestRunnerSettled(ctx context.Context, eventStream *streampkg.Str
 			return nil
 		}
 	}
+}
+
+func waitForPersistedTerminalRunnerState(ctx context.Context, eventLog storepkg.EventLogStore, requestID string, runnerID string) error {
+	if eventLog == nil {
+		return fmt.Errorf("runtime persistence event log store is nil")
+	}
+	if strings.TrimSpace(requestID) == "" {
+		return fmt.Errorf("request id must not be empty")
+	}
+	ticker := time.NewTicker(10 * time.Millisecond)
+	defer ticker.Stop()
+	nextSequence := uint64(1)
+	for {
+		events, err := eventLog.LoadEvents(ctx, streampkg.Scope{RequestID: requestID}, nextSequence, streampkg.Filter{})
+		if err != nil {
+			return err
+		}
+		if len(events) > 0 {
+			nextSequence = events[len(events)-1].SequenceNumber + 1
+		}
+		if hasPersistedTerminalRunnerState(events, runnerID) {
+			return nil
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-ticker.C:
+		}
+	}
+}
+
+func hasPersistedTerminalRunnerState(events []streampkg.Event, runnerID string) bool {
+	for _, event := range events {
+		expanded, err := streampkg.ExpandBundleEvent(event)
+		if err != nil {
+			continue
+		}
+		for _, candidate := range expanded {
+			if candidate.EventType != streampkg.EventRunnerPhaseChanged {
+				continue
+			}
+			if runnerID != "" && candidate.Scope.RunnerID != "" && candidate.Scope.RunnerID != runnerID {
+				continue
+			}
+			var delta struct {
+				Phase  string `json:"phase"`
+				Status string `json:"status"`
+			}
+			if err := json.Unmarshal(candidate.Delta, &delta); err != nil {
+				continue
+			}
+			if runnerpkg.RunnerPhase(delta.Phase) != runnerpkg.PhaseSettled {
+				continue
+			}
+			switch runnerpkg.RunnerStatus(delta.Status) {
+			case runnerpkg.RunnerStatusIdle, runnerpkg.RunnerStatusFailed, runnerpkg.RunnerStatusCanceled:
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func exampleRoot() (string, error) {

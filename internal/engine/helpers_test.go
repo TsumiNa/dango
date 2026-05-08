@@ -50,8 +50,10 @@ const (
 
 var ErrRunnerLogNotFound = runnerpkg.ErrRunnerLogNotFound
 
-func newOrchestrator(logger *slog.Logger) *Orchestrator {
-	return NewOrchestrator(WithOrchestratorContext(context.Background()), WithOrchestratorLogger(logger))
+func newOrchestrator(logger *slog.Logger, opts ...OrchestratorOption) *Orchestrator {
+	base := []OrchestratorOption{WithOrchestratorContext(context.Background()), WithOrchestratorLogger(logger)}
+	base = append(base, opts...)
+	return NewOrchestrator(base...)
 }
 
 func newDiscardLogger() *slog.Logger {

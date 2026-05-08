@@ -216,13 +216,7 @@ func TestDescribeRequest_RebuildsViewAndSavesCursor(t *testing.T) {
 		},
 	}}
 	cursorStore := &stubSnapshotCursorStore{}
-	o := newOrchestrator(testLogger)
-	if err := o.SetEventLogStore(eventLog); err != nil {
-		t.Fatalf("SetEventLogStore: %v", err)
-	}
-	if err := o.SetSnapshotCursorStore(cursorStore); err != nil {
-		t.Fatalf("SetSnapshotCursorStore: %v", err)
-	}
+	o := newOrchestrator(testLogger, WithEventLogStore(eventLog), WithSnapshotCursorStore(cursorStore))
 
 	view, err := o.DescribeRequest(context.Background(), requestID)
 	if err != nil {

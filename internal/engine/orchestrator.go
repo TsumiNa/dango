@@ -73,6 +73,48 @@ func WithOrchestratorLogger(logger *slog.Logger) OrchestratorOption {
 	}
 }
 
+// WithRunnerStore installs store as the persistence store that newly assembled
+// runners use.
+//
+// The Orchestrator keeps a shared reference to store and may call it from
+// concurrent runner execution and query paths. Callers remain responsible for
+// the store lifecycle and must not close, replace, or unsafely mutate it while
+// the Orchestrator may still use it. Passing nil leaves runner-record
+// persistence disabled.
+func WithRunnerStore(store runnerpkg.RunnerStore) OrchestratorOption {
+	return func(o *Orchestrator) {
+		o.runnerStore = store
+	}
+}
+
+// WithEventLogStore installs store as the request event-log store used by
+// StartRequest persistence workers and describe replay.
+//
+// The Orchestrator keeps a shared reference to store and may call it from
+// concurrent background persistence workers and describe/query paths. Callers
+// remain responsible for the store lifecycle and must not close, replace, or
+// unsafely mutate it while the Orchestrator may still use it. Passing nil
+// leaves request event-log persistence disabled.
+func WithEventLogStore(store storepkg.EventLogStore) OrchestratorOption {
+	return func(o *Orchestrator) {
+		o.eventLogStore = store
+	}
+}
+
+// WithSnapshotCursorStore installs store as the persistence store used to save
+// describe replay cursors.
+//
+// The Orchestrator keeps a shared reference to store and may call it from
+// concurrent describe/query paths. Callers remain responsible for the store
+// lifecycle and must not close, replace, or unsafely mutate it while the
+// Orchestrator may still use it. Passing nil leaves cursor persistence
+// disabled.
+func WithSnapshotCursorStore(store storepkg.SnapshotCursorStore) OrchestratorOption {
+	return func(o *Orchestrator) {
+		o.snapshotCursorStore = store
+	}
+}
+
 // ErrRunnerNotFound is returned when an Orchestrator runner lookup misses.
 var ErrRunnerNotFound = errors.New("orchestrate: runner not found")
 
@@ -145,7 +187,7 @@ func (o *Orchestrator) SetClient(client *llm.Client) error {
 //
 // The returned Orchestrator is independent and does not share global mutable
 // state with other instances. Options can install startup dependencies such as
-// a service context or logger.
+// a service context, logger, or persistence stores.
 func NewOrchestrator(opts ...OrchestratorOption) *Orchestrator {
 	o := &Orchestrator{
 		ctx:              context.Background(),
@@ -377,53 +419,6 @@ func (o *Orchestrator) SetOrchestratorSkillDir(dir string) error {
 		return err
 	}
 	return o.SetOrchestratorSkill(sk)
-}
-
-// SetRunnerStore configures the persistence store that newly assembled
-// runners should use.
-//
-// Passing nil clears any previously configured store. Like the other
-// Orchestrator configuration entry points, it can only be called during
-// startup.
-func (o *Orchestrator) SetRunnerStore(store runnerpkg.RunnerStore) error {
-	o.mu.Lock()
-	defer o.mu.Unlock()
-	if o.configLocked {
-		return fmt.Errorf("orchestrate: SetRunnerStore can only be called during startup")
-	}
-	o.runnerStore = store
-	return nil
-}
-
-// SetEventLogStore configures the request event-log store used by StartRequest
-// persistence workers and describe replay.
-//
-// Passing nil disables request event-log persistence and replay. Like the
-// other Orchestrator configuration entry points, it can only be called during
-// startup.
-func (o *Orchestrator) SetEventLogStore(store storepkg.EventLogStore) error {
-	o.mu.Lock()
-	defer o.mu.Unlock()
-	if o.configLocked {
-		return fmt.Errorf("orchestrate: SetEventLogStore can only be called during startup")
-	}
-	o.eventLogStore = store
-	return nil
-}
-
-// SetSnapshotCursorStore configures the store used to persist describe replay
-// cursors after a describe rebuild completes.
-//
-// Passing nil disables cursor persistence. Like the other Orchestrator
-// configuration entry points, it can only be called during startup.
-func (o *Orchestrator) SetSnapshotCursorStore(store storepkg.SnapshotCursorStore) error {
-	o.mu.Lock()
-	defer o.mu.Unlock()
-	if o.configLocked {
-		return fmt.Errorf("orchestrate: SetSnapshotCursorStore can only be called during startup")
-	}
-	o.snapshotCursorStore = store
-	return nil
 }
 
 // SetMaxRunningRunners configures how many runners may execute at once for

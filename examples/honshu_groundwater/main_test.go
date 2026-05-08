@@ -22,6 +22,8 @@ import (
 	runnerpkg "github.com/tsumina/dango/internal/engine/runner"
 	streampkg "github.com/tsumina/dango/internal/engine/stream"
 	"github.com/tsumina/dango/internal/llm"
+	storepkg "github.com/tsumina/dango/internal/store"
+	runtimepkg "github.com/tsumina/dango/internal/store/runtime"
 	"github.com/tsumina/dango/internal/streamrender"
 )
 
@@ -208,7 +210,7 @@ func TestRunHonshuGroundwaterExampleExecutesNeededSkills(t *testing.T) {
 		t.Fatalf("newExampleLogger: %v", err)
 	}
 
-	view, err := runHonshuGroundwaterExample(ctx, exampleConfig{
+	result, err := runHonshuGroundwaterExample(ctx, exampleConfig{
 		MeasurementsJSON: embeddedSampleMeasurements,
 		ArtifactsDir:     artifactsDir,
 		Out:              &stream,
@@ -217,6 +219,28 @@ func TestRunHonshuGroundwaterExampleExecutesNeededSkills(t *testing.T) {
 	})
 	if err != nil {
 		t.Fatalf("runHonshuGroundwaterExample: %v", err)
+	}
+	if result == nil {
+		t.Fatal("runHonshuGroundwaterExample returned nil result")
+	}
+	if result.RequestID == "" {
+		t.Fatal("result RequestID is empty")
+	}
+	if result.RunnerID == "" {
+		t.Fatal("result RunnerID is empty")
+	}
+	if result.ArtifactsDir != artifactsDir {
+		t.Fatalf("ArtifactsDir = %q, want %q", result.ArtifactsDir, artifactsDir)
+	}
+	if want := filepath.Join(artifactsDir, "persistence", "dango.db"); result.PersistencePath != want {
+		t.Fatalf("PersistencePath = %q, want %q", result.PersistencePath, want)
+	}
+	view := result.FinalRunnerView
+	if view == nil {
+		t.Fatal("result FinalRunnerView is nil")
+	}
+	if view.RunnerID != result.RunnerID {
+		t.Fatalf("view RunnerID = %q, want %q", view.RunnerID, result.RunnerID)
 	}
 	if view.Phase != runnerpkg.PhaseSettled {
 		t.Fatalf("phase = %q, want settled", view.Phase)
@@ -291,6 +315,107 @@ func TestRunHonshuGroundwaterExampleExecutesNeededSkills(t *testing.T) {
 		t.Fatalf("CSV missing prediction header: %s", string(csvData))
 	}
 }
+
+func TestRunHonshuGroundwaterExamplePersistsTerminalRequestState(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	client := newFakeLLMClient(t)
+	artifactsDir := t.TempDir()
+	logger, err := newExampleLogger(io.Discard, "debug")
+	if err != nil {
+		t.Fatalf("newExampleLogger: %v", err)
+	}
+
+	result, err := runHonshuGroundwaterExample(ctx, exampleConfig{
+		MeasurementsJSON: embeddedSampleMeasurements,
+		ArtifactsDir:     artifactsDir,
+		Out:              io.Discard,
+		Logger:           logger,
+		LLMClient:        client,
+	})
+	if err != nil {
+		t.Fatalf("runHonshuGroundwaterExample: %v", err)
+	}
+	if _, err := os.Stat(result.PersistencePath); err != nil {
+		t.Fatalf("stat persistence db: %v", err)
+	}
+
+	reopened, err := runtimepkg.Open(runtimepkg.Config{SQLitePath: result.PersistencePath})
+	if err != nil {
+		t.Fatalf("runtime.Open(reopen): %v", err)
+	}
+	defer func() {
+		if err := reopened.Close(); err != nil {
+			t.Fatalf("Close(reopened persistence): %v", err)
+		}
+	}()
+
+	if err := waitForPersistedTerminalRunnerState(ctx, reopened.EventLogStore(), result.RequestID, result.RunnerID); err != nil {
+		t.Fatalf("waitForPersistedTerminalRunnerState: %v", err)
+	}
+	rawEvents, err := reopened.EventLogStore().LoadEvents(ctx, streampkg.Scope{RequestID: result.RequestID}, 1, streampkg.Filter{})
+	if err != nil {
+		t.Fatalf("LoadEvents: %v", err)
+	}
+	if len(rawEvents) == 0 {
+		t.Fatal("persisted request event log is empty")
+	}
+}
+
+func TestWaitForPersistedTerminalRunnerStateLoadsOnlyNewEvents(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	store := &recordingEventLogStore{
+		loads: [][]streampkg.Event{
+			{{
+				SequenceNumber: 1,
+				EventType:      streampkg.EventStatusProgress,
+				Scope:          streampkg.Scope{RequestID: "req-1", RunnerID: "runner-1"},
+			}},
+			{{
+				SequenceNumber: 2,
+				EventType:      streampkg.EventRunnerPhaseChanged,
+				Scope:          streampkg.Scope{RequestID: "req-1", RunnerID: "runner-1"},
+				Delta:          json.RawMessage(`{"phase":"settled","status":"idle"}`),
+			}},
+		},
+	}
+	if err := waitForPersistedTerminalRunnerState(ctx, store, "req-1", "runner-1"); err != nil {
+		t.Fatalf("waitForPersistedTerminalRunnerState: %v", err)
+	}
+	want := []uint64{1, 2}
+	if len(store.froms) != len(want) {
+		t.Fatalf("LoadEvents called with %v, want %v", store.froms, want)
+	}
+	for i, got := range store.froms {
+		if got != want[i] {
+			t.Fatalf("LoadEvents from[%d] = %d, want %d", i, got, want[i])
+		}
+	}
+}
+
+type recordingEventLogStore struct {
+	loads [][]streampkg.Event
+	froms []uint64
+	call  int
+}
+
+func (s *recordingEventLogStore) AppendEvent(ctx context.Context, event streampkg.Event) error {
+	return nil
+}
+
+func (s *recordingEventLogStore) LoadEvents(ctx context.Context, scope streampkg.Scope, from uint64, filter streampkg.Filter) ([]streampkg.Event, error) {
+	s.froms = append(s.froms, from)
+	if s.call >= len(s.loads) {
+		s.call++
+		return nil, nil
+	}
+	events := append([]streampkg.Event(nil), s.loads[s.call]...)
+	s.call++
+	return events, nil
+}
+
+var _ storepkg.EventLogStore = (*recordingEventLogStore)(nil)
 
 func readStreamEvents(t *testing.T, path string) []streampkg.Event {
 	t.Helper()

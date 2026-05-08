@@ -22,8 +22,11 @@ func TestRuntimePersistenceSQLiteSupportsReplayRunnerRecordsAndDescribeAfterReop
 	}
 	configureOrchestratorPersistence(t, persistence)
 
-	o := newOrchestrator(testLogger)
-	configureOrchestratorStores(t, o, persistence)
+	o := newOrchestrator(testLogger,
+		WithEventLogStore(persistence.EventLogStore()),
+		WithSnapshotCursorStore(persistence.SnapshotCursorStore()),
+		WithRunnerStore(persistence.RunnerStore()),
+	)
 	mustAddSkills(t, o, newTestSkillRegistration(t, "single", "Single-step runner.", nil))
 	if err := o.SetOrchestratorSkill(bindTestOrchestratorSkill(t,
 		mustPlanJSON(t, &CoarsePlan{
@@ -86,8 +89,11 @@ func TestRuntimePersistenceSQLiteSupportsReplayRunnerRecordsAndDescribeAfterReop
 			t.Fatalf("Close(reopened persistence): %v", err)
 		}
 	}()
-	fresh := newOrchestrator(testLogger)
-	configureOrchestratorStores(t, fresh, reopened)
+	fresh := newOrchestrator(testLogger,
+		WithEventLogStore(reopened.EventLogStore()),
+		WithSnapshotCursorStore(reopened.SnapshotCursorStore()),
+		WithRunnerStore(reopened.RunnerStore()),
+	)
 
 	rawFrames, err := reopened.EventLogStore().LoadEvents(ctx, streampkg.Scope{RequestID: resp.RequestID}, 1, streampkg.Filter{})
 	if err != nil {
@@ -116,19 +122,6 @@ func TestRuntimePersistenceSQLiteSupportsReplayRunnerRecordsAndDescribeAfterReop
 	}
 	if cursor.EventSequence != reopenedView.SnapshotCursor().EventSequence {
 		t.Fatalf("cursor event sequence = %d, want %d", cursor.EventSequence, reopenedView.SnapshotCursor().EventSequence)
-	}
-}
-
-func configureOrchestratorStores(t *testing.T, o *Orchestrator, persistence *runtimepkg.Persistence) {
-	t.Helper()
-	if err := o.SetEventLogStore(persistence.EventLogStore()); err != nil {
-		t.Fatalf("SetEventLogStore: %v", err)
-	}
-	if err := o.SetSnapshotCursorStore(persistence.SnapshotCursorStore()); err != nil {
-		t.Fatalf("SetSnapshotCursorStore: %v", err)
-	}
-	if err := o.SetRunnerStore(persistence.RunnerStore()); err != nil {
-		t.Fatalf("SetRunnerStore: %v", err)
 	}
 }
 
