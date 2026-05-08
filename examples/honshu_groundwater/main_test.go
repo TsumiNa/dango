@@ -416,6 +416,22 @@ func TestRunHonshuGroundwaterExampleWritesPersistenceSummaries(t *testing.T) {
 	if summary.Cursor.RunnerID != result.RunnerID {
 		t.Fatalf("summary cursor runner_id = %q, want %q", summary.Cursor.RunnerID, result.RunnerID)
 	}
+	rawSummary := map[string]any{}
+	readJSONFile(t, filepath.Join(artifactsDir, "debug", "persistence_summary.json"), &rawSummary)
+	rawCursor, ok := rawSummary["cursor"].(map[string]any)
+	if !ok {
+		t.Fatalf("summary cursor raw JSON = %#v, want object", rawSummary["cursor"])
+	}
+	for _, key := range []string{"request_id", "runner_id", "event_sequence"} {
+		if _, ok := rawCursor[key]; !ok {
+			t.Fatalf("summary cursor missing snake_case key %q: %#v", key, rawCursor)
+		}
+	}
+	for _, key := range []string{"RequestID", "RunnerID", "EventSequence"} {
+		if _, ok := rawCursor[key]; ok {
+			t.Fatalf("summary cursor contains camel-case key %q: %#v", key, rawCursor)
+		}
+	}
 }
 
 func TestRunHonshuGroundwaterExamplePersistsTerminalRequestState(t *testing.T) {

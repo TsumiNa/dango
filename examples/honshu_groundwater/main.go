@@ -309,16 +309,16 @@ func createArtifactLog(artifactsDir string, name string) (*os.File, string, erro
 }
 
 type describeViewSummary struct {
-	RequestID                string                `json:"request_id"`
-	RunnerID                 string                `json:"runner_id,omitempty"`
-	Phase                    runnerpkg.RunnerPhase `json:"phase,omitempty"`
-	Status                   runnerpkg.RunnerStatus `json:"status,omitempty"`
-	NodeCount                int                   `json:"node_count"`
-	Nodes                    []describeNodeSummary `json:"nodes,omitempty"`
-	ArtifactCount            int                   `json:"artifact_count"`
+	RequestID                string                         `json:"request_id"`
+	RunnerID                 string                         `json:"runner_id,omitempty"`
+	Phase                    runnerpkg.RunnerPhase          `json:"phase,omitempty"`
+	Status                   runnerpkg.RunnerStatus         `json:"status,omitempty"`
+	NodeCount                int                            `json:"node_count"`
+	Nodes                    []describeNodeSummary          `json:"nodes,omitempty"`
+	ArtifactCount            int                            `json:"artifact_count"`
 	Artifacts                []orchestrate.DescribeArtifact `json:"artifacts,omitempty"`
-	LatestCheckpointSequence int64                 `json:"latest_checkpoint_sequence,omitempty"`
-	LatestEventSequence      uint64                `json:"latest_event_sequence,omitempty"`
+	LatestCheckpointSequence int64                          `json:"latest_checkpoint_sequence,omitempty"`
+	LatestEventSequence      uint64                         `json:"latest_event_sequence,omitempty"`
 }
 
 type describeNodeSummary struct {
@@ -346,20 +346,28 @@ type runnerRecordSummaryEntry struct {
 }
 
 type persistenceSummary struct {
-	RequestID                string                   `json:"request_id"`
-	RunnerID                 string                   `json:"runner_id,omitempty"`
-	Phase                    runnerpkg.RunnerPhase    `json:"phase,omitempty"`
-	Status                   runnerpkg.RunnerStatus   `json:"status,omitempty"`
-	PersistencePath          string                   `json:"persistence_path"`
-	StreamEventsPath         string                   `json:"stream_events_path"`
-	DescribeViewPath         string                   `json:"describe_view_path"`
-	RunnerRecordsPath        string                   `json:"runner_records_path"`
-	DescribeNodeCount        int                      `json:"describe_node_count"`
-	DescribeArtifactCount    int                      `json:"describe_artifact_count"`
-	RunnerRecordCount        int                      `json:"runner_record_count"`
-	LatestCheckpointSequence int64                    `json:"latest_checkpoint_sequence,omitempty"`
-	LatestEventSequence      uint64                   `json:"latest_event_sequence,omitempty"`
-	Cursor                   storepkg.SnapshotCursor  `json:"cursor"`
+	RequestID                string                  `json:"request_id"`
+	RunnerID                 string                  `json:"runner_id,omitempty"`
+	Phase                    runnerpkg.RunnerPhase   `json:"phase,omitempty"`
+	Status                   runnerpkg.RunnerStatus  `json:"status,omitempty"`
+	PersistencePath          string                  `json:"persistence_path"`
+	StreamEventsPath         string                  `json:"stream_events_path"`
+	DescribeViewPath         string                  `json:"describe_view_path"`
+	RunnerRecordsPath        string                  `json:"runner_records_path"`
+	DescribeNodeCount        int                     `json:"describe_node_count"`
+	DescribeArtifactCount    int                     `json:"describe_artifact_count"`
+	RunnerRecordCount        int                     `json:"runner_record_count"`
+	LatestCheckpointSequence int64                   `json:"latest_checkpoint_sequence,omitempty"`
+	LatestEventSequence      uint64                  `json:"latest_event_sequence,omitempty"`
+	Cursor                   snapshotCursorSummary   `json:"cursor"`
+}
+
+type snapshotCursorSummary struct {
+	RequestID          string    `json:"request_id"`
+	RunnerID           string    `json:"runner_id,omitempty"`
+	CheckpointSequence int64     `json:"checkpoint_sequence,omitempty"`
+	EventSequence      uint64    `json:"event_sequence,omitempty"`
+	UpdatedAt          time.Time `json:"updated_at,omitempty"`
 }
 
 func writePersistenceDebugArtifacts(artifactsDir string, streamLogPath string, persistencePath string, describeView *orchestrate.DescribeView, runnerRecords []runnerpkg.RunnerRecord, cursor storepkg.SnapshotCursor) error {
@@ -390,7 +398,7 @@ func writePersistenceDebugArtifacts(artifactsDir string, streamLogPath string, p
 		RunnerRecordCount:        runnerSummary.RecordCount,
 		LatestCheckpointSequence: describeSummary.LatestCheckpointSequence,
 		LatestEventSequence:      describeSummary.LatestEventSequence,
-		Cursor:                   cursor,
+		Cursor:                   summarizeSnapshotCursor(cursor),
 	}); err != nil {
 		return err
 	}
@@ -452,7 +460,17 @@ func summarizeRunnerRecords(records []runnerpkg.RunnerRecord) runnerRecordsSumma
 	return runnerRecordsSummary{RecordCount: len(entries), Records: entries}
 }
 
-func writeJSONArtifact(path string, value any) error {
+func summarizeSnapshotCursor(cursor storepkg.SnapshotCursor) snapshotCursorSummary {
+	return snapshotCursorSummary{
+		RequestID:          cursor.RequestID,
+		RunnerID:           cursor.RunnerID,
+		CheckpointSequence: cursor.CheckpointSequence,
+		EventSequence:      cursor.EventSequence,
+		UpdatedAt:          cursor.UpdatedAt,
+	}
+}
+
+func writeJSONArtifact(path string, value any) (err error) {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return err
 	}
@@ -460,7 +478,11 @@ func writeJSONArtifact(path string, value any) error {
 	if err != nil {
 		return err
 	}
-	defer file.Close()
+	defer func() {
+		if closeErr := file.Close(); closeErr != nil && err == nil {
+			err = fmt.Errorf("close %s: %w", path, closeErr)
+		}
+	}()
 	encoder := json.NewEncoder(file)
 	encoder.SetIndent("", "  ")
 	if err := encoder.Encode(value); err != nil {
