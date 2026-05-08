@@ -61,7 +61,11 @@ func TestTaskCreateGetRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
-	defer store.Close()
+	defer func() {
+		if err := store.Close(); err != nil {
+			t.Fatalf("Close: %v", err)
+		}
+	}()
 
 	ctx := context.Background()
 	task := TaskRecord{
@@ -101,7 +105,11 @@ func TestTaskGetMissingReturnsNotFound(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
-	defer store.Close()
+	defer func() {
+		if err := store.Close(); err != nil {
+			t.Fatalf("Close: %v", err)
+		}
+	}()
 
 	_, err = store.GetTask(context.Background(), "no-such-task")
 	if !store.IsNotFound(err) {
@@ -116,7 +124,11 @@ func TestTaskUpdateStatusRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
-	defer store.Close()
+	defer func() {
+		if err := store.Close(); err != nil {
+			t.Fatalf("Close: %v", err)
+		}
+	}()
 
 	ctx := context.Background()
 	if err := store.CreateTask(ctx, TaskRecord{ID: "t2", Status: "pending"}); err != nil {
@@ -142,7 +154,11 @@ func TestTaskUpdateStatusMissingReturnsNotFound(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
-	defer store.Close()
+	defer func() {
+		if err := store.Close(); err != nil {
+			t.Fatalf("Close: %v", err)
+		}
+	}()
 
 	err = store.UpdateTaskStatus(context.Background(), "no-such", "running")
 	if !store.IsNotFound(err) {
@@ -157,7 +173,11 @@ func TestTaskUpdatePlanRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
-	defer store.Close()
+	defer func() {
+		if err := store.Close(); err != nil {
+			t.Fatalf("Close: %v", err)
+		}
+	}()
 
 	ctx := context.Background()
 	if err := store.CreateTask(ctx, TaskRecord{ID: "t3", Status: "pending"}); err != nil {
@@ -187,7 +207,11 @@ func TestEdgeUpsertRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
-	defer store.Close()
+	defer func() {
+		if err := store.Close(); err != nil {
+			t.Fatalf("Close: %v", err)
+		}
+	}()
 
 	ctx := context.Background()
 	mustCreateTaskAndTool(t, store, ctx)
@@ -220,7 +244,11 @@ func TestEdgeUpdateResult(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
-	defer store.Close()
+	defer func() {
+		if err := store.Close(); err != nil {
+			t.Fatalf("Close: %v", err)
+		}
+	}()
 
 	ctx := context.Background()
 	mustCreateTaskAndTool(t, store, ctx)
@@ -257,7 +285,11 @@ func TestEdgeUpdateResultMissingReturnsNotFound(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
-	defer store.Close()
+	defer func() {
+		if err := store.Close(); err != nil {
+			t.Fatalf("Close: %v", err)
+		}
+	}()
 
 	err = store.UpdateEdgeResult(context.Background(), "no-such-edge", "completed", "", time.Now())
 	if !store.IsNotFound(err) {
@@ -272,7 +304,11 @@ func TestLogInsertRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
-	defer store.Close()
+	defer func() {
+		if err := store.Close(); err != nil {
+			t.Fatalf("Close: %v", err)
+		}
+	}()
 
 	ctx := context.Background()
 	mustCreateTaskAndTool(t, store, ctx)
@@ -327,31 +363,9 @@ func mustCreateTaskAndTool(t *testing.T, store *Store, ctx context.Context) {
 	if err := store.CreateTask(ctx, TaskRecord{
 		ID:     "task-fixture",
 		Status: "pending",
-	}); err != nil && !isDuplicate(err) {
+	}); err != nil {
 		t.Fatalf("CreateTask fixture: %v", err)
 	}
-}
-
-// isDuplicate reports whether err is a SQLite UNIQUE constraint violation,
-// so fixture helpers are idempotent across parallel sub-tests that share a DB.
-func isDuplicate(err error) bool {
-	if err == nil {
-		return false
-	}
-	return err.Error() != "" && containsAny(err.Error(), "UNIQUE constraint failed", "constraint failed")
-}
-
-func containsAny(s string, subs ...string) bool {
-	for _, sub := range subs {
-		if len(s) >= len(sub) {
-			for i := 0; i <= len(s)-len(sub); i++ {
-				if s[i:i+len(sub)] == sub {
-					return true
-				}
-			}
-		}
-	}
-	return false
 }
 
 // Ensure sql.ErrNoRows is recognized as not-found.
@@ -362,7 +376,11 @@ func TestIsNotFoundForSQLNoRows(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
-	defer store.Close()
+	defer func() {
+		if err := store.Close(); err != nil {
+			t.Fatalf("Close: %v", err)
+		}
+	}()
 
 	if !store.IsNotFound(sql.ErrNoRows) {
 		t.Error("IsNotFound(sql.ErrNoRows) = false, want true")
