@@ -30,28 +30,15 @@ func DefaultConfig() Config {
 // Option adjusts a constructed [Stream] before it is returned.
 type Option func(*Stream)
 
-// WithStore installs store as the constructed Stream's durable event sink.
-//
-// The Stream keeps a reference to store and calls it from [Stream.Emit] while
-// holding the stream's delivery lock. A nil store leaves durable replay
-// disabled. If store is shared with other goroutines, callers are responsible
-// for synchronization unless the Store implementation documents its own
-// concurrency safety.
-func WithStore(store Store) Option {
-	return func(s *Stream) {
-		s.store = store
-	}
-}
-
 // Stream is an append-only, replayable channel-like communication bus for one
 // logical execution scope.
 //
 // Producers publish structured events with [Stream.Emit]; consumers synchronize
 // by subscribing with filters and reading from the returned subscription. Stream
-// adds fan-out, replay, merge, scoped metadata, and optional persistence around
-// the channel-shaped communication model used by orchestrator, runner, and
-// skill goroutines. Executors and nodes add context around skill-owned streams
-// and merge them upward rather than forming a separate execution substrate.
+// adds fan-out, replay, merge, and scoped metadata around the channel-shaped
+// communication model used by orchestrator, runner, and skill goroutines.
+// Executors and nodes add context around skill-owned streams and merge them
+// upward rather than forming a separate execution substrate.
 //
 // Stream maintains a logical clock that provides stable event ordering
 // independent of wall-clock time. Each emitted event receives a monotonically
@@ -59,7 +46,6 @@ func WithStore(store Store) Option {
 type Stream struct {
 	scope       Scope
 	bufferLimit int
-	store       Store
 	now         func() time.Time
 
 	mu              sync.Mutex
@@ -133,12 +119,6 @@ func (s *Stream) Emit(ctx context.Context, event Event) error {
 			matches = append(matches, sub)
 		}
 	}
-	if s.store != nil {
-		if err := s.store.Append(ctx, prepared); err != nil {
-			s.mu.Unlock()
-			return err
-		}
-	}
 	s.nextSeq = sequence
 	s.nextLogicalTime = logicalTime
 	s.appendBufferLocked(prepared)
@@ -201,13 +181,11 @@ func (s *Stream) Close() {
 // Use [WithRawStream] to opt into raw frame delivery for debug and persistence
 // inspection.
 //
-// Replay comes from the in-memory buffer when possible and falls back to the
-// configured store when the requested range is older than the current buffer
-// window. By default, live events that would block on a full subscriber channel
-// are dropped for that subscriber; use [WithOverflowPolicy] to request an
-// immediate overflow error instead. Because one raw batch may expand into
-// multiple delivered events, the subscriber buffer counts logical events after
-// expansion for default expanded subscribers.
+// Replay comes from the in-memory buffer. By default, live events that would
+// block on a full subscriber channel are dropped for that subscriber; use
+// [WithOverflowPolicy] to request an immediate overflow error instead. Because
+// one raw batch may expand into multiple delivered events, the subscriber buffer
+// counts logical events after expansion for default expanded subscribers.
 func (s *Stream) Subscribe(filter Filter, opts ...SubscribeOption) (*Subscription, error) {
 	settings := subscribeSettings{
 		buffer:         defaultSubscriberBuffer,
@@ -270,7 +248,7 @@ func (s *Stream) Subscribe(filter Filter, opts ...SubscribeOption) (*Subscriptio
 	return sub, nil
 }
 
-// Replay returns a snapshot of buffered or stored events that match filter.
+// Replay returns a snapshot of buffered events that match filter.
 // By default merge batch frames are expanded into their logical events before
 // the filter is applied, matching the default behavior of [Stream.Subscribe].
 // Use [WithRawStream] to receive raw transport frames for debug and persistence
@@ -296,17 +274,9 @@ func (s *Stream) Replay(filter Filter, opts ...SubscribeOption) ([]Event, error)
 	return s.replayLogicalLocked(filter, settings)
 }
 
-// replayLogicalLocked replays events from the buffer or store, expanding merge
-// bundle events into their nested events and applying filter per logical event.
-// It must be called with s.mu held.
-//
-// Store reads always use an empty filter because a merge.bundle carrier must be
-// loaded to expand its nested events, even when the caller's filter is narrow.
-// Passing the caller's filter to the store would silently drop bundles whose
-// carrier event type does not match the filter. The expansion and filtering
-// therefore happen entirely in memory after loading. For store-backed streams
-// with a large history and a narrow filter, prefer [WithRawStream] and manual
-// bundle expansion if store IO is a concern.
+// replayLogicalLocked replays buffered events, expanding merge bundle events
+// into their nested events and applying filter per logical event. It must be
+// called with s.mu held.
 func (s *Stream) replayLogicalLocked(filter Filter, settings subscribeSettings) ([]Event, error) {
 	raw, err := s.replayLocked(Filter{}, settings)
 	if err != nil {
@@ -327,10 +297,6 @@ func (s *Stream) replayLocked(filter Filter, settings subscribeSettings) ([]Even
 	from := s.replayStartLocked(settings)
 	if from == 0 {
 		return nil, nil
-	}
-	oldestBuffered := s.oldestBufferedSequenceLocked()
-	if s.store != nil && (oldestBuffered == 0 || from < oldestBuffered) {
-		return s.store.Load(context.Background(), s.scope, from, filter)
 	}
 	var replay []Event
 	for _, event := range s.buffer {

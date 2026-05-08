@@ -12,29 +12,15 @@ import (
 	streampkg "github.com/tsumina/dango/internal/engine/stream"
 )
 
-func TestStreamStoreReplayFiltersAndIsolatesRequests(t *testing.T) {
+func TestStreamStoreLoadEventsFiltersAndIsolatesRequests(t *testing.T) {
 	t.Parallel()
 
 	dbPath := filepath.Join(t.TempDir(), "dango.db")
-	store, err := Open(dbPath)
+	dbStore, err := Open(dbPath)
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
-	cleanupStore := store
-
-	streamStore := NewStreamStore(store)
-	requestStream := streampkg.New(
-		streampkg.Scope{RequestID: "req_1"},
-		streampkg.Config{DisableBuffer: true},
-		streampkg.WithStore(streamStore),
-	)
-	otherRequestStream := streampkg.New(
-		streampkg.Scope{RequestID: "req_2"},
-		streampkg.Config{DisableBuffer: true},
-		streampkg.WithStore(streamStore),
-	)
-	t.Cleanup(requestStream.Close)
-	t.Cleanup(otherRequestStream.Close)
+	cleanupStore := dbStore
 	t.Cleanup(func() {
 		if cleanupStore == nil {
 			return
@@ -43,50 +29,17 @@ func TestStreamStoreReplayFiltersAndIsolatesRequests(t *testing.T) {
 			t.Fatalf("Close: %v", err)
 		}
 	})
+	eventLog := NewStreamStore(dbStore)
 
-	emit := func(t *testing.T, s *streampkg.Stream, event streampkg.Event) {
-		t.Helper()
-		if err := s.Emit(t.Context(), event); err != nil {
-			t.Fatalf("Emit(%s): %v", event.EventType, err)
-		}
-	}
+	appendEvent(t, eventLog, preparedStreamEvent("req_1", 1, streampkg.EventStatusProgress, streampkg.Source{Layer: "orchestrator", ID: "or_1"}, streampkg.StatusRunning, streampkg.Scope{}, json.RawMessage(`"planning"`)))
+	appendEvent(t, eventLog, preparedStreamEvent("req_1", 2, streampkg.EventLLMReasoningDelta, streampkg.Source{Layer: "skill", ID: "skill_1", ParentID: "executor_1"}, streampkg.StatusRunning, streampkg.Scope{RunnerID: "run_1", NodeID: "node_1"}, json.RawMessage(`"think"`)))
+	appendEvent(t, eventLog, preparedStreamEvent("req_1", 3, streampkg.EventLLMOutputDelta, streampkg.Source{Layer: "skill", ID: "skill_1", ParentID: "executor_1"}, streampkg.StatusCompleted, streampkg.Scope{RunnerID: "run_1", NodeID: "node_1"}, json.RawMessage(`"answer"`)))
+	appendEvent(t, eventLog, preparedStreamEvent("req_2", 1, streampkg.EventLLMOutputDelta, streampkg.Source{Layer: "skill", ID: "skill_2", ParentID: "executor_2"}, streampkg.StatusCompleted, streampkg.Scope{RunnerID: "run_2", NodeID: "node_2"}, json.RawMessage(`"other request"`)))
 
-	emit(t, requestStream, streampkg.Event{
-		EventType: streampkg.EventStatusProgress,
-		From:      streampkg.Source{Layer: "orchestrator", ID: "or_1"},
-		Status:    streampkg.StatusRunning,
-		Delta:     json.RawMessage(`"planning"`),
-	})
-	emit(t, requestStream, streampkg.Event{
-		EventType: streampkg.EventLLMReasoningDelta,
-		From:      streampkg.Source{Layer: "skill", ID: "skill_1", ParentID: "executor_1"},
-		Status:    streampkg.StatusRunning,
-		Scope:     streampkg.Scope{RunnerID: "run_1", NodeID: "node_1"},
-		Delta:     json.RawMessage(`"think"`),
-	})
-	emit(t, requestStream, streampkg.Event{
-		EventType: streampkg.EventLLMOutputDelta,
-		From:      streampkg.Source{Layer: "skill", ID: "skill_1", ParentID: "executor_1"},
-		Status:    streampkg.StatusCompleted,
-		Scope:     streampkg.Scope{RunnerID: "run_1", NodeID: "node_1"},
-		Delta:     json.RawMessage(`"answer"`),
-	})
-	emit(t, otherRequestStream, streampkg.Event{
-		EventType: streampkg.EventLLMOutputDelta,
-		From:      streampkg.Source{Layer: "skill", ID: "skill_2", ParentID: "executor_2"},
-		Status:    streampkg.StatusCompleted,
-		Scope:     streampkg.Scope{RunnerID: "run_2", NodeID: "node_2"},
-		Delta:     json.RawMessage(`"other request"`),
-	})
-
-	requestStream.Close()
-	otherRequestStream.Close()
-	if err := store.Close(); err != nil {
+	if err := dbStore.Close(); err != nil {
 		t.Fatalf("Close before reopen: %v", err)
 	}
 	cleanupStore = nil
-	store = nil
-
 	reopened, err := Open(dbPath)
 	if err != nil {
 		t.Fatalf("Open(reopen): %v", err)
@@ -96,15 +49,9 @@ func TestStreamStoreReplayFiltersAndIsolatesRequests(t *testing.T) {
 			t.Fatalf("Close(reopen): %v", err)
 		}
 	})
+	reopenedLog := NewStreamStore(reopened)
 
-	replayStream := streampkg.New(
-		streampkg.Scope{RequestID: "req_1"},
-		streampkg.Config{DisableBuffer: true},
-		streampkg.WithStore(NewStreamStore(reopened)),
-	)
-	t.Cleanup(replayStream.Close)
-
-	replay, err := replayStream.Replay(streampkg.Filter{
+	replay, err := reopenedLog.LoadEvents(t.Context(), streampkg.Scope{RequestID: "req_1"}, 2, streampkg.Filter{
 		Prefixes: []string{"llm."},
 		Sources: []streampkg.SourceSelector{{
 			Layer:    "skill",
@@ -112,9 +59,9 @@ func TestStreamStoreReplayFiltersAndIsolatesRequests(t *testing.T) {
 			ParentID: "executor_1",
 		}},
 		Scope: streampkg.Scope{RunnerID: "run_1", NodeID: "node_1"},
-	}, streampkg.WithReplayFrom(2))
+	})
 	if err != nil {
-		t.Fatalf("Replay filtered: %v", err)
+		t.Fatalf("LoadEvents filtered: %v", err)
 	}
 	if len(replay) != 2 {
 		t.Fatalf("len(replay) = %d, want 2", len(replay))
@@ -131,12 +78,12 @@ func TestStreamStoreReplayFiltersAndIsolatesRequests(t *testing.T) {
 		}
 	}
 
-	outputOnly, err := replayStream.Replay(streampkg.Filter{
+	outputOnly, err := reopenedLog.LoadEvents(t.Context(), streampkg.Scope{RequestID: "req_1"}, 1, streampkg.Filter{
 		EventTypes: []string{streampkg.EventLLMOutputDelta},
 		Scope:      streampkg.Scope{RunnerID: "run_1"},
-	}, streampkg.WithReplayFrom(1))
+	})
 	if err != nil {
-		t.Fatalf("Replay exact event type: %v", err)
+		t.Fatalf("LoadEvents exact event type: %v", err)
 	}
 	if len(outputOnly) != 1 {
 		t.Fatalf("len(outputOnly) = %d, want 1", len(outputOnly))
@@ -149,23 +96,16 @@ func TestStreamStoreReplayFiltersAndIsolatesRequests(t *testing.T) {
 func TestStreamStorePersistsRawMergeBundles(t *testing.T) {
 	t.Parallel()
 
-	dbPath := filepath.Join(t.TempDir(), "dango.db")
-	store, err := Open(dbPath)
+	dbStore, err := Open(filepath.Join(t.TempDir(), "dango.db"))
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
 	t.Cleanup(func() {
-		if err := store.Close(); err != nil {
+		if err := dbStore.Close(); err != nil {
 			t.Fatalf("Close: %v", err)
 		}
 	})
-
-	requestStream := streampkg.New(
-		streampkg.Scope{RequestID: "req_bundle"},
-		streampkg.Config{DisableBuffer: true},
-		streampkg.WithStore(NewStreamStore(store)),
-	)
-	t.Cleanup(requestStream.Close)
+	eventLog := NewStreamStore(dbStore)
 
 	batch, err := streampkg.EncodeEventBatch(streampkg.EventBatch{
 		TickID: 7,
@@ -189,82 +129,42 @@ func TestStreamStorePersistsRawMergeBundles(t *testing.T) {
 	if err != nil {
 		t.Fatalf("EncodeEventBatch: %v", err)
 	}
-	if err := requestStream.Emit(t.Context(), streampkg.Event{
-		EventType: streampkg.EventMergeBundle,
-		From:      streampkg.Source{Layer: "hub", ID: "hub_1"},
-		Status:    streampkg.StatusCompleted,
-		Delta:     batch,
-	}); err != nil {
-		t.Fatalf("Emit bundle: %v", err)
-	}
+	appendEvent(t, eventLog, preparedStreamEvent("req_bundle", 1, streampkg.EventMergeBundle, streampkg.Source{Layer: "hub", ID: "hub_1"}, streampkg.StatusCompleted, streampkg.Scope{}, batch))
 
-	replayStream := streampkg.New(
-		streampkg.Scope{RequestID: "req_bundle"},
-		streampkg.Config{DisableBuffer: true},
-		streampkg.WithStore(NewStreamStore(store)),
-	)
-	t.Cleanup(replayStream.Close)
-
-	raw, err := replayStream.Replay(streampkg.Filter{}, streampkg.WithReplayFrom(1), streampkg.WithRawStream())
+	raw, err := eventLog.LoadEvents(t.Context(), streampkg.Scope{RequestID: "req_bundle"}, 1, streampkg.Filter{})
 	if err != nil {
-		t.Fatalf("Replay raw: %v", err)
+		t.Fatalf("LoadEvents raw: %v", err)
 	}
 	if len(raw) != 1 || raw[0].EventType != streampkg.EventMergeBundle {
 		t.Fatalf("raw replay = %+v, want one merge bundle", raw)
 	}
-
-	expanded, err := replayStream.Replay(streampkg.Filter{Prefixes: []string{"llm."}}, streampkg.WithReplayFrom(1))
+	decoded, err := streampkg.DecodeEventBatch(raw[0].Delta)
 	if err != nil {
-		t.Fatalf("Replay expanded: %v", err)
+		t.Fatalf("DecodeEventBatch: %v", err)
 	}
-	if len(expanded) != 2 {
-		t.Fatalf("len(expanded) = %d, want 2", len(expanded))
-	}
-	if expanded[0].Scope.RequestID != "req_bundle" || expanded[1].Scope.RequestID != "req_bundle" {
-		t.Fatalf("expanded request ids = [%q %q], want req_bundle", expanded[0].Scope.RequestID, expanded[1].Scope.RequestID)
+	if len(decoded.Events) != 2 || decoded.Events[0].EventType != streampkg.EventLLMReasoningDelta || decoded.Events[1].EventType != streampkg.EventLLMOutputDelta {
+		t.Fatalf("bundle events = %+v, want reasoning then output", decoded.Events)
 	}
 }
 
-func TestStreamStoreReplayFromBeyondInt64ReturnsNoRows(t *testing.T) {
+func TestStreamStoreLoadEventsFromBeyondInt64ReturnsNoRows(t *testing.T) {
 	t.Parallel()
 
-	dbPath := filepath.Join(t.TempDir(), "dango.db")
-	store, err := Open(dbPath)
+	dbStore, err := Open(filepath.Join(t.TempDir(), "dango.db"))
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
 	t.Cleanup(func() {
-		if err := store.Close(); err != nil {
+		if err := dbStore.Close(); err != nil {
 			t.Fatalf("Close: %v", err)
 		}
 	})
+	eventLog := NewStreamStore(dbStore)
+	appendEvent(t, eventLog, preparedStreamEvent("req_big_from", 1, streampkg.EventStatusProgress, streampkg.Source{Layer: "orchestrator", ID: "or_1"}, streampkg.StatusRunning, streampkg.Scope{}, json.RawMessage(`"planning"`)))
 
-	requestStream := streampkg.New(
-		streampkg.Scope{RequestID: "req_big_from"},
-		streampkg.Config{DisableBuffer: true},
-		streampkg.WithStore(NewStreamStore(store)),
-	)
-	t.Cleanup(requestStream.Close)
-
-	if err := requestStream.Emit(t.Context(), streampkg.Event{
-		EventType: streampkg.EventStatusProgress,
-		From:      streampkg.Source{Layer: "orchestrator", ID: "or_1"},
-		Status:    streampkg.StatusRunning,
-		Delta:     json.RawMessage(`"planning"`),
-	}); err != nil {
-		t.Fatalf("Emit: %v", err)
-	}
-
-	replayStream := streampkg.New(
-		streampkg.Scope{RequestID: "req_big_from"},
-		streampkg.Config{DisableBuffer: true},
-		streampkg.WithStore(NewStreamStore(store)),
-	)
-	t.Cleanup(replayStream.Close)
-
-	replay, err := replayStream.Replay(streampkg.Filter{}, streampkg.WithReplayFrom(math.MaxUint64))
+	replay, err := eventLog.LoadEvents(t.Context(), streampkg.Scope{RequestID: "req_big_from"}, math.MaxUint64, streampkg.Filter{})
 	if err != nil {
-		t.Fatalf("Replay: %v", err)
+		t.Fatalf("LoadEvents: %v", err)
 	}
 	if len(replay) != 0 {
 		t.Fatalf("len(replay) = %d, want 0", len(replay))
@@ -274,17 +174,17 @@ func TestStreamStoreReplayFromBeyondInt64ReturnsNoRows(t *testing.T) {
 func TestStreamStoreRejectsEventsWithoutRequestID(t *testing.T) {
 	t.Parallel()
 
-	store, err := Open(filepath.Join(t.TempDir(), "dango.db"))
+	dbStore, err := Open(filepath.Join(t.TempDir(), "dango.db"))
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
 	t.Cleanup(func() {
-		if err := store.Close(); err != nil {
+		if err := dbStore.Close(); err != nil {
 			t.Fatalf("Close: %v", err)
 		}
 	})
 
-	err = NewStreamStore(store).Append(context.Background(), streampkg.Event{
+	err = NewStreamStore(dbStore).AppendEvent(context.Background(), streampkg.Event{
 		EventType:      streampkg.EventStatusProgress,
 		From:           streampkg.Source{Layer: "runner", ID: "run_1"},
 		SequenceNumber: 1,
@@ -294,9 +194,30 @@ func TestStreamStoreRejectsEventsWithoutRequestID(t *testing.T) {
 		Delta:          json.RawMessage(`"missing request"`),
 	})
 	if err == nil {
-		t.Fatal("Append() error = nil, want request_id validation error")
+		t.Fatal("AppendEvent() error = nil, want request_id validation error")
 	}
 	if !strings.Contains(err.Error(), "request_id") {
-		t.Fatalf("Append() error = %v, want request_id in message", err)
+		t.Fatalf("AppendEvent() error = %v, want request_id in message", err)
+	}
+}
+
+func appendEvent(t *testing.T, eventLog *StreamStore, event streampkg.Event) {
+	t.Helper()
+	if err := eventLog.AppendEvent(t.Context(), event); err != nil {
+		t.Fatalf("AppendEvent(%s): %v", event.EventType, err)
+	}
+}
+
+func preparedStreamEvent(requestID string, seq uint64, eventType string, source streampkg.Source, status string, scope streampkg.Scope, delta json.RawMessage) streampkg.Event {
+	scope.RequestID = requestID
+	return streampkg.Event{
+		EventType:      eventType,
+		From:           source,
+		Status:         status,
+		Scope:          scope,
+		SequenceNumber: seq,
+		LogicalTime:    seq,
+		Timestamp:      time.Unix(1_700_000_000+int64(seq), 0).UTC(),
+		Delta:          delta,
 	}
 }

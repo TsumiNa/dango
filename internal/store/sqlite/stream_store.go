@@ -9,10 +9,11 @@ import (
 	"time"
 
 	streampkg "github.com/tsumina/dango/internal/engine/stream"
+	storepkg "github.com/tsumina/dango/internal/store"
 	sqldb "github.com/tsumina/dango/internal/store/sqlite/db"
 )
 
-var _ streampkg.Store = (*StreamStore)(nil)
+var _ storepkg.EventLogStore = (*StreamStore)(nil)
 
 // StreamStore persists request-scoped stream events in SQLite.
 //
@@ -23,17 +24,16 @@ type StreamStore struct {
 	store *Store
 }
 
-// NewStreamStore returns a SQLite-backed adapter that implements the stream
-// event store contract for request event logs.
+// NewStreamStore returns a SQLite-backed event-log store for request events.
 func NewStreamStore(store *Store) *StreamStore {
 	return &StreamStore{store: store}
 }
 
-// Append stores one prepared request-stream event as a raw JSON frame plus
+// AppendEvent stores one prepared request-stream event as a raw JSON frame plus
 // helper columns used for replay lookups.
-func (s *StreamStore) Append(ctx context.Context, event streampkg.Event) error {
+func (s *StreamStore) AppendEvent(ctx context.Context, event streampkg.Event) error {
 	if s == nil || s.store == nil || s.store.queries == nil {
-		return fmt.Errorf("sqlite: StreamStore.Append called on nil store")
+		return fmt.Errorf("sqlite: StreamStore.AppendEvent called on nil store")
 	}
 	if err := validateStoredStreamEvent(event); err != nil {
 		return err
@@ -72,10 +72,10 @@ func (s *StreamStore) Append(ctx context.Context, event streampkg.Event) error {
 	return nil
 }
 
-// Load returns request-scoped events in ascending sequence order.
-func (s *StreamStore) Load(ctx context.Context, scope streampkg.Scope, from uint64, filter streampkg.Filter) ([]streampkg.Event, error) {
+// LoadEvents returns request-scoped events in ascending sequence order.
+func (s *StreamStore) LoadEvents(ctx context.Context, scope streampkg.Scope, from uint64, filter streampkg.Filter) ([]streampkg.Event, error) {
 	if s == nil || s.store == nil || s.store.queries == nil {
-		return nil, fmt.Errorf("sqlite: StreamStore.Load called on nil store")
+		return nil, fmt.Errorf("sqlite: StreamStore.LoadEvents called on nil store")
 	}
 	if scope.RequestID == "" {
 		return nil, fmt.Errorf("sqlite: request stream replay requires scope.request_id")
