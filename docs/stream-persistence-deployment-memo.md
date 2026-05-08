@@ -12,10 +12,10 @@ phase begins.
 
 The stream system is now the outward runtime observation bus:
 
-- `stream.New(scope, cfg, opts...)` creates an append-only stream with optional
-  in-memory replay and optional durable replay through `WithStore(stream.Store)`.
-- `stream.Store` is deliberately narrow: `Append(ctx, event)` plus
-  `Load(ctx, scope, from, filter)`.
+- `stream.New(scope, cfg, opts...)` creates an append-only stream with
+  in-memory replay. Durable event-log storage is outside the stream runtime.
+- `internal/store.EventLogStore` is the event-log persistence abstraction:
+  `AppendEvent(ctx, event)` plus `LoadEvents(ctx, scope, from, filter)`.
 - `Stream.Subscribe` and `Stream.Replay` expand merge bundles into logical
   events by default. `WithRawStream` exposes raw transport frames, including
   `merge.bundle`, for event-log inspection and replay debugging.
@@ -47,8 +47,9 @@ The describe/read side is a separate persistence concern:
   for tools, tasks, edges, and logs.
 - Task and edge rows are intended to support describe views that reconstruct the
   latest executable DAG without reading task directories first.
-- SQLite does not yet record stream events, and the current request stream is
-  created without a durable store.
+- SQLite now has a request stream event table and store adapter, but the
+  current production request stream is still created without an event-log
+  persistence worker.
 
 Exchange documents remain their own artifact bus. Persistence may index or link
 to exchange markdown and generated resources, but it should not merge exchange
@@ -91,8 +92,8 @@ state by replaying UI/debug output.
 This persistence belongs to the runner control plane. The existing
 `runner.RunnerStore` append-only contract is the current durable shape, and a
 future SQLite implementation should preserve its checkpoint semantics. It is
-not a `stream.Store`, even if both implementations live under the same storage
-package or database file.
+not part of stream runtime persistence, even if both implementations live under
+the same storage package or database file.
 
 ### Event Log Persistence
 
@@ -247,10 +248,10 @@ Test targets:
 - `go test ./internal/store/sqlite` covers migration versioning, append/load
   ordering, scope isolation by request id, `from` sequence handling, and filter
   matching for event type/source/scope.
-- Loaded SQLite event rows can be replayed as raw frames after an in-memory
-  stream buffer miss without making SQLite understand stream bundle internals.
-- Stored raw `merge.bundle` events can be loaded and expanded by
-  `Stream.Replay` without the SQLite layer understanding bundle internals.
+- Loaded SQLite event rows preserve raw frames for replay/debug callers without
+  making SQLite understand stream bundle internals.
+- Stored raw `merge.bundle` events can be loaded and decoded by stream helpers
+  without the SQLite layer understanding bundle internals.
 - Appending invalid or request-less events fails predictably if the event log
   requires request-scoped events.
 
@@ -265,9 +266,9 @@ JSON fallback, and the rule that child streams do not own event logs by default.
 
 Change surface:
 
-- Add an event-log store abstraction under `internal/store` and make
-  `internal/store/sqlite` implement it with the Phase 3 request stream event
-  table. Keep the stream runtime independent of concrete persistence backends.
+- Use the `internal/store.EventLogStore` abstraction implemented by
+  `internal/store/sqlite` with the Phase 3 request stream event table. Keep the
+  stream runtime independent of concrete persistence backends.
 - Add one startup-only orchestrator/application configuration entrypoint for
   event-log persistence, following the existing startup-only configuration
   style.

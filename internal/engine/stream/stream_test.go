@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"sync"
 	"testing"
 	"time"
 )
@@ -192,144 +191,8 @@ func TestStreamCloseClosesSubscribersAndRejectsUse(t *testing.T) {
 	}
 }
 
-func TestStreamStoreAppendPrecedesDelivery(t *testing.T) {
-	store := &recordingStore{}
-	s := New(Scope{}, DefaultConfig(), WithStore(store))
-	t.Cleanup(s.Close)
-
-	sub, err := s.Subscribe(Filter{})
-	if err != nil {
-		t.Fatalf("Subscribe: %v", err)
-	}
-
-	if err := s.Emit(t.Context(), Event{
-		EventType: EventStatusProgress,
-		From:      Source{Layer: "orchestrator"},
-		Status:    StatusRunning,
-		Delta:     json.RawMessage(`"stored"`),
-	}); err != nil {
-		t.Fatalf("Emit: %v", err)
-	}
-	_ = receiveEvent(t, sub.Events())
-
-	store.mu.Lock()
-	defer store.mu.Unlock()
-	if len(store.events) != 1 {
-		t.Fatalf("store appended %d events, want 1", len(store.events))
-	}
-	if store.events[0].SequenceNumber != 1 {
-		t.Fatalf("stored sequence = %d, want 1", store.events[0].SequenceNumber)
-	}
-}
-
-func TestStreamSubscribeLoadsReplayFromStoreBeyondBuffer(t *testing.T) {
-	store := &recordingStore{}
-	s := New(Scope{RequestID: "req_store"}, Config{BufferLimit: 1}, WithStore(store))
-	t.Cleanup(s.Close)
-
-	emit := func(eventType string, delta string) {
-		t.Helper()
-		if err := s.Emit(t.Context(), Event{
-			EventType: eventType,
-			From:      Source{Layer: "conversation"},
-			Status:    StatusRunning,
-			Delta:     json.RawMessage(delta),
-		}); err != nil {
-			t.Fatalf("Emit %s: %v", eventType, err)
-		}
-	}
-	emit(EventStatusProgress, `"status"`)
-	emit(EventLLMReasoningDelta, `"think"`)
-	emit(EventLLMOutputDelta, `"answer"`)
-
-	sub, err := s.Subscribe(Filter{Prefixes: []string{"llm."}}, WithReplayFrom(2))
-	if err != nil {
-		t.Fatalf("Subscribe: %v", err)
-	}
-	defer sub.Cancel()
-
-	first := receiveEvent(t, sub.Events())
-	second := receiveEvent(t, sub.Events())
-	if first.SequenceNumber != 2 || first.EventType != EventLLMReasoningDelta {
-		t.Fatalf("first replay = seq %d type %s, want seq 2 reasoning", first.SequenceNumber, first.EventType)
-	}
-	if second.SequenceNumber != 3 || second.EventType != EventLLMOutputDelta {
-		t.Fatalf("second replay = seq %d type %s, want seq 3 output", second.SequenceNumber, second.EventType)
-	}
-
-	store.mu.Lock()
-	defer store.mu.Unlock()
-	if len(store.loadCalls) != 1 {
-		t.Fatalf("store load calls = %d, want 1", len(store.loadCalls))
-	}
-	if store.loadCalls[0].from != 2 {
-		t.Fatalf("store load from = %d, want 2", store.loadCalls[0].from)
-	}
-	if store.loadCalls[0].scope.RequestID != "req_store" {
-		t.Fatalf("store load scope = %+v, want request scope", store.loadCalls[0].scope)
-	}
-}
-
-func TestStreamSubscribeReplayLastLoadsFromStoreWhenBufferDisabled(t *testing.T) {
-	store := &recordingStore{}
-	s := New(Scope{RunnerID: "run_store"}, Config{DisableBuffer: true}, WithStore(store))
-	t.Cleanup(s.Close)
-
-	for _, delta := range []string{`"one"`, `"two"`, `"three"`} {
-		if err := s.Emit(t.Context(), Event{
-			EventType: EventStatusProgress,
-			From:      Source{Layer: "runner"},
-			Status:    StatusRunning,
-			Delta:     json.RawMessage(delta),
-		}); err != nil {
-			t.Fatalf("Emit: %v", err)
-		}
-	}
-
-	sub, err := s.Subscribe(Filter{}, WithReplayLast(2))
-	if err != nil {
-		t.Fatalf("Subscribe: %v", err)
-	}
-	defer sub.Cancel()
-
-	first := receiveEvent(t, sub.Events())
-	second := receiveEvent(t, sub.Events())
-	if first.SequenceNumber != 2 || second.SequenceNumber != 3 {
-		t.Fatalf("replay sequences = [%d %d], want [2 3]", first.SequenceNumber, second.SequenceNumber)
-	}
-
-	store.mu.Lock()
-	defer store.mu.Unlock()
-	if len(store.loadCalls) != 1 {
-		t.Fatalf("store load calls = %d, want 1", len(store.loadCalls))
-	}
-	if store.loadCalls[0].from != 2 {
-		t.Fatalf("store load from = %d, want 2", store.loadCalls[0].from)
-	}
-}
-
-func TestStreamSubscribeReturnsStoreLoadError(t *testing.T) {
-	store := &recordingStore{loadErr: errors.New("boom")}
-	s := New(Scope{}, Config{DisableBuffer: true}, WithStore(store))
-	t.Cleanup(s.Close)
-
-	if err := s.Emit(t.Context(), Event{
-		EventType: EventStatusProgress,
-		From:      Source{Layer: "runner"},
-		Status:    StatusRunning,
-		Delta:     json.RawMessage(`"stored"`),
-	}); err != nil {
-		t.Fatalf("Emit: %v", err)
-	}
-
-	if _, err := s.Subscribe(Filter{}, WithReplayLast(1)); !errors.Is(err, store.loadErr) {
-		t.Fatalf("Subscribe err = %v, want load error", err)
-	}
-}
-
-func TestStreamReplayExpandsStoredBundles(t *testing.T) {
-	store := &recordingStore{}
-	s := New(Scope{RequestID: "req_1"}, Config{DisableBuffer: true}, WithStore(store))
+func TestStreamReplayExpandsBufferedBundles(t *testing.T) {
+	s := New(Scope{RequestID: "req_1"}, DefaultConfig())
 	t.Cleanup(s.Close)
 
 	delta, err := EncodeEventBatch(EventBatch{
@@ -543,33 +406,6 @@ func TestSubscribeReplayExpandsBundlesFromBuffer(t *testing.T) {
 	assertNoEvent(t, sub.Events())
 }
 
-func TestSubscribeReplayExpandsBundlesFromStore(t *testing.T) {
-	store := &recordingStore{}
-	s := New(Scope{RequestID: "req_store"}, Config{DisableBuffer: true}, WithStore(store))
-	t.Cleanup(s.Close)
-
-	n1 := Event{EventType: EventLLMReasoningDelta, From: Source{Layer: "skill"}, Status: StatusRunning, Delta: json.RawMessage(`"think"`)}
-	n2 := Event{EventType: EventLLMOutputDelta, From: Source{Layer: "skill"}, Status: StatusRunning, Delta: json.RawMessage(`"answer"`)}
-	if err := s.Emit(t.Context(), makeBundleEvent(t, 1, n1, n2)); err != nil {
-		t.Fatalf("Emit bundle: %v", err)
-	}
-
-	sub, err := s.Subscribe(Filter{EventTypes: []string{EventLLMOutputDelta}}, WithReplayFrom(1))
-	if err != nil {
-		t.Fatalf("Subscribe: %v", err)
-	}
-	defer sub.Cancel()
-
-	got := receiveEvent(t, sub.Events())
-	if got.EventType != EventLLMOutputDelta {
-		t.Errorf("event type = %q, want output", got.EventType)
-	}
-	if got.Scope.RequestID != "req_store" {
-		t.Errorf("Scope.RequestID = %q, want req_store", got.Scope.RequestID)
-	}
-	assertNoEvent(t, sub.Events())
-}
-
 func TestSubscribeReplayOrderMatchesLiveSubscription(t *testing.T) {
 	s := New(Scope{RequestID: "req_1"}, DefaultConfig())
 	t.Cleanup(s.Close)
@@ -675,48 +511,6 @@ func TestSubscribeReplayDropsWhenBufferFull(t *testing.T) {
 	receiveEvent(t, sub.Events())
 	receiveEvent(t, sub.Events())
 	assertNoEvent(t, sub.Events())
-}
-
-type recordingStore struct {
-	mu        sync.Mutex
-	events    []Event
-	loadCalls []recordingLoadCall
-	loadErr   error
-}
-
-type recordingLoadCall struct {
-	scope  Scope
-	from   uint64
-	filter Filter
-}
-
-func (s *recordingStore) Append(_ context.Context, event Event) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.events = append(s.events, event)
-	return nil
-}
-
-func (s *recordingStore) Load(_ context.Context, scope Scope, from uint64, filter Filter) ([]Event, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.loadCalls = append(s.loadCalls, recordingLoadCall{scope: scope, from: from, filter: filter})
-	if s.loadErr != nil {
-		return nil, s.loadErr
-	}
-	var replay []Event
-	for _, event := range s.events {
-		if event.SequenceNumber < from {
-			continue
-		}
-		if scope != (Scope{}) && event.Scope != scope {
-			continue
-		}
-		if filter.Match(event) {
-			replay = append(replay, event)
-		}
-	}
-	return replay, nil
 }
 
 func receiveEvent(t *testing.T, ch <-chan Event) Event {
