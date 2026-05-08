@@ -20,6 +20,15 @@ func TestStreamStoreLoadEventsFiltersAndIsolatesRequests(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
+	cleanupStore := dbStore
+	t.Cleanup(func() {
+		if cleanupStore == nil {
+			return
+		}
+		if err := cleanupStore.Close(); err != nil {
+			t.Fatalf("Close: %v", err)
+		}
+	})
 	eventLog := NewStreamStore(dbStore)
 
 	appendEvent(t, eventLog, preparedStreamEvent("req_1", 1, streampkg.EventStatusProgress, streampkg.Source{Layer: "orchestrator", ID: "or_1"}, streampkg.StatusRunning, streampkg.Scope{}, json.RawMessage(`"planning"`)))
@@ -30,6 +39,7 @@ func TestStreamStoreLoadEventsFiltersAndIsolatesRequests(t *testing.T) {
 	if err := dbStore.Close(); err != nil {
 		t.Fatalf("Close before reopen: %v", err)
 	}
+	cleanupStore = nil
 	reopened, err := Open(dbPath)
 	if err != nil {
 		t.Fatalf("Open(reopen): %v", err)

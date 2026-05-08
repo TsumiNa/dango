@@ -248,7 +248,7 @@ func (s *Stream) Subscribe(filter Filter, opts ...SubscribeOption) (*Subscriptio
 	return sub, nil
 }
 
-// Replay returns a snapshot of buffered or stored events that match filter.
+// Replay returns a snapshot of buffered events that match filter.
 // By default merge batch frames are expanded into their logical events before
 // the filter is applied, matching the default behavior of [Stream.Subscribe].
 // Use [WithRawStream] to receive raw transport frames for debug and persistence

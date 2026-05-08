@@ -24,10 +24,10 @@ The stream system is now the outward runtime observation bus:
   therefore observe the full request without enabling persistence on every child
   stream.
 
-Persistence is an independent runtime participant rather than part of stream
-delivery. A persistence component may subscribe to the request stream and write
-records, but those writes must run in their own goroutine and must not block or
-change delivery to normal subscribers.
+This branch moves event-log persistence out of stream delivery. It does not yet
+start a request-scoped persistence worker. Later phases should subscribe to the
+top-level request stream from independent goroutines so persistence cannot
+block or change delivery to normal subscribers.
 
 The orchestrator and runner APIs separate runtime observation from query views:
 
@@ -61,12 +61,10 @@ Several persistence systems may eventually share SQLite as a backend, but they
 do not share the same purpose or ownership boundary. Only the event log uses the
 stream event-log persistence contract.
 
-The shared persistence package should own the configured persistence surface.
-`internal/store` defines the application-facing persistence abstractions, while
-`internal/store/sqlite` provides the SQLite implementation. JSON persistence is
-still available in its current package during the early phases, but it should
-move behind the same store boundary in a later phase rather than staying under
-the stream runtime package.
+On this branch, `internal/store` owns the event-log persistence abstraction and
+`internal/store/sqlite` provides the SQLite implementation. Other persistence
+lanes should move behind the same package boundary when they are refactored.
+This branch does not yet provide a JSON event-log implementation.
 
 ### Skill Conversation Session Persistence
 
@@ -151,9 +149,9 @@ stores for the event log and checkpoint log, use them for the whole process
 lifetime, and clean their temporary directories on normal exit. This default
 JSON fallback is only a lifetime-local replay and inspection aid. It does not
 promise restart recovery and should not be treated as durable history after the
-process exits. Until JSON persistence moves under `internal/store`, this
-fallback remains an implementation detail of startup wiring rather than part of
-the stream package API.
+process exits. That fallback is still planned rather than implemented on this
+branch; when added, it should live behind `internal/store` rather than as part
+of the stream package API.
 
 User-configured persistence is the durable path. A configured JSON store or RDB
 store should record all event log rows, checkpoint log rows, and snapshot cursor
@@ -277,8 +275,8 @@ Change surface:
   fails, startup returns an error and no request is processed.
 - When no user store is configured, startup creates a process-lifetime
   temporary JSON event-log fallback and removes its directory on normal exit.
-  JSON may remain in its current package for this phase, but the next phase
-  should move it behind the `internal/store` abstraction.
+  This fallback does not exist on this branch yet; Phase 4 should introduce it
+  behind the `internal/store` abstraction rather than under `internal/engine/stream`.
 - Start one or more persistence goroutines that subscribe to top-level request
   streams and append raw request stream frames through the configured event-log
   store. These goroutines must not block stream delivery to normal subscribers.
@@ -301,8 +299,9 @@ Test targets:
 - Without configured persistence, `StartRequest` appends event rows to a
   temporary JSON store for the process lifetime and cleanup removes the temp
   directory on normal exit.
-- A late subscriber can replay from SQLite after the in-memory buffer window is
-  unavailable.
+- A late observer can load prior request frames from SQLite through
+  `internal/store.EventLogStore` and then subscribe to the live request stream
+  for new events.
 - Startup fails before accepting requests when the configured RDB or JSON store
   cannot be opened, migrated, or proven writable.
 - With both JSON and RDB configured, RDB health/write failure prevents the
