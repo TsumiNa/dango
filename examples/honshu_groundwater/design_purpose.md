@@ -22,10 +22,13 @@ all registered skills. Individual skills own their uv/Python execution
 environment, dependency set, and scratch playground, but they do not own
 separate LLM service settings.
 
-The `main.go` entrypoint is deliberately thin: configure the orchestrator,
-register the three skills, submit the user request, and stream runner updates
-until the runner settles. Business assertions about selected skills and
-artifacts live in tests rather than in the executable path.
+The `main.go` entrypoint is deliberately thin: open startup-owned runtime
+persistence under `artifacts/persistence/dango.db`, configure the orchestrator,
+register the three skills, submit the user request, stream runner updates
+until the runner settles, and wait for the request event log to persist the
+terminal runner state before exit. Business assertions about selected skills,
+artifacts, and persistence behavior live in tests rather than in the
+executable path.
 
 Generated files live under this example's `artifacts/` directory. Individual
 skills decide their own subdirectory layout under that root. The fixed Python
@@ -34,6 +37,12 @@ tests; they are not the system contract. At runtime, a skill is expected to read
 its assigned task and upstream exchange markdown, decide what glue code is
 needed, write temporary code in its playground when helpful, and run package/API
 calls through the available command and filesystem tools.
+
+The example also keeps two distinct debugging artifacts under that root: a
+renderer-aligned JSONL stream archive in `artifacts/debug/stream_events.jsonl`
+and the durable SQLite runtime persistence database in
+`artifacts/persistence/dango.db`. The JSONL file is for inspection; the SQLite
+database is the source of truth for startup-owned request persistence.
 
 When a skill produces files for downstream use, it declares those paths in the
 Dango exchange markdown front matter as `resources`; the runner parses that
