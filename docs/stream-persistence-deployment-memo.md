@@ -24,6 +24,11 @@ The stream system is now the outward runtime observation bus:
   therefore observe the full request without enabling persistence on every child
   stream.
 
+Persistence is an independent runtime participant rather than part of stream
+delivery. A persistence component may subscribe to the request stream and write
+records, but those writes must run in their own goroutine and must not block or
+change delivery to normal subscribers.
+
 The orchestrator and runner APIs separate runtime observation from query views:
 
 - `Orchestrator.StartRequest` creates the request-scoped stream and returns
@@ -53,7 +58,14 @@ artifact storage into the event log.
 
 Several persistence systems may eventually share SQLite as a backend, but they
 do not share the same purpose or ownership boundary. Only the event log uses the
-`stream.Store` persistence contract.
+stream event-log persistence contract.
+
+The shared persistence package should own the configured persistence surface.
+`internal/store` defines the application-facing persistence abstractions, while
+`internal/store/sqlite` provides the SQLite implementation. JSON persistence is
+still available in its current package during the early phases, but it should
+move behind the same store boundary in a later phase rather than staying under
+the stream runtime package.
 
 ### Skill Conversation Session Persistence
 
@@ -93,12 +105,15 @@ happened since request start.
 
 This lane records top-level request stream frames once. It should preserve the
 raw event frames needed for replay and debugging, while letting stream replay
-expand bundles into logical events for normal subscribers.
+expand bundles into logical events for normal subscribers. Event-log writes are
+not themselves stream events. Persistence startup, lag, write failure, and
+shutdown diagnostics belong in the component logger, not in externally visible
+`persistence.*` events.
 
 ## Target Shape
 
 The refactor should produce three explicit persistence lanes. Only the first
-lane is `stream.Store` persistence:
+lane is event-log persistence:
 
 1. **Event log** for replay, terminal/debug inspection, and event-level audits.
    This stores top-level request stream frames once, in raw form, and relies on
@@ -118,6 +133,15 @@ own durable store by default. That avoids duplicate event logs for one logical
 request while preserving the source, scope, metadata, upstream sequence, and
 bundle information needed for debugging.
 
+Persistence must not introduce a synchronous choice between writing the store
+and delivering stream events. Event delivery remains the stream package's
+responsibility. Durable writers subscribe or otherwise receive frames as
+independent goroutines, record them through the configured store, and report
+internal diagnostics through logging. If the configured persistence backend
+cannot be opened, migrated, or proven writable at startup, the application
+should refuse to accept requests instead of starting and later surfacing
+per-event persistence failures to subscribers.
+
 ## Default And Configured Persistence
 
 The application should always have a local JSON persistence fallback, even when
@@ -126,7 +150,9 @@ stores for the event log and checkpoint log, use them for the whole process
 lifetime, and clean their temporary directories on normal exit. This default
 JSON fallback is only a lifetime-local replay and inspection aid. It does not
 promise restart recovery and should not be treated as durable history after the
-process exits.
+process exits. Until JSON persistence moves under `internal/store`, this
+fallback remains an implementation detail of startup wiring rather than part of
+the stream package API.
 
 User-configured persistence is the durable path. A configured JSON store or RDB
 store should record all event log rows, checkpoint log rows, and snapshot cursor
@@ -173,8 +199,8 @@ record, or SQLite store contracts regresses.
 ### Phase 2: Add Stable Request Identity
 
 Purpose: make event logs addressable before attaching a shared durable
-store. `stream.Store.Load` scopes reads by `stream.Scope`, so recorded request
-streams need a stable `request_id` from the first event.
+store. Event-log reads scope by request identity, so recorded request streams
+need a stable `request_id` from the first event.
 
 Change surface:
 
@@ -212,41 +238,55 @@ Change surface:
   session id, status, timestamp, raw event JSON, and optional metadata/delta
   helper columns if they are useful for indexes.
 - Add sqlc queries for append and load-by-scope/from/filter behavior.
-- Add a concrete SQLite adapter that implements `stream.Store` for events. Keep
-  it in the SQLite store boundary rather than in `internal/engine/stream`.
+- Define the event-log store abstraction under `internal/store` and add a
+  concrete SQLite adapter under `internal/store/sqlite`. Keep concrete storage
+  implementations out of `internal/engine/stream`.
 
 Test targets:
 
 - `go test ./internal/store/sqlite` covers migration versioning, append/load
   ordering, scope isolation by request id, `from` sequence handling, and filter
   matching for event type/source/scope.
-- A stream created with `WithStore(sqliteStreamStore)` can replay stored raw
-  events after an in-memory buffer miss.
+- Loaded SQLite event rows can be replayed as raw frames after an in-memory
+  stream buffer miss without making SQLite understand stream bundle internals.
 - Stored raw `merge.bundle` events can be loaded and expanded by
   `Stream.Replay` without the SQLite layer understanding bundle internals.
 - Appending invalid or request-less events fails predictably if the event log
   requires request-scoped events.
 
-Commit boundary: SQLite can act as a `stream.Store`, but no production request
-path uses it yet.
+Commit boundary: SQLite can act as an event-log store, but no production
+request path uses it yet.
 
 ### Phase 4: Attach The Event Log At The Request Boundary
 
 Purpose: enable request stream persistence through orchestrator startup
-configuration while preserving the default temporary JSON fallback and keeping
-child streams without their own event logs by default.
+configuration while preserving stream delivery semantics, the default temporary
+JSON fallback, and the rule that child streams do not own event logs by default.
 
 Change surface:
 
-- Add one startup-only orchestrator configuration entrypoint for the request
-  stream store, following the existing `SetRunnerStore` style.
-- When no user store is configured, create a process-lifetime temporary
-  JSONStore and remove its directory on normal exit.
-- `StartRequest` passes that store to the request stream through
-  `stream.WithStore`.
-- If both JSON and RDB stores are configured, writes may go to both, but RDB
-  safe writes take priority over secondary JSON writes, and replay after an
-  in-memory miss must load from RDB.
+- Add an event-log store abstraction under `internal/store` and make
+  `internal/store/sqlite` implement it with the Phase 3 request stream event
+  table. Keep the stream runtime independent of concrete persistence backends.
+- Add one startup-only orchestrator/application configuration entrypoint for
+  event-log persistence, following the existing startup-only configuration
+  style.
+- Startup must open, migrate, and perform a minimal write/read health check for
+  the configured event-log store before accepting requests. If this check
+  fails, startup returns an error and no request is processed.
+- When no user store is configured, startup creates a process-lifetime
+  temporary JSON event-log fallback and removes its directory on normal exit.
+  JSON may remain in its current package for this phase, but the next phase
+  should move it behind the `internal/store` abstraction.
+- Start one or more persistence goroutines that subscribe to top-level request
+  streams and append raw request stream frames through the configured event-log
+  store. These goroutines must not block stream delivery to normal subscribers.
+- If both JSON and RDB stores are configured, the persistence configuration
+  treats RDB as authoritative for durability and replay after in-memory misses.
+  Secondary JSON behavior must not make an unsafe RDB write look successful.
+- Persistence worker failures are logged through the component logger with
+  request id, stream sequence, store/table/file, and error context when known.
+  They are not emitted as stream events and do not close subscriber streams.
 - Do not add persistence configuration to `Request`; callers should not choose
   event-log policy per request unless a later product requirement needs it.
 - Do not configure runner, executor, or skill child streams with their own
@@ -254,23 +294,26 @@ Change surface:
 
 Test targets:
 
-- With a configured request stream store, `StartRequest` appends planning,
+- With a configured event-log store, `StartRequest` appends planning,
   runner-created, runner, executor, skill, artifact, and terminal events through
-  the top-level event log.
+  the top-level event log without delaying normal stream subscribers.
 - Without configured persistence, `StartRequest` appends event rows to a
   temporary JSON store for the process lifetime and cleanup removes the temp
   directory on normal exit.
 - A late subscriber can replay from SQLite after the in-memory buffer window is
   unavailable.
-- With both JSON and RDB configured, RDB append failure surfaces before any
-  secondary JSON success is treated as durable, and replay after an in-memory
-  miss reads from RDB.
+- Startup fails before accepting requests when the configured RDB or JSON store
+  cannot be opened, migrated, or proven writable.
+- With both JSON and RDB configured, RDB health/write failure prevents the
+  system from treating secondary JSON success as durable, and replay after an
+  in-memory miss reads from RDB.
 - Event log rows are not duplicated by child stream stores.
-- Store append failures surface as stream failure behavior that callers can
-  observe, without introducing `persistence.*` event types.
+- Persistence worker append failures are captured by logs and internal health
+  state, not by `persistence.*` events or subscriber-visible stream failures.
 
-Commit boundary: production code can record request streams, but describe APIs
-still read their existing state sources.
+Commit boundary: production code can record request streams through an
+independent persistence participant, while stream subscribers remain unaware of
+persistence and describe APIs still read their existing state sources.
 
 ### Phase 5: Move Runner Checkpoints Onto SQLite
 
