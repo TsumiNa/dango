@@ -167,6 +167,35 @@ func TestReplayDescribeViewResumesFromCursorWithoutDuplicates(t *testing.T) {
 	}
 }
 
+func TestReplayDescribeViewMarksStatusFailedAfterPhaseUpdate(t *testing.T) {
+	t.Parallel()
+
+	const requestID = "req_failed"
+	const runnerID = "run_failed"
+	eventLog := &stubEventLogStore{events: map[string][]streampkg.Event{
+		requestID: {
+			rawBundleEvent(requestID, 1,
+				logicalEvent(streampkg.EventRunnerPhaseChanged, streampkg.Source{Layer: "runner", ID: runnerID}, streampkg.StatusRunning, streampkg.Scope{RunnerID: runnerID}, map[string]any{
+					"phase":  string(runnerpkg.PhaseExecuting),
+					"status": string(runnerpkg.RunnerStatusRunning),
+				}),
+			),
+			rawEvent(requestID, 2, streampkg.EventStatusFailed, streampkg.Source{Layer: "orchestrator", ID: "orchestrator"}, streampkg.StatusFailed, map[string]any{
+				"message":   "request rejected",
+				"runner_id": runnerID,
+			}),
+		},
+	}}
+
+	view, err := ReplayDescribeView(context.Background(), requestID, nil, storepkg.SnapshotCursor{}, eventLog)
+	if err != nil {
+		t.Fatalf("ReplayDescribeView: %v", err)
+	}
+	if view.Status != runnerpkg.RunnerStatusFailed {
+		t.Fatalf("Status = %q, want %q", view.Status, runnerpkg.RunnerStatusFailed)
+	}
+}
+
 type stubEventLogStore struct {
 	events    map[string][]streampkg.Event
 	lastFrom  uint64

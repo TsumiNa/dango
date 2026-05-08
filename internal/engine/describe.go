@@ -145,7 +145,7 @@ func (v *DescribeView) applyEvent(event streampkg.Event) error {
 		if err := json.Unmarshal(event.Delta, &delta); err == nil && delta.RunnerID != "" && v.RunnerID == "" {
 			v.RunnerID = delta.RunnerID
 		}
-		if event.EventType == streampkg.EventStatusFailed && v.Status == "" {
+		if event.EventType == streampkg.EventStatusFailed {
 			v.Status = runnerpkg.RunnerStatusFailed
 		}
 	case streampkg.EventRunnerPhaseChanged:
