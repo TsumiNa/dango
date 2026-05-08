@@ -29,6 +29,22 @@ type Log struct {
 	Timestamp time.Time `json:"timestamp"`
 }
 
+type RequestStreamEvent struct {
+	RequestID      string         `json:"request_id"`
+	SequenceNumber int64          `json:"sequence_number"`
+	LogicalTime    int64          `json:"logical_time"`
+	EventType      string         `json:"event_type"`
+	SourceLayer    string         `json:"source_layer"`
+	SourceID       sql.NullString `json:"source_id"`
+	SourceParentID sql.NullString `json:"source_parent_id"`
+	RunnerID       sql.NullString `json:"runner_id"`
+	NodeID         sql.NullString `json:"node_id"`
+	SessionID      sql.NullString `json:"session_id"`
+	Status         string         `json:"status"`
+	Timestamp      string         `json:"timestamp"`
+	RawEventJson   string         `json:"raw_event_json"`
+}
+
 type Task struct {
 	ID      string         `json:"id"`
 	Status  string         `json:"status"`

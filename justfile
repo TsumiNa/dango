@@ -5,12 +5,12 @@ default:
 
 # Regenerate sqlc wrappers for the SQLite store.
 db-generate:
-    GOCACHE=/tmp/dango-gocache GOMODCACHE=/tmp/dango-gomodcache go run github.com/sqlc-dev/sqlc/cmd/sqlc@latest generate
+    go run github.com/sqlc-dev/sqlc/cmd/sqlc@v1.30.0 generate
 
 # Create the next SQLite migration pair under internal/store/sqlite/migrations/.
 db-new-migration name:
     @test -n "{{name}}" || { echo "usage: just db-new-migration <name>" >&2; exit 1; }
-    @version=$$(date -u +%Y%m%d%H%M%S); base="internal/store/sqlite/migrations/$${version}_{{name}}"; touch "$${base}.up.sql" "$${base}.down.sql"; echo "created $${base}.up.sql"; echo "created $${base}.down.sql"
+    @version=$(date -u +%Y%m%d%H%M%S); base="internal/store/sqlite/migrations/${version}_{{name}}"; touch "${base}.up.sql" "${base}.down.sql"; echo "created ${base}.up.sql"; echo "created ${base}.down.sql"
 
 # Open the orchestrator SQLite database in the sqlite3 shell.
 db-open data_dir=".dango-demo":

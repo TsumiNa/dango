@@ -106,6 +106,144 @@ func (q *Queries) InsertLog(ctx context.Context, arg InsertLogParams) error {
 	return err
 }
 
+const insertRequestStreamEvent = `-- name: InsertRequestStreamEvent :exec
+INSERT INTO request_stream_events (
+  request_id,
+  sequence_number,
+  logical_time,
+  event_type,
+  source_layer,
+  source_id,
+  source_parent_id,
+  runner_id,
+  node_id,
+  session_id,
+  status,
+  timestamp,
+  raw_event_json
+) VALUES (
+  ?1,
+  ?2,
+  ?3,
+  ?4,
+  ?5,
+  ?6,
+  ?7,
+  ?8,
+  ?9,
+  ?10,
+  ?11,
+  ?12,
+  ?13
+)
+`
+
+type InsertRequestStreamEventParams struct {
+	RequestID      string         `json:"request_id"`
+	SequenceNumber int64          `json:"sequence_number"`
+	LogicalTime    int64          `json:"logical_time"`
+	EventType      string         `json:"event_type"`
+	SourceLayer    string         `json:"source_layer"`
+	SourceID       sql.NullString `json:"source_id"`
+	SourceParentID sql.NullString `json:"source_parent_id"`
+	RunnerID       sql.NullString `json:"runner_id"`
+	NodeID         sql.NullString `json:"node_id"`
+	SessionID      sql.NullString `json:"session_id"`
+	Status         string         `json:"status"`
+	Timestamp      string         `json:"timestamp"`
+	RawEventJson   string         `json:"raw_event_json"`
+}
+
+func (q *Queries) InsertRequestStreamEvent(ctx context.Context, arg InsertRequestStreamEventParams) error {
+	_, err := q.db.ExecContext(ctx, insertRequestStreamEvent,
+		arg.RequestID,
+		arg.SequenceNumber,
+		arg.LogicalTime,
+		arg.EventType,
+		arg.SourceLayer,
+		arg.SourceID,
+		arg.SourceParentID,
+		arg.RunnerID,
+		arg.NodeID,
+		arg.SessionID,
+		arg.Status,
+		arg.Timestamp,
+		arg.RawEventJson,
+	)
+	return err
+}
+
+const listRequestStreamEvents = `-- name: ListRequestStreamEvents :many
+SELECT sequence_number, raw_event_json
+FROM request_stream_events
+WHERE request_id = ?1
+  AND sequence_number >= ?2
+  AND (?3 IS NULL OR runner_id = ?3)
+  AND (?4 IS NULL OR node_id = ?4)
+  AND (?5 IS NULL OR session_id = ?5)
+  AND (?6 IS NULL OR status = ?6)
+  AND (?7 IS NULL OR event_type = ?7)
+  AND (?8 IS NULL OR event_type LIKE ?8 || '%')
+  AND (?9 IS NULL OR source_layer = ?9)
+  AND (?10 IS NULL OR source_id = ?10)
+  AND (?11 IS NULL OR source_parent_id = ?11)
+ORDER BY sequence_number ASC
+`
+
+type ListRequestStreamEventsParams struct {
+	RequestID          string      `json:"request_id"`
+	FromSequenceNumber int64       `json:"from_sequence_number"`
+	RunnerID           interface{} `json:"runner_id"`
+	NodeID             interface{} `json:"node_id"`
+	SessionID          interface{} `json:"session_id"`
+	Status             interface{} `json:"status"`
+	EventType          interface{} `json:"event_type"`
+	EventTypePrefix    interface{} `json:"event_type_prefix"`
+	SourceLayer        interface{} `json:"source_layer"`
+	SourceID           interface{} `json:"source_id"`
+	SourceParentID     interface{} `json:"source_parent_id"`
+}
+
+type ListRequestStreamEventsRow struct {
+	SequenceNumber int64  `json:"sequence_number"`
+	RawEventJson   string `json:"raw_event_json"`
+}
+
+func (q *Queries) ListRequestStreamEvents(ctx context.Context, arg ListRequestStreamEventsParams) ([]ListRequestStreamEventsRow, error) {
+	rows, err := q.db.QueryContext(ctx, listRequestStreamEvents,
+		arg.RequestID,
+		arg.FromSequenceNumber,
+		arg.RunnerID,
+		arg.NodeID,
+		arg.SessionID,
+		arg.Status,
+		arg.EventType,
+		arg.EventTypePrefix,
+		arg.SourceLayer,
+		arg.SourceID,
+		arg.SourceParentID,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListRequestStreamEventsRow
+	for rows.Next() {
+		var i ListRequestStreamEventsRow
+		if err := rows.Scan(&i.SequenceNumber, &i.RawEventJson); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listTasks = `-- name: ListTasks :many
 SELECT id, status, request, dag_json, created, updated
 FROM tasks
