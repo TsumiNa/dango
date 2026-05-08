@@ -79,6 +79,9 @@ func (s *StreamStore) Load(ctx context.Context, scope streampkg.Scope, from uint
 	if scope.RequestID == "" {
 		return nil, fmt.Errorf("sqlite: request stream replay requires scope.request_id")
 	}
+	if from > math.MaxInt64 {
+		return nil, nil
+	}
 	loadScope := mergeLoadScope(scope, filter.Scope)
 	rows, err := s.store.queries.ListRequestStreamEvents(ctx, sqldb.ListRequestStreamEventsParams{
 		RequestID:          scope.RequestID,

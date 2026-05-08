@@ -3,6 +3,7 @@ package sqlite
 import (
 	"context"
 	"encoding/json"
+	"math"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -19,6 +20,7 @@ func TestStreamStoreReplayFiltersAndIsolatesRequests(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
+	cleanupStore := store
 
 	streamStore := NewStreamStore(store)
 	requestStream := streampkg.New(
@@ -34,7 +36,10 @@ func TestStreamStoreReplayFiltersAndIsolatesRequests(t *testing.T) {
 	t.Cleanup(requestStream.Close)
 	t.Cleanup(otherRequestStream.Close)
 	t.Cleanup(func() {
-		if err := store.Close(); err != nil {
+		if cleanupStore == nil {
+			return
+		}
+		if err := cleanupStore.Close(); err != nil {
 			t.Fatalf("Close: %v", err)
 		}
 	})
@@ -79,6 +84,7 @@ func TestStreamStoreReplayFiltersAndIsolatesRequests(t *testing.T) {
 	if err := store.Close(); err != nil {
 		t.Fatalf("Close before reopen: %v", err)
 	}
+	cleanupStore = nil
 	store = nil
 
 	reopened, err := Open(dbPath)
@@ -216,6 +222,52 @@ func TestStreamStorePersistsRawMergeBundles(t *testing.T) {
 	}
 	if expanded[0].Scope.RequestID != "req_bundle" || expanded[1].Scope.RequestID != "req_bundle" {
 		t.Fatalf("expanded request ids = [%q %q], want req_bundle", expanded[0].Scope.RequestID, expanded[1].Scope.RequestID)
+	}
+}
+
+func TestStreamStoreReplayFromBeyondInt64ReturnsNoRows(t *testing.T) {
+	t.Parallel()
+
+	dbPath := filepath.Join(t.TempDir(), "dango.db")
+	store, err := Open(dbPath)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := store.Close(); err != nil {
+			t.Fatalf("Close: %v", err)
+		}
+	})
+
+	requestStream := streampkg.New(
+		streampkg.Scope{RequestID: "req_big_from"},
+		streampkg.Config{DisableBuffer: true},
+		streampkg.WithStore(NewStreamStore(store)),
+	)
+	t.Cleanup(requestStream.Close)
+
+	if err := requestStream.Emit(t.Context(), streampkg.Event{
+		EventType: streampkg.EventStatusProgress,
+		From:      streampkg.Source{Layer: "orchestrator", ID: "or_1"},
+		Status:    streampkg.StatusRunning,
+		Delta:     json.RawMessage(`"planning"`),
+	}); err != nil {
+		t.Fatalf("Emit: %v", err)
+	}
+
+	replayStream := streampkg.New(
+		streampkg.Scope{RequestID: "req_big_from"},
+		streampkg.Config{DisableBuffer: true},
+		streampkg.WithStore(NewStreamStore(store)),
+	)
+	t.Cleanup(replayStream.Close)
+
+	replay, err := replayStream.Replay(streampkg.Filter{}, streampkg.WithReplayFrom(math.MaxUint64))
+	if err != nil {
+		t.Fatalf("Replay: %v", err)
+	}
+	if len(replay) != 0 {
+		t.Fatalf("len(replay) = %d, want 0", len(replay))
 	}
 }
 
