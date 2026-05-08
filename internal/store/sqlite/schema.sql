@@ -56,3 +56,12 @@ CREATE INDEX idx_request_stream_events_event_type
 
 CREATE INDEX idx_request_stream_events_runner
   ON request_stream_events (request_id, runner_id, sequence_number);
+
+CREATE TABLE runner_records (
+  runner_id        TEXT NOT NULL,
+  sequence_number  INTEGER NOT NULL,
+  kind             TEXT NOT NULL,
+  timestamp        TEXT NOT NULL,
+  record_json      TEXT NOT NULL,
+  PRIMARY KEY (runner_id, sequence_number)
+);

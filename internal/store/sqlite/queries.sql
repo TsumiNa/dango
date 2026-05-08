@@ -144,3 +144,35 @@ WHERE request_id = sqlc.arg(request_id)
   AND (sqlc.narg(source_id) IS NULL OR source_id = sqlc.narg(source_id))
   AND (sqlc.narg(source_parent_id) IS NULL OR source_parent_id = sqlc.narg(source_parent_id))
 ORDER BY sequence_number ASC;
+
+-- name: GetRunnerRecordState :one
+SELECT
+  CAST(COALESCE(MAX(sequence_number), 0) AS INTEGER) AS last_sequence_number,
+  CAST(COALESCE(MAX(CASE WHEN kind = 'init' THEN 1 ELSE 0 END), 0) AS INTEGER) AS has_init
+FROM runner_records
+WHERE runner_id = sqlc.arg(runner_id);
+
+-- name: InsertRunnerRecord :exec
+INSERT INTO runner_records (
+  runner_id,
+  sequence_number,
+  kind,
+  timestamp,
+  record_json
+) VALUES (
+  sqlc.arg(runner_id),
+  sqlc.arg(sequence_number),
+  sqlc.arg(kind),
+  sqlc.arg(timestamp),
+  sqlc.arg(record_json)
+);
+
+-- name: ListRunnerRecords :many
+SELECT sequence_number, kind, record_json
+FROM runner_records
+WHERE runner_id = sqlc.arg(runner_id)
+ORDER BY sequence_number ASC;
+
+-- name: DeleteRunnerRecords :execrows
+DELETE FROM runner_records
+WHERE runner_id = sqlc.arg(runner_id);

@@ -21,13 +21,13 @@ func TestOpenAppliesEmbeddedMigrations(t *testing.T) {
 		}
 	}()
 
-	var version int
+	var version int64
 	var dirty bool
 	if err := store.db.QueryRow(`SELECT version, dirty FROM schema_migrations LIMIT 1`).Scan(&version, &dirty); err != nil {
 		t.Fatalf("query schema_migrations error = %v", err)
 	}
-	if version != 1 {
-		t.Fatalf("schema version = %d, want 1", version)
+	if version != 20260508091946 {
+		t.Fatalf("schema version = %d, want 20260508091946", version)
 	}
 	if dirty {
 		t.Fatal("schema dirty = true, want false")

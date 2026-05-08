@@ -3,9 +3,11 @@
 // The package owns schema migrations plus the row-level persistence API used by
 // the orchestrator and runner. [Open] creates or opens the database file,
 // applies embedded migrations, and returns a shared [Store]. [Store] then
-// exposes CRUD-style methods for the tool registry, tasks, and edges, while the
-// row mirror types [ToolRecord], [TaskRecord], and [EdgeRecord] provide the
-// stable data shape consumed by the higher-level services.
+// exposes CRUD-style methods for the tool registry, tasks, and edges, while
+// [StreamStore] persists request event logs and [RunnerStore] persists
+// append-only runner checkpoint records. The row mirror types [ToolRecord],
+// [TaskRecord], and [EdgeRecord] provide the stable data shape consumed by the
+// higher-level services.
 //
 // The typical workflow is: the CLI bootstraps the data directory, calls
 // [Open], passes the resulting [Store] into the orchestrator services, and then
