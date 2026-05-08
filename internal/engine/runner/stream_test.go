@@ -139,6 +139,75 @@ func TestRunnerEmitsCompactStreamEvents(t *testing.T) {
 	}
 }
 
+func TestRunnerNodeAddedEventIncludesDescribeFields(t *testing.T) {
+	r := newTestRunner()
+	sub, err := r.SubscribeStream(streampkg.Filter{EventTypes: []string{streampkg.EventRunnerNodeAdded}}, streampkg.WithSubscriberBuffer(8))
+	if err != nil {
+		t.Fatalf("SubscribeStream: %v", err)
+	}
+	defer sub.Cancel()
+
+	parent := &Node{
+		Id:              "plan",
+		SkillName:       "planner",
+		TaskDescription: "Draft a plan",
+		Executor: &testExecutor{
+			run: func(context.Context, map[string]any) (any, []*Node, error) {
+				return "planned", nil, nil
+			},
+		},
+	}
+	child := &Node{
+		Id:              "report",
+		SkillName:       "reporter",
+		TaskDescription: "Write the report",
+		Parents:         []*Node{parent},
+		Executor: &testExecutor{
+			run: func(context.Context, map[string]any) (any, []*Node, error) {
+				return "reported", nil, nil
+			},
+		},
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	if err := r.Start(ctx); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	if err := r.AddNodes(ctx, parent, child); err != nil {
+		t.Fatalf("AddNodes: %v", err)
+	}
+
+	event, ok := nextExpandedStreamEventWithin(t, sub, streampkg.Filter{
+		EventTypes: []string{streampkg.EventRunnerNodeAdded},
+		Scope:      streampkg.Scope{RunnerID: r.ID(), NodeID: child.Id},
+	}, 2*time.Second)
+	if !ok {
+		t.Fatal("stream closed before child node-added event")
+	}
+
+	var delta map[string]any
+	if err := json.Unmarshal(event.Delta, &delta); err != nil {
+		t.Fatalf("unmarshal delta: %v", err)
+	}
+	if delta["node_id"] != child.Id {
+		t.Fatalf("delta node_id = %v, want %q", delta["node_id"], child.Id)
+	}
+	if delta["skill_name"] != child.SkillName {
+		t.Fatalf("delta skill_name = %v, want %q", delta["skill_name"], child.SkillName)
+	}
+	if delta["task_description"] != child.TaskDescription {
+		t.Fatalf("delta task_description = %v, want %q", delta["task_description"], child.TaskDescription)
+	}
+	dependsOn, ok := delta["depends_on"].([]any)
+	if !ok {
+		t.Fatalf("delta depends_on = %T, want []any", delta["depends_on"])
+	}
+	if len(dependsOn) != 1 || dependsOn[0] != parent.Id {
+		t.Fatalf("delta depends_on = %v, want [%q]", dependsOn, parent.Id)
+	}
+}
+
 func TestRunnerEngineStoppedAfterIdleIsCompletedStreamStatus(t *testing.T) {
 	r := newTestRunner()
 	sub, err := r.SubscribeStream(streampkg.Filter{EventTypes: []string{streampkg.EventStatusProgress}}, streampkg.WithSubscriberBuffer(16))
