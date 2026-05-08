@@ -25,9 +25,11 @@ separate LLM service settings.
 The `main.go` entrypoint is deliberately thin: open startup-owned runtime
 persistence under `artifacts/persistence/dango.db`, configure the orchestrator,
 register the three skills, submit the user request, stream runner updates
-until the runner settles, and wait for the request event log to persist the
-terminal runner state before exit. Business assertions about selected skills,
-artifacts, and persistence behavior live in tests rather than in the
+until the runner settles, wait for the request event log to persist the
+terminal runner state, rebuild a compact describe view from the persisted
+request log, load persisted runner records, and write short JSON summaries
+under `artifacts/debug/` before exit. Business assertions about selected
+skills, artifacts, and reopen behavior live in tests rather than in the
 executable path.
 
 Generated files live under this example's `artifacts/` directory. Individual
@@ -42,7 +44,11 @@ The example also keeps two distinct debugging artifacts under that root: a
 renderer-aligned JSONL stream archive in `artifacts/debug/stream_events.jsonl`
 and the durable SQLite runtime persistence database in
 `artifacts/persistence/dango.db`. The JSONL file is for inspection; the SQLite
-database is the source of truth for startup-owned request persistence.
+database is the source of truth for startup-owned request persistence. After a
+settled run, the example also writes `artifacts/debug/describe_view.json`,
+`artifacts/debug/runner_records.json`, and
+`artifacts/debug/persistence_summary.json` so the persisted replay path is easy
+to inspect without dumping raw request payloads to stdout.
 
 When a skill produces files for downstream use, it declares those paths in the
 Dango exchange markdown front matter as `resources`; the runner parses that
@@ -52,6 +58,9 @@ planned downstream skills.
 Each `SKILL.md` also describes its Polish plan behavior. During the runner's
 managed lifecycle, skill-specific polish calls should preview requirements and
 handoffs without running execution tools or creating final artifacts.
+
+The tests reopen the persisted SQLite database with a fresh orchestrator and
+verify request replay, runner-record loading, and describe cursor persistence.
 
 This is not intended to validate hydrology. The model uses a real
 `scikit-learn` Gaussian process API, but the data and elevation lookup remain

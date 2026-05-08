@@ -284,6 +284,11 @@ func TestRunHonshuGroundwaterExampleExecutesNeededSkills(t *testing.T) {
 			t.Fatalf("logs missing %q:\n%s", want, logs.String())
 		}
 	}
+	for _, want := range []string{"request persisted", "describe replay completed", "persistence summaries written"} {
+		if !strings.Contains(logs.String(), want) {
+			t.Fatalf("logs missing %q:\n%s", want, logs.String())
+		}
+	}
 	if err := ensureNoPDFSkill(view.Plan); err != nil {
 		t.Fatal(err)
 	}
@@ -313,6 +318,119 @@ func TestRunHonshuGroundwaterExampleExecutesNeededSkills(t *testing.T) {
 	}
 	if !strings.Contains(string(csvData), "predicted_water_level_m_bgl") {
 		t.Fatalf("CSV missing prediction header: %s", string(csvData))
+	}
+}
+
+func TestRunHonshuGroundwaterExampleWritesPersistenceSummaries(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	client := newFakeLLMClient(t)
+	artifactsDir := t.TempDir()
+	logger, err := newExampleLogger(io.Discard, "debug")
+	if err != nil {
+		t.Fatalf("newExampleLogger: %v", err)
+	}
+
+	result, err := runHonshuGroundwaterExample(ctx, exampleConfig{
+		MeasurementsJSON: embeddedSampleMeasurements,
+		ArtifactsDir:     artifactsDir,
+		Out:              io.Discard,
+		Logger:           logger,
+		LLMClient:        client,
+	})
+	if err != nil {
+		t.Fatalf("runHonshuGroundwaterExample: %v", err)
+	}
+
+	var describe describeViewSummary
+	readJSONFile(t, filepath.Join(artifactsDir, "debug", "describe_view.json"), &describe)
+	if describe.RequestID != result.RequestID {
+		t.Fatalf("describe request_id = %q, want %q", describe.RequestID, result.RequestID)
+	}
+	if describe.RunnerID != result.RunnerID {
+		t.Fatalf("describe runner_id = %q, want %q", describe.RunnerID, result.RunnerID)
+	}
+	if describe.Phase != runnerpkg.PhaseSettled {
+		t.Fatalf("describe phase = %q, want %q", describe.Phase, runnerpkg.PhaseSettled)
+	}
+	if describe.NodeCount != 2 {
+		t.Fatalf("describe node_count = %d, want 2", describe.NodeCount)
+	}
+	if describe.ArtifactCount == 0 {
+		t.Fatal("describe artifact_count = 0, want persisted artifacts")
+	}
+	if describe.LatestEventSequence == 0 {
+		t.Fatal("describe latest_event_sequence = 0, want persisted replay cursor")
+	}
+	if !hasDescribeNode(describe.Nodes, "enrich_elevation", "elevation_lookup") {
+		t.Fatalf("describe nodes missing enrich_elevation: %+v", describe.Nodes)
+	}
+	if !hasDescribeNode(describe.Nodes, "train_model", "train_gp_model") {
+		t.Fatalf("describe nodes missing train_model: %+v", describe.Nodes)
+	}
+
+	var records runnerRecordsSummary
+	readJSONFile(t, filepath.Join(artifactsDir, "debug", "runner_records.json"), &records)
+	if records.RecordCount == 0 {
+		t.Fatal("runner_records record_count = 0, want persisted records")
+	}
+	if !hasRunnerRecordSummaryEvent(records.Records, runnerpkg.EventNodeCompleted.String(), "train_model") {
+		t.Fatalf("runner_records missing completed train_model event: %+v", records.Records)
+	}
+
+	var summary persistenceSummary
+	readJSONFile(t, filepath.Join(artifactsDir, "debug", "persistence_summary.json"), &summary)
+	if summary.RequestID != result.RequestID {
+		t.Fatalf("summary request_id = %q, want %q", summary.RequestID, result.RequestID)
+	}
+	if summary.RunnerID != result.RunnerID {
+		t.Fatalf("summary runner_id = %q, want %q", summary.RunnerID, result.RunnerID)
+	}
+	if summary.PersistencePath != result.PersistencePath {
+		t.Fatalf("summary persistence_path = %q, want %q", summary.PersistencePath, result.PersistencePath)
+	}
+	if summary.StreamEventsPath != filepath.Join(artifactsDir, "debug", "stream_events.jsonl") {
+		t.Fatalf("summary stream_events_path = %q", summary.StreamEventsPath)
+	}
+	if summary.DescribeViewPath != filepath.Join(artifactsDir, "debug", "describe_view.json") {
+		t.Fatalf("summary describe_view_path = %q", summary.DescribeViewPath)
+	}
+	if summary.RunnerRecordsPath != filepath.Join(artifactsDir, "debug", "runner_records.json") {
+		t.Fatalf("summary runner_records_path = %q", summary.RunnerRecordsPath)
+	}
+	if summary.DescribeNodeCount != describe.NodeCount {
+		t.Fatalf("summary describe_node_count = %d, want %d", summary.DescribeNodeCount, describe.NodeCount)
+	}
+	if summary.DescribeArtifactCount != describe.ArtifactCount {
+		t.Fatalf("summary describe_artifact_count = %d, want %d", summary.DescribeArtifactCount, describe.ArtifactCount)
+	}
+	if summary.RunnerRecordCount != records.RecordCount {
+		t.Fatalf("summary runner_record_count = %d, want %d", summary.RunnerRecordCount, records.RecordCount)
+	}
+	if summary.LatestEventSequence != describe.LatestEventSequence {
+		t.Fatalf("summary latest_event_sequence = %d, want %d", summary.LatestEventSequence, describe.LatestEventSequence)
+	}
+	if summary.Cursor.EventSequence != describe.LatestEventSequence {
+		t.Fatalf("summary cursor event_sequence = %d, want %d", summary.Cursor.EventSequence, describe.LatestEventSequence)
+	}
+	if summary.Cursor.RunnerID != result.RunnerID {
+		t.Fatalf("summary cursor runner_id = %q, want %q", summary.Cursor.RunnerID, result.RunnerID)
+	}
+	rawSummary := map[string]any{}
+	readJSONFile(t, filepath.Join(artifactsDir, "debug", "persistence_summary.json"), &rawSummary)
+	rawCursor, ok := rawSummary["cursor"].(map[string]any)
+	if !ok {
+		t.Fatalf("summary cursor raw JSON = %#v, want object", rawSummary["cursor"])
+	}
+	for _, key := range []string{"request_id", "runner_id", "event_sequence"} {
+		if _, ok := rawCursor[key]; !ok {
+			t.Fatalf("summary cursor missing snake_case key %q: %#v", key, rawCursor)
+		}
+	}
+	for _, key := range []string{"RequestID", "RunnerID", "EventSequence"} {
+		if _, ok := rawCursor[key]; ok {
+			t.Fatalf("summary cursor contains camel-case key %q: %#v", key, rawCursor)
+		}
 	}
 }
 
@@ -359,6 +477,91 @@ func TestRunHonshuGroundwaterExamplePersistsTerminalRequestState(t *testing.T) {
 	}
 	if len(rawEvents) == 0 {
 		t.Fatal("persisted request event log is empty")
+	}
+	if !hasPersistedTerminalRunnerState(rawEvents, result.RunnerID) {
+		t.Fatalf("persisted request event log missing terminal settled phase for %q", result.RunnerID)
+	}
+}
+
+func TestRunHonshuGroundwaterExampleReopensPersistedState(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	client := newFakeLLMClient(t)
+	artifactsDir := t.TempDir()
+	logger, err := newExampleLogger(io.Discard, "debug")
+	if err != nil {
+		t.Fatalf("newExampleLogger: %v", err)
+	}
+
+	result, err := runHonshuGroundwaterExample(ctx, exampleConfig{
+		MeasurementsJSON: embeddedSampleMeasurements,
+		ArtifactsDir:     artifactsDir,
+		Out:              io.Discard,
+		Logger:           logger,
+		LLMClient:        client,
+	})
+	if err != nil {
+		t.Fatalf("runHonshuGroundwaterExample: %v", err)
+	}
+
+	reopened, err := runtimepkg.Open(runtimepkg.Config{SQLitePath: result.PersistencePath})
+	if err != nil {
+		t.Fatalf("runtime.Open(reopen): %v", err)
+	}
+	defer func() {
+		if err := reopened.Close(); err != nil {
+			t.Fatalf("Close(reopened persistence): %v", err)
+		}
+	}()
+
+	fresh := orchestrate.NewOrchestrator(
+		orchestrate.WithOrchestratorContext(ctx),
+		orchestrate.WithEventLogStore(reopened.EventLogStore()),
+		orchestrate.WithRunnerStore(reopened.RunnerStore()),
+		orchestrate.WithSnapshotCursorStore(reopened.SnapshotCursorStore()),
+	)
+	rawEvents, err := reopened.EventLogStore().LoadEvents(ctx, streampkg.Scope{RequestID: result.RequestID}, 1, streampkg.Filter{})
+	if err != nil {
+		t.Fatalf("LoadEvents(reopen): %v", err)
+	}
+	if len(rawEvents) == 0 {
+		t.Fatal("LoadEvents(reopen) returned no persisted request frames")
+	}
+	if !hasPersistedTerminalRunnerState(rawEvents, result.RunnerID) {
+		t.Fatalf("LoadEvents(reopen) missing terminal settled phase for %q", result.RunnerID)
+	}
+	records, err := fresh.LoadRunnerRecords(ctx, result.RunnerID)
+	if err != nil {
+		t.Fatalf("LoadRunnerRecords(reopen): %v", err)
+	}
+	if len(records) == 0 {
+		t.Fatal("LoadRunnerRecords(reopen) returned no records")
+	}
+	if !hasPersistedRunnerRecord(records, runnerpkg.EventNodeCompleted.String(), "train_model") {
+		t.Fatalf("reopened runner records missing completed train_model event: %+v", records)
+	}
+	view, err := fresh.DescribeRequest(ctx, result.RequestID)
+	if err != nil {
+		t.Fatalf("DescribeRequest(reopen): %v", err)
+	}
+	if view.RunnerID != result.RunnerID {
+		t.Fatalf("DescribeRequest(reopen) runner_id = %q, want %q", view.RunnerID, result.RunnerID)
+	}
+	if view.Phase != runnerpkg.PhaseSettled {
+		t.Fatalf("DescribeRequest(reopen) phase = %q, want %q", view.Phase, runnerpkg.PhaseSettled)
+	}
+	if view.LatestEventSequence == 0 {
+		t.Fatal("DescribeRequest(reopen) latest_event_sequence = 0, want replay cursor")
+	}
+	cursor, err := reopened.SnapshotCursorStore().LoadCursor(ctx, result.RequestID)
+	if err != nil {
+		t.Fatalf("LoadCursor(reopen): %v", err)
+	}
+	if cursor.RunnerID != result.RunnerID {
+		t.Fatalf("LoadCursor(reopen) runner_id = %q, want %q", cursor.RunnerID, result.RunnerID)
+	}
+	if cursor.EventSequence != view.SnapshotCursor().EventSequence {
+		t.Fatalf("LoadCursor(reopen) event_sequence = %d, want %d", cursor.EventSequence, view.SnapshotCursor().EventSequence)
 	}
 }
 
@@ -438,6 +641,47 @@ func readStreamEvents(t *testing.T, path string) []streampkg.Event {
 		events = append(events, event)
 	}
 	return events
+}
+
+func readJSONFile(t *testing.T, path string, dst any) {
+	t.Helper()
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read %s: %v", path, err)
+	}
+	if err := json.Unmarshal(data, dst); err != nil {
+		t.Fatalf("unmarshal %s: %v\n%s", path, err, string(data))
+	}
+}
+
+func hasDescribeNode(nodes []describeNodeSummary, nodeID string, skillName string) bool {
+	for _, node := range nodes {
+		if node.ID == nodeID && node.SkillName == skillName {
+			return true
+		}
+	}
+	return false
+}
+
+func hasRunnerRecordSummaryEvent(records []runnerRecordSummaryEntry, eventType string, nodeID string) bool {
+	for _, record := range records {
+		if record.EventType == eventType && record.NodeID == nodeID {
+			return true
+		}
+	}
+	return false
+}
+
+func hasPersistedRunnerRecord(records []runnerpkg.RunnerRecord, eventType string, nodeID string) bool {
+	for _, record := range records {
+		if record.Kind != runnerpkg.RunnerRecordEvent || record.Event == nil {
+			continue
+		}
+		if record.Event.Type == eventType && record.Event.NodeID == nodeID {
+			return true
+		}
+	}
+	return false
 }
 
 func hasPlannerOutputEvent(events []streampkg.Event) bool {
