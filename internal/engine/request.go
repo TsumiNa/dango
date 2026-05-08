@@ -6,11 +6,13 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"sync"
 
 	"github.com/lithammer/shortuuid/v4"
 	runnerpkg "github.com/tsumina/dango/internal/engine/runner"
 	streampkg "github.com/tsumina/dango/internal/engine/stream"
 	"github.com/tsumina/dango/internal/llm"
+	storepkg "github.com/tsumina/dango/internal/store"
 )
 
 // RequestRejectedError reports a planner rejection for a request that could
@@ -76,6 +78,7 @@ type RejectReason struct {
 
 type requestStartup struct {
 	logger            *slog.Logger
+	eventLogStore     storepkg.EventLogStore
 	orchestratorSkill *llm.Skill
 	runnerStore       runnerpkg.RunnerStore
 	skillConfigs      map[string]SkillRegistration
@@ -103,11 +106,15 @@ func (o *Orchestrator) StartRequest(ctx context.Context, req Request) (*Response
 	o.configLocked = true
 	startup := requestStartup{
 		logger:            o.logger,
+		eventLogStore:     o.eventLogStore,
 		orchestratorSkill: o.orchestratorSkill,
 		runnerStore:       o.runnerStore,
 		skillConfigs:      cloneSkillRegistrations(o.skills),
 	}
 	o.mu.Unlock()
+	if err := startRequestEventLogPersistence(ctx, startup.logger, requestStream, startup.eventLogStore); err != nil {
+		return nil, err
+	}
 
 	go func() {
 		if err := o.startRequestWithStream(ctx, req, requestStream, startup); err != nil {
@@ -122,6 +129,176 @@ func (o *Orchestrator) StartRequest(ctx context.Context, req Request) (*Response
 		}
 	}()
 	return &Response{Stream: requestStream, RequestID: requestID}, nil
+}
+
+func startRequestEventLogPersistence(ctx context.Context, logger *slog.Logger, requestStream *streampkg.Stream, eventLog storepkg.EventLogStore) error {
+	if requestStream == nil || eventLog == nil {
+		return nil
+	}
+	if logger == nil {
+		logger = slog.Default()
+	}
+	sub, err := requestStream.Subscribe(streampkg.Filter{}, streampkg.WithRawStream(), streampkg.WithNoReplay(), streampkg.WithSubscriberBuffer(8192))
+	if err != nil {
+		return fmt.Errorf("orchestrate: subscribe request event log: %w", err)
+	}
+	queue := newRequestEventLogQueue()
+	go drainRequestEventLogSubscription(ctx, logger, sub, queue)
+	go persistQueuedRequestEventLog(ctx, logger, queue, eventLog)
+	return nil
+}
+
+func drainRequestEventLogSubscription(ctx context.Context, logger *slog.Logger, sub *streampkg.Subscription, queue *requestEventLogQueue) {
+	defer sub.Cancel()
+	defer queue.Close()
+	for {
+		event, ok, err := sub.Next(ctx)
+		if err != nil {
+			if !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded) {
+				logger.Error("request event log subscription failed", "err", err)
+			}
+			return
+		}
+		if !ok {
+			return
+		}
+		if !queue.Enqueue(event) {
+			return
+		}
+		if requestStreamTerminal(event) {
+			return
+		}
+	}
+}
+
+func persistQueuedRequestEventLog(ctx context.Context, logger *slog.Logger, queue *requestEventLogQueue, eventLog storepkg.EventLogStore) {
+	for {
+		event, ok, err := queue.Next(ctx)
+		if err != nil {
+			if !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded) {
+				logger.Error("request event log queue failed", "err", err)
+			}
+			return
+		}
+		if !ok {
+			return
+		}
+		if err := eventLog.AppendEvent(ctx, event); err != nil {
+			logger.Error("request event log append failed",
+				"request_id", event.Scope.RequestID,
+				"sequence_number", event.SequenceNumber,
+				"event_type", event.EventType,
+				"err", err,
+			)
+		}
+	}
+}
+
+type requestEventLogQueue struct {
+	mu     sync.Mutex
+	events []streampkg.Event
+	head   int
+	closed bool
+	wake   chan struct{}
+}
+
+func newRequestEventLogQueue() *requestEventLogQueue {
+	return &requestEventLogQueue{wake: make(chan struct{}, 1)}
+}
+
+func (q *requestEventLogQueue) Enqueue(event streampkg.Event) bool {
+	if q == nil {
+		return false
+	}
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	if q.closed {
+		return false
+	}
+	q.events = append(q.events, event)
+	q.signalLocked()
+	return true
+}
+
+func (q *requestEventLogQueue) Close() {
+	if q == nil {
+		return
+	}
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	if q.closed {
+		return
+	}
+	q.closed = true
+	q.signalLocked()
+}
+
+func (q *requestEventLogQueue) Next(ctx context.Context) (streampkg.Event, bool, error) {
+	for {
+		q.mu.Lock()
+		if q.head < len(q.events) {
+			event := q.events[q.head]
+			q.events[q.head] = streampkg.Event{}
+			q.head++
+			if q.head == len(q.events) {
+				q.events = q.events[:0]
+				q.head = 0
+			} else if q.head >= 1024 && q.head*2 >= len(q.events) {
+				remaining := append([]streampkg.Event(nil), q.events[q.head:]...)
+				q.events = remaining
+				q.head = 0
+			}
+			q.mu.Unlock()
+			return event, true, nil
+		}
+		closed := q.closed
+		q.mu.Unlock()
+		if closed {
+			return streampkg.Event{}, false, nil
+		}
+		select {
+		case <-ctx.Done():
+			return streampkg.Event{}, false, ctx.Err()
+		case <-q.wake:
+		}
+	}
+}
+
+func (q *requestEventLogQueue) signalLocked() {
+	select {
+	case q.wake <- struct{}{}:
+	default:
+	}
+}
+
+func requestStreamTerminal(event streampkg.Event) bool {
+	events, err := streampkg.ExpandBundleEvent(event)
+	if err != nil {
+		return false
+	}
+	for _, candidate := range events {
+		if candidate.From.Layer == "orchestrator" && candidate.EventType == streampkg.EventStatusFailed {
+			return true
+		}
+		if candidate.EventType != streampkg.EventRunnerPhaseChanged {
+			continue
+		}
+		var delta struct {
+			Phase  string `json:"phase"`
+			Status string `json:"status"`
+		}
+		if err := json.Unmarshal(candidate.Delta, &delta); err != nil {
+			continue
+		}
+		if runnerpkg.RunnerPhase(delta.Phase) != runnerpkg.PhaseSettled {
+			continue
+		}
+		switch runnerpkg.RunnerStatus(delta.Status) {
+		case runnerpkg.RunnerStatusIdle, runnerpkg.RunnerStatusFailed, runnerpkg.RunnerStatusCanceled:
+			return true
+		}
+	}
+	return false
 }
 
 func (o *Orchestrator) startRequestWithStream(ctx context.Context, req Request, requestStream *streampkg.Stream, startup requestStartup) error {

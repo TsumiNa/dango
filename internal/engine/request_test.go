@@ -4,14 +4,17 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	runnerpkg "github.com/tsumina/dango/internal/engine/runner"
 	streampkg "github.com/tsumina/dango/internal/engine/stream"
 	"github.com/tsumina/dango/internal/llm"
+	storepkg "github.com/tsumina/dango/internal/store"
 )
 
 func TestRequestPriorityValid(t *testing.T) {
@@ -251,6 +254,98 @@ func TestStartRequest_ReturnsReplayableRequestStream(t *testing.T) {
 	}
 }
 
+func TestStartRequest_PersistsRawRequestFramesWithoutBlockingSubscribers(t *testing.T) {
+	clearLLMEnv(t)
+	o := newOrchestrator(testLogger)
+	eventLog := newBlockingEventLogStore()
+	if err := o.SetEventLogStore(eventLog); err != nil {
+		t.Fatalf("SetEventLogStore: %v", err)
+	}
+	mustAddSkills(t, o, newTestSkillRegistration(t, "single", "Single-step runner.", nil))
+	if err := o.SetOrchestratorSkill(bindTestOrchestratorSkill(t,
+		mustPlanJSON(t, &CoarsePlan{
+			Request: "run a single node",
+			Nodes: []CoarsePlanNode{{
+				ID:              "only",
+				SkillName:       "single",
+				TaskDescription: "Run the only node.",
+			}},
+		}),
+		mustReviewJSON(t, true, ""),
+	)); err != nil {
+		t.Fatalf("SetOrchestratorSkill: %v", err)
+	}
+
+	resp, err := o.StartRequest(context.Background(), Request{Input: "run a single node"})
+	if err != nil {
+		t.Fatalf("StartRequest: %v", err)
+	}
+	runnerID := mustReadRunnerCreated(t, resp.Stream)
+	if runnerID == "" {
+		t.Fatal("runnerID is empty")
+	}
+	if got := eventLog.Count(); got != 0 {
+		t.Fatalf("blocked event log count = %d, want 0 before unblocking persistence", got)
+	}
+
+	managedRunner, err := o.Runner(runnerID)
+	if err != nil {
+		t.Fatalf("Runner: %v", err)
+	}
+	eventLog.Unblock()
+	waitCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	if err := managedRunner.Wait(waitCtx); err != nil {
+		t.Fatalf("runner Wait: %v", err)
+	}
+	stored := eventLog.WaitForEventType(t, streampkg.EventMergeBundle)
+	if !containsStoredEventType(stored, streampkg.EventMergeBundle) {
+		t.Fatalf("stored raw events = %+v, want merge.bundle frame", stored)
+	}
+	for _, event := range stored {
+		if event.Scope.RequestID != resp.RequestID {
+			t.Fatalf("stored scope.request_id = %q, want %q", event.Scope.RequestID, resp.RequestID)
+		}
+	}
+}
+
+func TestStartRequestEventLogPersistence_DrainsSubscriptionWithoutDropsWhenStoreBlocked(t *testing.T) {
+	stream := streampkg.New(streampkg.Scope{RequestID: "req_overflow"}, streampkg.DefaultConfig())
+	eventLog := newBlockingEventLogStore()
+	if err := startRequestEventLogPersistence(context.Background(), testLogger, stream, eventLog); err != nil {
+		t.Fatalf("startRequestEventLogPersistence: %v", err)
+	}
+	const total = 9000
+	for i := 0; i < total; i++ {
+		if err := stream.Emit(context.Background(), streampkg.Event{
+			EventType: streampkg.EventStatusProgress,
+			From:      streampkg.Source{Layer: "orchestrator", ID: "orchestrator"},
+			Status:    streampkg.StatusRunning,
+			Delta:     json.RawMessage("null"),
+		}); err != nil {
+			t.Fatalf("Emit(%d): %v", i, err)
+		}
+	}
+	if err := stream.Emit(context.Background(), streampkg.Event{
+		EventType: streampkg.EventRunnerPhaseChanged,
+		From:      streampkg.Source{Layer: "runner", ID: "runner_overflow"},
+		Status:    streampkg.StatusCompleted,
+		Scope:     streampkg.Scope{RunnerID: "runner_overflow"},
+		Delta:     json.RawMessage(`{"phase":"settled","status":"idle"}`),
+	}); err != nil {
+		t.Fatalf("Emit(terminal): %v", err)
+	}
+	eventLog.Unblock()
+	stored := eventLog.WaitForAtLeast(t, total+1)
+	if len(stored) != total+1 {
+		t.Fatalf("len(stored) = %d, want %d", len(stored), total+1)
+	}
+	if stored[len(stored)-1].EventType != streampkg.EventRunnerPhaseChanged {
+		t.Fatalf("last stored event type = %q, want %q", stored[len(stored)-1].EventType, streampkg.EventRunnerPhaseChanged)
+	}
+	stream.Close()
+}
+
 func TestStartRequestStreamsBeforeRunnerCreation(t *testing.T) {
 	clearLLMEnv(t)
 	o := newOrchestrator(testLogger)
@@ -325,6 +420,116 @@ func TestStartRequestStreamsBeforeRunnerCreation(t *testing.T) {
 		t.Fatal("runnerID is empty")
 	}
 }
+
+type blockingEventLogStore struct {
+	mu      sync.Mutex
+	events  []streampkg.Event
+	blockCh chan struct{}
+	notify  chan struct{}
+}
+
+func newBlockingEventLogStore() *blockingEventLogStore {
+	return &blockingEventLogStore{
+		blockCh: make(chan struct{}),
+		notify:  make(chan struct{}, 64),
+	}
+}
+
+func (s *blockingEventLogStore) AppendEvent(_ context.Context, event streampkg.Event) error {
+	select {
+	case <-s.blockCh:
+	default:
+		<-s.blockCh
+	}
+	s.mu.Lock()
+	s.events = append(s.events, event)
+	s.mu.Unlock()
+	select {
+	case s.notify <- struct{}{}:
+	default:
+	}
+	return nil
+}
+
+func (s *blockingEventLogStore) LoadEvents(_ context.Context, scope streampkg.Scope, from uint64, filter streampkg.Filter) ([]streampkg.Event, error) {
+	if scope.RequestID == "" {
+		return nil, fmt.Errorf("request id must not be empty")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var out []streampkg.Event
+	for _, event := range s.events {
+		if event.Scope.RequestID != scope.RequestID || event.SequenceNumber < from {
+			continue
+		}
+		if filter.Match(event) {
+			out = append(out, event)
+		}
+	}
+	return out, nil
+}
+
+func (s *blockingEventLogStore) Unblock() {
+	select {
+	case <-s.blockCh:
+	default:
+		close(s.blockCh)
+	}
+}
+
+func (s *blockingEventLogStore) Count() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return len(s.events)
+}
+
+func (s *blockingEventLogStore) WaitForAtLeast(t *testing.T, n int) []streampkg.Event {
+	t.Helper()
+	deadline := time.After(2 * time.Second)
+	for {
+		s.mu.Lock()
+		if len(s.events) >= n {
+			out := append([]streampkg.Event(nil), s.events...)
+			s.mu.Unlock()
+			return out
+		}
+		s.mu.Unlock()
+		select {
+		case <-s.notify:
+		case <-deadline:
+			t.Fatalf("timed out waiting for %d persisted events", n)
+		}
+	}
+}
+
+func (s *blockingEventLogStore) WaitForEventType(t *testing.T, eventType string) []streampkg.Event {
+	t.Helper()
+	deadline := time.After(2 * time.Second)
+	for {
+		s.mu.Lock()
+		out := append([]streampkg.Event(nil), s.events...)
+		s.mu.Unlock()
+		if containsStoredEventType(out, eventType) {
+			return out
+		}
+		select {
+		case <-s.notify:
+		case <-deadline:
+			t.Fatalf("timed out waiting for persisted %s event", eventType)
+		}
+	}
+}
+
+func containsStoredEventType(events []streampkg.Event, eventType string) bool {
+	for _, event := range events {
+		if event.EventType == eventType {
+			return true
+		}
+	}
+	return false
+}
+
+var _ storepkg.EventLogStore = (*blockingEventLogStore)(nil)
 
 func TestStartRequest_ReplayPreservesRequestIdentity(t *testing.T) {
 	clearLLMEnv(t)
