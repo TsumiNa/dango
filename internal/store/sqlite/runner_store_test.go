@@ -184,6 +184,71 @@ func TestRunnerStoreConcurrentAppendSerialises(t *testing.T) {
 	}
 }
 
+func TestRunnerStoreConcurrentAppendAcrossStoresSerialises(t *testing.T) {
+	t.Parallel()
+
+	dbPath := filepath.Join(t.TempDir(), "shared.db")
+	dbStoreA, err := Open(dbPath)
+	if err != nil {
+		t.Fatalf("Open(store A): %v", err)
+	}
+	t.Cleanup(func() {
+		if err := dbStoreA.Close(); err != nil {
+			t.Fatalf("Close(store A): %v", err)
+		}
+	})
+	dbStoreB, err := Open(dbPath)
+	if err != nil {
+		t.Fatalf("Open(store B): %v", err)
+	}
+	t.Cleanup(func() {
+		if err := dbStoreB.Close(); err != nil {
+			t.Fatalf("Close(store B): %v", err)
+		}
+	})
+
+	storeA := NewRunnerStore(dbStoreA)
+	storeB := NewRunnerStore(dbStoreB)
+	ctx := context.Background()
+	const id = "shared-runner"
+	if _, err := storeA.Append(ctx, id, &runnerpkg.RunnerRecord{Kind: runnerpkg.RunnerRecordInit}); err != nil {
+		t.Fatalf("Append init: %v", err)
+	}
+
+	stores := []*RunnerStore{storeA, storeB}
+	const writers = 8
+	const perWriter = 20
+	var wg sync.WaitGroup
+	wg.Add(writers)
+	for i := 0; i < writers; i++ {
+		store := stores[i%len(stores)]
+		go func(store *RunnerStore) {
+			defer wg.Done()
+			for j := 0; j < perWriter; j++ {
+				if _, err := store.Append(ctx, id, &runnerpkg.RunnerRecord{Kind: runnerpkg.RunnerRecordStatus, Status: runnerpkg.RunnerStatusRunning}); err != nil {
+					t.Errorf("Append: %v", err)
+					return
+				}
+			}
+		}(store)
+	}
+	wg.Wait()
+
+	records, err := storeA.Load(ctx, id)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	want := 1 + writers*perWriter
+	if len(records) != want {
+		t.Fatalf("records = %d, want %d", len(records), want)
+	}
+	for i, rec := range records {
+		if rec.Seq != int64(i+1) {
+			t.Fatalf("records[%d].Seq = %d, want %d", i, rec.Seq, i+1)
+		}
+	}
+}
+
 func TestRunnerStoreRoundTripsMarkdownEventData(t *testing.T) {
 	t.Parallel()
 
