@@ -97,3 +97,50 @@ WHERE id = sqlc.arg(edge_id);
 -- name: InsertLog :exec
 INSERT INTO logs (edge_id, level, message)
 VALUES (sqlc.arg(edge_id), sqlc.arg(level), sqlc.arg(message));
+
+-- name: InsertRequestStreamEvent :exec
+INSERT INTO request_stream_events (
+  request_id,
+  sequence_number,
+  logical_time,
+  event_type,
+  source_layer,
+  source_id,
+  source_parent_id,
+  runner_id,
+  node_id,
+  session_id,
+  status,
+  timestamp,
+  raw_event_json
+) VALUES (
+  sqlc.arg(request_id),
+  sqlc.arg(sequence_number),
+  sqlc.arg(logical_time),
+  sqlc.arg(event_type),
+  sqlc.arg(source_layer),
+  sqlc.narg(source_id),
+  sqlc.narg(source_parent_id),
+  sqlc.narg(runner_id),
+  sqlc.narg(node_id),
+  sqlc.narg(session_id),
+  sqlc.arg(status),
+  sqlc.arg(timestamp),
+  sqlc.arg(raw_event_json)
+);
+
+-- name: ListRequestStreamEvents :many
+SELECT sequence_number, raw_event_json
+FROM request_stream_events
+WHERE request_id = sqlc.arg(request_id)
+  AND sequence_number >= sqlc.arg(from_sequence_number)
+  AND (sqlc.narg(runner_id) IS NULL OR runner_id = sqlc.narg(runner_id))
+  AND (sqlc.narg(node_id) IS NULL OR node_id = sqlc.narg(node_id))
+  AND (sqlc.narg(session_id) IS NULL OR session_id = sqlc.narg(session_id))
+  AND (sqlc.narg(status) IS NULL OR status = sqlc.narg(status))
+  AND (sqlc.narg(event_type) IS NULL OR event_type = sqlc.narg(event_type))
+  AND (sqlc.narg(event_type_prefix) IS NULL OR event_type LIKE sqlc.narg(event_type_prefix) || '%')
+  AND (sqlc.narg(source_layer) IS NULL OR source_layer = sqlc.narg(source_layer))
+  AND (sqlc.narg(source_id) IS NULL OR source_id = sqlc.narg(source_id))
+  AND (sqlc.narg(source_parent_id) IS NULL OR source_parent_id = sqlc.narg(source_parent_id))
+ORDER BY sequence_number ASC;
