@@ -83,6 +83,26 @@ func (q *Queries) GetRunnerRecordState(ctx context.Context, runnerID string) (Ge
 	return i, err
 }
 
+const getSnapshotCursor = `-- name: GetSnapshotCursor :one
+SELECT request_id, runner_id, checkpoint_sequence, event_sequence, updated_at
+FROM snapshot_cursors
+WHERE request_id = ?1
+LIMIT 1
+`
+
+func (q *Queries) GetSnapshotCursor(ctx context.Context, requestID string) (SnapshotCursor, error) {
+	row := q.db.QueryRowContext(ctx, getSnapshotCursor, requestID)
+	var i SnapshotCursor
+	err := row.Scan(
+		&i.RequestID,
+		&i.RunnerID,
+		&i.CheckpointSequence,
+		&i.EventSequence,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
 const getTask = `-- name: GetTask :one
 SELECT id, status, request, dag_json, created, updated
 FROM tasks
@@ -545,6 +565,46 @@ func (q *Queries) UpsertEdge(ctx context.Context, arg UpsertEdgeParams) error {
 		arg.HandoffYaml,
 		arg.Started,
 		arg.Finished,
+	)
+	return err
+}
+
+const upsertSnapshotCursor = `-- name: UpsertSnapshotCursor :exec
+INSERT INTO snapshot_cursors (
+  request_id,
+  runner_id,
+  checkpoint_sequence,
+  event_sequence,
+  updated_at
+) VALUES (
+  ?1,
+  ?2,
+  ?3,
+  ?4,
+  ?5
+)
+ON CONFLICT(request_id) DO UPDATE SET
+  runner_id = excluded.runner_id,
+  checkpoint_sequence = excluded.checkpoint_sequence,
+  event_sequence = excluded.event_sequence,
+  updated_at = excluded.updated_at
+`
+
+type UpsertSnapshotCursorParams struct {
+	RequestID          string         `json:"request_id"`
+	RunnerID           sql.NullString `json:"runner_id"`
+	CheckpointSequence int64          `json:"checkpoint_sequence"`
+	EventSequence      int64          `json:"event_sequence"`
+	UpdatedAt          string         `json:"updated_at"`
+}
+
+func (q *Queries) UpsertSnapshotCursor(ctx context.Context, arg UpsertSnapshotCursorParams) error {
+	_, err := q.db.ExecContext(ctx, upsertSnapshotCursor,
+		arg.RequestID,
+		arg.RunnerID,
+		arg.CheckpointSequence,
+		arg.EventSequence,
+		arg.UpdatedAt,
 	)
 	return err
 }

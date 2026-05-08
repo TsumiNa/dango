@@ -176,3 +176,29 @@ ORDER BY sequence_number ASC;
 -- name: DeleteRunnerRecords :execrows
 DELETE FROM runner_records
 WHERE runner_id = sqlc.arg(runner_id);
+
+-- name: UpsertSnapshotCursor :exec
+INSERT INTO snapshot_cursors (
+  request_id,
+  runner_id,
+  checkpoint_sequence,
+  event_sequence,
+  updated_at
+) VALUES (
+  sqlc.arg(request_id),
+  sqlc.narg(runner_id),
+  sqlc.arg(checkpoint_sequence),
+  sqlc.arg(event_sequence),
+  sqlc.arg(updated_at)
+)
+ON CONFLICT(request_id) DO UPDATE SET
+  runner_id = excluded.runner_id,
+  checkpoint_sequence = excluded.checkpoint_sequence,
+  event_sequence = excluded.event_sequence,
+  updated_at = excluded.updated_at;
+
+-- name: GetSnapshotCursor :one
+SELECT request_id, runner_id, checkpoint_sequence, event_sequence, updated_at
+FROM snapshot_cursors
+WHERE request_id = sqlc.arg(request_id)
+LIMIT 1;

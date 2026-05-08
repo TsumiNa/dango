@@ -53,6 +53,14 @@ type RunnerRecord struct {
 	RecordJson     string `json:"record_json"`
 }
 
+type SnapshotCursor struct {
+	RequestID          string         `json:"request_id"`
+	RunnerID           sql.NullString `json:"runner_id"`
+	CheckpointSequence int64          `json:"checkpoint_sequence"`
+	EventSequence      int64          `json:"event_sequence"`
+	UpdatedAt          string         `json:"updated_at"`
+}
+
 type Task struct {
 	ID      string         `json:"id"`
 	Status  string         `json:"status"`

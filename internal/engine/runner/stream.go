@@ -55,6 +55,9 @@ func (r *Runner) emitNodeStreamEvent(event *RunnerEvent) {
 	if !ok {
 		return
 	}
+	r.updateMu.Lock()
+	node := r.snapshot.NodesData[event.NodeID]
+	r.updateMu.Unlock()
 	delta := map[string]any{
 		"event": event.Type.String(),
 	}
@@ -62,6 +65,25 @@ func (r *Runner) emitNodeStreamEvent(event *RunnerEvent) {
 	if event.NodeID != "" {
 		scope.NodeID = event.NodeID
 		delta["node_id"] = event.NodeID
+	}
+	if event.Type == EventNodeAdded && node != nil {
+		if node.SkillName != "" {
+			delta["skill_name"] = node.SkillName
+		}
+		if node.TaskDescription != "" {
+			delta["task_description"] = node.TaskDescription
+		}
+		if len(node.Parents) > 0 {
+			dependsOn := make([]string, 0, len(node.Parents))
+			for _, parent := range node.Parents {
+				if parent != nil && parent.Id != "" {
+					dependsOn = append(dependsOn, parent.Id)
+				}
+			}
+			if len(dependsOn) > 0 {
+				delta["depends_on"] = dependsOn
+			}
+		}
 	}
 	if event.Type == EventNodeFailed && event.Data != nil {
 		delta["error"] = compactStreamText(fmt.Sprint(event.Data))
