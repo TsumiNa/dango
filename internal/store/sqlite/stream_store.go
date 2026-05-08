@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"math"
+	"time"
 
 	streampkg "github.com/tsumina/dango/internal/engine/stream"
 	sqldb "github.com/tsumina/dango/internal/store/sqlite/db"
@@ -58,7 +59,7 @@ func (s *StreamStore) Append(ctx context.Context, event streampkg.Event) error {
 		NodeID:         nullableString(event.Scope.NodeID),
 		SessionID:      nullableString(event.Scope.SessionID),
 		Status:         event.Status,
-		Timestamp:      event.Timestamp.UTC().Format("2006-01-02T15:04:05.999999999Z07:00"),
+		Timestamp:      event.Timestamp.UTC().Format(time.RFC3339Nano),
 		RawEventJson:   string(raw),
 	}); err != nil {
 		return fmt.Errorf(
