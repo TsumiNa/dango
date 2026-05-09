@@ -615,21 +615,26 @@ A full branch check was run against the design goals in this memo.
 These deviations are intentionally recorded here so follow-up cleanup can be
 tracked without rewriting historical PR notes.
 
+### Post-PR follow-up work to complete
+
+1. **Prompt override public surface.**
+   - The built-in prompt override hook no longer needs to stay internal.
+   - Follow-up work should expose it as a public advanced API on
+     orchestrator/runner configuration.
+   - Documentation must label it advanced usage.
+   - No dedicated example is required for the initial public surface.
+
 ## Open Questions / Deferred
 
-1. **Prompt override public surface:** resolved. The built-in prompt override
-  hook no longer needs to stay internal. A follow-up may expose it as a public
-  advanced API on orchestrator/runner configuration. Documentation must label
-  it advanced usage, and no example is required for the initial public surface.
-2. **Visibility/redaction controls:** accepted as deferred. Privacy labels,
+1. **Visibility/redaction controls:** accepted as deferred. Privacy labels,
   redaction policy, and per-recipient visibility on exchange/handoff remain out
   of scope. The new types should not preclude adding a `visibility:`
   front-matter field later.
-3. **SQLite/Postgres persistence backends:** moved to
+2. **SQLite/Postgres persistence backends:** moved to
   `docs/runner-persistence-rdb-backends-memo.md`. The follow-up should be a
   multi-PR plan where every PR has one clear target and enough tests to be
   completed inside that PR.
-4. **Cross-runner exchange:** no active plan. Runner-local exchange remains the
+3. **Cross-runner exchange:** no active plan. Runner-local exchange remains the
   contract for now, while recording that sibling-runner whiteboard sharing may
   become useful later.
 
