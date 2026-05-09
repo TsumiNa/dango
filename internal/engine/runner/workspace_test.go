@@ -126,7 +126,7 @@ func TestHandoffRejectsSymlinkSourceArtifact(t *testing.T) {
 	if err == nil {
 		t.Fatal("Handoff returned nil error for symbolic-link artifact source")
 	}
-	if !strings.Contains(err.Error(), "must not be symbolic link") {
+	if !strings.Contains(err.Error(), "must not be a symbolic link") {
 		t.Fatalf("Handoff error = %v, want symbolic-link rejection", err)
 	}
 }
