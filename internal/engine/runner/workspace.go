@@ -185,9 +185,6 @@ func validateRulePath(subdir string) (string, error) {
 	if strings.Contains(clean, string(filepath.Separator)) {
 		return "", fmt.Errorf("runner: path rule must return a single path element %q", subdir)
 	}
-	if clean == ".." {
-		return "", fmt.Errorf("runner: path rule returned parent-escaping path %q", subdir)
-	}
 	return clean, nil
 }
 
@@ -278,7 +275,11 @@ func symlinkTreeIfExists(src string, dst string) error {
 		if walkErr != nil {
 			return walkErr
 		}
-		if d.Type()&os.ModeSymlink != 0 {
+		entryInfo, err := os.Lstat(path)
+		if err != nil {
+			return err
+		}
+		if entryInfo.Mode()&os.ModeSymlink != 0 {
 			return fmt.Errorf("runner: source path %q must not be a symbolic link", path)
 		}
 		rel, err := filepath.Rel(src, path)
