@@ -55,7 +55,7 @@ func TestExchangeResourcesSurviveAnnotation(t *testing.T) {
 		t.Fatalf("Markdown: %v", err)
 	}
 
-	r := newTestRunner()
+	r := New(WithLogger(testLogger), WithTrustedResourceRoots(resourceDir))
 	got := r.annotateExchangeOutput(&Node{Id: "node-1"}, raw)
 	parsed, err := ParseExchangeMarkdown(got.(string))
 	if err != nil {
@@ -67,6 +67,49 @@ func TestExchangeResourcesSurviveAnnotation(t *testing.T) {
 }
 
 func TestRunnerPassesParentExchangeResourceDirsToChildBinder(t *testing.T) {
+	resourceDir := t.TempDir()
+	resourceFile := filepath.Join(resourceDir, "predictions.csv")
+	if err := os.WriteFile(resourceFile, []byte("x\n"), 0o644); err != nil {
+		t.Fatalf("write resource: %v", err)
+	}
+	parentOutput, err := (ExchangeDocument{
+		Stage: ExchangeStageExecute,
+		Resources: []ExchangeResource{{
+			Path: resourceFile,
+			Type: ExchangeResourceFile,
+		}},
+		Handoff: "parent output",
+	}).Markdown()
+	if err != nil {
+		t.Fatalf("Markdown: %v", err)
+	}
+	child := &resourceRecorderExecutor{}
+	parent := &Node{Id: "parent", Executor: &staticExecutor{output: parentOutput}}
+	childNode := &Node{Id: "child", Parents: []*Node{parent}, Executor: child}
+	r := New(WithLogger(testLogger), WithTrustedResourceRoots(resourceDir))
+	if err := r.Start(context.Background()); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	if err := r.AddNodes(context.Background(), parent, childNode); err != nil {
+		t.Fatalf("AddNodes: %v", err)
+	}
+	waitForRunnerEvent(t, r, EventEngineIdle, "")
+	if err := r.Complete(context.Background()); err != nil {
+		t.Fatalf("Complete: %v", err)
+	}
+	if err := r.Wait(context.Background()); err != nil {
+		t.Fatalf("Wait: %v", err)
+	}
+	realResourceDir, err := filepath.EvalSymlinks(resourceDir)
+	if err != nil {
+		t.Fatalf("EvalSymlinks(resourceDir): %v", err)
+	}
+	if len(child.accessibleDirs) != 1 || child.accessibleDirs[0] != realResourceDir {
+		t.Fatalf("child accessible dirs = %v, want [%s]", child.accessibleDirs, realResourceDir)
+	}
+}
+
+func TestRunnerSkipsUntrustedParentExchangeResourceDirs(t *testing.T) {
 	resourceDir := t.TempDir()
 	resourceFile := filepath.Join(resourceDir, "predictions.csv")
 	if err := os.WriteFile(resourceFile, []byte("x\n"), 0o644); err != nil {
@@ -100,12 +143,8 @@ func TestRunnerPassesParentExchangeResourceDirsToChildBinder(t *testing.T) {
 	if err := r.Wait(context.Background()); err != nil {
 		t.Fatalf("Wait: %v", err)
 	}
-	realResourceDir, err := filepath.EvalSymlinks(resourceDir)
-	if err != nil {
-		t.Fatalf("EvalSymlinks(resourceDir): %v", err)
-	}
-	if len(child.accessibleDirs) != 1 || child.accessibleDirs[0] != realResourceDir {
-		t.Fatalf("child accessible dirs = %v, want [%s]", child.accessibleDirs, realResourceDir)
+	if len(child.accessibleDirs) != 0 {
+		t.Fatalf("child accessible dirs = %v, want none for untrusted resources", child.accessibleDirs)
 	}
 }
 

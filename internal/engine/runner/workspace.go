@@ -5,8 +5,6 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-
-	persistencepkg "github.com/tsumina/dango/internal/engine/runner/persistence"
 )
 
 // Workspace holds the runner-owned workspace directory layout.
@@ -31,7 +29,7 @@ type SkillWorkspace struct {
 
 // ProvisionWorkspace creates the runner workspace tree and computes
 // per-skill accessible directories.
-func ProvisionWorkspace(globalRoot string, runnerID string, nodeIDs []string, rule persistencepkg.PathRule) (*Workspace, error) {
+func ProvisionWorkspace(globalRoot string, runnerID string, nodeIDs []string, rule func(string) string) (*Workspace, error) {
 	root, err := ensureCanonicalDir(globalRoot)
 	if err != nil {
 		return nil, fmt.Errorf("runner: resolve workspace root: %w", err)
@@ -40,7 +38,7 @@ func ProvisionWorkspace(globalRoot string, runnerID string, nodeIDs []string, ru
 		return nil, fmt.Errorf("runner: runner id is required")
 	}
 	if rule == nil {
-		rule = persistencepkg.DefaultPathRule
+		rule = defaultWorkspacePathRule
 	}
 	subdir, err := validateRulePath(rule(runnerID))
 	if err != nil {
@@ -101,6 +99,10 @@ func ProvisionWorkspace(globalRoot string, runnerID string, nodeIDs []string, ru
 		}
 	}
 	return workspace, nil
+}
+
+func defaultWorkspacePathRule(runnerID string) string {
+	return "task_" + runnerID
 }
 
 // Root returns the runner workspace root.

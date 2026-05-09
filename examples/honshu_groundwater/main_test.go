@@ -516,9 +516,7 @@ func TestRunHonshuGroundwaterExampleReopensPersistedState(t *testing.T) {
 
 	fresh := orchestrate.NewOrchestrator(
 		orchestrate.WithOrchestratorContext(ctx),
-		orchestrate.WithEventLogStore(reopened.EventLogStore()),
-		orchestrate.WithRunnerStore(reopened.RunnerStore()),
-		orchestrate.WithSnapshotCursorStore(reopened.SnapshotCursorStore()),
+		orchestrate.WithPersistence(reopened.Backend()),
 	)
 	rawEvents, err := reopened.EventLogStore().LoadEvents(ctx, streampkg.Scope{RequestID: result.RequestID}, 1, streampkg.Filter{})
 	if err != nil {

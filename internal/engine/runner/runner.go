@@ -29,17 +29,21 @@ type Runner struct {
 	logger *slog.Logger
 
 	// Startup configuration set once via Options.
-	store             RunnerStore
-	eventStream       *streampkg.Stream
-	plan              *CoarsePlan
-	initialNodes      map[string]*Node
-	plannerSkill      *llm.Skill
-	skillSummaries    []SkillSummary
-	planNodeBuilder   PlanNodeBuilder
+	persistenceHandle    PersistenceHandle
+	store                RunnerStore
+	workspaceRoot        string
+	rootPathRule         func(string) string
+	trustedResourceRoots []string
+	workspace            *Workspace
+	eventStream          *streampkg.Stream
+	plan                 *CoarsePlan
+	initialNodes         map[string]*Node
+	plannerSkill         *llm.Skill
+	skillSummaries       []SkillSummary
+	planNodeBuilder      PlanNodeBuilder
 	skillSessionStore    llm.SessionStore
 	skillSessionIDs      map[string]string
 	skillSessionMu       sync.Mutex
-	allowedResourceRoots []string
 
 	// Engine-level lifecycle state.
 	stateMu sync.RWMutex
@@ -99,6 +103,7 @@ func New(opts ...Option) *Runner {
 		queryCh:           make(chan chan<- RunnerSnapshot),
 		skillSessionStore: newMemorySessionStore(),
 		skillSessionIDs:   make(map[string]string),
+		rootPathRule:      defaultWorkspacePathRule,
 	}
 	for _, opt := range opts {
 		if opt != nil {
@@ -461,6 +466,11 @@ func (r *Runner) runEngine(ctx context.Context) error {
 	r.stateMu.Unlock()
 	r.emitPhaseChangedEvent()
 
+	if err := r.provisionWorkspace(nodesFromMap(r.initialNodes)); err != nil {
+		_, _ = r.transitionState(RunnerStatusFailed, err, true)
+		return err
+	}
+
 	if err := r.appendRecord(store, &RunnerRecord{Kind: RunnerRecordInit}); err != nil {
 		_, _ = r.transitionState(RunnerStatusFailed, err, true)
 		return err
@@ -538,7 +548,7 @@ func (r *Runner) runEngine(ctx context.Context) error {
 		for _, p := range n.Parents {
 			inputs[p.Id] = outputs[p.Id]
 		}
-		if err := r.prepareNodeExecutor(n.Id, n.Executor, exchangeResourceDirsFromOutputs(inputs, r.allowedResourceRoots)); err != nil {
+		if err := r.prepareNodeExecutor(n.Id, n.Executor, r.nodeAccessibleDirs(n.Id, inputs)); err != nil {
 			return err
 		}
 
@@ -668,4 +678,15 @@ func (r *Runner) runEngine(ctx context.Context) error {
 			replyCh <- buildRuntimeSnapshot()
 		}
 	}
+}
+
+func nodesFromMap(nodes map[string]*Node) []string {
+	if len(nodes) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(nodes))
+	for id := range nodes {
+		out = append(out, id)
+	}
+	return out
 }

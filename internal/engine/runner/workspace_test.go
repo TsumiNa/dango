@@ -5,13 +5,11 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-
-	persistencepkg "github.com/tsumina/dango/internal/engine/runner/persistence"
 )
 
 func TestProvisionWorkspaceCreatesLayoutAndAccessibleDirs(t *testing.T) {
 	globalRoot := t.TempDir()
-	workspace, err := ProvisionWorkspace(globalRoot, "runner-1", []string{"alpha", "beta"}, persistencepkg.DefaultPathRule)
+	workspace, err := ProvisionWorkspace(globalRoot, "runner-1", []string{"alpha", "beta"}, defaultWorkspacePathRule)
 	if err != nil {
 		t.Fatalf("ProvisionWorkspace: %v", err)
 	}
@@ -71,7 +69,7 @@ func TestProvisionWorkspaceCreatesLayoutAndAccessibleDirs(t *testing.T) {
 func TestProvisionWorkspaceRejectsInvalidRuleOutputs(t *testing.T) {
 	cases := []struct {
 		name string
-		rule persistencepkg.PathRule
+		rule func(string) string
 	}{
 		{
 			name: "empty path",
@@ -101,7 +99,7 @@ func TestProvisionWorkspaceRejectsInvalidRuleOutputs(t *testing.T) {
 }
 
 func TestHandoffRejectsSymlinkSourceArtifact(t *testing.T) {
-	workspace, err := ProvisionWorkspace(t.TempDir(), "runner-1", []string{"upstream", "downstream"}, persistencepkg.DefaultPathRule)
+	workspace, err := ProvisionWorkspace(t.TempDir(), "runner-1", []string{"upstream", "downstream"}, defaultWorkspacePathRule)
 	if err != nil {
 		t.Fatalf("ProvisionWorkspace: %v", err)
 	}
@@ -137,14 +135,14 @@ func TestProvisionWorkspaceRejectsPathCollision(t *testing.T) {
 	if err := os.MkdirAll(collisionPath, 0o755); err != nil {
 		t.Fatalf("MkdirAll(collisionPath): %v", err)
 	}
-	_, err := ProvisionWorkspace(root, "runner-1", []string{"node"}, persistencepkg.DefaultPathRule)
+	_, err := ProvisionWorkspace(root, "runner-1", []string{"node"}, defaultWorkspacePathRule)
 	if err == nil {
 		t.Fatal("ProvisionWorkspace returned nil error for path collision")
 	}
 }
 
 func TestHandoffSymlinksHandoffAndArtifacts(t *testing.T) {
-	workspace, err := ProvisionWorkspace(t.TempDir(), "runner-1", []string{"upstream", "downstream"}, persistencepkg.DefaultPathRule)
+	workspace, err := ProvisionWorkspace(t.TempDir(), "runner-1", []string{"upstream", "downstream"}, defaultWorkspacePathRule)
 	if err != nil {
 		t.Fatalf("ProvisionWorkspace: %v", err)
 	}

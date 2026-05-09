@@ -7,6 +7,21 @@ import (
 	"github.com/tsumina/dango/internal/llm"
 )
 
+// PersistenceHandle exposes runner persistence sinks and workspace root.
+//
+// Implementations are typically orchestrator-owned and shared across runners.
+// Runners keep a reference to the handle and may call its methods for their
+// entire lifecycle. Callers must ensure the handle remains valid and that
+// returned objects stay usable while a runner may still use them, and must
+// provide synchronization when sharing mutable implementations.
+type PersistenceHandle interface {
+	// RunnerStore returns the append/load store used for runner lifecycle records.
+	RunnerStore() RunnerStore
+	// WorkspaceRoot returns the global workspace root. Runners combine it with a
+	// path rule to provision their own per-runner workspace directory.
+	WorkspaceRoot() string
+}
+
 // Option adjusts a constructed [Runner] before it is returned.
 type Option func(*Runner)
 
@@ -36,15 +51,52 @@ func WithLogger(logger *slog.Logger) Option {
 	}
 }
 
-// WithStore installs store as the Runner's persistence sink.
+// WithPersistenceHandle installs handle as the Runner's persistence source.
 //
-// The Runner keeps a reference to store and may call it from runner lifecycle
-// goroutines. A nil store disables persistence. If store is shared with other
-// goroutines, callers are responsible for synchronization unless the
-// RunnerStore implementation documents its own concurrency safety.
-func WithStore(store RunnerStore) Option {
+// The Runner keeps a reference to handle and resolves its runner store and
+// workspace root during construction. A nil handle disables persistence and
+// workspace provisioning.
+func WithPersistenceHandle(handle PersistenceHandle) Option {
 	return func(r *Runner) {
-		r.store = store
+		r.persistenceHandle = handle
+		if handle == nil {
+			r.store = nil
+			r.workspaceRoot = ""
+			return
+		}
+		r.store = handle.RunnerStore()
+		r.workspaceRoot = handle.WorkspaceRoot()
+	}
+}
+
+// WithTrustedResourceRoots installs additional trusted roots for exchange
+// resource filtering and tool access.
+//
+// Existing directories are canonicalized and kept on the runner. Non-existent
+// or invalid paths are ignored. The runner stores canonical string paths, not
+// live handles; callers may manage the source roots independently, but changing
+// filesystem contents after construction can change what tools can read/write.
+// These roots are combined with the workspace root from [PersistenceHandle]
+// when determining executor-accessible directories.
+func WithTrustedResourceRoots(roots ...string) Option {
+	return func(r *Runner) {
+		canonicalRoots := make([]string, 0, len(roots))
+		for _, root := range roots {
+			if canonical, ok := canonicalExistingDir(root); ok && !containsDir(canonicalRoots, canonical) {
+				canonicalRoots = append(canonicalRoots, canonical)
+			}
+		}
+		r.trustedResourceRoots = canonicalRoots
+	}
+}
+
+// WithRootPathRule installs rule as the mapping from runner ID to per-runner
+// workspace subdirectory under the global workspace root.
+func WithRootPathRule(rule func(string) string) Option {
+	return func(r *Runner) {
+		if rule != nil {
+			r.rootPathRule = rule
+		}
 	}
 }
 
@@ -88,19 +140,5 @@ func WithSkillSummaries(summaries []SkillSummary) Option {
 func WithPlanNodeBuilder(builder PlanNodeBuilder) Option {
 	return func(r *Runner) {
 		r.planNodeBuilder = builder
-	}
-}
-
-// WithAllowedResourceRoots restricts which filesystem paths exchange documents
-// may declare as resources. A resolved resource directory is only granted to
-// downstream skills when it is rooted under at least one of roots. Paths
-// outside these roots are silently discarded.
-//
-// Callers should pass the request artifacts directory (and any other trusted
-// roots) so that model-generated exchange documents cannot escalate filesystem
-// access beyond the expected workspace.
-func WithAllowedResourceRoots(roots ...string) Option {
-	return func(r *Runner) {
-		r.allowedResourceRoots = append(r.allowedResourceRoots, roots...)
 	}
 }

@@ -24,9 +24,14 @@ func (o *Orchestrator) DescribeRequest(ctx context.Context, requestID string) (*
 	}
 
 	o.mu.RLock()
-	eventLog := o.eventLogStore
-	cursorStore := o.snapshotCursorStore
+	backend := o.persistence
 	o.mu.RUnlock()
+	var eventLog storepkg.EventLogStore
+	var cursorStore storepkg.SnapshotCursorStore
+	if backend != nil {
+		eventLog = backend.EventLogStore()
+		cursorStore = backend.SnapshotCursorStore()
+	}
 	if eventLog == nil {
 		return nil, ErrEventLogStoreNotConfigured
 	}

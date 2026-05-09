@@ -1,13 +1,16 @@
 package runtime
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 
 	runnerpkg "github.com/tsumina/dango/internal/engine/runner"
+	persistencepkg "github.com/tsumina/dango/internal/engine/runner/persistence"
 	storepkg "github.com/tsumina/dango/internal/store"
 	sqlitepkg "github.com/tsumina/dango/internal/store/sqlite"
 )
@@ -24,13 +27,10 @@ func DefaultConfig() Config {
 	return Config{}
 }
 
-// Persistence groups the startup-owned stores used by the orchestrator.
+// Persistence groups the startup-owned backend used by the orchestrator.
 type Persistence struct {
-	eventLogStore       storepkg.EventLogStore
-	runnerStore         runnerpkg.RunnerStore
-	snapshotCursorStore storepkg.SnapshotCursorStore
-	sqliteStore         *sqlitepkg.Store
-	rootDir             string
+	backend persistencepkg.Backend
+	rootDir string
 }
 
 // Open creates the startup-owned persistence bundle described by cfg.
@@ -47,26 +47,34 @@ func Open(cfg Config) (*Persistence, error) {
 
 // EventLogStore returns the configured request event-log store.
 func (p *Persistence) EventLogStore() storepkg.EventLogStore {
-	if p == nil {
+	if p == nil || p.backend == nil {
 		return nil
 	}
-	return p.eventLogStore
+	return p.backend.EventLogStore()
 }
 
 // RunnerStore returns the configured runner checkpoint store.
 func (p *Persistence) RunnerStore() runnerpkg.RunnerStore {
-	if p == nil {
+	if p == nil || p.backend == nil {
 		return nil
 	}
-	return p.runnerStore
+	return p.backend.RunnerStore()
 }
 
 // SnapshotCursorStore returns the configured describe snapshot cursor store.
 func (p *Persistence) SnapshotCursorStore() storepkg.SnapshotCursorStore {
+	if p == nil || p.backend == nil {
+		return nil
+	}
+	return p.backend.SnapshotCursorStore()
+}
+
+// Backend returns the unified persistence backend used by orchestrator.
+func (p *Persistence) Backend() persistencepkg.Backend {
 	if p == nil {
 		return nil
 	}
-	return p.snapshotCursorStore
+	return p.backend
 }
 
 // RootDir returns the temporary fallback root directory, or the empty string
@@ -85,8 +93,8 @@ func (p *Persistence) Close() error {
 		return nil
 	}
 	var errs []error
-	if p.sqliteStore != nil {
-		if err := p.sqliteStore.Close(); err != nil {
+	if p.backend != nil {
+		if err := p.backend.Close(context.Background()); err != nil {
 			errs = append(errs, err)
 		}
 	}
@@ -106,11 +114,23 @@ func openSQLitePersistence(path string) (*Persistence, error) {
 	if err != nil {
 		return nil, fmt.Errorf("runtime persistence open sqlite %q: %w", path, err)
 	}
-	return &Persistence{
+	markdownRoot := filepath.Dir(path)
+	markdownBackend, err := persistencepkg.NewMarkdownBackend(markdownRoot)
+	if err != nil {
+		_ = dbStore.Close()
+		return nil, fmt.Errorf("runtime persistence open markdown workspace backend: %w", err)
+	}
+	backend := &compositeBackend{
 		eventLogStore:       sqlitepkg.NewStreamStore(dbStore),
 		runnerStore:         sqlitepkg.NewRunnerStore(dbStore),
 		snapshotCursorStore: sqlitepkg.NewSnapshotCursorStore(dbStore),
-		sqliteStore:         dbStore,
+		workspaceRoot:       markdownBackend.WorkspaceRoot(),
+		closeOnce: sync.OnceValue(func() error {
+			return errors.Join(markdownBackend.Close(context.Background()), dbStore.Close())
+		}),
+	}
+	return &Persistence{
+		backend: backend,
 	}, nil
 }
 
@@ -123,22 +143,41 @@ func openJSONFallbackPersistence() (*Persistence, error) {
 		_ = os.RemoveAll(root)
 		return nil, wrap
 	}
-	eventLogStore, err := storepkg.NewJSONEventLogStore(filepath.Join(root, "event-log"))
+	backend, err := persistencepkg.NewMarkdownBackend(root)
 	if err != nil {
-		return cleanup(fmt.Errorf("runtime persistence open JSON event log: %w", err))
-	}
-	runnerStore, err := runnerpkg.NewJSONRunnerStore(filepath.Join(root, "runner-log"))
-	if err != nil {
-		return cleanup(fmt.Errorf("runtime persistence open JSON runner log: %w", err))
-	}
-	cursorStore, err := storepkg.NewJSONSnapshotCursorStore(filepath.Join(root, "snapshot-cursor"))
-	if err != nil {
-		return cleanup(fmt.Errorf("runtime persistence open JSON snapshot cursor: %w", err))
+		return cleanup(fmt.Errorf("runtime persistence open markdown backend: %w", err))
 	}
 	return &Persistence{
-		eventLogStore:       eventLogStore,
-		runnerStore:         runnerStore,
-		snapshotCursorStore: cursorStore,
-		rootDir:             root,
+		backend: backend,
+		rootDir: root,
 	}, nil
+}
+
+// compositeBackend combines SQLite-backed stores with a filesystem workspace
+// root used by runner markdown/workspace artifacts.
+//
+// The backend owns both the SQLite store and markdown workspace backend close
+// lifecycle via closeOnce. Close joins those shutdown paths exactly once, so
+// callers may close either Persistence or the exposed Backend safely.
+type compositeBackend struct {
+	eventLogStore       storepkg.EventLogStore
+	runnerStore         runnerpkg.RunnerStore
+	snapshotCursorStore storepkg.SnapshotCursorStore
+	workspaceRoot       string
+	closeOnce           func() error
+}
+
+func (c *compositeBackend) EventLogStore() storepkg.EventLogStore { return c.eventLogStore }
+func (c *compositeBackend) RunnerStore() runnerpkg.RunnerStore {
+	return c.runnerStore
+}
+func (c *compositeBackend) SnapshotCursorStore() storepkg.SnapshotCursorStore {
+	return c.snapshotCursorStore
+}
+func (c *compositeBackend) WorkspaceRoot() string { return c.workspaceRoot }
+func (c *compositeBackend) Close(context.Context) error {
+	if c == nil || c.closeOnce == nil {
+		return nil
+	}
+	return c.closeOnce()
 }

@@ -10,7 +10,7 @@ import (
 
 func TestRunnerPersistsEventsAndCancellation(t *testing.T) {
 	store := mustNewRunnerStore(t, t.TempDir())
-	r := New(WithLogger(testLogger), WithStore(store))
+	r := New(WithLogger(testLogger), WithPersistenceHandle(testRunnerPersistenceHandle{store: store}))
 
 	ctx, cancel := context.WithCancel(context.Background())
 	if err := r.Start(ctx); err != nil {
@@ -68,7 +68,7 @@ func TestRunnerPersistsEventsAndCancellation(t *testing.T) {
 
 func TestRunnerPersistsFailure(t *testing.T) {
 	store := mustNewRunnerStore(t, t.TempDir())
-	r := New(WithLogger(testLogger), WithStore(store))
+	r := New(WithLogger(testLogger), WithPersistenceHandle(testRunnerPersistenceHandle{store: store}))
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -111,3 +111,12 @@ func TestRunnerPersistsFailure(t *testing.T) {
 		t.Fatalf("runner state = %q, want failed", got)
 	}
 }
+
+type testRunnerPersistenceHandle struct {
+	store RunnerStore
+	root  string
+}
+
+func (h testRunnerPersistenceHandle) RunnerStore() RunnerStore { return h.store }
+
+func (h testRunnerPersistenceHandle) WorkspaceRoot() string { return h.root }
