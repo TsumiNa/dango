@@ -69,6 +69,7 @@ Important event families today:
 - `artifact.created` for executor-declared resources.
 - `exchange.published`, `handoff.emitted`, `handoff.delivered`, and
   `memo.snapshot` for channel-specific routing updates.
+- `skill.memo.delta` for memo sections emitted from skill exchange/report flows.
 
 ## Current Architecture
 

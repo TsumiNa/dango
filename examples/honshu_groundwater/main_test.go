@@ -299,6 +299,19 @@ func TestRunHonshuGroundwaterExampleExecutesNeededSkills(t *testing.T) {
 	if strings.TrimSpace(trainHandoff.Body) == "" {
 		t.Fatal("train handoff body is empty")
 	}
+	trainCompletedRaw, err := completedNodeMarkdown(view, "train_model")
+	if err != nil {
+		t.Fatalf("completedNodeMarkdown(train_model): %v", err)
+	}
+	if strings.Contains(trainCompletedRaw, "uv: command not found") {
+		t.Skip("uv not available in PATH; skipping artifact marker assertions")
+	}
+	markerText := strings.ToLower(trainHandoff.Body + "\n" + trainCompletedRaw)
+	for _, marker := range []string{".csv", ".svg", "prediction_count"} {
+		if !strings.Contains(markerText, marker) {
+			t.Fatalf("train output missing marker %q:\n%s", marker, trainCompletedRaw)
+		}
+	}
 }
 
 func TestRunHonshuGroundwaterExampleWritesPersistenceWorkspaceArtifacts(t *testing.T) {
@@ -594,27 +607,6 @@ func readFile(t *testing.T, path string) string {
 	return string(data)
 }
 
-func findFilesWithExt(root string, ext string) ([]string, error) {
-	var matches []string
-	err := filepath.WalkDir(root, func(path string, d os.DirEntry, walkErr error) error {
-		if walkErr != nil {
-			return walkErr
-		}
-		if d.IsDir() {
-			return nil
-		}
-		if strings.EqualFold(filepath.Ext(path), ext) {
-			matches = append(matches, path)
-		}
-		return nil
-	})
-	if err != nil {
-		return nil, err
-	}
-	sort.Strings(matches)
-	return matches, nil
-}
-
 func hasPersistedRunnerRecord(records []runnerpkg.RunnerRecord, eventType string, nodeID string) bool {
 	for _, record := range records {
 		if record.Kind != runnerpkg.RunnerRecordEvent || record.Event == nil {
@@ -795,22 +787,6 @@ type trainingResult struct {
 	MeanPredictedMBGL  float64 `json:"mean_predicted_water_level_m_bgl"`
 	ValidationSummary  string  `json:"validation_summary"`
 	DownstreamReminder string  `json:"downstream_reminder"`
-}
-
-func trainingResultFromView(view *runnerpkg.RunnerView, nodeID string) (*trainingResult, error) {
-	doc, err := handoffFromView(view, nodeID)
-	if err != nil {
-		return nil, err
-	}
-	jsonText, err := extractJSONBlock(doc.Body)
-	if err != nil {
-		return nil, err
-	}
-	var result trainingResult
-	if err := json.Unmarshal([]byte(jsonText), &result); err != nil {
-		return nil, err
-	}
-	return &result, nil
 }
 
 func handoffFromView(view *runnerpkg.RunnerView, nodeID string) (*runnerpkg.HandoffDoc, error) {
