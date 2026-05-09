@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"hash/fnv"
 	"os"
 	"path/filepath"
 	"strings"
@@ -216,9 +217,9 @@ func (s *compositeEventLogStore) AppendEvent(ctx context.Context, event streampk
 	if err := s.primary.AppendEvent(ctx, event); err != nil {
 		return fmt.Errorf("runtime persistence append primary event log: %w", err)
 	}
-	if err := s.mirror.AppendEvent(ctx, event); err != nil {
-		return fmt.Errorf("runtime persistence append markdown mirror event log: %w", err)
-	}
+	// Mirror persistence is best-effort: once the primary SQLite write succeeds
+	// we must still return success to avoid retry ambiguity on unique keys.
+	_ = s.mirror.AppendEvent(ctx, event)
 	return nil
 }
 
@@ -232,17 +233,26 @@ func (s *compositeEventLogStore) LoadEvents(ctx context.Context, scope streampkg
 type compositeRunnerStore struct {
 	primary runnerpkg.RunnerStore
 	mirror  runnerpkg.RunnerStore
+
+	appendLocks [compositeRunnerLockCount]sync.Mutex
 }
+
+const compositeRunnerLockCount = 64
 
 func (s *compositeRunnerStore) Append(ctx context.Context, runnerID string, rec *runnerpkg.RunnerRecord) (int64, error) {
 	if s == nil || s.primary == nil || s.mirror == nil {
 		return 0, fmt.Errorf("runtime persistence composite runner store is not configured")
 	}
+	unlock := s.lock(runnerID)
+	defer unlock()
+
 	seq, err := s.primary.Append(ctx, runnerID, rec)
 	if err != nil {
 		return 0, fmt.Errorf("runtime persistence append primary runner record: %w", err)
 	}
-	if _, err := s.mirror.Append(ctx, runnerID, rec); err != nil {
+	rec.Seq = seq
+	mirrorRec := cloneRunnerRecord(rec)
+	if _, err := s.mirror.Append(ctx, runnerID, mirrorRec); err != nil {
 		return 0, fmt.Errorf("runtime persistence append markdown mirror runner record: %w", err)
 	}
 	return seq, nil
@@ -266,6 +276,32 @@ func (s *compositeRunnerStore) Delete(ctx context.Context, runnerID string) erro
 		return fmt.Errorf("runtime persistence delete markdown mirror runner record: %w", err)
 	}
 	return nil
+}
+
+func (s *compositeRunnerStore) lock(runnerID string) func() {
+	lock := &s.appendLocks[compositeRunnerLockIndex(runnerID)]
+	lock.Lock()
+	return lock.Unlock
+}
+
+// compositeRunnerLockIndex hashes a runner id into the fixed stripe set used to
+// serialize composite append operations for that runner.
+func compositeRunnerLockIndex(runnerID string) uint32 {
+	h := fnv.New32a()
+	_, _ = h.Write([]byte(runnerID))
+	return h.Sum32() % uint32(compositeRunnerLockCount)
+}
+
+func cloneRunnerRecord(rec *runnerpkg.RunnerRecord) *runnerpkg.RunnerRecord {
+	clone := *rec
+	if rec.Event != nil {
+		eventClone := *rec.Event
+		if rec.Event.DataJSON != nil {
+			eventClone.DataJSON = append([]byte(nil), rec.Event.DataJSON...)
+		}
+		clone.Event = &eventClone
+	}
+	return &clone
 }
 
 type compositeSnapshotCursorStore struct {
