@@ -263,11 +263,11 @@ func TestCompositeEventLogStore_AppendEventIgnoresMirrorFailure(t *testing.T) {
 	if err := store.AppendEvent(ctx, event); err != nil {
 		t.Fatalf("AppendEvent: %v", err)
 	}
-	if primary.appendCalls != 1 {
-		t.Fatalf("primary append calls = %d, want 1", primary.appendCalls)
+	if primary.calls() != 1 {
+		t.Fatalf("primary append calls = %d, want 1", primary.calls())
 	}
-	if mirror.appendCalls != 1 {
-		t.Fatalf("mirror append calls = %d, want 1", mirror.appendCalls)
+	if mirror.calls() != 1 {
+		t.Fatalf("mirror append calls = %d, want 1", mirror.calls())
 	}
 }
 
@@ -286,11 +286,11 @@ func TestCompositeEventLogStore_AppendEventReturnsPrimaryFailure(t *testing.T) {
 	if err := store.AppendEvent(ctx, event); err == nil {
 		t.Fatal("AppendEvent succeeded, want primary failure")
 	}
-	if primary.appendCalls != 1 {
-		t.Fatalf("primary append calls = %d, want 1", primary.appendCalls)
+	if primary.calls() != 1 {
+		t.Fatalf("primary append calls = %d, want 1", primary.calls())
 	}
-	if mirror.appendCalls != 0 {
-		t.Fatalf("mirror append calls = %d, want 0 when primary fails", mirror.appendCalls)
+	if mirror.calls() != 0 {
+		t.Fatalf("mirror append calls = %d, want 0 when primary fails", mirror.calls())
 	}
 }
 
@@ -348,7 +348,7 @@ func TestCompositeRunnerStore_AppendSerializesPerRunner(t *testing.T) {
 	firstMirrorStarted := make(chan struct{})
 	releaseFirstMirror := make(chan struct{})
 	secondPrimaryEntered := make(chan struct{})
-	allowSecondPrimary := make(chan struct{})
+	releaseSecondPrimary := make(chan struct{})
 	primary := &runtimeTestRunnerStore{
 		appendFn: func(_ context.Context, _ string, in *runnerpkg.RunnerRecord) (int64, error) {
 			nextSeqMu.Lock()
@@ -358,7 +358,7 @@ func TestCompositeRunnerStore_AppendSerializesPerRunner(t *testing.T) {
 			in.Seq = seq
 			if seq == 2 {
 				close(secondPrimaryEntered)
-				<-allowSecondPrimary
+				<-releaseSecondPrimary
 			}
 			return seq, nil
 		},
@@ -400,20 +400,29 @@ func TestCompositeRunnerStore_AppendSerializesPerRunner(t *testing.T) {
 	if err := <-firstDone; err != nil {
 		t.Fatalf("first append: %v", err)
 	}
-	close(allowSecondPrimary)
+	close(releaseSecondPrimary)
 	if err := <-secondDone; err != nil {
 		t.Fatalf("second append: %v", err)
 	}
 }
 
 type runtimeTestEventLogStore struct {
+	mu          sync.Mutex
 	appendErr   error
 	appendCalls int
 }
 
 func (s *runtimeTestEventLogStore) AppendEvent(context.Context, streampkg.Event) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	s.appendCalls++
 	return s.appendErr
+}
+
+func (s *runtimeTestEventLogStore) calls() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.appendCalls
 }
 
 func (s *runtimeTestEventLogStore) LoadEvents(context.Context, streampkg.Scope, uint64, streampkg.Filter) ([]streampkg.Event, error) {

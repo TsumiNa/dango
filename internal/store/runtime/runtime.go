@@ -282,6 +282,8 @@ func (s *compositeRunnerStore) lock(runnerID string) func() {
 	return lock.Unlock
 }
 
+// compositeRunnerLockIndex hashes a runner id into the fixed stripe set used to
+// serialize composite append operations for that runner.
 func compositeRunnerLockIndex(runnerID string) uint32 {
 	h := fnv.New32a()
 	_, _ = h.Write([]byte(runnerID))
