@@ -182,6 +182,9 @@ func validateRulePath(subdir string) (string, error) {
 	if clean == "." {
 		return "", fmt.Errorf("runner: path rule returned empty path")
 	}
+	if strings.Contains(clean, string(filepath.Separator)) {
+		return "", fmt.Errorf("runner: path rule must return a single path element %q", subdir)
+	}
 	parts := strings.Split(clean, string(filepath.Separator))
 	for _, part := range parts {
 		if part == ".." {
@@ -238,12 +241,15 @@ func pathWithinRoot(root string, target string) bool {
 }
 
 func symlinkFileIfExists(src string, dst string) error {
-	info, err := os.Stat(src)
+	info, err := os.Lstat(src)
 	if os.IsNotExist(err) {
 		return nil
 	}
 	if err != nil {
 		return fmt.Errorf("runner: stat source file %q: %w", src, err)
+	}
+	if info.Mode()&os.ModeSymlink != 0 {
+		return fmt.Errorf("runner: source file %q must not be symbolic link", src)
 	}
 	if info.IsDir() {
 		return fmt.Errorf("runner: source %q is a directory", src)
@@ -258,12 +264,15 @@ func symlinkFileIfExists(src string, dst string) error {
 }
 
 func symlinkTreeIfExists(src string, dst string) error {
-	info, err := os.Stat(src)
+	info, err := os.Lstat(src)
 	if os.IsNotExist(err) {
 		return nil
 	}
 	if err != nil {
 		return fmt.Errorf("runner: stat source dir %q: %w", src, err)
+	}
+	if info.Mode()&os.ModeSymlink != 0 {
+		return fmt.Errorf("runner: source dir %q must not be symbolic link", src)
 	}
 	if !info.IsDir() {
 		return fmt.Errorf("runner: source %q is not a directory", src)
@@ -271,6 +280,9 @@ func symlinkTreeIfExists(src string, dst string) error {
 	return filepath.WalkDir(src, func(path string, d os.DirEntry, walkErr error) error {
 		if walkErr != nil {
 			return walkErr
+		}
+		if d.Type()&os.ModeSymlink != 0 {
+			return fmt.Errorf("runner: source path %q must not be symbolic link", path)
 		}
 		rel, err := filepath.Rel(src, path)
 		if err != nil {

@@ -3,6 +3,7 @@ package runner
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	persistencepkg "github.com/tsumina/dango/internal/engine/runner/persistence"
@@ -15,7 +16,11 @@ func TestProvisionWorkspaceCreatesLayoutAndAccessibleDirs(t *testing.T) {
 		t.Fatalf("ProvisionWorkspace: %v", err)
 	}
 
-	expectedRoot := filepath.Join(globalRoot, "task_runner-1")
+	canonicalRoot, err := ensureCanonicalDir(globalRoot)
+	if err != nil {
+		t.Fatalf("ensureCanonicalDir(globalRoot): %v", err)
+	}
+	expectedRoot := filepath.Join(canonicalRoot, "task_runner-1")
 	if workspace.Root() != expectedRoot {
 		t.Fatalf("workspace root = %q, want %q", workspace.Root(), expectedRoot)
 	}
@@ -80,6 +85,10 @@ func TestProvisionWorkspaceRejectsInvalidRuleOutputs(t *testing.T) {
 			name: "parent escaping path",
 			rule: func(string) string { return "../escape" },
 		},
+		{
+			name: "multi segment path",
+			rule: func(string) string { return "foo/bar" },
+		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -88,6 +97,37 @@ func TestProvisionWorkspaceRejectsInvalidRuleOutputs(t *testing.T) {
 				t.Fatal("ProvisionWorkspace returned nil error for invalid path rule output")
 			}
 		})
+	}
+}
+
+func TestHandoffRejectsSymlinkSourceArtifact(t *testing.T) {
+	workspace, err := ProvisionWorkspace(t.TempDir(), "runner-1", []string{"upstream", "downstream"}, persistencepkg.DefaultPathRule)
+	if err != nil {
+		t.Fatalf("ProvisionWorkspace: %v", err)
+	}
+	upstream, ok := workspace.Skill("upstream")
+	if !ok {
+		t.Fatal("upstream skill workspace missing")
+	}
+	if _, ok := workspace.Skill("downstream"); !ok {
+		t.Fatal("downstream skill workspace missing")
+	}
+
+	artifactDir := filepath.Join(upstream.OutboxDir, "artifacts", "data")
+	if err := os.MkdirAll(artifactDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll(artifact dir): %v", err)
+	}
+	artifactLink := filepath.Join(artifactDir, "outside.txt")
+	if err := os.Symlink("/etc/hosts", artifactLink); err != nil {
+		t.Fatalf("Symlink(artifact): %v", err)
+	}
+
+	err = workspace.Handoff("upstream", "downstream")
+	if err == nil {
+		t.Fatal("Handoff returned nil error for symbolic-link artifact source")
+	}
+	if !strings.Contains(err.Error(), "must not be symbolic link") {
+		t.Fatalf("Handoff error = %v, want symbolic-link rejection", err)
 	}
 }
 
