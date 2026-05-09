@@ -90,6 +90,11 @@ func TestOpen_SQLiteStoresSurviveReopen(t *testing.T) {
 	if workspaceRoot != wantWorkspaceRoot {
 		t.Fatalf("WorkspaceRoot() = %q, want %q", workspaceRoot, wantWorkspaceRoot)
 	}
+	for _, mirrorDir := range []string{"event-log", "runner-log", "snapshot-cursor"} {
+		if _, err := os.Stat(filepath.Join(filepath.Dir(dbPath), mirrorDir)); !os.IsNotExist(err) {
+			t.Fatalf("%s unexpectedly exists in sqlite-only mode: %v", mirrorDir, err)
+		}
+	}
 	event := runtimeTestEvent("req_sqlite_runtime", 1)
 	if err := persistence.EventLogStore().AppendEvent(ctx, event); err != nil {
 		t.Fatalf("AppendEvent: %v", err)
@@ -130,6 +135,73 @@ func TestOpen_SQLiteStoresSurviveReopen(t *testing.T) {
 	}
 	if len(records) != 2 {
 		t.Fatalf("len(records) = %d, want 2", len(records))
+	}
+	loadedCursor, err := reopened.SnapshotCursorStore().LoadCursor(ctx, cursor.RequestID)
+	if err != nil {
+		t.Fatalf("LoadCursor(reopen): %v", err)
+	}
+	if loadedCursor.EventSequence != cursor.EventSequence {
+		t.Fatalf("loaded cursor event sequence = %d, want %d", loadedCursor.EventSequence, cursor.EventSequence)
+	}
+}
+
+func TestOpen_SQLiteWithMarkdownMirrorWritesMirrorFiles(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	dbPath := filepath.Join(t.TempDir(), "dango.db")
+	persistence, err := Open(Config{SQLitePath: dbPath, SQLiteMarkdownMirror: true})
+	if err != nil {
+		t.Fatalf("Open(sqlite+mirror): %v", err)
+	}
+	event := runtimeTestEvent("req_sqlite_mirror", 1)
+	if err := persistence.EventLogStore().AppendEvent(ctx, event); err != nil {
+		t.Fatalf("AppendEvent: %v", err)
+	}
+	if _, err := persistence.RunnerStore().Append(ctx, "run_sqlite_mirror", &runnerpkg.RunnerRecord{Kind: runnerpkg.RunnerRecordInit}); err != nil {
+		t.Fatalf("Append(init): %v", err)
+	}
+	cursor := storepkg.SnapshotCursor{RequestID: event.Scope.RequestID, RunnerID: "run_sqlite_mirror", EventSequence: 1}
+	if err := persistence.SnapshotCursorStore().SaveCursor(ctx, cursor); err != nil {
+		t.Fatalf("SaveCursor: %v", err)
+	}
+	if err := persistence.Close(); err != nil {
+		t.Fatalf("Close(first): %v", err)
+	}
+
+	mirrorRoot := filepath.Dir(dbPath)
+	for _, file := range []string{
+		filepath.Join(mirrorRoot, "event-log", event.Scope.RequestID+".jsonl"),
+		filepath.Join(mirrorRoot, "runner-log", "run_sqlite_mirror.jsonl"),
+		filepath.Join(mirrorRoot, "snapshot-cursor", event.Scope.RequestID+".json"),
+	} {
+		if _, err := os.Stat(file); err != nil {
+			t.Fatalf("Stat(%q): %v", file, err)
+		}
+	}
+
+	reopened, err := Open(Config{SQLitePath: dbPath})
+	if err != nil {
+		t.Fatalf("Open(reopen sqlite-only): %v", err)
+	}
+	defer func() {
+		if err := reopened.Close(); err != nil {
+			t.Fatalf("Close(reopen): %v", err)
+		}
+	}()
+	loadedEvents, err := reopened.EventLogStore().LoadEvents(ctx, streampkg.Scope{RequestID: event.Scope.RequestID}, 1, streampkg.Filter{})
+	if err != nil {
+		t.Fatalf("LoadEvents(reopen): %v", err)
+	}
+	if len(loadedEvents) != 1 || loadedEvents[0].Scope.RequestID != event.Scope.RequestID {
+		t.Fatalf("loaded events = %+v, want persisted request %q", loadedEvents, event.Scope.RequestID)
+	}
+	records, err := reopened.RunnerStore().Load(ctx, "run_sqlite_mirror")
+	if err != nil {
+		t.Fatalf("Load runner records(reopen): %v", err)
+	}
+	if len(records) != 1 || records[0].Kind != runnerpkg.RunnerRecordInit {
+		t.Fatalf("records = %+v, want one init", records)
 	}
 	loadedCursor, err := reopened.SnapshotCursorStore().LoadCursor(ctx, cursor.RequestID)
 	if err != nil {
