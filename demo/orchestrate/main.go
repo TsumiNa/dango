@@ -83,9 +83,7 @@ func banner(step int, title, intent string) {
 	}
 }
 
-func note(msg string)     { fmt.Println(dim("  · ") + msg) }
-func okLine(msg string)   { fmt.Println(green("  ✓ ") + msg) }
-func warnLine(msg string) { fmt.Println(yellow("  ! ") + msg) }
+func note(msg string) { fmt.Println(dim("  · ") + msg) }
 
 // colorPhase / colorStatus / colorEvent tint state strings so the eye can
 // track lifecycle transitions at a glance.
@@ -420,42 +418,6 @@ func demoPlanningOutput(req *struct {
 	return string(buf), nil
 }
 
-func revisedPlan(request string) *orchestrate.CoarsePlan {
-	return &orchestrate.CoarsePlan{
-		Request: request,
-		Nodes: []orchestrate.CoarsePlanNode{
-			{
-				ID:              "collect",
-				SkillName:       "collect",
-				TaskDescription: "Gather the facts, source notes, and context needed for: " + request,
-			},
-			{
-				ID:              "review",
-				SkillName:       "review",
-				TaskDescription: "Check tone, completeness, and next steps before sending.",
-				DependsOn:       []string{"collect"},
-			},
-			{
-				ID:              "deliver",
-				SkillName:       "summarize",
-				TaskDescription: "Write the final reader-facing draft for: " + request,
-				DependsOn:       []string{"review"},
-			},
-		},
-	}
-}
-
-func missingSkills(skills map[string]*llm.Skill, required ...string) []string {
-	missing := make([]string, 0, len(required))
-	for _, name := range required {
-		if skills[name] == nil {
-			missing = append(missing, name)
-		}
-	}
-	sort.Strings(missing)
-	return missing
-}
-
 func mustStartRequest(ctx context.Context, o *orchestrate.Orchestrator, input string, priority orchestrate.RequestPriority) *orchestrate.CoarsePlan {
 	resp, err := o.StartRequest(ctx, orchestrate.Request{Input: input, Priority: priority})
 	if err != nil {
@@ -676,72 +638,9 @@ func compactStreamText(text string) string {
 	return text
 }
 
-func mustInstallRunnerBehavior(o *orchestrate.Orchestrator, runnerID string, label string, deliverGate <-chan struct{}) {
-	runner := mustRunner(o, runnerID)
-	for id, node := range runner.Nodes() {
-		executor, ok := node.Executor.(*orchestrate.Executor)
-		if !ok || executor == nil {
-			fatalf("runner %q node %q executor = %T, want *orchestrate.Executor", runnerID, id, node.Executor)
-		}
-		nodeID := id
-		executor.RunE = func(ctx context.Context, parentOutputs map[string]any) (any, []*runnerpkg.Node, error) {
-			switch nodeID {
-			case "collect":
-				if err := sleepOrCancel(ctx, 120*time.Millisecond); err != nil {
-					return nil, nil, err
-				}
-				return fmt.Sprintf("%s gathered the source notes", label), nil, nil
-			case "review":
-				if err := sleepOrCancel(ctx, 100*time.Millisecond); err != nil {
-					return nil, nil, err
-				}
-				return fmt.Sprintf("%s reviewed %v for clarity and tone", label, parentOutputs["collect"]), nil, nil
-			case "deliver":
-				if deliverGate != nil {
-					select {
-					case <-ctx.Done():
-						return nil, nil, ctx.Err()
-					case <-deliverGate:
-					}
-				}
-				if err := sleepOrCancel(ctx, 160*time.Millisecond); err != nil {
-					return nil, nil, err
-				}
-				inputKey := "collect"
-				if _, ok := parentOutputs["review"]; ok {
-					inputKey = "review"
-				}
-				return fmt.Sprintf("%s sent the final draft based on %v", label, parentOutputs[inputKey]), nil, nil
-			default:
-				if err := sleepOrCancel(ctx, 80*time.Millisecond); err != nil {
-					return nil, nil, err
-				}
-				return fmt.Sprintf("%s finished %s", label, nodeID), nil, nil
-			}
-		}
-	}
-}
-
-func sleepOrCancel(ctx context.Context, d time.Duration) error {
-	timer := time.NewTimer(d)
-	defer timer.Stop()
-	select {
-	case <-ctx.Done():
-		return ctx.Err()
-	case <-timer.C:
-		return nil
-	}
-}
-
 func mustWaitForPhase(o *orchestrate.Orchestrator, id string, phase runnerpkg.RunnerPhase, timeout time.Duration, label string) *runnerpkg.RunnerView {
 	return mustWaitForView(o, id, timeout, label, func(view *runnerpkg.RunnerView) bool {
 		return view.Phase == phase
-	})
-}
-
-func mustWaitForStatus(o *orchestrate.Orchestrator, id string, status runnerpkg.RunnerStatus, timeout time.Duration, label string) *runnerpkg.RunnerView {
-	return mustWaitForView(o, id, timeout, label, func(view *runnerpkg.RunnerView) bool {
-		return view.State.Status == status
 	})
 }
 

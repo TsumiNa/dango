@@ -20,24 +20,6 @@ import (
 	"github.com/tsumina/dango/internal/llm"
 )
 
-func loadTestSkill(t *testing.T) *llm.Skill {
-	t.Helper()
-	dir := t.TempDir()
-	content := "---\nname: t\ndescription: d\n---\nbody\n"
-	if err := os.WriteFile(filepath.Join(dir, llm.SkillFile), []byte(content), 0o644); err != nil {
-		t.Fatalf("write SKILL.md: %v", err)
-	}
-	loaded, err := llm.NewSkill(dir, llm.DefaultSkillConfig())
-	if err != nil {
-		t.Fatalf("llm.New: %v", err)
-	}
-	sk, err := loaded.Bind(&llm.Client{}, llm.DefaultConversationConfig())
-	if err != nil {
-		t.Fatalf("Skill.Bind: %v", err)
-	}
-	return sk
-}
-
 func loadLightweightTestSkill(t *testing.T) *llm.Skill {
 	t.Helper()
 	dir := t.TempDir()

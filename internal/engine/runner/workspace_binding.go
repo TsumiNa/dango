@@ -1,7 +1,5 @@
 package runner
 
-import "fmt"
-
 func (r *Runner) provisionWorkspace(nodeIDs []string) error {
 	if r == nil {
 		return nil
@@ -56,15 +54,4 @@ func (r *Runner) resourceAllowedRoots() []string {
 		}
 	}
 	return roots
-}
-
-func (r *Runner) workspaceForNode(nodeID string) (SkillWorkspace, error) {
-	if r.workspace == nil {
-		return SkillWorkspace{}, fmt.Errorf("runner: workspace not configured")
-	}
-	workspace, ok := r.workspace.Skill(nodeID)
-	if !ok {
-		return SkillWorkspace{}, fmt.Errorf("runner: workspace missing for node %q", nodeID)
-	}
-	return workspace, nil
 }
