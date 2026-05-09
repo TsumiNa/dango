@@ -7,7 +7,7 @@ import (
 	"github.com/tsumina/dango/internal/llm"
 )
 
-// PersistenceHandle exposes runner-owned persistence sinks and workspace root.
+// PersistenceHandle exposes runner persistence sinks and workspace root.
 //
 // Implementations are typically orchestrator-owned and shared across runners.
 // Runners keep references to the returned objects for their entire lifecycle.

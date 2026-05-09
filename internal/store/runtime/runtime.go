@@ -127,10 +127,10 @@ func openSQLitePersistence(path string) (*Persistence, error) {
 		return nil, fmt.Errorf("runtime persistence open markdown workspace backend: %w", err)
 	}
 	backend := &compositeBackend{
-		eventLogStore:     sqlitepkg.NewStreamStore(dbStore),
-		runnerStore:       sqlitepkg.NewRunnerStore(dbStore),
-		snapshotCursor:    sqlitepkg.NewSnapshotCursorStore(dbStore),
-		workspaceRootPath: markdownBackend.WorkspaceRoot(),
+		eventLogStore:       sqlitepkg.NewStreamStore(dbStore),
+		runnerStore:         sqlitepkg.NewRunnerStore(dbStore),
+		snapshotCursorStore: sqlitepkg.NewSnapshotCursorStore(dbStore),
+		workspaceRootPath:   markdownBackend.WorkspaceRoot(),
 	}
 	return &Persistence{
 		backend:      backend,
@@ -160,10 +160,10 @@ func openJSONFallbackPersistence() (*Persistence, error) {
 }
 
 type compositeBackend struct {
-	eventLogStore     storepkg.EventLogStore
-	runnerStore       runnerpkg.RunnerStore
-	snapshotCursor    storepkg.SnapshotCursorStore
-	workspaceRootPath string
+	eventLogStore       storepkg.EventLogStore
+	runnerStore         runnerpkg.RunnerStore
+	snapshotCursorStore storepkg.SnapshotCursorStore
+	workspaceRootPath   string
 }
 
 func (c *compositeBackend) EventLogStore() storepkg.EventLogStore { return c.eventLogStore }
@@ -171,7 +171,7 @@ func (c *compositeBackend) RunnerStore() runnerpkg.RunnerStore {
 	return c.runnerStore
 }
 func (c *compositeBackend) SnapshotCursorStore() storepkg.SnapshotCursorStore {
-	return c.snapshotCursor
+	return c.snapshotCursorStore
 }
 func (c *compositeBackend) WorkspaceRoot() string       { return c.workspaceRootPath }
 func (c *compositeBackend) Close(context.Context) error { return nil }

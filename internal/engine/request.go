@@ -465,7 +465,7 @@ func newRunnerFromPlan(ctx context.Context, logger *slog.Logger, backend persist
 	opts := []runnerpkg.Option{
 		runnerpkg.WithContext(ctx),
 		runnerpkg.WithLogger(logger),
-		runnerpkg.WithPersistenceHandle(newRunnerPersistenceHandle(backend)),
+		runnerpkg.WithPersistenceHandle(backend),
 		runnerpkg.WithRootPathRule(pathRule),
 		runnerpkg.WithInitialPlan(plan, nodes),
 		runnerpkg.WithPlannerSkill(plannerSkill),
@@ -476,31 +476,6 @@ func newRunnerFromPlan(ctx context.Context, logger *slog.Logger, backend persist
 		}),
 	}
 	return runnerpkg.New(opts...), nil
-}
-
-type runnerPersistenceHandle struct {
-	backend persistencepkg.Backend
-}
-
-func newRunnerPersistenceHandle(backend persistencepkg.Backend) runnerpkg.PersistenceHandle {
-	if backend == nil {
-		return nil
-	}
-	return &runnerPersistenceHandle{backend: backend}
-}
-
-func (h *runnerPersistenceHandle) RunnerStore() runnerpkg.RunnerStore {
-	if h == nil || h.backend == nil {
-		return nil
-	}
-	return h.backend.RunnerStore()
-}
-
-func (h *runnerPersistenceHandle) WorkspaceRoot() string {
-	if h == nil || h.backend == nil {
-		return ""
-	}
-	return h.backend.WorkspaceRoot()
 }
 
 func buildPlanNodes(logger *slog.Logger, req Request, plan *CoarsePlan, skills map[string]SkillRegistration) (map[string]*runnerpkg.Node, error) {
