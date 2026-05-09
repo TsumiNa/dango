@@ -175,6 +175,12 @@ func TestHandoffLinksReadOnlyHandoffAndArtifacts(t *testing.T) {
 	if deliveredArtifactInfo.Mode().Perm()&0o222 != 0 {
 		t.Fatalf("delivered artifact mode = %o, want read-only", deliveredArtifactInfo.Mode().Perm())
 	}
+	if sourceHandoffInfo.Mode().Perm()&0o222 != 0 {
+		t.Fatalf("source handoff mode = %o, want read-only after hard link handoff", sourceHandoffInfo.Mode().Perm())
+	}
+	if sourceArtifactInfo.Mode().Perm()&0o222 != 0 {
+		t.Fatalf("source artifact mode = %o, want read-only after hard link handoff", sourceArtifactInfo.Mode().Perm())
+	}
 }
 
 func containsPath(paths []string, target string) bool {
