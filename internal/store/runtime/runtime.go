@@ -216,9 +216,7 @@ func (s *compositeEventLogStore) AppendEvent(ctx context.Context, event streampk
 	if err := s.primary.AppendEvent(ctx, event); err != nil {
 		return fmt.Errorf("runtime persistence append primary event log: %w", err)
 	}
-	if err := s.mirror.AppendEvent(ctx, event); err != nil {
-		return fmt.Errorf("runtime persistence append markdown mirror event log: %w", err)
-	}
+	_ = s.mirror.AppendEvent(ctx, event)
 	return nil
 }
 
@@ -232,19 +230,28 @@ func (s *compositeEventLogStore) LoadEvents(ctx context.Context, scope streampkg
 type compositeRunnerStore struct {
 	primary runnerpkg.RunnerStore
 	mirror  runnerpkg.RunnerStore
+
+	mu    sync.Mutex
+	locks map[string]*sync.Mutex
 }
 
 func (s *compositeRunnerStore) Append(ctx context.Context, runnerID string, rec *runnerpkg.RunnerRecord) (int64, error) {
 	if s == nil || s.primary == nil || s.mirror == nil {
 		return 0, fmt.Errorf("runtime persistence composite runner store is not configured")
 	}
+	unlock := s.lock(runnerID)
+	defer unlock()
+
 	seq, err := s.primary.Append(ctx, runnerID, rec)
 	if err != nil {
 		return 0, fmt.Errorf("runtime persistence append primary runner record: %w", err)
 	}
-	if _, err := s.mirror.Append(ctx, runnerID, rec); err != nil {
+	mirrorRec := *rec
+	mirrorRec.Seq = seq
+	if _, err := s.mirror.Append(ctx, runnerID, &mirrorRec); err != nil {
 		return 0, fmt.Errorf("runtime persistence append markdown mirror runner record: %w", err)
 	}
+	rec.Seq = seq
 	return seq, nil
 }
 
@@ -266,6 +273,22 @@ func (s *compositeRunnerStore) Delete(ctx context.Context, runnerID string) erro
 		return fmt.Errorf("runtime persistence delete markdown mirror runner record: %w", err)
 	}
 	return nil
+}
+
+func (s *compositeRunnerStore) lock(runnerID string) func() {
+	s.mu.Lock()
+	if s.locks == nil {
+		s.locks = make(map[string]*sync.Mutex)
+	}
+	lock := s.locks[runnerID]
+	if lock == nil {
+		lock = &sync.Mutex{}
+		s.locks[runnerID] = lock
+	}
+	s.mu.Unlock()
+
+	lock.Lock()
+	return lock.Unlock
 }
 
 type compositeSnapshotCursorStore struct {

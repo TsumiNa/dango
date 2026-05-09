@@ -3,6 +3,7 @@ package runtime
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -244,6 +245,107 @@ func TestOpen_SQLiteBackendCloseReleasesUnderlyingResources(t *testing.T) {
 	if err := persistence.Close(); err != nil {
 		t.Fatalf("Close(after backend close): %v", err)
 	}
+}
+
+func TestCompositeEventLogStore_AppendEventIgnoresMirrorFailure(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	event := runtimeTestEvent("req_composite_event", 1)
+	primary := &runtimeTestEventLogStore{}
+	mirror := &runtimeTestEventLogStore{appendErr: errors.New("mirror append failed")}
+	store := &compositeEventLogStore{
+		primary: primary,
+		mirror:  mirror,
+	}
+
+	if err := store.AppendEvent(ctx, event); err != nil {
+		t.Fatalf("AppendEvent: %v", err)
+	}
+	if primary.appendCalls != 1 {
+		t.Fatalf("primary append calls = %d, want 1", primary.appendCalls)
+	}
+	if mirror.appendCalls != 1 {
+		t.Fatalf("mirror append calls = %d, want 1", mirror.appendCalls)
+	}
+}
+
+func TestCompositeRunnerStore_AppendKeepsCallerSequence(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	rec := &runnerpkg.RunnerRecord{Kind: runnerpkg.RunnerRecordInit}
+	primary := &runtimeTestRunnerStore{
+		appendFn: func(_ context.Context, _ string, in *runnerpkg.RunnerRecord) (int64, error) {
+			in.Seq = 11
+			return 11, nil
+		},
+	}
+	var mirrorRec *runnerpkg.RunnerRecord
+	mirror := &runtimeTestRunnerStore{
+		appendFn: func(_ context.Context, _ string, in *runnerpkg.RunnerRecord) (int64, error) {
+			mirrorRec = in
+			if in.Seq != 11 {
+				t.Fatalf("mirror input seq = %d, want 11", in.Seq)
+			}
+			in.Seq = 100
+			return in.Seq, nil
+		},
+	}
+	store := &compositeRunnerStore{
+		primary: primary,
+		mirror:  mirror,
+	}
+
+	seq, err := store.Append(ctx, "run_composite_seq", rec)
+	if err != nil {
+		t.Fatalf("Append: %v", err)
+	}
+	if seq != 11 {
+		t.Fatalf("Append seq = %d, want 11", seq)
+	}
+	if rec.Seq != 11 {
+		t.Fatalf("caller record seq = %d, want 11", rec.Seq)
+	}
+	if mirrorRec == nil {
+		t.Fatal("mirror record pointer was nil")
+	}
+	if mirrorRec == rec {
+		t.Fatal("mirror append received caller record pointer; want clone")
+	}
+}
+
+type runtimeTestEventLogStore struct {
+	appendErr   error
+	appendCalls int
+}
+
+func (s *runtimeTestEventLogStore) AppendEvent(context.Context, streampkg.Event) error {
+	s.appendCalls++
+	return s.appendErr
+}
+
+func (s *runtimeTestEventLogStore) LoadEvents(context.Context, streampkg.Scope, uint64, streampkg.Filter) ([]streampkg.Event, error) {
+	return nil, nil
+}
+
+type runtimeTestRunnerStore struct {
+	appendFn func(context.Context, string, *runnerpkg.RunnerRecord) (int64, error)
+}
+
+func (s *runtimeTestRunnerStore) Append(ctx context.Context, runnerID string, rec *runnerpkg.RunnerRecord) (int64, error) {
+	if s.appendFn == nil {
+		return 0, nil
+	}
+	return s.appendFn(ctx, runnerID, rec)
+}
+
+func (s *runtimeTestRunnerStore) Load(context.Context, string) ([]runnerpkg.RunnerRecord, error) {
+	return nil, nil
+}
+
+func (s *runtimeTestRunnerStore) Delete(context.Context, string) error {
+	return nil
 }
 
 func runtimeTestEvent(requestID string, sequence uint64) streampkg.Event {
