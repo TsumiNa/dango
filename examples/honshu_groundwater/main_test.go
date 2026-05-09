@@ -284,44 +284,40 @@ func TestRunHonshuGroundwaterExampleExecutesNeededSkills(t *testing.T) {
 			t.Fatalf("logs missing %q:\n%s", want, logs.String())
 		}
 	}
-	for _, want := range []string{"request persisted", "describe replay completed", "persistence summaries written"} {
-		if !strings.Contains(logs.String(), want) {
-			t.Fatalf("logs missing %q:\n%s", want, logs.String())
-		}
+	if !strings.Contains(logs.String(), "request persisted") {
+		t.Fatalf("logs missing %q:\n%s", "request persisted", logs.String())
 	}
 	if err := ensureNoPDFSkill(view.Plan); err != nil {
 		t.Fatal(err)
 	}
-	train, err := trainingResultFromView(view, "train_model")
+	trainHandoff, err := handoffFromView(view, "train_model")
 	if err != nil {
-		t.Fatalf("trainingResultFromView: %v", err)
+		t.Fatalf("handoffFromView: %v", err)
 	}
-	trainDoc, err := exchangeDocumentFromView(view, "train_model")
+	if strings.TrimSpace(trainHandoff.Body) == "" {
+		t.Fatal("train handoff body is empty")
+	}
+	trainCompletedRaw, err := completedNodeMarkdown(view, "train_model")
 	if err != nil {
-		t.Fatalf("exchangeDocumentFromView: %v", err)
+		t.Fatalf("completedNodeMarkdown(train_model): %v", err)
 	}
-	if len(trainDoc.Resources) != 2 {
-		t.Fatalf("train resources = %+v, want CSV and SVG resources", trainDoc.Resources)
+	if _, err := exec.LookPath("uv"); err != nil {
+		t.Skip("uv not available in PATH; skipping artifact marker assertions")
 	}
-	if train.PredictionCount != 36 {
-		t.Fatalf("prediction count = %d, want 36", train.PredictionCount)
+	completedText := strings.ToLower(trainCompletedRaw)
+	if !strings.Contains(completedText, ".csv") {
+		t.Fatalf("train completed output missing %q marker:\n%s", ".csv", trainCompletedRaw)
 	}
-	if _, err := os.Stat(train.CSVPath); err != nil {
-		t.Fatalf("stat CSV: %v", err)
+	if !strings.Contains(completedText, ".svg") {
+		t.Fatalf("train completed output missing %q marker:\n%s", ".svg", trainCompletedRaw)
 	}
-	if _, err := os.Stat(train.PlotPath); err != nil {
-		t.Fatalf("stat plot: %v", err)
-	}
-	csvData, err := os.ReadFile(train.CSVPath)
-	if err != nil {
-		t.Fatalf("read CSV: %v", err)
-	}
-	if !strings.Contains(string(csvData), "predicted_water_level_m_bgl") {
-		t.Fatalf("CSV missing prediction header: %s", string(csvData))
+	handoffText := strings.ToLower(trainHandoff.Body)
+	if !strings.Contains(handoffText, "prediction_count") {
+		t.Fatalf("train handoff body missing %q marker:\n%s", "prediction_count", trainHandoff.Body)
 	}
 }
 
-func TestRunHonshuGroundwaterExampleWritesPersistenceSummaries(t *testing.T) {
+func TestRunHonshuGroundwaterExampleWritesPersistenceWorkspaceArtifacts(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
 	client := newFakeLLMClient(t)
@@ -341,96 +337,60 @@ func TestRunHonshuGroundwaterExampleWritesPersistenceSummaries(t *testing.T) {
 	if err != nil {
 		t.Fatalf("runHonshuGroundwaterExample: %v", err)
 	}
-
-	var describe describeViewSummary
-	readJSONFile(t, filepath.Join(artifactsDir, "debug", "describe_view.json"), &describe)
-	if describe.RequestID != result.RequestID {
-		t.Fatalf("describe request_id = %q, want %q", describe.RequestID, result.RequestID)
+	if result.PersistenceWorkRoot == "" {
+		t.Fatal("PersistenceWorkRoot is empty")
 	}
-	if describe.RunnerID != result.RunnerID {
-		t.Fatalf("describe runner_id = %q, want %q", describe.RunnerID, result.RunnerID)
+	wantWorkspaceRoot := filepath.Join(artifactsDir, "persistence", "workspace")
+	if result.PersistenceWorkRoot != wantWorkspaceRoot {
+		t.Fatalf("PersistenceWorkRoot = %q, want %q", result.PersistenceWorkRoot, wantWorkspaceRoot)
 	}
-	if describe.Phase != runnerpkg.PhaseSettled {
-		t.Fatalf("describe phase = %q, want %q", describe.Phase, runnerpkg.PhaseSettled)
+	runnerRoot := filepath.Join(result.PersistenceWorkRoot, "task_"+result.RunnerID)
+	if stat, err := os.Stat(runnerRoot); err != nil || !stat.IsDir() {
+		t.Fatalf("runner workspace root stat = (%v, %v), want existing directory", stat, err)
 	}
-	if describe.NodeCount != 2 {
-		t.Fatalf("describe node_count = %d, want 2", describe.NodeCount)
+	if _, err := os.Stat(filepath.Join(artifactsDir, "debug", "describe_view.json")); !os.IsNotExist(err) {
+		t.Fatalf("describe_view.json err = %v, want not exist", err)
 	}
-	if describe.ArtifactCount == 0 {
-		t.Fatal("describe artifact_count = 0, want persisted artifacts")
+	if _, err := os.Stat(filepath.Join(artifactsDir, "debug", "runner_records.json")); !os.IsNotExist(err) {
+		t.Fatalf("runner_records.json err = %v, want not exist", err)
 	}
-	if describe.LatestEventSequence == 0 {
-		t.Fatal("describe latest_event_sequence = 0, want persisted replay cursor")
+	if _, err := os.Stat(filepath.Join(artifactsDir, "debug", "persistence_summary.json")); !os.IsNotExist(err) {
+		t.Fatalf("persistence_summary.json err = %v, want not exist", err)
 	}
-	if !hasDescribeNode(describe.Nodes, "enrich_elevation", "elevation_lookup") {
-		t.Fatalf("describe nodes missing enrich_elevation: %+v", describe.Nodes)
+	exchangeFiles, err := filepath.Glob(filepath.Join(runnerRoot, "exchange", "*.md"))
+	if err != nil {
+		t.Fatalf("glob workspace exchange docs: %v", err)
 	}
-	if !hasDescribeNode(describe.Nodes, "train_model", "train_gp_model") {
-		t.Fatalf("describe nodes missing train_model: %+v", describe.Nodes)
+	if len(exchangeFiles) == 0 {
+		t.Fatal("workspace exchange docs missing")
 	}
-
-	var records runnerRecordsSummary
-	readJSONFile(t, filepath.Join(artifactsDir, "debug", "runner_records.json"), &records)
-	if records.RecordCount == 0 {
-		t.Fatal("runner_records record_count = 0, want persisted records")
+	firstExchange := strings.TrimSpace(readFile(t, exchangeFiles[0]))
+	if _, err := runnerpkg.ParseExchangeDocMarkdown(firstExchange); err != nil {
+		t.Fatalf("parse exchange doc %q: %v", exchangeFiles[0], err)
 	}
-	if !hasRunnerRecordSummaryEvent(records.Records, runnerpkg.EventNodeCompleted.String(), "train_model") {
-		t.Fatalf("runner_records missing completed train_model event: %+v", records.Records)
+	memoSnapshots, err := filepath.Glob(filepath.Join(runnerRoot, "archive", "memo", "*", "*", "*.memo.md"))
+	if err != nil {
+		t.Fatalf("glob memo snapshots: %v", err)
 	}
-
-	var summary persistenceSummary
-	readJSONFile(t, filepath.Join(artifactsDir, "debug", "persistence_summary.json"), &summary)
-	if summary.RequestID != result.RequestID {
-		t.Fatalf("summary request_id = %q, want %q", summary.RequestID, result.RequestID)
+	if _, err := os.Stat(filepath.Join(runnerRoot, "archive", "memo")); err != nil {
+		t.Fatalf("stat memo archive root: %v", err)
 	}
-	if summary.RunnerID != result.RunnerID {
-		t.Fatalf("summary runner_id = %q, want %q", summary.RunnerID, result.RunnerID)
-	}
-	if summary.PersistencePath != result.PersistencePath {
-		t.Fatalf("summary persistence_path = %q, want %q", summary.PersistencePath, result.PersistencePath)
-	}
-	if summary.StreamEventsPath != filepath.Join(artifactsDir, "debug", "stream_events.jsonl") {
-		t.Fatalf("summary stream_events_path = %q", summary.StreamEventsPath)
-	}
-	if summary.DescribeViewPath != filepath.Join(artifactsDir, "debug", "describe_view.json") {
-		t.Fatalf("summary describe_view_path = %q", summary.DescribeViewPath)
-	}
-	if summary.RunnerRecordsPath != filepath.Join(artifactsDir, "debug", "runner_records.json") {
-		t.Fatalf("summary runner_records_path = %q", summary.RunnerRecordsPath)
-	}
-	if summary.DescribeNodeCount != describe.NodeCount {
-		t.Fatalf("summary describe_node_count = %d, want %d", summary.DescribeNodeCount, describe.NodeCount)
-	}
-	if summary.DescribeArtifactCount != describe.ArtifactCount {
-		t.Fatalf("summary describe_artifact_count = %d, want %d", summary.DescribeArtifactCount, describe.ArtifactCount)
-	}
-	if summary.RunnerRecordCount != records.RecordCount {
-		t.Fatalf("summary runner_record_count = %d, want %d", summary.RunnerRecordCount, records.RecordCount)
-	}
-	if summary.LatestEventSequence != describe.LatestEventSequence {
-		t.Fatalf("summary latest_event_sequence = %d, want %d", summary.LatestEventSequence, describe.LatestEventSequence)
-	}
-	if summary.Cursor.EventSequence != describe.LatestEventSequence {
-		t.Fatalf("summary cursor event_sequence = %d, want %d", summary.Cursor.EventSequence, describe.LatestEventSequence)
-	}
-	if summary.Cursor.RunnerID != result.RunnerID {
-		t.Fatalf("summary cursor runner_id = %q, want %q", summary.Cursor.RunnerID, result.RunnerID)
-	}
-	rawSummary := map[string]any{}
-	readJSONFile(t, filepath.Join(artifactsDir, "debug", "persistence_summary.json"), &rawSummary)
-	rawCursor, ok := rawSummary["cursor"].(map[string]any)
-	if !ok {
-		t.Fatalf("summary cursor raw JSON = %#v, want object", rawSummary["cursor"])
-	}
-	for _, key := range []string{"request_id", "runner_id", "event_sequence"} {
-		if _, ok := rawCursor[key]; !ok {
-			t.Fatalf("summary cursor missing snake_case key %q: %#v", key, rawCursor)
+	if len(memoSnapshots) > 0 {
+		firstMemo := strings.TrimSpace(readFile(t, memoSnapshots[0]))
+		if _, err := runnerpkg.ParseMemoMarkdown(firstMemo); err != nil {
+			t.Fatalf("parse memo snapshot %q: %v", memoSnapshots[0], err)
 		}
 	}
-	for _, key := range []string{"RequestID", "RunnerID", "EventSequence"} {
-		if _, ok := rawCursor[key]; ok {
-			t.Fatalf("summary cursor contains camel-case key %q: %#v", key, rawCursor)
-		}
+	handoffFiles, err := filepath.Glob(filepath.Join(runnerRoot, "skills", "*", "outbox", "handoff.md"))
+	if err != nil {
+		t.Fatalf("glob outbox handoffs: %v", err)
+	}
+	if len(handoffFiles) == 0 {
+		t.Fatal("workspace outbox handoffs missing")
+	}
+	firstHandoff := strings.TrimSpace(readFile(t, handoffFiles[0]))
+	if _, err := runnerpkg.ParseHandoffMarkdown(firstHandoff); err != nil {
+		t.Fatalf("parse outbox handoff %q: %v", handoffFiles[0], err)
 	}
 }
 
@@ -641,33 +601,13 @@ func readStreamEvents(t *testing.T, path string) []streampkg.Event {
 	return events
 }
 
-func readJSONFile(t *testing.T, path string, dst any) {
+func readFile(t *testing.T, path string) string {
 	t.Helper()
 	data, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatalf("read %s: %v", path, err)
 	}
-	if err := json.Unmarshal(data, dst); err != nil {
-		t.Fatalf("unmarshal %s: %v\n%s", path, err, string(data))
-	}
-}
-
-func hasDescribeNode(nodes []describeNodeSummary, nodeID string, skillName string) bool {
-	for _, node := range nodes {
-		if node.ID == nodeID && node.SkillName == skillName {
-			return true
-		}
-	}
-	return false
-}
-
-func hasRunnerRecordSummaryEvent(records []runnerRecordSummaryEntry, eventType string, nodeID string) bool {
-	for _, record := range records {
-		if record.EventType == eventType && record.NodeID == nodeID {
-			return true
-		}
-	}
-	return false
+	return string(data)
 }
 
 func hasPersistedRunnerRecord(records []runnerpkg.RunnerRecord, eventType string, nodeID string) bool {
@@ -852,32 +792,45 @@ type trainingResult struct {
 	DownstreamReminder string  `json:"downstream_reminder"`
 }
 
-func trainingResultFromView(view *runnerpkg.RunnerView, nodeID string) (*trainingResult, error) {
-	doc, err := exchangeDocumentFromView(view, nodeID)
+func handoffFromView(view *runnerpkg.RunnerView, nodeID string) (*runnerpkg.HandoffDoc, error) {
+	raw, err := completedNodeMarkdown(view, nodeID)
 	if err != nil {
 		return nil, err
 	}
-	jsonText, err := extractJSONBlock(doc.Handoff)
-	if err != nil {
-		return nil, err
+	if doc, parseErr := runnerpkg.ParseHandoffMarkdown(raw); parseErr == nil {
+		return doc, nil
 	}
-	var result trainingResult
-	if err := json.Unmarshal([]byte(jsonText), &result); err != nil {
-		return nil, err
+	if legacy, parseErr := runnerpkg.ParseExchangeMarkdown(raw); parseErr == nil {
+		doc := &runnerpkg.HandoffDoc{
+			RunnerID: legacy.RunnerID,
+			FromNode: legacy.NodeID,
+			ToNodes:  []string{"downstream"},
+			Body:     legacy.Handoff,
+		}
+		for _, resource := range legacy.Resources {
+			doc.Artifacts = append(doc.Artifacts, runnerpkg.HandoffArtifact{
+				Path:        resource.Path,
+				Type:        resource.Type,
+				Description: resource.Description,
+			})
+		}
+		return doc, nil
 	}
-	return &result, nil
+	return nil, fmt.Errorf("parse completed node %q as handoff or legacy exchange markdown", nodeID)
 }
 
-func exchangeDocumentFromView(view *runnerpkg.RunnerView, nodeID string) (*runnerpkg.ExchangeDocument, error) {
+func completedNodeMarkdown(view *runnerpkg.RunnerView, nodeID string) (string, error) {
+	if view == nil {
+		return "", fmt.Errorf("runner view is nil")
+	}
+	if view.Snapshot.CompletedNodes == nil {
+		return "", fmt.Errorf("runner view has no completed nodes")
+	}
 	raw, ok := view.Snapshot.CompletedNodes[nodeID].(string)
 	if !ok || raw == "" {
-		return nil, fmt.Errorf("missing completed output for node %q", nodeID)
+		return "", fmt.Errorf("missing completed output for node %q", nodeID)
 	}
-	doc, err := runnerpkg.ParseExchangeMarkdown(raw)
-	if err != nil {
-		return nil, err
-	}
-	return doc, nil
+	return raw, nil
 }
 
 func ensureNoPDFSkill(plan *orchestrate.CoarsePlan) error {

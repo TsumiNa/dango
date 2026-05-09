@@ -11,7 +11,6 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
-	"sort"
 	"strings"
 	"time"
 
@@ -39,11 +38,12 @@ type exampleConfig struct {
 }
 
 type exampleRunResult struct {
-	RequestID       string
-	RunnerID        string
-	ArtifactsDir    string
-	PersistencePath string
-	FinalRunnerView *runnerpkg.RunnerView
+	RequestID           string
+	RunnerID            string
+	ArtifactsDir        string
+	PersistencePath     string
+	PersistenceWorkRoot string
+	FinalRunnerView     *runnerpkg.RunnerView
 }
 
 func main() {
@@ -231,38 +231,18 @@ func runHonshuGroundwaterExample(ctx context.Context, cfg exampleConfig) (_ *exa
 	if err := closeEventStream(); err != nil {
 		return nil, err
 	}
-	logger.Info("request persisted", "request_id", resp.RequestID, "runner_id", runnerID)
-	describeView, err := orchestrator.DescribeRequest(ctx, resp.RequestID)
-	if err != nil {
-		return nil, fmt.Errorf("describe persisted request: %w", err)
-	}
-	runnerRecords, err := orchestrator.LoadRunnerRecords(ctx, runnerID)
-	if err != nil {
-		return nil, fmt.Errorf("load persisted runner records: %w", err)
-	}
-	cursor, err := persistence.SnapshotCursorStore().LoadCursor(ctx, resp.RequestID)
-	if err != nil {
-		return nil, fmt.Errorf("load describe cursor: %w", err)
-	}
-	logger.Info("describe replay completed",
+	logger.Info("request persisted",
 		"request_id", resp.RequestID,
-		"runner_id", describeView.RunnerID,
-		"event_sequence", describeView.LatestEventSequence,
-		"runner_records", len(runnerRecords),
-	)
-	if err := writePersistenceDebugArtifacts(artifactsDir, streamLogPath, persistencePath, describeView, runnerRecords, cursor); err != nil {
-		return nil, fmt.Errorf("write persistence debug artifacts: %w", err)
-	}
-	logger.Info("persistence summaries written",
-		"request_id", resp.RequestID,
-		"debug_dir", filepath.Join(artifactsDir, "debug"),
+		"runner_id", runnerID,
+		"workspace_root", persistence.Backend().WorkspaceRoot(),
 	)
 	result := &exampleRunResult{
-		RequestID:       resp.RequestID,
-		RunnerID:        runnerID,
-		ArtifactsDir:    artifactsDir,
-		PersistencePath: persistencePath,
-		FinalRunnerView: view,
+		RequestID:           resp.RequestID,
+		RunnerID:            runnerID,
+		ArtifactsDir:        artifactsDir,
+		PersistencePath:     persistencePath,
+		PersistenceWorkRoot: persistence.Backend().WorkspaceRoot(),
+		FinalRunnerView:     view,
 	}
 	if view.State.Status == runnerpkg.RunnerStatusFailed {
 		errText := strings.TrimSpace(view.State.Error)
@@ -304,189 +284,6 @@ func createArtifactLog(artifactsDir string, name string) (*os.File, string, erro
 		return nil, "", err
 	}
 	return file, path, nil
-}
-
-type describeViewSummary struct {
-	RequestID                string                         `json:"request_id"`
-	RunnerID                 string                         `json:"runner_id,omitempty"`
-	Phase                    runnerpkg.RunnerPhase          `json:"phase,omitempty"`
-	Status                   runnerpkg.RunnerStatus         `json:"status,omitempty"`
-	NodeCount                int                            `json:"node_count"`
-	Nodes                    []describeNodeSummary          `json:"nodes,omitempty"`
-	ArtifactCount            int                            `json:"artifact_count"`
-	Artifacts                []orchestrate.DescribeArtifact `json:"artifacts,omitempty"`
-	LatestCheckpointSequence int64                          `json:"latest_checkpoint_sequence,omitempty"`
-	LatestEventSequence      uint64                         `json:"latest_event_sequence,omitempty"`
-}
-
-type describeNodeSummary struct {
-	ID        string   `json:"id"`
-	SkillName string   `json:"skill_name,omitempty"`
-	DependsOn []string `json:"depends_on,omitempty"`
-	Status    string   `json:"status,omitempty"`
-	Error     string   `json:"error,omitempty"`
-}
-
-type runnerRecordsSummary struct {
-	RecordCount int                        `json:"record_count"`
-	Records     []runnerRecordSummaryEntry `json:"records,omitempty"`
-}
-
-type runnerRecordSummaryEntry struct {
-	Seq          int64                      `json:"seq"`
-	Kind         runnerpkg.RunnerRecordKind `json:"kind"`
-	Timestamp    time.Time                  `json:"ts"`
-	Status       runnerpkg.RunnerStatus     `json:"status,omitempty"`
-	Error        string                     `json:"error,omitempty"`
-	EventType    string                     `json:"event_type,omitempty"`
-	NodeID       string                     `json:"node_id,omitempty"`
-	DataEncoding string                     `json:"data_encoding,omitempty"`
-}
-
-type persistenceSummary struct {
-	RequestID                string                 `json:"request_id"`
-	RunnerID                 string                 `json:"runner_id,omitempty"`
-	Phase                    runnerpkg.RunnerPhase  `json:"phase,omitempty"`
-	Status                   runnerpkg.RunnerStatus `json:"status,omitempty"`
-	PersistencePath          string                 `json:"persistence_path"`
-	StreamEventsPath         string                 `json:"stream_events_path"`
-	DescribeViewPath         string                 `json:"describe_view_path"`
-	RunnerRecordsPath        string                 `json:"runner_records_path"`
-	DescribeNodeCount        int                    `json:"describe_node_count"`
-	DescribeArtifactCount    int                    `json:"describe_artifact_count"`
-	RunnerRecordCount        int                    `json:"runner_record_count"`
-	LatestCheckpointSequence int64                  `json:"latest_checkpoint_sequence,omitempty"`
-	LatestEventSequence      uint64                 `json:"latest_event_sequence,omitempty"`
-	Cursor                   snapshotCursorSummary  `json:"cursor"`
-}
-
-type snapshotCursorSummary struct {
-	RequestID          string    `json:"request_id"`
-	RunnerID           string    `json:"runner_id,omitempty"`
-	CheckpointSequence int64     `json:"checkpoint_sequence,omitempty"`
-	EventSequence      uint64    `json:"event_sequence,omitempty"`
-	UpdatedAt          time.Time `json:"updated_at,omitempty"`
-}
-
-func writePersistenceDebugArtifacts(artifactsDir string, streamLogPath string, persistencePath string, describeView *orchestrate.DescribeView, runnerRecords []runnerpkg.RunnerRecord, cursor storepkg.SnapshotCursor) error {
-	debugDir := filepath.Join(artifactsDir, "debug")
-	describePath := filepath.Join(debugDir, "describe_view.json")
-	runnerRecordsPath := filepath.Join(debugDir, "runner_records.json")
-	persistenceSummaryPath := filepath.Join(debugDir, "persistence_summary.json")
-
-	describeSummary := summarizeDescribeView(describeView)
-	if err := writeJSONArtifact(describePath, describeSummary); err != nil {
-		return err
-	}
-	runnerSummary := summarizeRunnerRecords(runnerRecords)
-	if err := writeJSONArtifact(runnerRecordsPath, runnerSummary); err != nil {
-		return err
-	}
-	if err := writeJSONArtifact(persistenceSummaryPath, persistenceSummary{
-		RequestID:                describeSummary.RequestID,
-		RunnerID:                 describeSummary.RunnerID,
-		Phase:                    describeSummary.Phase,
-		Status:                   describeSummary.Status,
-		PersistencePath:          persistencePath,
-		StreamEventsPath:         streamLogPath,
-		DescribeViewPath:         describePath,
-		RunnerRecordsPath:        runnerRecordsPath,
-		DescribeNodeCount:        describeSummary.NodeCount,
-		DescribeArtifactCount:    describeSummary.ArtifactCount,
-		RunnerRecordCount:        runnerSummary.RecordCount,
-		LatestCheckpointSequence: describeSummary.LatestCheckpointSequence,
-		LatestEventSequence:      describeSummary.LatestEventSequence,
-		Cursor:                   summarizeSnapshotCursor(cursor),
-	}); err != nil {
-		return err
-	}
-	return nil
-}
-
-func summarizeDescribeView(view *orchestrate.DescribeView) describeViewSummary {
-	if view == nil {
-		return describeViewSummary{}
-	}
-	nodeIDs := make([]string, 0, len(view.Nodes))
-	for nodeID := range view.Nodes {
-		nodeIDs = append(nodeIDs, nodeID)
-	}
-	sort.Strings(nodeIDs)
-	nodes := make([]describeNodeSummary, 0, len(nodeIDs))
-	for _, nodeID := range nodeIDs {
-		node := view.Nodes[nodeID]
-		nodes = append(nodes, describeNodeSummary{
-			ID:        node.ID,
-			SkillName: node.SkillName,
-			DependsOn: append([]string(nil), node.DependsOn...),
-			Status:    node.Status,
-			Error:     node.Error,
-		})
-	}
-	artifacts := append([]orchestrate.DescribeArtifact(nil), view.Artifacts...)
-	return describeViewSummary{
-		RequestID:                view.RequestID,
-		RunnerID:                 view.RunnerID,
-		Phase:                    view.Phase,
-		Status:                   view.Status,
-		NodeCount:                len(nodes),
-		Nodes:                    nodes,
-		ArtifactCount:            len(artifacts),
-		Artifacts:                artifacts,
-		LatestCheckpointSequence: view.LatestCheckpointSequence,
-		LatestEventSequence:      view.LatestEventSequence,
-	}
-}
-
-func summarizeRunnerRecords(records []runnerpkg.RunnerRecord) runnerRecordsSummary {
-	entries := make([]runnerRecordSummaryEntry, 0, len(records))
-	for _, record := range records {
-		entry := runnerRecordSummaryEntry{
-			Seq:       record.Seq,
-			Kind:      record.Kind,
-			Timestamp: record.Timestamp,
-			Status:    record.Status,
-			Error:     record.Error,
-		}
-		if record.Event != nil {
-			entry.EventType = record.Event.Type
-			entry.NodeID = record.Event.NodeID
-			entry.DataEncoding = record.Event.DataEncoding
-		}
-		entries = append(entries, entry)
-	}
-	return runnerRecordsSummary{RecordCount: len(entries), Records: entries}
-}
-
-func summarizeSnapshotCursor(cursor storepkg.SnapshotCursor) snapshotCursorSummary {
-	return snapshotCursorSummary{
-		RequestID:          cursor.RequestID,
-		RunnerID:           cursor.RunnerID,
-		CheckpointSequence: cursor.CheckpointSequence,
-		EventSequence:      cursor.EventSequence,
-		UpdatedAt:          cursor.UpdatedAt,
-	}
-}
-
-func writeJSONArtifact(path string, value any) (err error) {
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		return err
-	}
-	file, err := os.Create(path)
-	if err != nil {
-		return err
-	}
-	defer func() {
-		if closeErr := file.Close(); closeErr != nil && err == nil {
-			err = fmt.Errorf("close %s: %w", path, closeErr)
-		}
-	}()
-	encoder := json.NewEncoder(file)
-	encoder.SetIndent("", "  ")
-	if err := encoder.Encode(value); err != nil {
-		return err
-	}
-	return nil
 }
 
 func buildGroundwaterRequest(measurements string) string {
