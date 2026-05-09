@@ -85,6 +85,11 @@ func TestOpen_SQLiteStoresSurviveReopen(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Open(sqlite): %v", err)
 	}
+	workspaceRoot := persistence.Backend().WorkspaceRoot()
+	wantWorkspaceRoot := filepath.Join(filepath.Dir(dbPath), "workspace")
+	if workspaceRoot != wantWorkspaceRoot {
+		t.Fatalf("WorkspaceRoot() = %q, want %q", workspaceRoot, wantWorkspaceRoot)
+	}
 	event := runtimeTestEvent("req_sqlite_runtime", 1)
 	if err := persistence.EventLogStore().AppendEvent(ctx, event); err != nil {
 		t.Fatalf("AppendEvent: %v", err)
@@ -145,6 +150,27 @@ func TestOpen_RejectsUnusableSQLitePath(t *testing.T) {
 	_, err := Open(Config{SQLitePath: filepath.Join(blocked, "dango.db")})
 	if err == nil {
 		t.Fatal("Open accepted unusable sqlite path")
+	}
+}
+
+func TestOpen_SQLiteBackendCloseReleasesUnderlyingResources(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	dbPath := filepath.Join(t.TempDir(), "dango.db")
+	persistence, err := Open(Config{SQLitePath: dbPath})
+	if err != nil {
+		t.Fatalf("Open(sqlite): %v", err)
+	}
+	event := runtimeTestEvent("req_sqlite_backend_close", 1)
+	if err := persistence.Backend().Close(ctx); err != nil {
+		t.Fatalf("Backend().Close: %v", err)
+	}
+	if err := persistence.EventLogStore().AppendEvent(ctx, event); err == nil {
+		t.Fatal("AppendEvent succeeded after Backend().Close, want closed backing store")
+	}
+	if err := persistence.Close(); err != nil {
+		t.Fatalf("Close(after backend close): %v", err)
 	}
 }
 

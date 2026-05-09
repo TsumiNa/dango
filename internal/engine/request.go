@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"os"
 	"sync"
 
 	"github.com/lithammer/shortuuid/v4"
@@ -458,6 +459,11 @@ func stopStreamMerges(merges []*streampkg.Merge) {
 }
 
 func newRunnerFromPlan(ctx context.Context, logger *slog.Logger, backend persistencepkg.Backend, pathRule persistencepkg.PathRule, req Request, plan *CoarsePlan, skills map[string]SkillRegistration, plannerSkill *llm.Skill, skillSummaries []runnerpkg.SkillSummary) (*runnerpkg.Runner, error) {
+	if req.ArtifactsDir != "" {
+		if err := os.MkdirAll(req.ArtifactsDir, 0o755); err != nil {
+			return nil, fmt.Errorf("orchestrate: create artifacts dir %q: %w", req.ArtifactsDir, err)
+		}
+	}
 	nodes, err := buildPlanNodes(logger, req, plan, skills)
 	if err != nil {
 		return nil, err
@@ -467,6 +473,7 @@ func newRunnerFromPlan(ctx context.Context, logger *slog.Logger, backend persist
 		runnerpkg.WithLogger(logger),
 		runnerpkg.WithPersistenceHandle(backend),
 		runnerpkg.WithRootPathRule(pathRule),
+		runnerpkg.WithTrustedResourceRoots(req.ArtifactsDir),
 		runnerpkg.WithInitialPlan(plan, nodes),
 		runnerpkg.WithPlannerSkill(plannerSkill),
 		runnerpkg.WithSkillSummaries(skillSummaries),

@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 
 	runnerpkg "github.com/tsumina/dango/internal/engine/runner"
 	persistencepkg "github.com/tsumina/dango/internal/engine/runner/persistence"
@@ -28,10 +29,8 @@ func DefaultConfig() Config {
 
 // Persistence groups the startup-owned backend used by the orchestrator.
 type Persistence struct {
-	backend      persistencepkg.Backend
-	sqliteStore  *sqlitepkg.Store
-	rootDir      string
-	closeBackend func(context.Context) error
+	backend persistencepkg.Backend
+	rootDir string
 }
 
 // Open creates the startup-owned persistence bundle described by cfg.
@@ -94,13 +93,8 @@ func (p *Persistence) Close() error {
 		return nil
 	}
 	var errs []error
-	if p.closeBackend != nil {
-		if err := p.closeBackend(context.Background()); err != nil {
-			errs = append(errs, err)
-		}
-	}
-	if p.sqliteStore != nil {
-		if err := p.sqliteStore.Close(); err != nil {
+	if p.backend != nil {
+		if err := p.backend.Close(context.Background()); err != nil {
 			errs = append(errs, err)
 		}
 	}
@@ -120,7 +114,7 @@ func openSQLitePersistence(path string) (*Persistence, error) {
 	if err != nil {
 		return nil, fmt.Errorf("runtime persistence open sqlite %q: %w", path, err)
 	}
-	markdownRoot := filepath.Join(filepath.Dir(path), "workspace")
+	markdownRoot := filepath.Dir(path)
 	markdownBackend, err := persistencepkg.NewMarkdownBackend(markdownRoot)
 	if err != nil {
 		_ = dbStore.Close()
@@ -131,11 +125,12 @@ func openSQLitePersistence(path string) (*Persistence, error) {
 		runnerStore:         sqlitepkg.NewRunnerStore(dbStore),
 		snapshotCursorStore: sqlitepkg.NewSnapshotCursorStore(dbStore),
 		workspaceRootPath:   markdownBackend.WorkspaceRoot(),
+		closeOnce: sync.OnceValue(func() error {
+			return errors.Join(markdownBackend.Close(context.Background()), dbStore.Close())
+		}),
 	}
 	return &Persistence{
-		backend:      backend,
-		sqliteStore:  dbStore,
-		closeBackend: markdownBackend.Close,
+		backend: backend,
 	}, nil
 }
 
@@ -153,9 +148,8 @@ func openJSONFallbackPersistence() (*Persistence, error) {
 		return cleanup(fmt.Errorf("runtime persistence open markdown backend: %w", err))
 	}
 	return &Persistence{
-		backend:      backend,
-		rootDir:      root,
-		closeBackend: backend.Close,
+		backend: backend,
+		rootDir: root,
 	}, nil
 }
 
@@ -166,6 +160,7 @@ type compositeBackend struct {
 	runnerStore         runnerpkg.RunnerStore
 	snapshotCursorStore storepkg.SnapshotCursorStore
 	workspaceRootPath   string
+	closeOnce           func() error
 }
 
 func (c *compositeBackend) EventLogStore() storepkg.EventLogStore { return c.eventLogStore }
@@ -175,5 +170,10 @@ func (c *compositeBackend) RunnerStore() runnerpkg.RunnerStore {
 func (c *compositeBackend) SnapshotCursorStore() storepkg.SnapshotCursorStore {
 	return c.snapshotCursorStore
 }
-func (c *compositeBackend) WorkspaceRoot() string       { return c.workspaceRootPath }
-func (c *compositeBackend) Close(context.Context) error { return nil }
+func (c *compositeBackend) WorkspaceRoot() string { return c.workspaceRootPath }
+func (c *compositeBackend) Close(context.Context) error {
+	if c == nil || c.closeOnce == nil {
+		return nil
+	}
+	return c.closeOnce()
+}

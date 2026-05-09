@@ -29,20 +29,21 @@ type Runner struct {
 	logger *slog.Logger
 
 	// Startup configuration set once via Options.
-	persistenceHandle PersistenceHandle
-	store             RunnerStore
-	workspaceRoot     string
-	rootPathRule      func(string) string
-	workspace         *Workspace
-	eventStream       *streampkg.Stream
-	plan              *CoarsePlan
-	initialNodes      map[string]*Node
-	plannerSkill      *llm.Skill
-	skillSummaries    []SkillSummary
-	planNodeBuilder   PlanNodeBuilder
-	skillSessionStore llm.SessionStore
-	skillSessionIDs   map[string]string
-	skillSessionMu    sync.Mutex
+	persistenceHandle    PersistenceHandle
+	store                RunnerStore
+	workspaceRoot        string
+	rootPathRule         func(string) string
+	trustedResourceRoots []string
+	workspace            *Workspace
+	eventStream          *streampkg.Stream
+	plan                 *CoarsePlan
+	initialNodes         map[string]*Node
+	plannerSkill         *llm.Skill
+	skillSummaries       []SkillSummary
+	planNodeBuilder      PlanNodeBuilder
+	skillSessionStore    llm.SessionStore
+	skillSessionIDs      map[string]string
+	skillSessionMu       sync.Mutex
 
 	// Engine-level lifecycle state.
 	stateMu sync.RWMutex

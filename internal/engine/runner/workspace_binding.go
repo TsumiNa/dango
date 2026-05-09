@@ -26,13 +26,36 @@ func (r *Runner) nodeAccessibleDirs(nodeID string, inputs map[string]any) []stri
 			dirs = append(dirs, workspaceDirs...)
 		}
 	}
-	resourceDirs := exchangeResourceDirsFromOutputs(inputs, nil)
-	for _, dir := range resourceDirs {
-		if !containsDir(dirs, dir) {
-			dirs = append(dirs, dir)
+	allowedRoots := r.resourceAllowedRoots()
+	for _, root := range r.trustedResourceRoots {
+		if !containsDir(dirs, root) {
+			dirs = append(dirs, root)
+		}
+	}
+	if len(allowedRoots) > 0 {
+		resourceDirs := exchangeResourceDirsFromOutputs(inputs, allowedRoots)
+		for _, dir := range resourceDirs {
+			if !containsDir(dirs, dir) {
+				dirs = append(dirs, dir)
+			}
 		}
 	}
 	return dirs
+}
+
+func (r *Runner) resourceAllowedRoots() []string {
+	var roots []string
+	if r.workspace != nil {
+		if root, ok := canonicalExistingDir(r.workspace.Root()); ok {
+			roots = append(roots, root)
+		}
+	}
+	for _, root := range r.trustedResourceRoots {
+		if !containsDir(roots, root) {
+			roots = append(roots, root)
+		}
+	}
+	return roots
 }
 
 func (r *Runner) workspaceForNode(nodeID string) (SkillWorkspace, error) {

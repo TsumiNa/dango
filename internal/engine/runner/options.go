@@ -52,7 +52,7 @@ func WithLogger(logger *slog.Logger) Option {
 // WithPersistenceHandle installs handle as the Runner's persistence source.
 //
 // The Runner keeps a reference to handle and resolves its runner store and
-// workspace root at start time. A nil handle disables persistence and workspace
+// workspace root during construction. A nil handle disables persistence and workspace
 // provisioning.
 func WithPersistenceHandle(handle PersistenceHandle) Option {
 	return func(r *Runner) {
@@ -64,6 +64,23 @@ func WithPersistenceHandle(handle PersistenceHandle) Option {
 		}
 		r.store = handle.RunnerStore()
 		r.workspaceRoot = handle.WorkspaceRoot()
+	}
+}
+
+// WithTrustedResourceRoots installs additional trusted roots for exchange
+// resource filtering and tool access.
+//
+// Existing directories are canonicalized and kept on the runner. Non-existent
+// or invalid paths are ignored.
+func WithTrustedResourceRoots(roots ...string) Option {
+	return func(r *Runner) {
+		canonicalRoots := make([]string, 0, len(roots))
+		for _, root := range roots {
+			if canonical, ok := canonicalExistingDir(root); ok && !containsDir(canonicalRoots, canonical) {
+				canonicalRoots = append(canonicalRoots, canonical)
+			}
+		}
+		r.trustedResourceRoots = canonicalRoots
 	}
 }
 
