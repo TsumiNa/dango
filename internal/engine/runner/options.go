@@ -52,8 +52,8 @@ func WithLogger(logger *slog.Logger) Option {
 // WithPersistenceHandle installs handle as the Runner's persistence source.
 //
 // The Runner keeps a reference to handle and resolves its runner store and
-// workspace root during construction. A nil handle disables persistence and workspace
-// provisioning.
+// workspace root during construction. A nil handle disables persistence and
+// workspace provisioning.
 func WithPersistenceHandle(handle PersistenceHandle) Option {
 	return func(r *Runner) {
 		r.persistenceHandle = handle
