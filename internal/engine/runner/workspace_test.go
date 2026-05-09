@@ -103,7 +103,7 @@ func TestProvisionWorkspaceRejectsPathCollision(t *testing.T) {
 	}
 }
 
-func TestHandoffLinksReadOnlyHandoffAndArtifacts(t *testing.T) {
+func TestHandoffSymlinksHandoffAndArtifacts(t *testing.T) {
 	workspace, err := ProvisionWorkspace(t.TempDir(), "runner-1", []string{"upstream", "downstream"}, persistencepkg.DefaultPathRule)
 	if err != nil {
 		t.Fatalf("ProvisionWorkspace: %v", err)
@@ -147,39 +147,33 @@ func TestHandoffLinksReadOnlyHandoffAndArtifacts(t *testing.T) {
 	if string(artifactContent) != "x\n1\n" {
 		t.Fatalf("delivered artifact content = %q, want %q", string(artifactContent), "x\n1\n")
 	}
-	sourceHandoffInfo, err := os.Stat(handoffPath)
+	handoffLinkInfo, err := os.Lstat(deliveredHandoff)
 	if err != nil {
-		t.Fatalf("Stat(source handoff): %v", err)
+		t.Fatalf("Lstat(delivered handoff): %v", err)
 	}
-	deliveredHandoffInfo, err := os.Stat(deliveredHandoff)
+	if handoffLinkInfo.Mode()&os.ModeSymlink == 0 {
+		t.Fatal("delivered handoff is not a symlink")
+	}
+	handoffTarget, err := os.Readlink(deliveredHandoff)
 	if err != nil {
-		t.Fatalf("Stat(delivered handoff): %v", err)
+		t.Fatalf("Readlink(delivered handoff): %v", err)
 	}
-	if !os.SameFile(sourceHandoffInfo, deliveredHandoffInfo) {
-		t.Fatal("handoff file is not hard-linked")
+	if handoffTarget != handoffPath {
+		t.Fatalf("handoff symlink target = %q, want %q", handoffTarget, handoffPath)
 	}
-	sourceArtifactInfo, err := os.Stat(artifactPath)
+	artifactLinkInfo, err := os.Lstat(deliveredArtifact)
 	if err != nil {
-		t.Fatalf("Stat(source artifact): %v", err)
+		t.Fatalf("Lstat(delivered artifact): %v", err)
 	}
-	deliveredArtifactInfo, err := os.Stat(deliveredArtifact)
+	if artifactLinkInfo.Mode()&os.ModeSymlink == 0 {
+		t.Fatal("delivered artifact is not a symlink")
+	}
+	artifactTarget, err := os.Readlink(deliveredArtifact)
 	if err != nil {
-		t.Fatalf("Stat(delivered artifact): %v", err)
+		t.Fatalf("Readlink(delivered artifact): %v", err)
 	}
-	if !os.SameFile(sourceArtifactInfo, deliveredArtifactInfo) {
-		t.Fatal("artifact file is not hard-linked")
-	}
-	if deliveredHandoffInfo.Mode().Perm()&0o222 != 0 {
-		t.Fatalf("delivered handoff mode = %o, want read-only", deliveredHandoffInfo.Mode().Perm())
-	}
-	if deliveredArtifactInfo.Mode().Perm()&0o222 != 0 {
-		t.Fatalf("delivered artifact mode = %o, want read-only", deliveredArtifactInfo.Mode().Perm())
-	}
-	if sourceHandoffInfo.Mode().Perm()&0o222 != 0 {
-		t.Fatalf("source handoff mode = %o, want read-only after hard link handoff", sourceHandoffInfo.Mode().Perm())
-	}
-	if sourceArtifactInfo.Mode().Perm()&0o222 != 0 {
-		t.Fatalf("source artifact mode = %o, want read-only after hard link handoff", sourceArtifactInfo.Mode().Perm())
+	if artifactTarget != artifactPath {
+		t.Fatalf("artifact symlink target = %q, want %q", artifactTarget, artifactPath)
 	}
 }
 

@@ -145,11 +145,10 @@ func (w *Workspace) AccessibleDirs(nodeID string) ([]string, error) {
 	return append([]string(nil), sk.accessibleDirs...), nil
 }
 
-// Handoff links a producer's outbox handoff and artifacts into a successor
-// skill's inbox directory and marks the linked files read-only.
+// Handoff symlinks a producer's outbox handoff and artifacts into a successor
+// skill's inbox directory.
 //
-// Because hard links share inodes, read-only mode also applies to the
-// producer outbox files that were linked.
+// Successor skills should treat inbox handoff/artifacts as read-only by policy.
 func (w *Workspace) Handoff(producerID string, successorID string) error {
 	producer, ok := w.Skill(producerID)
 	if !ok {
@@ -166,10 +165,10 @@ func (w *Workspace) Handoff(producerID string, successorID string) error {
 	if err := os.MkdirAll(dst, 0o755); err != nil {
 		return fmt.Errorf("runner: create inbox route dir: %w", err)
 	}
-	if err := linkReadOnlyFileIfExists(filepath.Join(producer.OutboxDir, "handoff.md"), filepath.Join(dst, "handoff.md")); err != nil {
+	if err := symlinkFileIfExists(filepath.Join(producer.OutboxDir, "handoff.md"), filepath.Join(dst, "handoff.md")); err != nil {
 		return err
 	}
-	return linkReadOnlyTreeIfExists(filepath.Join(producer.OutboxDir, "artifacts"), filepath.Join(dst, "artifacts"))
+	return symlinkTreeIfExists(filepath.Join(producer.OutboxDir, "artifacts"), filepath.Join(dst, "artifacts"))
 }
 
 func validateRulePath(subdir string) (string, error) {
@@ -238,7 +237,7 @@ func pathWithinRoot(root string, target string) bool {
 	return true
 }
 
-func linkReadOnlyFileIfExists(src string, dst string) error {
+func symlinkFileIfExists(src string, dst string) error {
 	info, err := os.Stat(src)
 	if os.IsNotExist(err) {
 		return nil
@@ -252,19 +251,13 @@ func linkReadOnlyFileIfExists(src string, dst string) error {
 	if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
 		return fmt.Errorf("runner: create destination parent: %w", err)
 	}
-	// Clear owner/group/other write bits before linking. Since src/dst share one
-	// inode after os.Link, this read-only mode applies through both paths.
-	readOnlyMode := info.Mode().Perm() &^ 0o222
-	if err := os.Chmod(src, readOnlyMode); err != nil {
-		return fmt.Errorf("runner: set source file read-only %q: %w", src, err)
-	}
-	if err := os.Link(src, dst); err != nil {
-		return fmt.Errorf("runner: hard link file %q -> %q: %w", src, dst, err)
+	if err := os.Symlink(src, dst); err != nil {
+		return fmt.Errorf("runner: symlink file %q -> %q: %w", src, dst, err)
 	}
 	return nil
 }
 
-func linkReadOnlyTreeIfExists(src string, dst string) error {
+func symlinkTreeIfExists(src string, dst string) error {
 	info, err := os.Stat(src)
 	if os.IsNotExist(err) {
 		return nil
@@ -287,6 +280,6 @@ func linkReadOnlyTreeIfExists(src string, dst string) error {
 		if d.IsDir() {
 			return os.MkdirAll(target, 0o755)
 		}
-		return linkReadOnlyFileIfExists(path, target)
+		return symlinkFileIfExists(path, target)
 	})
 }
