@@ -221,8 +221,23 @@ func beginImmediate(ctx context.Context, conn *sql.Conn) error {
 }
 
 func commitImmediate(ctx context.Context, conn *sql.Conn) error {
-	_, err := conn.ExecContext(ctx, "COMMIT")
-	return err
+	for {
+		if _, err := conn.ExecContext(ctx, "COMMIT"); err == nil {
+			return nil
+		} else if !isSQLiteLockError(err) {
+			return err
+		}
+
+		timer := time.NewTimer(runnerStoreLockRetryDelay)
+		select {
+		case <-ctx.Done():
+			if !timer.Stop() {
+				<-timer.C
+			}
+			return ctx.Err()
+		case <-timer.C:
+		}
+	}
 }
 
 func rollbackImmediate(ctx context.Context, conn *sql.Conn) error {

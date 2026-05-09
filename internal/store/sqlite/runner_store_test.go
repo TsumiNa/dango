@@ -249,6 +249,113 @@ func TestRunnerStoreConcurrentAppendAcrossStoresSerialises(t *testing.T) {
 	}
 }
 
+func TestRunnerStoreAppendRetriesCommitWhenReaderHoldsSharedLock(t *testing.T) {
+	t.Parallel()
+
+	dbPath := filepath.Join(t.TempDir(), "shared.db")
+	dbStoreA, err := Open(dbPath)
+	if err != nil {
+		t.Fatalf("Open(store A): %v", err)
+	}
+	t.Cleanup(func() {
+		if err := dbStoreA.Close(); err != nil {
+			t.Fatalf("Close(store A): %v", err)
+		}
+	})
+	dbStoreB, err := Open(dbPath)
+	if err != nil {
+		t.Fatalf("Open(store B): %v", err)
+	}
+	t.Cleanup(func() {
+		if err := dbStoreB.Close(); err != nil {
+			t.Fatalf("Close(store B): %v", err)
+		}
+	})
+
+	runnerStore := NewRunnerStore(dbStoreA)
+	ctx := context.Background()
+	const id = "commit-retry"
+	if _, err := runnerStore.Append(ctx, id, &runnerpkg.RunnerRecord{Kind: runnerpkg.RunnerRecordInit}); err != nil {
+		t.Fatalf("Append init: %v", err)
+	}
+
+	readerConn, err := dbStoreB.db.Conn(ctx)
+	if err != nil {
+		t.Fatalf("Conn(reader): %v", err)
+	}
+	if _, err := readerConn.ExecContext(ctx, "BEGIN"); err != nil {
+		_ = readerConn.Close()
+		t.Fatalf("BEGIN reader tx: %v", err)
+	}
+	readerRows, err := readerConn.QueryContext(ctx, "SELECT sequence_number FROM runner_records WHERE runner_id = ?", id)
+	if err != nil {
+		_, _ = readerConn.ExecContext(ctx, "ROLLBACK")
+		_ = readerConn.Close()
+		t.Fatalf("SELECT reader rows: %v", err)
+	}
+	if !readerRows.Next() {
+		_ = readerRows.Close()
+		_, _ = readerConn.ExecContext(ctx, "ROLLBACK")
+		_ = readerConn.Close()
+		t.Fatal("reader query returned no rows")
+	}
+	var seq int64
+	if err := readerRows.Scan(&seq); err != nil {
+		_ = readerRows.Close()
+		_, _ = readerConn.ExecContext(ctx, "ROLLBACK")
+		_ = readerConn.Close()
+		t.Fatalf("Scan reader row: %v", err)
+	}
+	if seq != 1 {
+		_ = readerRows.Close()
+		_, _ = readerConn.ExecContext(ctx, "ROLLBACK")
+		_ = readerConn.Close()
+		t.Fatalf("reader row seq = %d, want 1", seq)
+	}
+
+	var releaseOnce sync.Once
+	releaseReader := func() {
+		releaseOnce.Do(func() {
+			_ = readerRows.Close()
+			_, _ = readerConn.ExecContext(context.Background(), "ROLLBACK")
+			_ = readerConn.Close()
+		})
+	}
+	t.Cleanup(releaseReader)
+
+	const holdLock = 200 * time.Millisecond
+	readerReleased := make(chan struct{})
+	go func() {
+		defer close(readerReleased)
+		time.Sleep(holdLock)
+		releaseReader()
+	}()
+
+	appendCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	defer cancel()
+	started := time.Now()
+	seq, err = runnerStore.Append(appendCtx, id, &runnerpkg.RunnerRecord{Kind: runnerpkg.RunnerRecordStatus, Status: runnerpkg.RunnerStatusRunning})
+	elapsed := time.Since(started)
+	<-readerReleased
+	if err != nil {
+		t.Fatalf("Append during reader lock: %v", err)
+	}
+	if seq != 2 {
+		t.Fatalf("Append seq = %d, want 2", seq)
+	}
+	if elapsed < holdLock/2 {
+		t.Fatalf("Append returned after %v, want it to wait for reader lock", elapsed)
+	}
+
+	records, err := runnerStore.Load(ctx, id)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if len(records) != 2 {
+		t.Fatalf("records = %d, want 2", len(records))
+	}
+}
+
 func TestRunnerStoreRoundTripsMarkdownEventData(t *testing.T) {
 	t.Parallel()
 
