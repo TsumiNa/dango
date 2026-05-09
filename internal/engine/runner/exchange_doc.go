@@ -52,7 +52,7 @@ func (doc ExchangeDoc) Markdown() (string, error) {
 		return "", fmt.Errorf("runner: exchange doc node_id must not be empty")
 	}
 	if doc.CreatedAt.IsZero() {
-		doc.CreatedAt = time.Now().UTC()
+		doc.CreatedAt = time.Now()
 	}
 
 	meta := exchangeDocFrontMatter{

@@ -2,6 +2,7 @@ package runner
 
 import (
 	"fmt"
+	"path"
 	"strings"
 	"time"
 
@@ -64,12 +65,21 @@ func (doc HandoffDoc) Markdown() (string, error) {
 		return "", fmt.Errorf("runner: handoff doc to_nodes must not be empty")
 	}
 	for _, to := range doc.ToNodes {
-		if strings.TrimSpace(to) == "" {
+		trimmed := strings.TrimSpace(to)
+		if trimmed == "" {
 			return "", fmt.Errorf("runner: handoff doc to_nodes must not contain empty values")
+		}
+		if trimmed != to {
+			return "", fmt.Errorf("runner: handoff doc to_nodes must not contain leading or trailing whitespace")
+		}
+	}
+	for _, artifact := range doc.Artifacts {
+		if err := validateHandoffArtifactPath(artifact.Path); err != nil {
+			return "", err
 		}
 	}
 	if doc.CreatedAt.IsZero() {
-		doc.CreatedAt = time.Now().UTC()
+		doc.CreatedAt = time.Now()
 	}
 
 	meta := handoffDocFrontMatter{
@@ -119,8 +129,17 @@ func ParseHandoffMarkdown(raw string) (*HandoffDoc, error) {
 		return nil, fmt.Errorf("runner: handoff doc to_nodes must not be empty")
 	}
 	for _, to := range meta.ToNodes {
-		if strings.TrimSpace(to) == "" {
+		trimmed := strings.TrimSpace(to)
+		if trimmed == "" {
 			return nil, fmt.Errorf("runner: handoff doc to_nodes must not contain empty values")
+		}
+		if trimmed != to {
+			return nil, fmt.Errorf("runner: handoff doc to_nodes must not contain leading or trailing whitespace")
+		}
+	}
+	for _, artifact := range meta.Artifacts {
+		if err := validateHandoffArtifactPath(artifact.Path); err != nil {
+			return nil, err
 		}
 	}
 	if meta.CreatedAt.IsZero() {
@@ -137,4 +156,22 @@ func ParseHandoffMarkdown(raw string) (*HandoffDoc, error) {
 		Artifacts: append([]HandoffArtifact(nil), meta.Artifacts...),
 		Body:      strings.TrimSpace(string(body)),
 	}, nil
+}
+
+func validateHandoffArtifactPath(raw string) error {
+	trimmed := strings.TrimSpace(raw)
+	if trimmed == "" {
+		return fmt.Errorf("runner: handoff doc artifact path must not be empty")
+	}
+	if trimmed != raw {
+		return fmt.Errorf("runner: handoff doc artifact path must not contain leading or trailing whitespace")
+	}
+	if path.IsAbs(trimmed) {
+		return fmt.Errorf("runner: handoff doc artifact path must be relative: %q", trimmed)
+	}
+	clean := path.Clean(trimmed)
+	if clean == ".." || strings.HasPrefix(clean, "../") || strings.Contains(clean, "/../") {
+		return fmt.Errorf("runner: handoff doc artifact path must not escape workspace: %q", trimmed)
+	}
+	return nil
 }

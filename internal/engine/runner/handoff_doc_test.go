@@ -56,6 +56,69 @@ func TestHandoffDocMarkdownRejectsMissingFields(t *testing.T) {
 	}
 }
 
+func TestHandoffDocMarkdownRejectsWhitespacePaddedToNodes(t *testing.T) {
+	_, err := (HandoffDoc{
+		RunnerID: "runner-1",
+		FromNode: "node-a",
+		ToNodes:  []string{" node-b "},
+	}).Markdown()
+	if err == nil || !strings.Contains(err.Error(), "leading or trailing whitespace") {
+		t.Fatalf("Markdown error = %v, want whitespace to_nodes rejection", err)
+	}
+}
+
+func TestParseHandoffMarkdownRejectsWhitespacePaddedToNodes(t *testing.T) {
+	raw := `---
+kind: dango.handoff_doc
+version: 1
+runner_id: runner-1
+from_node: node-a
+to_nodes:
+  - " node-b "
+created_at: 2026-05-01T12:00:00Z
+---
+
+handoff body`
+	_, err := ParseHandoffMarkdown(raw)
+	if err == nil || !strings.Contains(err.Error(), "leading or trailing whitespace") {
+		t.Fatalf("ParseHandoffMarkdown error = %v, want whitespace to_nodes rejection", err)
+	}
+}
+
+func TestHandoffDocMarkdownRejectsUnsafeArtifactPath(t *testing.T) {
+	_, err := (HandoffDoc{
+		RunnerID: "runner-1",
+		FromNode: "node-a",
+		ToNodes:  []string{"node-b"},
+		Artifacts: []HandoffArtifact{{
+			Path: "../secret.txt",
+		}},
+	}).Markdown()
+	if err == nil || !strings.Contains(err.Error(), "must not escape workspace") {
+		t.Fatalf("Markdown error = %v, want unsafe artifact path rejection", err)
+	}
+}
+
+func TestParseHandoffMarkdownRejectsAbsoluteArtifactPath(t *testing.T) {
+	raw := `---
+kind: dango.handoff_doc
+version: 1
+runner_id: runner-1
+from_node: node-a
+to_nodes:
+  - node-b
+created_at: 2026-05-01T12:00:00Z
+artifacts:
+  - path: /tmp/report.md
+---
+
+handoff body`
+	_, err := ParseHandoffMarkdown(raw)
+	if err == nil || !strings.Contains(err.Error(), "must be relative") {
+		t.Fatalf("ParseHandoffMarkdown error = %v, want absolute artifact path rejection", err)
+	}
+}
+
 func TestParseHandoffMarkdownRejectsLegacyExchangeKind(t *testing.T) {
 	raw := `---
 kind: dango.exchange
