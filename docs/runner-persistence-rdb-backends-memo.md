@@ -36,8 +36,10 @@ backend with Markdown when callers want both behaviors.
   path through the same path rule.
 - Do not make RDB storage the only persistence shape. `None`, `Markdown`, and
   `Composite` should continue to work.
-- Do not merge all artifacts into a single opaque row. Large artifact bodies may
-  live in files or blobs, but metadata and routing records must be queryable.
+- Do not merge all artifacts into a single opaque row. Persist artifact path (or
+  stable content address) plus queryable routing/search metadata only. Large
+  artifact bodies should stay in workspace files or external blobs and be
+  referenced by path/address.
 - Keep migrations backend-owned and deterministic. Startup should fail clearly
   if a configured durable backend cannot open, migrate, or prove writability.
 - Add a backend conformance test suite before adding the second database. The
@@ -63,8 +65,9 @@ these records first-class:
   markdown body, and emission sequence.
 - `handoff_deliveries`: handoff ID, successor node, delivered inbox path, and
   delivery status.
-- `artifacts`: logical artifact metadata, content address or file path,
-  media/type hints, size, checksum when available, and ownership.
+- `artifacts`: artifact path or content address plus queryable metadata needed
+  for routing/search (media/type hints, ownership, size, checksum when
+  available). Do not store full artifact bodies inline in this table.
 - `memo_snapshots`: node ID, snapshot sequence, snapshot path, checksum, and
   optional compact summary.
 - `snapshot_cursors`: runner/request identity, consumer name, last materialized

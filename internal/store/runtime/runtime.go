@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"hash/fnv"
 	"os"
 	"path/filepath"
 	"strings"
@@ -11,8 +12,8 @@ import (
 
 	runnerpkg "github.com/tsumina/dango/internal/engine/runner"
 	persistencepkg "github.com/tsumina/dango/internal/engine/runner/persistence"
+	streampkg "github.com/tsumina/dango/internal/engine/stream"
 	storepkg "github.com/tsumina/dango/internal/store"
-	sqlitepkg "github.com/tsumina/dango/internal/store/sqlite"
 )
 
 // Config controls how startup-owned persistence is opened.
@@ -20,6 +21,9 @@ type Config struct {
 	// SQLitePath selects the durable SQLite backend. When empty, Open creates a
 	// process-lifetime temporary JSON fallback and removes it during Close.
 	SQLitePath string
+	// SQLiteMarkdownMirror enables JSON/JSONL markdown mirror stores alongside
+	// SQLite when SQLitePath is configured. Reads still use SQLite.
+	SQLiteMarkdownMirror bool
 }
 
 // DefaultConfig returns the default startup persistence configuration.
@@ -37,9 +41,13 @@ type Persistence struct {
 //
 // When cfg.SQLitePath is empty, Open creates a temporary JSON fallback rooted
 // under the system temp directory. Otherwise it opens the configured SQLite
-// store and exposes the SQLite-backed event log, runner, and cursor stores.
+// backend. When cfg.SQLiteMarkdownMirror is true, Open mirrors writes to a
+// Markdown backend under the SQLite directory for human-readable inspection.
 func Open(cfg Config) (*Persistence, error) {
 	if strings.TrimSpace(cfg.SQLitePath) != "" {
+		if cfg.SQLiteMarkdownMirror {
+			return openSQLiteCompositePersistence(cfg.SQLitePath)
+		}
 		return openSQLitePersistence(cfg.SQLitePath)
 	}
 	return openJSONFallbackPersistence()
@@ -110,28 +118,43 @@ func (p *Persistence) Close() error {
 }
 
 func openSQLitePersistence(path string) (*Persistence, error) {
-	dbStore, err := sqlitepkg.Open(path)
+	backend, err := persistencepkg.NewSQLiteBackend(path)
+	if err != nil {
+		return nil, fmt.Errorf("runtime persistence open sqlite %q: %w", path, err)
+	}
+	return &Persistence{backend: backend}, nil
+}
+
+func openSQLiteCompositePersistence(path string) (*Persistence, error) {
+	sqliteBackend, err := persistencepkg.NewSQLiteBackend(path)
 	if err != nil {
 		return nil, fmt.Errorf("runtime persistence open sqlite %q: %w", path, err)
 	}
 	markdownRoot := filepath.Dir(path)
 	markdownBackend, err := persistencepkg.NewMarkdownBackend(markdownRoot)
 	if err != nil {
-		_ = dbStore.Close()
-		return nil, fmt.Errorf("runtime persistence open markdown workspace backend: %w", err)
+		_ = sqliteBackend.Close(context.Background())
+		return nil, fmt.Errorf("runtime persistence open markdown mirror backend: %w", err)
 	}
 	backend := &compositeBackend{
-		eventLogStore:       sqlitepkg.NewStreamStore(dbStore),
-		runnerStore:         sqlitepkg.NewRunnerStore(dbStore),
-		snapshotCursorStore: sqlitepkg.NewSnapshotCursorStore(dbStore),
-		workspaceRoot:       markdownBackend.WorkspaceRoot(),
+		eventLogStore: &compositeEventLogStore{
+			primary: sqliteBackend.EventLogStore(),
+			mirror:  markdownBackend.EventLogStore(),
+		},
+		runnerStore: &compositeRunnerStore{
+			primary: sqliteBackend.RunnerStore(),
+			mirror:  markdownBackend.RunnerStore(),
+		},
+		snapshotCursorStore: &compositeSnapshotCursorStore{
+			primary: sqliteBackend.SnapshotCursorStore(),
+			mirror:  markdownBackend.SnapshotCursorStore(),
+		},
+		workspaceRoot: sqliteBackend.WorkspaceRoot(),
 		closeOnce: sync.OnceValue(func() error {
-			return errors.Join(markdownBackend.Close(context.Background()), dbStore.Close())
+			return errors.Join(sqliteBackend.Close(context.Background()), markdownBackend.Close(context.Background()))
 		}),
 	}
-	return &Persistence{
-		backend: backend,
-	}, nil
+	return &Persistence{backend: backend}, nil
 }
 
 func openJSONFallbackPersistence() (*Persistence, error) {
@@ -180,4 +203,128 @@ func (c *compositeBackend) Close(context.Context) error {
 		return nil
 	}
 	return c.closeOnce()
+}
+
+type compositeEventLogStore struct {
+	primary storepkg.EventLogStore
+	mirror  storepkg.EventLogStore
+}
+
+func (s *compositeEventLogStore) AppendEvent(ctx context.Context, event streampkg.Event) error {
+	if s == nil || s.primary == nil || s.mirror == nil {
+		return fmt.Errorf("runtime persistence composite event log store is not configured")
+	}
+	if err := s.primary.AppendEvent(ctx, event); err != nil {
+		return fmt.Errorf("runtime persistence append primary event log: %w", err)
+	}
+	// Mirror persistence is best-effort: once the primary SQLite write succeeds
+	// we must still return success to avoid retry ambiguity on unique keys.
+	_ = s.mirror.AppendEvent(ctx, event)
+	return nil
+}
+
+func (s *compositeEventLogStore) LoadEvents(ctx context.Context, scope streampkg.Scope, from uint64, filter streampkg.Filter) ([]streampkg.Event, error) {
+	if s == nil || s.primary == nil {
+		return nil, fmt.Errorf("runtime persistence composite event log primary store is not configured")
+	}
+	return s.primary.LoadEvents(ctx, scope, from, filter)
+}
+
+type compositeRunnerStore struct {
+	primary runnerpkg.RunnerStore
+	mirror  runnerpkg.RunnerStore
+
+	appendLocks [compositeRunnerLockCount]sync.Mutex
+}
+
+const compositeRunnerLockCount = 64
+
+func (s *compositeRunnerStore) Append(ctx context.Context, runnerID string, rec *runnerpkg.RunnerRecord) (int64, error) {
+	if s == nil || s.primary == nil || s.mirror == nil {
+		return 0, fmt.Errorf("runtime persistence composite runner store is not configured")
+	}
+	unlock := s.lock(runnerID)
+	defer unlock()
+
+	seq, err := s.primary.Append(ctx, runnerID, rec)
+	if err != nil {
+		return 0, fmt.Errorf("runtime persistence append primary runner record: %w", err)
+	}
+	rec.Seq = seq
+	mirrorRec := cloneRunnerRecord(rec)
+	if _, err := s.mirror.Append(ctx, runnerID, mirrorRec); err != nil {
+		return 0, fmt.Errorf("runtime persistence append markdown mirror runner record: %w", err)
+	}
+	return seq, nil
+}
+
+func (s *compositeRunnerStore) Load(ctx context.Context, runnerID string) ([]runnerpkg.RunnerRecord, error) {
+	if s == nil || s.primary == nil {
+		return nil, fmt.Errorf("runtime persistence composite runner primary store is not configured")
+	}
+	return s.primary.Load(ctx, runnerID)
+}
+
+func (s *compositeRunnerStore) Delete(ctx context.Context, runnerID string) error {
+	if s == nil || s.primary == nil || s.mirror == nil {
+		return fmt.Errorf("runtime persistence composite runner store is not configured")
+	}
+	if err := s.primary.Delete(ctx, runnerID); err != nil {
+		return fmt.Errorf("runtime persistence delete primary runner record: %w", err)
+	}
+	if err := s.mirror.Delete(ctx, runnerID); err != nil {
+		return fmt.Errorf("runtime persistence delete markdown mirror runner record: %w", err)
+	}
+	return nil
+}
+
+func (s *compositeRunnerStore) lock(runnerID string) func() {
+	lock := &s.appendLocks[compositeRunnerLockIndex(runnerID)]
+	lock.Lock()
+	return lock.Unlock
+}
+
+// compositeRunnerLockIndex hashes a runner id into the fixed stripe set used to
+// serialize composite append operations for that runner.
+func compositeRunnerLockIndex(runnerID string) uint32 {
+	h := fnv.New32a()
+	_, _ = h.Write([]byte(runnerID))
+	return h.Sum32() % uint32(compositeRunnerLockCount)
+}
+
+func cloneRunnerRecord(rec *runnerpkg.RunnerRecord) *runnerpkg.RunnerRecord {
+	clone := *rec
+	if rec.Event != nil {
+		eventClone := *rec.Event
+		if rec.Event.DataJSON != nil {
+			eventClone.DataJSON = append([]byte(nil), rec.Event.DataJSON...)
+		}
+		clone.Event = &eventClone
+	}
+	return &clone
+}
+
+type compositeSnapshotCursorStore struct {
+	primary storepkg.SnapshotCursorStore
+	mirror  storepkg.SnapshotCursorStore
+}
+
+func (s *compositeSnapshotCursorStore) SaveCursor(ctx context.Context, cursor storepkg.SnapshotCursor) error {
+	if s == nil || s.primary == nil || s.mirror == nil {
+		return fmt.Errorf("runtime persistence composite snapshot cursor store is not configured")
+	}
+	if err := s.primary.SaveCursor(ctx, cursor); err != nil {
+		return fmt.Errorf("runtime persistence save primary snapshot cursor: %w", err)
+	}
+	if err := s.mirror.SaveCursor(ctx, cursor); err != nil {
+		return fmt.Errorf("runtime persistence save markdown mirror snapshot cursor: %w", err)
+	}
+	return nil
+}
+
+func (s *compositeSnapshotCursorStore) LoadCursor(ctx context.Context, requestID string) (storepkg.SnapshotCursor, error) {
+	if s == nil || s.primary == nil {
+		return storepkg.SnapshotCursor{}, fmt.Errorf("runtime persistence composite snapshot cursor primary store is not configured")
+	}
+	return s.primary.LoadCursor(ctx, requestID)
 }
