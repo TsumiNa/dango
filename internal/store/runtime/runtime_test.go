@@ -298,7 +298,13 @@ func TestCompositeRunnerStore_AppendKeepsCallerSequence(t *testing.T) {
 	t.Parallel()
 
 	ctx := context.Background()
-	rec := &runnerpkg.RunnerRecord{Kind: runnerpkg.RunnerRecordInit}
+	rec := &runnerpkg.RunnerRecord{
+		Kind: runnerpkg.RunnerRecordInit,
+		Event: &runnerpkg.StoredRunnerEvent{
+			Type:     "status.progress",
+			DataJSON: []byte(`{"step":"primary"}`),
+		},
+	}
 	primary := &runtimeTestRunnerStore{
 		appendFn: func(_ context.Context, _ string, in *runnerpkg.RunnerRecord) (int64, error) {
 			in.Seq = 11
@@ -336,6 +342,16 @@ func TestCompositeRunnerStore_AppendKeepsCallerSequence(t *testing.T) {
 	}
 	if mirrorRec == rec {
 		t.Fatal("mirror append received caller record pointer; want clone")
+	}
+	if mirrorRec.Event == nil || rec.Event == nil {
+		t.Fatal("missing event payload after append")
+	}
+	if string(mirrorRec.Event.DataJSON) != `{"step":"primary"}` {
+		t.Fatalf("mirror data json = %q, want original payload", mirrorRec.Event.DataJSON)
+	}
+	mirrorRec.Event.DataJSON[0] = '['
+	if string(rec.Event.DataJSON) != `{"step":"primary"}` {
+		t.Fatalf("caller data json mutated after mirror write = %q", rec.Event.DataJSON)
 	}
 }
 

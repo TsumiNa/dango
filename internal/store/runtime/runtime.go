@@ -217,6 +217,8 @@ func (s *compositeEventLogStore) AppendEvent(ctx context.Context, event streampk
 	if err := s.primary.AppendEvent(ctx, event); err != nil {
 		return fmt.Errorf("runtime persistence append primary event log: %w", err)
 	}
+	// Mirror persistence is best-effort: once the primary SQLite write succeeds
+	// we must still return success to avoid retry ambiguity on unique keys.
 	_ = s.mirror.AppendEvent(ctx, event)
 	return nil
 }
