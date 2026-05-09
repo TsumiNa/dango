@@ -1,6 +1,6 @@
 # Phase 7 Consumer Refactor Plan
 
-Last updated: 2026-05-08
+Last updated: 2026-05-09
 
 This memo reviews the draft plan for aligning consumer surfaces with the Phase
 7 startup persistence work, then refines it into an implementation-ready
@@ -324,3 +324,19 @@ The refactor is complete when all of the following are true.
 - `internal/streamrender` has no persistence ownership and no broad rewrite.
 - The focused example tests, streamrender tests, and broader repository tests
   pass.
+
+## Phase 4 Completion Note
+
+Phase 4 was completed on 2026-05-09 with validation rather than additional
+renderer work.
+
+- `go test ./internal/streamrender` passed, including the existing expanded
+  `merge.bundle` subscription coverage and compact live-line expectations.
+- `go test ./examples/honshu_groundwater` passed, including the persistence,
+  reopen, and compact-output assertions that exercise the renderer through the
+  example's live request stream.
+- No new live rendering gap appeared during the example run, so
+  `internal/streamrender` did not require a Phase 4 code change.
+- Final confirmation also passed with `go test ./internal/store/runtime
+  ./internal/engine` and `go test ./...`, satisfying the completion criteria
+  at repository scope.
