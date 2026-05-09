@@ -2,11 +2,13 @@
 
 Last updated: 2026-05-09
 
-This memo replaces the earlier "exchange upgrade" notes. It plans the full
+This memo replaces the earlier "exchange upgrade" notes. It records the shipped
 rewrite of dango's three core agent-information channels — **memo**,
 **exchange**, and **handoff** — together with the runner support, persistence
-design, and built-in prompt layout that surround them. The work is large and
-will be delivered as a sequence of small, independently testable PRs.
+design, and built-in prompt layout that surround them.
+
+**Status:** Implemented on this branch, with explicit post-PR deviations tracked
+below.
 
 ## Why a Rewrite
 
@@ -450,7 +452,7 @@ These changes are surgical: no orchestrator semantics, no public method
 signatures, and no planning-flow logic shift. They only swap the storage
 plumbing.
 
-## PR Breakdown
+## PR Breakdown (shipped sequence)
 
 Each PR must build, test, and (where applicable) run the Honshu example to
 green on its own. Numbered PRs are sequential where dependencies require it;
@@ -571,28 +573,47 @@ the prompt-extraction PR can land in parallel with the type work.
 
 ### PR 8 — Honshu example cleanup
 
-- Delete `writePersistenceDebugArtifacts` and the local summary structs.
-- Replace `WithEventLogStore` / `WithRunnerStore` /
-  `WithSnapshotCursorStore` with a single
-  `orchestrate.WithPersistence(...)` call. The `runtimepkg.Open` helper
-  returns the unified backend after PR 4, so the wiring is a one-liner.
-- Drop `Request.ArtifactsDir` reuse for skill access; keep it only as the
-  caller-facing destination for final deliverables.
-- Verify the example still produces the same human-readable artifacts as
-  the old debug writer did, now under the persistence-managed workspace
-  tree plus a deliverables mirror under `Request.ArtifactsDir`.
-- **Test signal:** `go run ./examples/honshu_groundwater` succeeds; the
-  workspace tree contains memo snapshots, exchange entries, and per-edge
-  handoffs; `Request.ArtifactsDir` contains only final deliverables.
+- Deleted `writePersistenceDebugArtifacts` and the local summary structs.
+- Continued using a single `orchestrate.WithPersistence(...)` call from
+  `runtimepkg.Open(...)`.
+- Updated the Honshu example tests to verify persistence-managed workspace
+  outputs (exchange entries, memo snapshots, and handoff routes) directly.
+- **Current test signal:** Honshu tests assert workspace artifacts under the
+  persistence workspace root and final deliverables under `Request.ArtifactsDir`.
 
 ### PR 9 — Documentation
 
-- Update `.github/instructions/` where workflows reference the old
-  exchange document model.
-- Refresh the architecture diagram and the `docs/stream-refactor-memo.md`
-  cross-references.
-- Convert this memo from a plan into a "what we shipped" record (or
-  archive it).
+- Refreshed this memo into a shipped-status record.
+- Added cross-reference updates in `docs/stream-refactor-memo.md` to point to
+  this exchange/memo/handoff rewrite record.
+
+## Post-PR Verification (2026-05-09)
+
+A full branch check was run against the design goals in this memo.
+
+### Confirmed implemented
+
+- Unified orchestrator persistence via `WithPersistence(...)` and runtime
+  persistence backend wiring is in place.
+- Runner workspace layout, path-rule allocation, memo snapshots, exchange
+  publication, and handoff routing are in place.
+- Honshu example now relies on persistence-managed workspace artifacts instead
+  of ad-hoc JSON summary writers.
+
+### Deviations from this memo's original hard requirements
+
+1. **Legacy `ExchangeDocument` compatibility is still present.**
+   - Legacy exchange symbols and parsers remain in `internal/engine/runner/`.
+   - Executor stage paths still emit a legacy exchange markdown return value.
+   - This diverges from the "No backwards compatibility" requirement in this
+     memo.
+2. **`Request.ArtifactsDir` still participates in runner trusted roots.**
+   - `newRunnerFromPlan` still forwards `runnerpkg.WithTrustedResourceRoots(req.ArtifactsDir)`.
+   - This diverges from the stricter target where `Request.ArtifactsDir` is
+     only the caller-facing final-deliverable mirror destination.
+
+These deviations are intentionally recorded here so follow-up cleanup can be
+tracked without rewriting historical PR notes.
 
 ## Open Questions / Deferred
 

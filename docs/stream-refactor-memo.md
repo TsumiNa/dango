@@ -1,11 +1,14 @@
 # Stream Refactor Memo
 
-Last updated: 2026-05-03
+Last updated: 2026-05-09
 
 This memo records the current design, completed milestones, and deferred
 follow-ups for the stream refactor across orchestrator, runner, executor,
 skill, and conversation code. It is kept as a coordination note for this branch
 rather than a full changelog.
+
+For the shipped Exchange/Memo/Handoff channel rewrite record, see
+`docs/exchange-system-upgrade-memo.md`.
 
 ## Purpose
 
@@ -63,8 +66,9 @@ Important event families today:
 - `runner.phase.changed` and `runner.node.*` for runner progress.
 - `executor.polish.*`, `executor.execute.*`, and `executor.report.*` for
   executor phase progress.
-- `artifact.created` for executor-declared exchange resources.
-- `skill.memo.delta` for memo sections declared in skill exchange documents.
+- `artifact.created` for executor-declared resources.
+- `exchange.published`, `handoff.emitted`, `handoff.delivered`, and
+  `memo.snapshot` for channel-specific routing updates.
 
 ## Current Architecture
 
