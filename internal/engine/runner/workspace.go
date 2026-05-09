@@ -255,7 +255,8 @@ func copyFileIfExists(src string, dst string) error {
 		return fmt.Errorf("runner: open source file %q: %w", src, err)
 	}
 	defer in.Close()
-	out, err := os.Create(dst)
+	mode := info.Mode() & os.ModePerm
+	out, err := os.OpenFile(dst, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, mode)
 	if err != nil {
 		return fmt.Errorf("runner: create destination file %q: %w", dst, err)
 	}
@@ -265,6 +266,9 @@ func copyFileIfExists(src string, dst string) error {
 	}
 	if err := out.Close(); err != nil {
 		return fmt.Errorf("runner: close destination file %q: %w", dst, err)
+	}
+	if err := os.Chmod(dst, mode); err != nil {
+		return fmt.Errorf("runner: preserve file mode for %q: %w", dst, err)
 	}
 	return nil
 }
