@@ -13,13 +13,17 @@ const (
 	HandoffArtifactDir = "dir"
 )
 
-func handoffArtifactDirsFromOutputs(outputs map[string]any, allowedRoots []string) []string {
-	if len(outputs) == 0 {
+func handoffArtifactDirsFromOutputs(outputs map[string]any, allowedRoots []string, workspace *Workspace) []string {
+	if len(outputs) == 0 || workspace == nil {
 		return nil
 	}
 	var dirs []string
-	for _, output := range outputs {
+	for producerID, output := range outputs {
 		text, ok := output.(string)
+		if !ok {
+			continue
+		}
+		producerWorkspace, ok := workspace.Skill(producerID)
 		if !ok {
 			continue
 		}
@@ -28,12 +32,36 @@ func handoffArtifactDirsFromOutputs(outputs map[string]any, allowedRoots []strin
 			continue
 		}
 		for _, artifact := range doc.Artifacts {
+			resolvedPath, ok := resolveHandoffArtifactPath(producerWorkspace, artifact.Path)
+			if !ok {
+				continue
+			}
+			artifact.Path = resolvedPath
 			if dir, ok := handoffArtifactDir(artifact, allowedRoots); ok && !containsDir(dirs, dir) {
 				dirs = append(dirs, dir)
 			}
 		}
 	}
 	return dirs
+}
+
+func resolveHandoffArtifactPath(workspace SkillWorkspace, declaredPath string) (string, bool) {
+	if workspace.Root == "" {
+		return "", false
+	}
+	declaredPath = strings.TrimSpace(declaredPath)
+	if declaredPath == "" || filepath.IsAbs(declaredPath) {
+		return "", false
+	}
+	clean := filepath.Clean(filepath.FromSlash(declaredPath))
+	if clean == "." || clean == ".." || strings.HasPrefix(clean, ".."+string(filepath.Separator)) {
+		return "", false
+	}
+	resolved := filepath.Join(workspace.Root, clean)
+	if !pathWithinRoot(workspace.Root, resolved) {
+		return "", false
+	}
+	return resolved, true
 }
 
 func handoffArtifactDir(artifact HandoffArtifact, allowedRoots []string) (string, bool) {

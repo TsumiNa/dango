@@ -33,7 +33,7 @@ func (r *Runner) nodeAccessibleDirs(nodeID string, inputs map[string]any) []stri
 		}
 	}
 	if len(allowedRoots) > 0 {
-		resourceDirs := handoffArtifactDirsFromOutputs(inputs, allowedRoots)
+		resourceDirs := handoffArtifactDirsFromOutputs(inputs, allowedRoots, r.workspace)
 		for _, dir := range resourceDirs {
 			if !containsDir(dirs, dir) {
 				dirs = append(dirs, dir)

@@ -28,8 +28,8 @@ func (r *Runner) emitChannelDocumentEvents(ctx context.Context, node *Node, outp
 
 func (r *Runner) emitHandoffEvents(ctx context.Context, node *Node, doc *HandoffDoc) {
 	payload := streampkg.HandoffEmittedPayload{
-		RunnerID:  doc.RunnerID,
-		FromNode:  doc.FromNode,
+		RunnerID:  r.id,
+		FromNode:  node.Id,
 		ToNodes:   append([]string(nil), doc.ToNodes...),
 		Intent:    doc.Intent,
 		Document:  strings.TrimSpace(doc.Body),
@@ -44,11 +44,18 @@ func (r *Runner) emitHandoffEvents(ctx context.Context, node *Node, doc *Handoff
 	r.emitSkillStreamEvent(ctx, streampkg.EventHandoffEmitted, streampkg.StatusCompleted, node.Id, node, payloadMap(payload))
 
 	for _, artifact := range doc.Artifacts {
-		path := strings.TrimSpace(artifact.Path)
-		if path == "" {
+		declaredPath := strings.TrimSpace(artifact.Path)
+		if declaredPath == "" {
 			continue
 		}
-		delta := map[string]any{"path": path}
+		artifactPath := declaredPath
+		if resolved, ok := r.resolveNodeArtifactPath(node.Id, declaredPath); ok {
+			artifactPath = resolved
+		}
+		delta := map[string]any{"path": artifactPath}
+		if artifactPath != declaredPath {
+			delta["declared_path"] = declaredPath
+		}
 		if artifact.Type != "" {
 			delta["resource_type"] = artifact.Type
 		}
@@ -64,8 +71,8 @@ func (r *Runner) emitHandoffEvents(ctx context.Context, node *Node, doc *Handoff
 
 func (r *Runner) emitExchangePublishedEvent(ctx context.Context, node *Node, doc *ExchangeDoc) {
 	payload := streampkg.ExchangePublishedPayload{
-		RunnerID:  doc.RunnerID,
-		NodeID:    doc.NodeID,
+		RunnerID:  r.id,
+		NodeID:    node.Id,
 		Document:  strings.TrimSpace(doc.Body),
 		Title:     doc.Title,
 		CreatedAt: doc.CreatedAt,
@@ -102,6 +109,17 @@ func (r *Runner) deliverHandoffToSuccessor(ctx context.Context, producer *Node, 
 		"to_node":   successor.Id,
 	})
 	return nil
+}
+
+func (r *Runner) resolveNodeArtifactPath(nodeID string, declaredPath string) (string, bool) {
+	if r.workspace == nil {
+		return "", false
+	}
+	workspace, ok := r.workspace.Skill(nodeID)
+	if !ok {
+		return "", false
+	}
+	return resolveHandoffArtifactPath(workspace, declaredPath)
 }
 
 func handoffArtifactPayloads(artifacts []HandoffArtifact) []streampkg.HandoffArtifactPayload {
