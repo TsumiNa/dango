@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"time"
 
 	runnerpkg "github.com/tsumina/dango/internal/engine/runner"
 	streampkg "github.com/tsumina/dango/internal/engine/stream"
@@ -55,16 +56,16 @@ func planWithOrchestrator(ctx context.Context, req Request, skills []runnerpkg.S
 			return nil, nil, fmt.Errorf("orchestrate: %w (after one retry)", parseErr)
 		}
 	}
-	if exchange, err := planningExchangeMarkdown(req.Input, runtimeSkill, raw); err != nil {
-		return nil, nil, fmt.Errorf("orchestrate: build planning exchange: %w", err)
-	} else if exchange != "" {
+	if handoff, err := planningHandoffMarkdown(req.Input, runtimeSkill, raw); err != nil {
+		return nil, nil, fmt.Errorf("orchestrate: build planning handoff: %w", err)
+	} else if handoff != "" {
 		emitEngineStreamEvent(ctx, requestStream,
 			streamSourceOrchestrator(),
 			streampkg.EventLLMOutputDelta,
 			streampkg.StatusCompleted,
-			exchange,
+			handoff,
 			streampkg.Scope{},
-			map[string]any{"stage": "planning"},
+			map[string]any{"stage": "plan"},
 		)
 	}
 	emitEngineStreamEvent(ctx, requestStream,
@@ -78,17 +79,24 @@ func planWithOrchestrator(ctx context.Context, req Request, skills []runnerpkg.S
 	return plan, reject, nil
 }
 
-func planningExchangeMarkdown(request string, runtimeSkill *llm.Skill, raw string) (string, error) {
+func planningHandoffMarkdown(request string, runtimeSkill *llm.Skill, raw string) (string, error) {
 	if strings.TrimSpace(raw) == "" {
 		return "", nil
 	}
-	doc := runnerpkg.ExchangeDocument{
-		Stage:           runnerpkg.ExchangeStage("planning"),
-		SkillName:       "orchestrator",
-		TaskDescription: request,
-		Memo:            "Initial orchestrator planning result.",
-		Reasoning:       latestReasoning(runtimeSkill),
-		Handoff:         raw,
+	body := strings.TrimSpace(raw)
+	if reasoning := strings.TrimSpace(latestReasoning(runtimeSkill)); reasoning != "" {
+		body = body + "\n\nReasoning:\n" + reasoning
+	}
+	doc := runnerpkg.HandoffDoc{
+		RunnerID:  "orchestrator-plan",
+		FromNode:  "orchestrator",
+		ToNodes:   []string{"runner.bootstrap"},
+		Intent:    "plan",
+		CreatedAt: time.Now(),
+		Body: strings.TrimSpace(fmt.Sprintf("Request:\n%s\n\nPlan:\n%s",
+			request,
+			body,
+		)),
 	}
 	return doc.Markdown()
 }

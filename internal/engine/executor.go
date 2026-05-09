@@ -179,8 +179,8 @@ func (e *Executor) planTask() error {
 }
 
 // Execute runs the task. When [Executor.RunE] is set it is invoked directly;
-// otherwise Execute asks the bound runtime skill to return a markdown exchange
-// document and wraps plain-text replies into that document format.
+// otherwise Execute asks the bound runtime skill for handoff content and writes
+// stage artifacts through the runner workspace channels.
 func (e *Executor) Execute(ctx context.Context, parentOutputs map[string]any) (any, []*runnerpkg.Node, error) {
 	if ctx != nil {
 		if err := ctx.Err(); err != nil {
@@ -218,8 +218,8 @@ func (e *Executor) Execute(ctx context.Context, parentOutputs map[string]any) (a
 }
 
 // Polish satisfies the runner's polish contract. The default implementation
-// refreshes the planner via [Executor.PolishPlan] and returns a markdown
-// exchange document for orchestrator review.
+// refreshes the planner via [Executor.PolishPlan] and returns handoff markdown
+// for orchestrator review.
 func (e *Executor) Polish(ctx context.Context) (any, error) {
 	if ctx != nil {
 		if err := ctx.Err(); err != nil {
@@ -238,7 +238,7 @@ func (e *Executor) Polish(ctx context.Context) (any, error) {
 }
 
 // Report satisfies the runner's report contract. The default implementation
-// returns a markdown exchange document summarizing the execution output.
+// returns handoff markdown summarizing the execution output.
 func (e *Executor) Report(ctx context.Context, output any) (any, error) {
 	if ctx != nil {
 		if err := ctx.Err(); err != nil {

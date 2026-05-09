@@ -606,8 +606,8 @@ func TestStartRequest_StreamsPlannerReasoningAndPlanningExchange(t *testing.T) {
 	defer sub.Cancel()
 
 	deadline := time.Now().Add(2 * time.Second)
-	var sawReasoning, sawPlanningExchange bool
-	for time.Now().Before(deadline) && !(sawReasoning && sawPlanningExchange) {
+	var sawReasoning, sawPlanningHandoff bool
+	for time.Now().Before(deadline) && !(sawReasoning && sawPlanningHandoff) {
 		readCtx, cancel := context.WithTimeout(context.Background(), time.Until(deadline))
 		event, ok, err := sub.Next(readCtx)
 		cancel()
@@ -627,20 +627,20 @@ func TestStartRequest_StreamsPlannerReasoningAndPlanningExchange(t *testing.T) {
 				sawReasoning = true
 			}
 		case streampkg.EventLLMOutputDelta:
-			doc, err := runnerpkg.ParseExchangeMarkdown(delta)
+			doc, err := runnerpkg.ParseHandoffMarkdown(delta)
 			if err != nil {
 				continue
 			}
-			if doc.Stage == runnerpkg.ExchangeStage("planning") && doc.SkillName == "orchestrator" && doc.TaskDescription == "run a single node" && doc.Handoff == planOutput && strings.Contains(doc.Reasoning, "checked the available skills") {
-				sawPlanningExchange = true
+			if doc.FromNode == "orchestrator" && doc.Intent == "plan" && strings.Contains(doc.Body, "run a single node") && strings.Contains(doc.Body, planOutput) && strings.Contains(doc.Body, "checked the available skills") {
+				sawPlanningHandoff = true
 			}
 		}
 	}
 	if !sawReasoning {
 		t.Fatal("missing planner reasoning stream event from orchestrator planning")
 	}
-	if !sawPlanningExchange {
-		t.Fatal("missing planning exchange markdown stream event from orchestrator planning")
+	if !sawPlanningHandoff {
+		t.Fatal("missing planning handoff markdown stream event from orchestrator planning")
 	}
 
 	runnerID := mustReadRunnerCreated(t, resp.Stream)
