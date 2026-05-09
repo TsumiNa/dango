@@ -183,7 +183,7 @@ func validateRulePath(subdir string) (string, error) {
 		return "", fmt.Errorf("runner: path rule returned empty path")
 	}
 	if strings.Contains(clean, string(filepath.Separator)) {
-		return "", fmt.Errorf("runner: path rule must return a single path element %q", subdir)
+		return "", fmt.Errorf("runner: path rule must return a single path element %q", clean)
 	}
 	return clean, nil
 }

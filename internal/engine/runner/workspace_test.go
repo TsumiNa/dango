@@ -86,7 +86,7 @@ func TestProvisionWorkspaceRejectsInvalidRuleOutputs(t *testing.T) {
 			rule: func(string) string { return "../escape" },
 		},
 		{
-			name: "multi segment path",
+			name: "multi-segment path",
 			rule: func(string) string { return "foo/bar" },
 		},
 	}
