@@ -1,0 +1,31 @@
+Execute the assigned task.
+
+Tool budget is limited. Trust your SKILL.md and the Workspace access block already in this conversation:
+do not call pwd, do not list_dir on paths already named, and do not re-read SKILL.md or your own scripts.
+If your SKILL.md documents a canonical script entrypoint that fits this task, run it directly with one bash call and pass the parent handoff verbatim on stdin when the script accepts it.
+Treat the script's stdout as the authoritative result — do not re-read or paginate output files just to confirm them.
+
+Return one handoff markdown document body suitable for downstream skills. Include concise memo-like progress in prose and list durable output paths clearly.
+
+Task:
+{{.TaskDescription}}
+{{if and (trim .SourceInput) (eq .ParentHandoffs "No parent handoffs.")}}
+
+Original request input for this root task:
+{{.SourceInput}}
+{{end}}
+
+Parent handoff documents:
+{{.ParentHandoffs}}
+{{if .ArtifactsDir}}
+
+Artifacts root:
+{{.ArtifactsDir}}
+Use a skill-specific subdirectory under this root for durable files. Include generated files in handoff artifact metadata.
+{{end}}
+{{if .AccessibleDirs}}
+
+Accessible resource directories:
+{{range .AccessibleDirs}}- {{.}}
+{{end}}
+{{end}}

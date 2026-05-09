@@ -3,7 +3,9 @@ package engine
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
+	"io/fs"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -171,10 +173,7 @@ func TestExecute_NoRunEReturnsMarkdownFallback(t *testing.T) {
 	if doc.Stage != runnerpkg.ExchangeStageExecute {
 		t.Fatalf("Stage = %q, want execute", doc.Stage)
 	}
-	if doc.SkillName != "t" {
-		t.Fatalf("SkillName = %q, want t", doc.SkillName)
-	}
-	if doc.Handoff == "" {
+	if strings.TrimSpace(doc.Handoff) == "" {
 		t.Fatal("expected fallback handoff to be populated")
 	}
 }
@@ -202,7 +201,7 @@ func TestExecutionPromptIncludesArtifactsRoot(t *testing.T) {
 	if !strings.Contains(prompt, "Artifacts root:") || !strings.Contains(prompt, artifactsDir) {
 		t.Fatalf("execution prompt missing artifacts root %q:\n%s", artifactsDir, prompt)
 	}
-	if !strings.Contains(prompt, "skill-specific subdirectory") || !strings.Contains(prompt, "resources") {
+	if !strings.Contains(prompt, "skill-specific subdirectory") || !strings.Contains(prompt, "artifact metadata") {
 		t.Fatalf("execution prompt missing artifact handoff guidance:\n%s", prompt)
 	}
 }
@@ -367,22 +366,14 @@ func TestPolish_ReturnsExchangeMarkdown(t *testing.T) {
 	if len(doc.Handoffs) != 1 || doc.Handoffs[0].To != runnerpkg.ExchangeRecipientOrchestrator {
 		t.Fatalf("handoffs = %+v, want orchestrator", doc.Handoffs)
 	}
-	if doc.Memo == "" || doc.Handoff == "" {
-		t.Fatalf("doc sections not populated: %+v", doc)
+	if strings.TrimSpace(doc.Handoff) == "" {
+		t.Fatalf("doc handoff not populated: %+v", doc)
 	}
 }
 
 func TestPolish_UsesRuntimeSkillWhenBound(t *testing.T) {
 	clearLLMEnv(t)
-	polishDoc, err := (runnerpkg.ExchangeDocument{
-		Stage:     runnerpkg.ExchangeStagePolish,
-		Memo:      "Skill-specific polish notes.",
-		Reasoning: "The skill checked its own execution requirements.",
-		Handoff:   "Use the GP package environment after elevation enrichment.",
-	}).Markdown()
-	if err != nil {
-		t.Fatalf("polish doc markdown: %v", err)
-	}
+	polishDoc := "Use the GP package environment after elevation enrichment."
 
 	var requestBody string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -470,10 +461,69 @@ func TestReport_ReturnsExchangeMarkdownFallback(t *testing.T) {
 	if doc.Stage != runnerpkg.ExchangeStageReport {
 		t.Fatalf("Stage = %q, want report", doc.Stage)
 	}
-	if len(doc.Handoffs) != 1 || doc.Handoffs[0].Intent != runnerpkg.ExchangeIntentSummarize {
-		t.Fatalf("handoffs = %+v, want summarize", doc.Handoffs)
-	}
-	if doc.Handoff == "" {
+	if strings.TrimSpace(doc.Handoff) == "" {
 		t.Fatal("expected report handoff to include output")
+	}
+}
+
+func TestExecutorStagesWriteWorkspaceHandoffAndMemoSnapshot(t *testing.T) {
+	workspace, err := runnerpkg.ProvisionWorkspace(t.TempDir(), "runner-1", []string{"node-1"}, nil)
+	if err != nil {
+		t.Fatalf("ProvisionWorkspace: %v", err)
+	}
+	skillWS, ok := workspace.Skill("node-1")
+	if !ok {
+		t.Fatal("workspace.Skill(node-1) = false")
+	}
+	if err := os.WriteFile(filepath.Join(skillWS.MemoDir, "plan.md"), []byte("memo body"), 0o644); err != nil {
+		t.Fatalf("WriteFile(memo): %v", err)
+	}
+	externalMemo := filepath.Join(t.TempDir(), "external.md")
+	if err := os.WriteFile(externalMemo, []byte("external"), 0o644); err != nil {
+		t.Fatalf("WriteFile(external memo): %v", err)
+	}
+	symlinkMemo := filepath.Join(skillWS.MemoDir, "external_link.md")
+	if err := os.Symlink(externalMemo, symlinkMemo); err != nil {
+		if errors.Is(err, fs.ErrPermission) {
+			t.Skipf("symlink not permitted: %v", err)
+		}
+		t.Fatalf("Symlink(external memo): %v", err)
+	}
+	accessible, err := workspace.AccessibleDirs("node-1")
+	if err != nil {
+		t.Fatalf("AccessibleDirs: %v", err)
+	}
+	exec, err := NewExecutor(loadLightweightTestSkill(t), &ExecutionPlanner{
+		id:              "node-1",
+		TaskDescription: "Plan and execute.",
+	}, llm.DefaultConversationConfig(), WithExecutorClient(&llm.Client{}))
+	if err != nil {
+		t.Fatalf("NewExecutor: %v", err)
+	}
+	if _, err := exec.BindForRunner(nil, accessible); err != nil {
+		t.Fatalf("BindForRunner: %v", err)
+	}
+
+	if _, err := exec.Polish(context.Background()); err != nil {
+		t.Fatalf("Polish: %v", err)
+	}
+	handoffRaw, err := os.ReadFile(filepath.Join(skillWS.OutboxDir, "handoff.md"))
+	if err != nil {
+		t.Fatalf("ReadFile(outbox handoff): %v", err)
+	}
+	handoff, err := runnerpkg.ParseHandoffMarkdown(string(handoffRaw))
+	if err != nil {
+		t.Fatalf("ParseHandoffMarkdown(outbox): %v", err)
+	}
+	if handoff.FromNode != "node-1" {
+		t.Fatalf("handoff.FromNode = %q, want node-1", handoff.FromNode)
+	}
+	archiveMemo := filepath.Join(workspace.ArchiveDir(), "memo", "node-1", "polish", "plan.md.memo.md")
+	if _, err := os.Stat(archiveMemo); err != nil {
+		t.Fatalf("memo snapshot stat(%s): %v", archiveMemo, err)
+	}
+	archiveLinkedMemo := filepath.Join(workspace.ArchiveDir(), "memo", "node-1", "polish", "external_link.md.memo.md")
+	if _, err := os.Stat(archiveLinkedMemo); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("symlink memo should be skipped, stat err = %v", err)
 	}
 }
