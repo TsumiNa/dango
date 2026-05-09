@@ -13,6 +13,8 @@ import (
 // Runners keep references to the returned objects for their entire lifecycle.
 // Callers must ensure these objects remain valid while a runner may still use
 // them and must provide synchronization when sharing mutable implementations.
+// WorkspaceRoot returns the global root; runners combine it with a path rule to
+// provision their own per-runner workspace directory.
 type PersistenceHandle interface {
 	RunnerStore() RunnerStore
 	WorkspaceRoot() string

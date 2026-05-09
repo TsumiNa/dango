@@ -159,6 +159,8 @@ func openJSONFallbackPersistence() (*Persistence, error) {
 	}, nil
 }
 
+// compositeBackend combines SQLite-backed stores with a filesystem workspace
+// root used by runner markdown/workspace artifacts.
 type compositeBackend struct {
 	eventLogStore       storepkg.EventLogStore
 	runnerStore         runnerpkg.RunnerStore

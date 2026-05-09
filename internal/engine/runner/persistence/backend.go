@@ -8,6 +8,10 @@ import (
 )
 
 // Backend is the unified persistence surface used by orchestrator and runner.
+//
+// EventLogStore, RunnerStore, and SnapshotCursorStore are orchestrator-level
+// durable sinks. WorkspaceRoot is the global workspace root that runners use
+// with a path rule to derive their own per-runner workspace subdirectory.
 type Backend interface {
 	// EventLogStore returns the request-stream event store.
 	EventLogStore() storepkg.EventLogStore

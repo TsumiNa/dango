@@ -6,6 +6,7 @@ func (r *Runner) provisionWorkspace(nodeIDs []string) error {
 	if r == nil {
 		return nil
 	}
+	// Empty workspaceRoot intentionally disables workspace provisioning.
 	if r.workspaceRoot == "" {
 		return nil
 	}
