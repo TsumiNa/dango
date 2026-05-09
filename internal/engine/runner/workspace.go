@@ -2,7 +2,6 @@ package runner
 
 import (
 	"fmt"
-	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -146,9 +145,9 @@ func (w *Workspace) AccessibleDirs(nodeID string) ([]string, error) {
 	return append([]string(nil), sk.accessibleDirs...), nil
 }
 
-// RouteOutboxToInbox copies a producer's outbox handoff and artifacts into a
-// successor skill's inbox directory.
-func (w *Workspace) RouteOutboxToInbox(producerID string, successorID string) error {
+// Handoff links a producer's outbox handoff and artifacts into a successor
+// skill's inbox directory and marks the linked files read-only.
+func (w *Workspace) Handoff(producerID string, successorID string) error {
 	producer, ok := w.Skill(producerID)
 	if !ok {
 		return fmt.Errorf("runner: unknown producer skill %q", producerID)
@@ -164,10 +163,10 @@ func (w *Workspace) RouteOutboxToInbox(producerID string, successorID string) er
 	if err := os.MkdirAll(dst, 0o755); err != nil {
 		return fmt.Errorf("runner: create inbox route dir: %w", err)
 	}
-	if err := copyFileIfExists(filepath.Join(producer.OutboxDir, "handoff.md"), filepath.Join(dst, "handoff.md")); err != nil {
+	if err := linkReadOnlyFileIfExists(filepath.Join(producer.OutboxDir, "handoff.md"), filepath.Join(dst, "handoff.md")); err != nil {
 		return err
 	}
-	return copyTreeIfExists(filepath.Join(producer.OutboxDir, "artifacts"), filepath.Join(dst, "artifacts"))
+	return linkReadOnlyTreeIfExists(filepath.Join(producer.OutboxDir, "artifacts"), filepath.Join(dst, "artifacts"))
 }
 
 func validateRulePath(subdir string) (string, error) {
@@ -236,7 +235,7 @@ func pathWithinRoot(root string, target string) bool {
 	return true
 }
 
-func copyFileIfExists(src string, dst string) error {
+func linkReadOnlyFileIfExists(src string, dst string) error {
 	info, err := os.Stat(src)
 	if os.IsNotExist(err) {
 		return nil
@@ -250,27 +249,16 @@ func copyFileIfExists(src string, dst string) error {
 	if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
 		return fmt.Errorf("runner: create destination parent: %w", err)
 	}
-	in, err := os.Open(src)
-	if err != nil {
-		return fmt.Errorf("runner: open source file %q: %w", src, err)
+	if err := os.Link(src, dst); err != nil {
+		return fmt.Errorf("runner: hard link file %q -> %q: %w", src, dst, err)
 	}
-	defer in.Close()
-	mode := info.Mode() & os.ModePerm
-	out, err := os.OpenFile(dst, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, mode)
-	if err != nil {
-		return fmt.Errorf("runner: create destination file %q: %w", dst, err)
-	}
-	if _, err := io.Copy(out, in); err != nil {
-		_ = out.Close()
-		return fmt.Errorf("runner: copy file %q -> %q: %w", src, dst, err)
-	}
-	if err := out.Close(); err != nil {
-		return fmt.Errorf("runner: close destination file %q: %w", dst, err)
+	if err := os.Chmod(dst, info.Mode().Perm()&^0o222); err != nil {
+		return fmt.Errorf("runner: set destination file read-only %q: %w", dst, err)
 	}
 	return nil
 }
 
-func copyTreeIfExists(src string, dst string) error {
+func linkReadOnlyTreeIfExists(src string, dst string) error {
 	info, err := os.Stat(src)
 	if os.IsNotExist(err) {
 		return nil
@@ -293,6 +281,6 @@ func copyTreeIfExists(src string, dst string) error {
 		if d.IsDir() {
 			return os.MkdirAll(target, 0o755)
 		}
-		return copyFileIfExists(path, target)
+		return linkReadOnlyFileIfExists(path, target)
 	})
 }

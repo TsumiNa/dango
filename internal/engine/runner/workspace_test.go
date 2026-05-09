@@ -103,7 +103,7 @@ func TestProvisionWorkspaceRejectsPathCollision(t *testing.T) {
 	}
 }
 
-func TestRouteOutboxToInboxCopiesHandoffAndArtifacts(t *testing.T) {
+func TestHandoffLinksReadOnlyHandoffAndArtifacts(t *testing.T) {
 	workspace, err := ProvisionWorkspace(t.TempDir(), "runner-1", []string{"upstream", "downstream"}, persistencepkg.DefaultPathRule)
 	if err != nil {
 		t.Fatalf("ProvisionWorkspace: %v", err)
@@ -128,8 +128,8 @@ func TestRouteOutboxToInboxCopiesHandoffAndArtifacts(t *testing.T) {
 		t.Fatalf("WriteFile(artifact): %v", err)
 	}
 
-	if err := workspace.RouteOutboxToInbox("upstream", "downstream"); err != nil {
-		t.Fatalf("RouteOutboxToInbox: %v", err)
+	if err := workspace.Handoff("upstream", "downstream"); err != nil {
+		t.Fatalf("Handoff: %v", err)
 	}
 	deliveredHandoff := filepath.Join(downstream.InboxDir, "upstream", "handoff.md")
 	deliveredArtifact := filepath.Join(downstream.InboxDir, "upstream", "artifacts", "data", "sample.csv")
@@ -146,6 +146,34 @@ func TestRouteOutboxToInboxCopiesHandoffAndArtifacts(t *testing.T) {
 	}
 	if string(artifactContent) != "x\n1\n" {
 		t.Fatalf("delivered artifact content = %q, want %q", string(artifactContent), "x\n1\n")
+	}
+	sourceHandoffInfo, err := os.Stat(handoffPath)
+	if err != nil {
+		t.Fatalf("Stat(source handoff): %v", err)
+	}
+	deliveredHandoffInfo, err := os.Stat(deliveredHandoff)
+	if err != nil {
+		t.Fatalf("Stat(delivered handoff): %v", err)
+	}
+	if !os.SameFile(sourceHandoffInfo, deliveredHandoffInfo) {
+		t.Fatal("handoff file is not hard-linked")
+	}
+	sourceArtifactInfo, err := os.Stat(artifactPath)
+	if err != nil {
+		t.Fatalf("Stat(source artifact): %v", err)
+	}
+	deliveredArtifactInfo, err := os.Stat(deliveredArtifact)
+	if err != nil {
+		t.Fatalf("Stat(delivered artifact): %v", err)
+	}
+	if !os.SameFile(sourceArtifactInfo, deliveredArtifactInfo) {
+		t.Fatal("artifact file is not hard-linked")
+	}
+	if deliveredHandoffInfo.Mode().Perm()&0o222 != 0 {
+		t.Fatalf("delivered handoff mode = %o, want read-only", deliveredHandoffInfo.Mode().Perm())
+	}
+	if deliveredArtifactInfo.Mode().Perm()&0o222 != 0 {
+		t.Fatalf("delivered artifact mode = %o, want read-only", deliveredArtifactInfo.Mode().Perm())
 	}
 }
 
