@@ -13,11 +13,11 @@ import (
 // MarkdownBackend persists orchestrator/runner state in JSON/JSONL files and
 // provides a filesystem workspace root for runner-managed markdown artifacts.
 type MarkdownBackend struct {
-	root             string
-	eventLogStore    storepkg.EventLogStore
-	runnerStore      runnerpkg.RunnerStore
-	snapshotCursor   storepkg.SnapshotCursorStore
-	workspaceRootDir string
+	root           string
+	eventLogStore  storepkg.EventLogStore
+	runnerStore    runnerpkg.RunnerStore
+	snapshotCursor storepkg.SnapshotCursorStore
+	workspaceRoot  string
 }
 
 // NewMarkdownBackend creates a markdown/file-backed persistence backend rooted
@@ -45,16 +45,16 @@ func NewMarkdownBackend(root string) (*MarkdownBackend, error) {
 	if err != nil {
 		return nil, fmt.Errorf("runner/persistence: open markdown snapshot cursor store: %w", err)
 	}
-	workspaceRootDir := filepath.Join(absRoot, "workspace")
-	if err := os.MkdirAll(workspaceRootDir, 0o755); err != nil {
+	workspaceRoot := filepath.Join(absRoot, "workspace")
+	if err := os.MkdirAll(workspaceRoot, 0o755); err != nil {
 		return nil, fmt.Errorf("runner/persistence: create markdown workspace root: %w", err)
 	}
 	return &MarkdownBackend{
-		root:             absRoot,
-		eventLogStore:    eventLogStore,
-		runnerStore:      runnerStore,
-		snapshotCursor:   snapshotCursor,
-		workspaceRootDir: workspaceRootDir,
+		root:           absRoot,
+		eventLogStore:  eventLogStore,
+		runnerStore:    runnerStore,
+		snapshotCursor: snapshotCursor,
+		workspaceRoot:  workspaceRoot,
 	}, nil
 }
 
@@ -83,7 +83,7 @@ func (m *MarkdownBackend) WorkspaceRoot() string {
 	if m == nil {
 		return ""
 	}
-	return m.workspaceRootDir
+	return m.workspaceRoot
 }
 
 func (m *MarkdownBackend) Close(context.Context) error { return nil }

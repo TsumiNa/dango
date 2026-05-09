@@ -124,7 +124,7 @@ func openSQLitePersistence(path string) (*Persistence, error) {
 		eventLogStore:       sqlitepkg.NewStreamStore(dbStore),
 		runnerStore:         sqlitepkg.NewRunnerStore(dbStore),
 		snapshotCursorStore: sqlitepkg.NewSnapshotCursorStore(dbStore),
-		workspaceRootPath:   markdownBackend.WorkspaceRoot(),
+		workspaceRoot:       markdownBackend.WorkspaceRoot(),
 		closeOnce: sync.OnceValue(func() error {
 			return errors.Join(markdownBackend.Close(context.Background()), dbStore.Close())
 		}),
@@ -163,7 +163,7 @@ type compositeBackend struct {
 	eventLogStore       storepkg.EventLogStore
 	runnerStore         runnerpkg.RunnerStore
 	snapshotCursorStore storepkg.SnapshotCursorStore
-	workspaceRootPath   string
+	workspaceRoot       string
 	closeOnce           func() error
 }
 
@@ -174,7 +174,7 @@ func (c *compositeBackend) RunnerStore() runnerpkg.RunnerStore {
 func (c *compositeBackend) SnapshotCursorStore() storepkg.SnapshotCursorStore {
 	return c.snapshotCursorStore
 }
-func (c *compositeBackend) WorkspaceRoot() string { return c.workspaceRootPath }
+func (c *compositeBackend) WorkspaceRoot() string { return c.workspaceRoot }
 func (c *compositeBackend) Close(context.Context) error {
 	if c == nil || c.closeOnce == nil {
 		return nil

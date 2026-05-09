@@ -10,9 +10,10 @@ import (
 // PersistenceHandle exposes runner persistence sinks and workspace root.
 //
 // Implementations are typically orchestrator-owned and shared across runners.
-// Runners keep references to the returned objects for their entire lifecycle.
-// Callers must ensure these objects remain valid while a runner may still use
-// them and must provide synchronization when sharing mutable implementations.
+// Runners keep a reference to the handle and may call its methods for their
+// entire lifecycle. Callers must ensure the handle remains valid and that
+// returned objects stay usable while a runner may still use them, and must
+// provide synchronization when sharing mutable implementations.
 type PersistenceHandle interface {
 	// RunnerStore returns the append/load store used for runner lifecycle records.
 	RunnerStore() RunnerStore
@@ -75,6 +76,8 @@ func WithPersistenceHandle(handle PersistenceHandle) Option {
 // or invalid paths are ignored. The runner stores canonical string paths, not
 // live handles; callers may manage the source roots independently, but changing
 // filesystem contents after construction can change what tools can read/write.
+// These roots are combined with the workspace root from [PersistenceHandle]
+// when determining executor-accessible directories.
 func WithTrustedResourceRoots(roots ...string) Option {
 	return func(r *Runner) {
 		canonicalRoots := make([]string, 0, len(roots))
