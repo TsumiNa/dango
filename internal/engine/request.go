@@ -10,6 +10,7 @@ import (
 
 	"github.com/lithammer/shortuuid/v4"
 	runnerpkg "github.com/tsumina/dango/internal/engine/runner"
+	persistencepkg "github.com/tsumina/dango/internal/engine/runner/persistence"
 	streampkg "github.com/tsumina/dango/internal/engine/stream"
 	"github.com/tsumina/dango/internal/llm"
 	storepkg "github.com/tsumina/dango/internal/store"
@@ -78,9 +79,9 @@ type RejectReason struct {
 
 type requestStartup struct {
 	logger            *slog.Logger
-	eventLogStore     storepkg.EventLogStore
+	persistence       persistencepkg.Backend
+	runnerPathRule    persistencepkg.PathRule
 	orchestratorSkill *llm.Skill
-	runnerStore       runnerpkg.RunnerStore
 	skillConfigs      map[string]SkillRegistration
 }
 
@@ -106,13 +107,17 @@ func (o *Orchestrator) StartRequest(ctx context.Context, req Request) (*Response
 	o.configLocked = true
 	startup := requestStartup{
 		logger:            o.logger,
-		eventLogStore:     o.eventLogStore,
+		persistence:       o.persistence,
+		runnerPathRule:    o.runnerPathRule,
 		orchestratorSkill: o.orchestratorSkill,
-		runnerStore:       o.runnerStore,
 		skillConfigs:      cloneSkillRegistrations(o.skills),
 	}
 	o.mu.Unlock()
-	if err := startRequestEventLogPersistence(ctx, startup.logger, requestStream, startup.eventLogStore); err != nil {
+	var eventLogStore storepkg.EventLogStore
+	if startup.persistence != nil {
+		eventLogStore = startup.persistence.EventLogStore()
+	}
+	if err := startRequestEventLogPersistence(ctx, startup.logger, requestStream, eventLogStore); err != nil {
 		return nil, err
 	}
 
@@ -369,7 +374,7 @@ func (o *Orchestrator) startRequestWithStream(ctx context.Context, req Request, 
 		streamMerges = append(streamMerges, merge)
 	}
 
-	runner, err := newRunnerFromPlan(ctx, startup.logger, startup.runnerStore, req, plan, startup.skillConfigs, plannerSkill, skillSummaries)
+	runner, err := newRunnerFromPlan(ctx, startup.logger, startup.persistence, startup.runnerPathRule, req, plan, startup.skillConfigs, plannerSkill, skillSummaries)
 	if err != nil {
 		return err
 	}
@@ -452,7 +457,7 @@ func stopStreamMerges(merges []*streampkg.Merge) {
 	}
 }
 
-func newRunnerFromPlan(ctx context.Context, logger *slog.Logger, store runnerpkg.RunnerStore, req Request, plan *CoarsePlan, skills map[string]SkillRegistration, plannerSkill *llm.Skill, skillSummaries []runnerpkg.SkillSummary) (*runnerpkg.Runner, error) {
+func newRunnerFromPlan(ctx context.Context, logger *slog.Logger, backend persistencepkg.Backend, pathRule persistencepkg.PathRule, req Request, plan *CoarsePlan, skills map[string]SkillRegistration, plannerSkill *llm.Skill, skillSummaries []runnerpkg.SkillSummary) (*runnerpkg.Runner, error) {
 	nodes, err := buildPlanNodes(logger, req, plan, skills)
 	if err != nil {
 		return nil, err
@@ -460,7 +465,8 @@ func newRunnerFromPlan(ctx context.Context, logger *slog.Logger, store runnerpkg
 	opts := []runnerpkg.Option{
 		runnerpkg.WithContext(ctx),
 		runnerpkg.WithLogger(logger),
-		runnerpkg.WithStore(store),
+		runnerpkg.WithPersistenceHandle(newRunnerPersistenceHandle(backend)),
+		runnerpkg.WithRootPathRule(pathRule),
 		runnerpkg.WithInitialPlan(plan, nodes),
 		runnerpkg.WithPlannerSkill(plannerSkill),
 		runnerpkg.WithSkillSummaries(skillSummaries),
@@ -469,10 +475,32 @@ func newRunnerFromPlan(ctx context.Context, logger *slog.Logger, store runnerpkg
 			return buildPlanNodes(logger, request, replanned, skills)
 		}),
 	}
-	if req.ArtifactsDir != "" {
-		opts = append(opts, runnerpkg.WithAllowedResourceRoots(req.ArtifactsDir))
-	}
 	return runnerpkg.New(opts...), nil
+}
+
+type runnerPersistenceHandle struct {
+	backend persistencepkg.Backend
+}
+
+func newRunnerPersistenceHandle(backend persistencepkg.Backend) runnerpkg.PersistenceHandle {
+	if backend == nil {
+		return nil
+	}
+	return &runnerPersistenceHandle{backend: backend}
+}
+
+func (h *runnerPersistenceHandle) RunnerStore() runnerpkg.RunnerStore {
+	if h == nil || h.backend == nil {
+		return nil
+	}
+	return h.backend.RunnerStore()
+}
+
+func (h *runnerPersistenceHandle) WorkspaceRoot() string {
+	if h == nil || h.backend == nil {
+		return ""
+	}
+	return h.backend.WorkspaceRoot()
 }
 
 func buildPlanNodes(logger *slog.Logger, req Request, plan *CoarsePlan, skills map[string]SkillRegistration) (map[string]*runnerpkg.Node, error) {
@@ -506,15 +534,6 @@ func buildPlanNodes(logger *slog.Logger, req Request, plan *CoarsePlan, skills m
 			planner.TaskDescription = req.Input
 		}
 		skill := skillCfg.Skill
-		if req.ArtifactsDir != "" {
-			dirs := append([]string(nil), skillCfg.AccessibleDirs...)
-			dirs = append(dirs, req.ArtifactsDir)
-			var err error
-			skill, err = skill.SetAccessibleDirsAndBuiltinTools(dirs...)
-			if err != nil {
-				return nil, fmt.Errorf("orchestrate: configure artifacts dir for node %q: %w", step.ID, err)
-			}
-		}
 		convCfg := conversationConfigForNode(skillCfg.Config, step.ID, step.SkillName)
 		executor, err := NewExecutor(skill, planner, convCfg, WithExecutorLogger(logger), WithExecutorClient(skillCfg.Client))
 		if err != nil {

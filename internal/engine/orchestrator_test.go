@@ -107,19 +107,17 @@ func TestNewOrchestrator_InstallsPersistenceStoresFromOptions(t *testing.T) {
 	runnerStore := mustNewRunnerStore(t, t.TempDir())
 	eventLogStore := newBlockingEventLogStore()
 	cursorStore := &stubSnapshotCursorStore{}
-	o := newOrchestrator(testLogger,
-		WithRunnerStore(runnerStore),
-		WithEventLogStore(eventLogStore),
-		WithSnapshotCursorStore(cursorStore),
+	backend := newTestPersistenceBackend(
+		func(b *testPersistenceBackend) { b.runnerLog = runnerStore },
+		func(b *testPersistenceBackend) { b.eventLog = eventLogStore },
+		func(b *testPersistenceBackend) { b.cursor = cursorStore },
+		func(b *testPersistenceBackend) { b.root = t.TempDir() },
 	)
-	if o.runnerStore != runnerStore {
-		t.Fatalf("runnerStore = %v, want %v", o.runnerStore, runnerStore)
-	}
-	if o.eventLogStore != eventLogStore {
-		t.Fatalf("eventLogStore = %v, want %v", o.eventLogStore, eventLogStore)
-	}
-	if o.snapshotCursorStore != cursorStore {
-		t.Fatalf("snapshotCursorStore = %v, want %v", o.snapshotCursorStore, cursorStore)
+	o := newOrchestrator(testLogger,
+		WithPersistence(backend),
+	)
+	if o.persistence != backend {
+		t.Fatalf("persistence = %v, want %v", o.persistence, backend)
 	}
 }
 
@@ -597,7 +595,10 @@ func TestLoadRunnerRecords_RequiresConfiguredStore(t *testing.T) {
 
 func TestLoadRunnerRecords_LoadsPersistedLogWithoutLiveRunner(t *testing.T) {
 	store := mustNewRunnerStore(t, t.TempDir())
-	o := newOrchestrator(testLogger, WithRunnerStore(store))
+	o := newOrchestrator(testLogger, WithPersistence(newTestPersistenceBackend(
+		func(b *testPersistenceBackend) { b.runnerLog = store },
+		func(b *testPersistenceBackend) { b.root = t.TempDir() },
+	)))
 	if _, err := store.Append(context.Background(), "runner_persisted_only", &runnerpkg.RunnerRecord{Kind: runnerpkg.RunnerRecordInit}); err != nil {
 		t.Fatalf("Append(init): %v", err)
 	}
@@ -701,7 +702,10 @@ func TestLoadRunnerRecords_LoadsPersistedLog(t *testing.T) {
 	testLoadRunnerRecordsLoadsPersistedLog(t, func(t *testing.T) OrchestratorOption {
 		t.Helper()
 		store := mustNewRunnerStore(t, t.TempDir())
-		return WithRunnerStore(store)
+		return WithPersistence(newTestPersistenceBackend(
+			func(b *testPersistenceBackend) { b.runnerLog = store },
+			func(b *testPersistenceBackend) { b.root = t.TempDir() },
+		))
 	})
 }
 
@@ -717,7 +721,10 @@ func TestLoadRunnerRecords_LoadsPersistedSQLiteLog(t *testing.T) {
 				t.Fatalf("Close sqlite store: %v", err)
 			}
 		})
-		return WithRunnerStore(sqlitepkg.NewRunnerStore(dbStore))
+		return WithPersistence(newTestPersistenceBackend(
+			func(b *testPersistenceBackend) { b.runnerLog = sqlitepkg.NewRunnerStore(dbStore) },
+			func(b *testPersistenceBackend) { b.root = t.TempDir() },
+		))
 	})
 }
 
@@ -765,7 +772,10 @@ func testLoadRunnerRecordsLoadsPersistedLog(t *testing.T, configureStore func(t 
 
 func TestRemoveRunner_RejectsActiveRunner(t *testing.T) {
 	store := mustNewRunnerStore(t, t.TempDir())
-	o := newOrchestrator(testLogger, WithRunnerStore(store))
+	o := newOrchestrator(testLogger, WithPersistence(newTestPersistenceBackend(
+		func(b *testPersistenceBackend) { b.runnerLog = store },
+		func(b *testPersistenceBackend) { b.root = t.TempDir() },
+	)))
 	started := make(chan struct{})
 	release := make(chan struct{})
 	managedRunner := newManagedQueueTestRunner(t, "active", func(ctx context.Context, parentOutputs map[string]any) (any, []*Node, error) {
@@ -798,7 +808,10 @@ func TestRemoveRunner_RejectsActiveRunner(t *testing.T) {
 
 func TestRemoveRunner_DeletesTerminalRunnerAndLog(t *testing.T) {
 	store := mustNewRunnerStore(t, t.TempDir())
-	o := newOrchestrator(testLogger, WithRunnerStore(store))
+	o := newOrchestrator(testLogger, WithPersistence(newTestPersistenceBackend(
+		func(b *testPersistenceBackend) { b.runnerLog = store },
+		func(b *testPersistenceBackend) { b.root = t.TempDir() },
+	)))
 	managedRunner := newManagedQueueTestRunner(t, "failing", func(ctx context.Context, parentOutputs map[string]any) (any, []*Node, error) {
 		return nil, nil, errors.New("boom")
 	})

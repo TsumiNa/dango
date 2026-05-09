@@ -9,9 +9,9 @@ import (
 	"time"
 
 	runnerpkg "github.com/tsumina/dango/internal/engine/runner"
+	persistencepkg "github.com/tsumina/dango/internal/engine/runner/persistence"
 	streampkg "github.com/tsumina/dango/internal/engine/stream"
 	"github.com/tsumina/dango/internal/llm"
-	storepkg "github.com/tsumina/dango/internal/store"
 )
 
 // Orchestrator is a runner factory that bridges external user requests to
@@ -28,18 +28,17 @@ type Orchestrator struct {
 	envClient         *llm.Client
 	envClientErr      error
 
-	mu                  sync.RWMutex
-	configLocked        bool
-	eventLogStore       storepkg.EventLogStore
-	runnerStore         runnerpkg.RunnerStore
-	snapshotCursorStore storepkg.SnapshotCursorStore
-	maxRunningRunners   int
-	skills              map[string]SkillRegistration
-	runners             map[string]*runnerpkg.Runner
-	runningRunnerIDs    map[string]struct{}
-	queuedRunnerByID    map[string]*queuedRunner
-	queuedRunners       runnerStartQueue
-	nextQueueOrder      uint64
+	mu                sync.RWMutex
+	configLocked      bool
+	persistence       persistencepkg.Backend
+	runnerPathRule    persistencepkg.PathRule
+	maxRunningRunners int
+	skills            map[string]SkillRegistration
+	runners           map[string]*runnerpkg.Runner
+	runningRunnerIDs  map[string]struct{}
+	queuedRunnerByID  map[string]*queuedRunner
+	queuedRunners     runnerStartQueue
+	nextQueueOrder    uint64
 }
 
 // OrchestratorOption adjusts a constructed [Orchestrator] before it is returned.
@@ -73,45 +72,23 @@ func WithOrchestratorLogger(logger *slog.Logger) OrchestratorOption {
 	}
 }
 
-// WithRunnerStore installs store as the persistence store that newly assembled
-// runners use.
-//
-// The Orchestrator keeps a shared reference to store and may call it from
-// concurrent runner execution and query paths. Callers remain responsible for
-// the store lifecycle and must not close, replace, or unsafely mutate it while
-// the Orchestrator may still use it. Passing nil leaves runner-record
-// persistence disabled.
-func WithRunnerStore(store runnerpkg.RunnerStore) OrchestratorOption {
+// WithPersistence installs backend as the orchestrator-owned persistence
+// backend used for runner records, request event logs, snapshot cursors, and
+// runner workspace provisioning.
+func WithPersistence(backend persistencepkg.Backend) OrchestratorOption {
 	return func(o *Orchestrator) {
-		o.runnerStore = store
+		o.persistence = backend
 	}
 }
 
-// WithEventLogStore installs store as the request event-log store used by
-// StartRequest persistence workers and describe replay.
+// WithRunnerPathRule installs rule as the per-runner workspace path mapper.
 //
-// The Orchestrator keeps a shared reference to store and may call it from
-// concurrent background persistence workers and describe/query paths. Callers
-// remain responsible for the store lifecycle and must not close, replace, or
-// unsafely mutate it while the Orchestrator may still use it. Passing nil
-// leaves request event-log persistence disabled.
-func WithEventLogStore(store storepkg.EventLogStore) OrchestratorOption {
+// Nil keeps [persistence.DefaultPathRule].
+func WithRunnerPathRule(rule persistencepkg.PathRule) OrchestratorOption {
 	return func(o *Orchestrator) {
-		o.eventLogStore = store
-	}
-}
-
-// WithSnapshotCursorStore installs store as the persistence store used to save
-// describe replay cursors.
-//
-// The Orchestrator keeps a shared reference to store and may call it from
-// concurrent describe/query paths. Callers remain responsible for the store
-// lifecycle and must not close, replace, or unsafely mutate it while the
-// Orchestrator may still use it. Passing nil leaves cursor persistence
-// disabled.
-func WithSnapshotCursorStore(store storepkg.SnapshotCursorStore) OrchestratorOption {
-	return func(o *Orchestrator) {
-		o.snapshotCursorStore = store
+		if rule != nil {
+			o.runnerPathRule = rule
+		}
 	}
 }
 
@@ -123,11 +100,11 @@ var ErrRunnerNotFound = errors.New("orchestrate: runner not found")
 var ErrRunnerActive = errors.New("orchestrate: runner is still active")
 
 // ErrRunnerStoreNotConfigured is returned when persisted runner records are
-// requested without a configured runner store.
+// requested without a configured persistence backend runner store.
 var ErrRunnerStoreNotConfigured = errors.New("orchestrate: runner store not configured")
 
 // ErrEventLogStoreNotConfigured is returned when request-level describe replay
-// is requested without a configured event-log store.
+// is requested without a configured persistence backend event-log store.
 var ErrEventLogStoreNotConfigured = errors.New("orchestrate: event log store not configured")
 
 // ErrRunnerPlanNotAwaitingReview is returned when callers try to accept or
@@ -192,6 +169,7 @@ func NewOrchestrator(opts ...OrchestratorOption) *Orchestrator {
 	o := &Orchestrator{
 		ctx:              context.Background(),
 		logger:           slog.Default(),
+		runnerPathRule:   persistencepkg.DefaultPathRule,
 		skills:           make(map[string]SkillRegistration),
 		runners:          make(map[string]*runnerpkg.Runner),
 		runningRunnerIDs: make(map[string]struct{}),
@@ -652,8 +630,12 @@ func (o *Orchestrator) LoadRunnerRecords(ctx context.Context, id string) ([]runn
 	}
 
 	o.mu.RLock()
-	store := o.runnerStore
+	backend := o.persistence
 	o.mu.RUnlock()
+	var store runnerpkg.RunnerStore
+	if backend != nil {
+		store = backend.RunnerStore()
+	}
 	if store == nil {
 		return nil, ErrRunnerStoreNotConfigured
 	}
@@ -673,8 +655,12 @@ func (o *Orchestrator) RemoveRunner(ctx context.Context, id string) error {
 
 	o.mu.RLock()
 	runner := o.runners[id]
-	store := o.runnerStore
+	backend := o.persistence
 	o.mu.RUnlock()
+	var store runnerpkg.RunnerStore
+	if backend != nil {
+		store = backend.RunnerStore()
+	}
 	if runner == nil {
 		return ErrRunnerNotFound
 	}

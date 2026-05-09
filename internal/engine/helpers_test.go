@@ -15,8 +15,10 @@ import (
 	"github.com/openai/openai-go/v3"
 	"github.com/openai/openai-go/v3/option"
 	runnerpkg "github.com/tsumina/dango/internal/engine/runner"
+	persistencepkg "github.com/tsumina/dango/internal/engine/runner/persistence"
 	streampkg "github.com/tsumina/dango/internal/engine/stream"
 	"github.com/tsumina/dango/internal/llm"
+	storepkg "github.com/tsumina/dango/internal/store"
 )
 
 var testLogger = slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelError}))
@@ -54,6 +56,33 @@ func newOrchestrator(logger *slog.Logger, opts ...OrchestratorOption) *Orchestra
 	base := []OrchestratorOption{WithOrchestratorContext(context.Background()), WithOrchestratorLogger(logger)}
 	base = append(base, opts...)
 	return NewOrchestrator(base...)
+}
+
+type testPersistenceBackend struct {
+	eventLog  storepkg.EventLogStore
+	runnerLog runnerpkg.RunnerStore
+	cursor    storepkg.SnapshotCursorStore
+	root      string
+}
+
+func (b *testPersistenceBackend) EventLogStore() storepkg.EventLogStore { return b.eventLog }
+func (b *testPersistenceBackend) RunnerStore() runnerpkg.RunnerStore    { return b.runnerLog }
+func (b *testPersistenceBackend) SnapshotCursorStore() storepkg.SnapshotCursorStore {
+	return b.cursor
+}
+func (b *testPersistenceBackend) WorkspaceRoot() string { return b.root }
+func (b *testPersistenceBackend) Close(context.Context) error {
+	return nil
+}
+
+func newTestPersistenceBackend(opts ...func(*testPersistenceBackend)) persistencepkg.Backend {
+	backend := &testPersistenceBackend{}
+	for _, opt := range opts {
+		if opt != nil {
+			opt(backend)
+		}
+	}
+	return backend
 }
 
 func newDiscardLogger() *slog.Logger {

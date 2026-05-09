@@ -145,9 +145,7 @@ func runHonshuGroundwaterExample(ctx context.Context, cfg exampleConfig) (_ *exa
 	orchestrator := orchestrate.NewOrchestrator(
 		orchestrate.WithOrchestratorContext(ctx),
 		orchestrate.WithOrchestratorLogger(logger),
-		orchestrate.WithEventLogStore(persistence.EventLogStore()),
-		orchestrate.WithRunnerStore(persistence.RunnerStore()),
-		orchestrate.WithSnapshotCursorStore(persistence.SnapshotCursorStore()),
+		orchestrate.WithPersistence(persistence.Backend()),
 	)
 	if cfg.LLMClient != nil {
 		logger.Info("using configured llm client",

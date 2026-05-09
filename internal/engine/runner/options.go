@@ -7,6 +7,17 @@ import (
 	"github.com/tsumina/dango/internal/llm"
 )
 
+// PersistenceHandle exposes runner-owned persistence sinks and workspace root.
+//
+// Implementations are typically orchestrator-owned and shared across runners.
+// Runners keep references to the returned objects for their entire lifecycle.
+// Callers must ensure these objects remain valid while a runner may still use
+// them and must provide synchronization when sharing mutable implementations.
+type PersistenceHandle interface {
+	RunnerStore() RunnerStore
+	WorkspaceRoot() string
+}
+
 // Option adjusts a constructed [Runner] before it is returned.
 type Option func(*Runner)
 
@@ -36,15 +47,31 @@ func WithLogger(logger *slog.Logger) Option {
 	}
 }
 
-// WithStore installs store as the Runner's persistence sink.
+// WithPersistenceHandle installs handle as the Runner's persistence source.
 //
-// The Runner keeps a reference to store and may call it from runner lifecycle
-// goroutines. A nil store disables persistence. If store is shared with other
-// goroutines, callers are responsible for synchronization unless the
-// RunnerStore implementation documents its own concurrency safety.
-func WithStore(store RunnerStore) Option {
+// The Runner keeps a reference to handle and resolves its runner store and
+// workspace root at start time. A nil handle disables persistence and workspace
+// provisioning.
+func WithPersistenceHandle(handle PersistenceHandle) Option {
 	return func(r *Runner) {
-		r.store = store
+		r.persistenceHandle = handle
+		if handle == nil {
+			r.store = nil
+			r.workspaceRoot = ""
+			return
+		}
+		r.store = handle.RunnerStore()
+		r.workspaceRoot = handle.WorkspaceRoot()
+	}
+}
+
+// WithRootPathRule installs rule as the mapping from runner ID to per-runner
+// workspace subdirectory under the global workspace root.
+func WithRootPathRule(rule func(string) string) Option {
+	return func(r *Runner) {
+		if rule != nil {
+			r.rootPathRule = rule
+		}
 	}
 }
 
@@ -88,19 +115,5 @@ func WithSkillSummaries(summaries []SkillSummary) Option {
 func WithPlanNodeBuilder(builder PlanNodeBuilder) Option {
 	return func(r *Runner) {
 		r.planNodeBuilder = builder
-	}
-}
-
-// WithAllowedResourceRoots restricts which filesystem paths exchange documents
-// may declare as resources. A resolved resource directory is only granted to
-// downstream skills when it is rooted under at least one of roots. Paths
-// outside these roots are silently discarded.
-//
-// Callers should pass the request artifacts directory (and any other trusted
-// roots) so that model-generated exchange documents cannot escalate filesystem
-// access beyond the expected workspace.
-func WithAllowedResourceRoots(roots ...string) Option {
-	return func(r *Runner) {
-		r.allowedResourceRoots = append(r.allowedResourceRoots, roots...)
 	}
 }

@@ -23,9 +23,7 @@ func TestRuntimePersistenceSQLiteSupportsReplayRunnerRecordsAndDescribeAfterReop
 	configureOrchestratorPersistence(t, persistence)
 
 	o := newOrchestrator(testLogger,
-		WithEventLogStore(persistence.EventLogStore()),
-		WithSnapshotCursorStore(persistence.SnapshotCursorStore()),
-		WithRunnerStore(persistence.RunnerStore()),
+		WithPersistence(persistence.Backend()),
 	)
 	mustAddSkills(t, o, newTestSkillRegistration(t, "single", "Single-step runner.", nil))
 	if err := o.SetOrchestratorSkill(bindTestOrchestratorSkill(t,
@@ -90,9 +88,7 @@ func TestRuntimePersistenceSQLiteSupportsReplayRunnerRecordsAndDescribeAfterReop
 		}
 	}()
 	fresh := newOrchestrator(testLogger,
-		WithEventLogStore(reopened.EventLogStore()),
-		WithSnapshotCursorStore(reopened.SnapshotCursorStore()),
-		WithRunnerStore(reopened.RunnerStore()),
+		WithPersistence(reopened.Backend()),
 	)
 
 	rawFrames, err := reopened.EventLogStore().LoadEvents(ctx, streampkg.Scope{RequestID: resp.RequestID}, 1, streampkg.Filter{})

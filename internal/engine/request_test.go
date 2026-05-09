@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -74,7 +73,10 @@ func TestStartRequest_BuildsRunnerFromPlanAndReturnsID(t *testing.T) {
 	perSkillClient := &llm.Client{}
 	executeClient := &llm.Client{}
 	store := mustNewRunnerStore(t, t.TempDir())
-	o := newOrchestrator(testLogger, WithRunnerStore(store))
+	o := newOrchestrator(testLogger, WithPersistence(newTestPersistenceBackend(
+		func(b *testPersistenceBackend) { b.runnerLog = store },
+		func(b *testPersistenceBackend) { b.root = t.TempDir() },
+	)))
 	mustAddSkills(t, o,
 		newTestSkillRegistration(t, "plan", "Draft a plan.", perSkillClient),
 		newTestSkillRegistration(t, "execute", "Execute a plan.", executeClient),
@@ -153,12 +155,8 @@ func TestStartRequest_BuildsRunnerFromPlanAndReturnsID(t *testing.T) {
 	if got := runExecutor.Planner().ArtifactsDir; got != artifactsDir {
 		t.Errorf("run artifacts dir = %q, want %q", got, artifactsDir)
 	}
-	realArtifactsDir, err := filepath.EvalSymlinks(artifactsDir)
-	if err != nil {
-		t.Fatalf("EvalSymlinks(artifactsDir): %v", err)
-	}
-	if got := runExecutor.Skill().AccessibleDirs(); len(got) != 1 || got[0] != realArtifactsDir {
-		t.Fatalf("run skill accessible dirs = %v, want [%s]", got, realArtifactsDir)
+	if got := runExecutor.Skill().AccessibleDirs(); len(got) != 0 {
+		t.Fatalf("run skill accessible dirs = %v, want empty before workspace binding", got)
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
@@ -254,7 +252,9 @@ func TestStartRequest_ReturnsReplayableRequestStream(t *testing.T) {
 func TestStartRequest_PersistsRawRequestFramesWithoutBlockingSubscribers(t *testing.T) {
 	clearLLMEnv(t)
 	eventLog := newBlockingEventLogStore()
-	o := newOrchestrator(testLogger, WithEventLogStore(eventLog))
+	o := newOrchestrator(testLogger, WithPersistence(newTestPersistenceBackend(
+		func(b *testPersistenceBackend) { b.eventLog = eventLog },
+	)))
 	mustAddSkills(t, o, newTestSkillRegistration(t, "single", "Single-step runner.", nil))
 	if err := o.SetOrchestratorSkill(bindTestOrchestratorSkill(t,
 		mustPlanJSON(t, &CoarsePlan{
