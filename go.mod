@@ -14,6 +14,7 @@ require (
 	go.opentelemetry.io/otel v1.43.0
 	go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracehttp v1.43.0
 	go.opentelemetry.io/otel/sdk v1.43.0
+	golang.org/x/term v0.42.0
 	gopkg.in/yaml.v2 v2.4.0
 	modernc.org/sqlite v1.50.0
 	mvdan.cc/sh/v3 v3.13.1
@@ -38,7 +39,6 @@ require (
 	github.com/tidwall/sjson v1.2.5 // indirect
 	github.com/xo/terminfo v0.0.0-20220910002029-abceb7e1c41e // indirect
 	golang.org/x/exp v0.0.0-20260410095643-746e56fc9e2f // indirect
-	golang.org/x/term v0.42.0 // indirect
 )
 
 require (
@@ -94,5 +94,4 @@ require (
 	modernc.org/libc v1.72.2 // indirect
 	modernc.org/mathutil v1.7.1 // indirect
 	modernc.org/memory v1.11.0 // indirect
-	modernc.org/opt v0.2.0 // indirect
 )
