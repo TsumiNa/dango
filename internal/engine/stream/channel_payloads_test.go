@@ -58,7 +58,7 @@ func TestPR3EventPayloadJSONRoundTrip(t *testing.T) {
 		HandoffPath:   "skills/node_2/inbox/node_1/handoff.md",
 		ArtifactPaths: []string{"skills/node_2/inbox/node_1/artifacts/data.csv"},
 		Artifacts: []HandoffArtifactPayload{
-			{Path: "artifacts/data.csv", Type: "csv"},
+			{Path: "artifacts/data.csv", Type: "csv", Description: "training rows"},
 		},
 		DeliveredAt: created,
 	}
