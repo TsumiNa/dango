@@ -267,9 +267,6 @@ func copyFileIfExists(src string, dst string) error {
 	if err := out.Close(); err != nil {
 		return fmt.Errorf("runner: close destination file %q: %w", dst, err)
 	}
-	if err := os.Chmod(dst, mode); err != nil {
-		return fmt.Errorf("runner: preserve file mode for %q: %w", dst, err)
-	}
 	return nil
 }
 

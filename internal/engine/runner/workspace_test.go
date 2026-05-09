@@ -112,6 +112,10 @@ func TestRouteOutboxToInboxCopiesHandoffAndArtifacts(t *testing.T) {
 	if !ok {
 		t.Fatal("upstream skill workspace missing")
 	}
+	downstream, ok := workspace.Skill("downstream")
+	if !ok {
+		t.Fatal("downstream skill workspace missing")
+	}
 	handoffPath := filepath.Join(upstream.OutboxDir, "handoff.md")
 	if err := os.WriteFile(handoffPath, []byte("# handoff\n"), 0o644); err != nil {
 		t.Fatalf("WriteFile(handoff): %v", err)
@@ -127,8 +131,8 @@ func TestRouteOutboxToInboxCopiesHandoffAndArtifacts(t *testing.T) {
 	if err := workspace.RouteOutboxToInbox("upstream", "downstream"); err != nil {
 		t.Fatalf("RouteOutboxToInbox: %v", err)
 	}
-	deliveredHandoff := filepath.Join(workspace.Root(), "skills", "downstream", "inbox", "upstream", "handoff.md")
-	deliveredArtifact := filepath.Join(workspace.Root(), "skills", "downstream", "inbox", "upstream", "artifacts", "data", "sample.csv")
+	deliveredHandoff := filepath.Join(downstream.InboxDir, "upstream", "handoff.md")
+	deliveredArtifact := filepath.Join(downstream.InboxDir, "upstream", "artifacts", "data", "sample.csv")
 	handoffContent, err := os.ReadFile(deliveredHandoff)
 	if err != nil {
 		t.Fatalf("ReadFile(delivered handoff): %v", err)
