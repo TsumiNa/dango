@@ -602,27 +602,29 @@ A full branch check was run against the design goals in this memo.
 
 ### Deviations from this memo's original hard requirements
 
-1. **Legacy `ExchangeDocument` compatibility is still present.**
-   - Legacy exchange symbols and parsers remain in `internal/engine/runner/`.
-   - Executor stage paths still emit a legacy exchange markdown return value.
-   - This diverges from the "No backwards compatibility" requirement in this
-     memo.
-2. **`Request.ArtifactsDir` still participates in runner trusted roots.**
-   - `newRunnerFromPlan` still forwards `runnerpkg.WithTrustedResourceRoots(req.ArtifactsDir)`.
-   - This diverges from the stricter target where `Request.ArtifactsDir` is
-     only the caller-facing final-deliverable mirror destination.
+Resolved in the follow-up PR:
 
-These deviations are intentionally recorded here so follow-up cleanup can be
-tracked without rewriting historical PR notes.
+1. **Legacy `ExchangeDocument` compatibility was removed.**
+   - Legacy exchange symbols, parsers, draft helpers, resource metadata, and
+     executor legacy return paths were deleted.
+   - Executor stage paths now return `dango.handoff_doc` markdown.
+2. **`Request.ArtifactsDir` no longer participates in runner trusted roots.**
+   - `newRunnerFromPlan` no longer forwards request artifacts through
+     `runnerpkg.WithTrustedResourceRoots`.
+   - `Request.ArtifactsDir` remains the caller-facing final-deliverable mirror
+     destination.
+
+This section is intentionally retained as a historical follow-up record.
 
 ### Post-PR follow-up work to complete
 
+Completed in the follow-up PR:
+
 1. **Prompt override public surface.**
-   - The built-in prompt override hook no longer needs to stay internal.
-   - Follow-up work should expose it as a public advanced API on
-     orchestrator/runner configuration.
-   - Documentation must label it advanced usage.
-   - No dedicated example is required for the initial public surface.
+   - The built-in prompt override hook is exposed as an advanced API on
+     orchestrator and runner configuration.
+   - Template override maps are copied at configuration boundaries.
+   - No dedicated example was added for the initial public surface.
 
 ## Open Questions / Deferred
 

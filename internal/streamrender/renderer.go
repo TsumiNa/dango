@@ -1135,13 +1135,16 @@ func imagePath(path string) bool {
 }
 
 func exchangeText(text string) bool {
-	return runnerpkg.LooksLikeExchangeMarkdown(text)
+	return runnerpkg.LooksLikeChannelMarkdown(text)
 }
 
 func looksLikeExchangeDraft(text string) bool {
 	trimmed := strings.TrimSpace(text)
-	if runnerpkg.LooksLikeExchangeMarkdown(trimmed) {
+	if runnerpkg.LooksLikeChannelMarkdown(trimmed) {
 		return true
 	}
-	return strings.HasPrefix(trimmed, "---") && (strings.Contains(trimmed, "# Memo") || strings.Contains(trimmed, "# Handoff"))
+	return strings.HasPrefix(trimmed, "---") &&
+		(strings.Contains(trimmed, "kind: "+runnerpkg.HandoffDocKind) ||
+			strings.Contains(trimmed, "kind: "+runnerpkg.ExchangeDocKind) ||
+			strings.Contains(trimmed, "kind: "+runnerpkg.MemoDocumentKind))
 }

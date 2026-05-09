@@ -121,6 +121,16 @@ func TestNewOrchestrator_InstallsPersistenceStoresFromOptions(t *testing.T) {
 	}
 }
 
+func TestNewOrchestrator_InstallsPromptTemplateOverrides(t *testing.T) {
+	overrides := map[string]string{"execute.tmpl": "override"}
+	o := newOrchestrator(testLogger, WithPromptTemplateOverrides(overrides))
+	overrides["execute.tmpl"] = "mutated"
+
+	if got := o.promptTemplateOverrides["execute.tmpl"]; got != "override" {
+		t.Fatalf("prompt override = %q, want original copy", got)
+	}
+}
+
 func TestSetMaxRunningRunners_RejectsChangesAfterStartup(t *testing.T) {
 	o := newOrchestrator(testLogger)
 	mustRejectStartRequest(t, o)

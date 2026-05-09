@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 )
 
@@ -81,7 +82,7 @@ func newStoredRunnerEvent(event RunnerEvent) *StoredRunnerEvent {
 		stored.DataText = errValue.Error()
 		return stored
 	}
-	if text, ok := event.Data.(string); ok && looksLikeCanonicalExchangeMarkdown(text) && IsExchangeMarkdown(text) {
+	if text, ok := event.Data.(string); ok && isRunnerChannelMarkdown(text) {
 		stored.DataEncoding = "markdown"
 		stored.DataText = text
 		return stored
@@ -95,4 +96,20 @@ func newStoredRunnerEvent(event RunnerEvent) *StoredRunnerEvent {
 	stored.DataEncoding = "json"
 	stored.DataJSON = raw
 	return stored
+}
+
+func isRunnerChannelMarkdown(raw string) bool {
+	if !strings.HasPrefix(raw, "---\n") {
+		return false
+	}
+	if _, err := ParseHandoffMarkdown(raw); err == nil {
+		return true
+	}
+	if _, err := ParseExchangeDocMarkdown(raw); err == nil {
+		return true
+	}
+	if _, err := ParseMemoMarkdown(raw); err == nil {
+		return true
+	}
+	return false
 }

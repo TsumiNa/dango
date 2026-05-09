@@ -212,7 +212,7 @@ func plannerMarkdownDocument(v any) string {
 	switch value := v.(type) {
 	case string:
 		return value
-	case *ExchangeDocument:
+	case *HandoffDoc:
 		if value == nil {
 			return ""
 		}
@@ -221,7 +221,7 @@ func plannerMarkdownDocument(v any) string {
 			return raw
 		}
 		return fmt.Sprintf("%+v", *value)
-	case ExchangeDocument:
+	case HandoffDoc:
 		raw, err := value.Markdown()
 		if err == nil {
 			return raw

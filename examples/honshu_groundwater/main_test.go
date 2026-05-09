@@ -800,23 +800,7 @@ func handoffFromView(view *runnerpkg.RunnerView, nodeID string) (*runnerpkg.Hand
 	if doc, parseErr := runnerpkg.ParseHandoffMarkdown(raw); parseErr == nil {
 		return doc, nil
 	}
-	if legacy, parseErr := runnerpkg.ParseExchangeMarkdown(raw); parseErr == nil {
-		doc := &runnerpkg.HandoffDoc{
-			RunnerID: legacy.RunnerID,
-			FromNode: legacy.NodeID,
-			ToNodes:  []string{"downstream"},
-			Body:     legacy.Handoff,
-		}
-		for _, resource := range legacy.Resources {
-			doc.Artifacts = append(doc.Artifacts, runnerpkg.HandoffArtifact{
-				Path:        resource.Path,
-				Type:        resource.Type,
-				Description: resource.Description,
-			})
-		}
-		return doc, nil
-	}
-	return nil, fmt.Errorf("parse completed node %q as handoff or legacy exchange markdown", nodeID)
+	return nil, fmt.Errorf("parse completed node %q as handoff markdown", nodeID)
 }
 
 func completedNodeMarkdown(view *runnerpkg.RunnerView, nodeID string) (string, error) {
@@ -1056,16 +1040,22 @@ func sourceWorkspaceFromPrompt(prompt string) (string, error) {
 func artifactsRootFromPrompt(prompt string) (string, error) {
 	const marker = "Artifacts root:\n"
 	start := strings.Index(prompt, marker)
-	if start < 0 {
-		return "", fmt.Errorf("prompt does not include artifacts root")
+	if start >= 0 {
+		rest := prompt[start+len(marker):]
+		line, _, _ := strings.Cut(rest, "\n")
+		root := strings.TrimSpace(line)
+		if root == "" {
+			return "", fmt.Errorf("artifacts root is empty")
+		}
+		return root, nil
 	}
-	rest := prompt[start+len(marker):]
-	line, _, _ := strings.Cut(rest, "\n")
-	root := strings.TrimSpace(line)
-	if root == "" {
-		return "", fmt.Errorf("artifacts root is empty")
+	for _, line := range strings.Split(prompt, "\n") {
+		dir := strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(line), "- "))
+		if filepath.Base(dir) == "outbox" {
+			return filepath.Join(dir, "artifacts"), nil
+		}
 	}
-	return root, nil
+	return "", fmt.Errorf("prompt does not include artifacts root or outbox")
 }
 
 func skillScriptCommand(skillDir string, script string, payload any) (string, error) {
@@ -1097,16 +1087,12 @@ func findTool(t *testing.T, tools []llm.Tool, name string) llm.Tool {
 }
 
 func polishExchangeMarkdown(prompt string) (string, error) {
-	doc := runnerpkg.ExchangeDocument{
-		Stage: runnerpkg.ExchangeStagePolish,
-		Handoffs: []runnerpkg.ExchangeHandoff{{
-			To:      runnerpkg.ExchangeRecipientOrchestrator,
-			Intent:  runnerpkg.ExchangeIntentReview,
-			Summary: "Skill-specific execution plan is ready for review.",
-		}},
-		Memo:      "The skill reviewed its assigned task without running execution tools.",
-		Reasoning: "The polished plan keeps execution concerns scoped to this skill.",
-		Handoff:   "Proceed with this skill only if the assigned task matches its stated responsibility.\n\n" + prompt,
+	doc := runnerpkg.HandoffDoc{
+		RunnerID: "runner-1",
+		FromNode: "node",
+		ToNodes:  []string{"orchestrator"},
+		Intent:   "review",
+		Body:     "Proceed with this skill only if the assigned task matches its stated responsibility.\n\n" + prompt,
 	}
 	return doc.Markdown()
 }
@@ -1146,42 +1132,23 @@ func missingSkills(prompt plannerPrompt, required ...string) []string {
 }
 
 func executionExchangeMarkdown(toolOutput string) (string, error) {
-	doc := runnerpkg.ExchangeDocument{
-		Stage: runnerpkg.ExchangeStageExecute,
-		Handoffs: []runnerpkg.ExchangeHandoff{{
-			To:      runnerpkg.ExchangeRecipientDownstream,
-			Intent:  runnerpkg.ExchangeIntentContinue,
-			Summary: "Structured tool output for downstream skills.",
-		}},
-		Memo:      "The skill used its required domain tool and captured structured output.",
-		Reasoning: "The tool output is the authoritative handoff for the next node.",
-		Handoff:   fencedJSON(toolOutput),
-		Resources: exchangeResourcesFromToolOutput(toolOutput),
+	doc := runnerpkg.HandoffDoc{
+		RunnerID: "runner-1",
+		FromNode: "node",
+		ToNodes:  []string{"downstream"},
+		Intent:   "continue",
+		Body:     fencedJSON(toolOutput),
 	}
 	return doc.Markdown()
 }
 
-func exchangeResourcesFromToolOutput(toolOutput string) []runnerpkg.ExchangeResource {
-	var payload struct {
-		Resources []runnerpkg.ExchangeResource `json:"resources"`
-	}
-	if err := json.Unmarshal([]byte(toolOutput), &payload); err != nil {
-		return nil
-	}
-	return payload.Resources
-}
-
 func reportExchangeMarkdown(output string) (string, error) {
-	doc := runnerpkg.ExchangeDocument{
-		Stage: runnerpkg.ExchangeStageReport,
-		Handoffs: []runnerpkg.ExchangeHandoff{{
-			To:      runnerpkg.ExchangeRecipientOrchestrator,
-			Intent:  runnerpkg.ExchangeIntentSummarize,
-			Summary: "Report summary for final request synthesis.",
-		}},
-		Memo:      "Report created from the executor output.",
-		Reasoning: "The report keeps artifact references visible to the orchestrator.",
-		Handoff:   summarizeReportOutput(output),
+	doc := runnerpkg.HandoffDoc{
+		RunnerID: "runner-1",
+		FromNode: "node",
+		ToNodes:  []string{"orchestrator"},
+		Intent:   "summarize",
+		Body:     summarizeReportOutput(output),
 	}
 	return doc.Markdown()
 }

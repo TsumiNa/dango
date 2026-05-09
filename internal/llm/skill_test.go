@@ -393,7 +393,7 @@ func TestRuntimeInstructionPrependsPlatformSystemPrompt(t *testing.T) {
 		"Dango platform conventions",
 		"Two skill roles",
 		"Executor lifecycle: polish → execute → report",
-		"Exchange markdown",
+		"Handoff markdown",
 		"DO_THE_TASK",
 		"Workspace access:",
 	} {

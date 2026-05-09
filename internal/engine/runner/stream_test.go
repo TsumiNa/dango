@@ -4,8 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -258,18 +256,18 @@ func TestRunnerEngineStoppedAfterIdleIsCompletedStreamStatus(t *testing.T) {
 	}
 }
 
-func TestRunnerEmitsArtifactCreatedEventsFromExchangeOutput(t *testing.T) {
-	artifactPath := filepath.Join(t.TempDir(), "predictions.csv")
-	if err := os.WriteFile(artifactPath, []byte("x\n"), 0o644); err != nil {
-		t.Fatalf("WriteFile: %v", err)
-	}
-	raw, err := (ExchangeDocument{
-		Stage: ExchangeStageExecute,
-		Resources: []ExchangeResource{{
-			Path:        artifactPath,
-			Type:        ExchangeResourceFile,
+func TestRunnerEmitsArtifactCreatedEventsFromHandoffOutput(t *testing.T) {
+	raw, err := (HandoffDoc{
+		RunnerID: "runner-1",
+		FromNode: "artifact-node",
+		ToNodes:  []string{"downstream"},
+		Intent:   "continue",
+		Artifacts: []HandoffArtifact{{
+			Path:        "outbox/artifacts/predictions.csv",
+			Type:        HandoffArtifactFile,
 			Description: "prediction table",
 		}},
+		Body: "done",
 	}).Markdown()
 	if err != nil {
 		t.Fatalf("Markdown: %v", err)
@@ -314,14 +312,11 @@ func TestRunnerEmitsArtifactCreatedEventsFromExchangeOutput(t *testing.T) {
 	if err := json.Unmarshal(event.Delta, &delta); err != nil {
 		t.Fatalf("unmarshal delta: %v", err)
 	}
-	if delta["path"] != artifactPath {
-		t.Fatalf("delta path = %v, want %q", delta["path"], artifactPath)
+	if delta["path"] != "outbox/artifacts/predictions.csv" {
+		t.Fatalf("delta path = %v", delta["path"])
 	}
-	if delta["resource_type"] != ExchangeResourceFile {
-		t.Fatalf("delta resource_type = %v, want %q", delta["resource_type"], ExchangeResourceFile)
-	}
-	if delta["stage"] != string(ExchangeStageExecute) {
-		t.Fatalf("delta stage = %v, want %q", delta["stage"], ExchangeStageExecute)
+	if delta["resource_type"] != HandoffArtifactFile {
+		t.Fatalf("delta resource_type = %v, want %q", delta["resource_type"], HandoffArtifactFile)
 	}
 	if delta["description"] != "prediction table" {
 		t.Fatalf("delta description = %v, want prediction table", delta["description"])
@@ -334,11 +329,13 @@ func TestRunnerEmitsArtifactCreatedEventsFromExchangeOutput(t *testing.T) {
 	}
 }
 
-func TestRunnerEmitsSkillMemoEventsFromExchangeOutput(t *testing.T) {
-	raw, err := (ExchangeDocument{
-		Stage:   ExchangeStageExecute,
-		Memo:    "Parsed inputs and prepared durable outputs.",
-		Handoff: "done",
+func TestRunnerEmitsHandoffEventsFromHandoffOutput(t *testing.T) {
+	raw, err := (HandoffDoc{
+		RunnerID: "runner-1",
+		FromNode: "handoff-node",
+		ToNodes:  []string{"downstream"},
+		Intent:   "continue",
+		Body:     "Parsed inputs and prepared durable outputs.",
 	}).Markdown()
 	if err != nil {
 		t.Fatalf("Markdown: %v", err)
@@ -346,15 +343,15 @@ func TestRunnerEmitsSkillMemoEventsFromExchangeOutput(t *testing.T) {
 
 	r := newTestRunner()
 	eventStream := r.EventStream()
-	sub, err := eventStream.Subscribe(streampkg.Filter{EventTypes: []string{streampkg.EventSkillMemoDelta}}, streampkg.WithSubscriberBuffer(8))
+	sub, err := eventStream.Subscribe(streampkg.Filter{EventTypes: []string{streampkg.EventHandoffEmitted}}, streampkg.WithSubscriberBuffer(8))
 	if err != nil {
 		t.Fatalf("Subscribe: %v", err)
 	}
 	defer sub.Cancel()
 
 	node := &Node{
-		Id:        "memo-node",
-		SkillName: "memo-skill",
+		Id:        "handoff-node",
+		SkillName: "handoff-skill",
 		Executor: &testExecutor{
 			run: func(context.Context, map[string]any) (any, []*Node, error) {
 				return raw, nil, nil
@@ -370,12 +367,12 @@ func TestRunnerEmitsSkillMemoEventsFromExchangeOutput(t *testing.T) {
 		t.Fatalf("AddNodes: %v", err)
 	}
 
-	event, ok := nextExpandedStreamEventWithin(t, sub, streampkg.Filter{EventTypes: []string{streampkg.EventSkillMemoDelta}}, 2*time.Second)
+	event, ok := nextExpandedStreamEventWithin(t, sub, streampkg.Filter{EventTypes: []string{streampkg.EventHandoffEmitted}}, 2*time.Second)
 	if !ok {
-		t.Fatal("stream closed before memo event")
+		t.Fatal("stream closed before handoff event")
 	}
-	if event.From.Layer != "skill" || event.From.ID != "memo-skill" || event.From.ParentID != node.Id {
-		t.Fatalf("event source = %+v, want skill memo source with node parent", event.From)
+	if event.From.Layer != "skill" || event.From.ID != "handoff-skill" || event.From.ParentID != node.Id {
+		t.Fatalf("event source = %+v, want skill handoff source with node parent", event.From)
 	}
 	if event.Scope.RunnerID != r.ID() || event.Scope.NodeID != node.Id {
 		t.Fatalf("event scope = %+v, want runner/node ids", event.Scope)
@@ -384,22 +381,22 @@ func TestRunnerEmitsSkillMemoEventsFromExchangeOutput(t *testing.T) {
 	if err := json.Unmarshal(event.Delta, &delta); err != nil {
 		t.Fatalf("unmarshal delta: %v", err)
 	}
-	if delta["memo"] != "Parsed inputs and prepared durable outputs." {
-		t.Fatalf("delta memo = %v", delta["memo"])
+	if delta["document"] != "Parsed inputs and prepared durable outputs." {
+		t.Fatalf("delta document = %v", delta["document"])
 	}
-	if delta["stage"] != string(ExchangeStageExecute) {
-		t.Fatalf("delta stage = %v, want %q", delta["stage"], ExchangeStageExecute)
+	if delta["intent"] != "continue" {
+		t.Fatalf("delta intent = %v, want continue", delta["intent"])
 	}
 	if delta["node_id"] != node.Id {
 		t.Fatalf("delta node_id = %v, want %q", delta["node_id"], node.Id)
 	}
-	if got := event.Metadata["skill_name"]; got != "memo-skill" {
-		t.Fatalf("event metadata skill_name = %v, want memo-skill", got)
+	if got := event.Metadata["skill_name"]; got != "handoff-skill" {
+		t.Fatalf("event metadata skill_name = %v, want handoff-skill", got)
 	}
 }
 
 func TestRunnerDoesNotEmitSkillMemoWithoutMemo(t *testing.T) {
-	raw, err := (ExchangeDocument{Stage: ExchangeStageExecute, Handoff: "done"}).Markdown()
+	raw, err := (HandoffDoc{RunnerID: "runner-1", FromNode: "no-memo", ToNodes: []string{"downstream"}, Body: "done"}).Markdown()
 	if err != nil {
 		t.Fatalf("Markdown: %v", err)
 	}
@@ -436,7 +433,7 @@ func TestRunnerDoesNotEmitSkillMemoWithoutMemo(t *testing.T) {
 }
 
 func TestRunnerDoesNotEmitArtifactCreatedWithoutResources(t *testing.T) {
-	raw, err := (ExchangeDocument{Stage: ExchangeStageExecute, Handoff: "done"}).Markdown()
+	raw, err := (HandoffDoc{RunnerID: "runner-1", FromNode: "no-artifact", ToNodes: []string{"downstream"}, Body: "done"}).Markdown()
 	if err != nil {
 		t.Fatalf("Markdown: %v", err)
 	}

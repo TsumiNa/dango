@@ -57,3 +57,20 @@ func TestRendererRendersReportTemplate(t *testing.T) {
 		t.Fatalf("RenderReport output missing execution output:\n%s", out)
 	}
 }
+
+func TestRendererUsesTemplateOverride(t *testing.T) {
+	r, err := NewRenderer(WithTemplateOverrides(map[string]string{
+		"execute.tmpl": "advanced override for {{.TaskDescription}}",
+	}))
+	if err != nil {
+		t.Fatalf("NewRenderer: %v", err)
+	}
+
+	out, err := r.RenderExecute(ExecuteData{TaskDescription: "custom task"})
+	if err != nil {
+		t.Fatalf("RenderExecute: %v", err)
+	}
+	if out != "advanced override for custom task" {
+		t.Fatalf("RenderExecute = %q", out)
+	}
+}

@@ -7,18 +7,13 @@ import (
 )
 
 const (
-	// ExchangeResourceFile marks a front matter resource path as a file.
-	ExchangeResourceFile = "file"
-	// ExchangeResourceDir marks a front matter resource path as a directory.
-	ExchangeResourceDir = "dir"
+	// HandoffArtifactFile marks a handoff artifact path as a file.
+	HandoffArtifactFile = "file"
+	// HandoffArtifactDir marks a handoff artifact path as a directory.
+	HandoffArtifactDir = "dir"
 )
 
-// exchangeResourceDirsFromOutputs collects the containing directories of all
-// resources declared in upstream exchange documents. allowedRoots constrains
-// which directories may be granted: a resolved directory is included only when
-// it is rooted under at least one entry in allowedRoots. An empty allowedRoots
-// disables the constraint (no filtering).
-func exchangeResourceDirsFromOutputs(outputs map[string]any, allowedRoots []string) []string {
+func handoffArtifactDirsFromOutputs(outputs map[string]any, allowedRoots []string) []string {
 	if len(outputs) == 0 {
 		return nil
 	}
@@ -28,12 +23,12 @@ func exchangeResourceDirsFromOutputs(outputs map[string]any, allowedRoots []stri
 		if !ok {
 			continue
 		}
-		doc, err := ParseExchangeMarkdown(text)
+		doc, err := ParseHandoffMarkdown(text)
 		if err != nil {
 			continue
 		}
-		for _, resource := range doc.Resources {
-			if dir, ok := exchangeResourceDir(resource, allowedRoots); ok && !containsDir(dirs, dir) {
+		for _, artifact := range doc.Artifacts {
+			if dir, ok := handoffArtifactDir(artifact, allowedRoots); ok && !containsDir(dirs, dir) {
 				dirs = append(dirs, dir)
 			}
 		}
@@ -41,20 +36,20 @@ func exchangeResourceDirsFromOutputs(outputs map[string]any, allowedRoots []stri
 	return dirs
 }
 
-func exchangeResourceDir(resource ExchangeResource, allowedRoots []string) (string, bool) {
-	if resource.Path == "" || !filepath.IsAbs(resource.Path) {
+func handoffArtifactDir(artifact HandoffArtifact, allowedRoots []string) (string, bool) {
+	if artifact.Path == "" || !filepath.IsAbs(artifact.Path) {
 		return "", false
 	}
-	path := resource.Path
+	path := artifact.Path
 	var dir string
-	switch resource.Type {
-	case ExchangeResourceDir:
+	switch artifact.Type {
+	case HandoffArtifactDir:
 		resolved, ok := canonicalExistingDir(path)
 		if !ok {
 			return "", false
 		}
 		dir = resolved
-	case ExchangeResourceFile:
+	case HandoffArtifactFile:
 		resolved, ok := canonicalExistingDir(filepath.Dir(path))
 		if !ok {
 			return "", false
@@ -81,9 +76,6 @@ func exchangeResourceDir(resource ExchangeResource, allowedRoots []string) (stri
 	return dir, true
 }
 
-// dirUnderAllowedRoots reports whether dir is rooted under at least one entry
-// in allowedRoots. When allowedRoots is empty the check is skipped (permit
-// all), so callers that have no configured roots keep the previous behaviour.
 func dirUnderAllowedRoots(dir string, allowedRoots []string) bool {
 	if len(allowedRoots) == 0 {
 		return true
@@ -92,7 +84,6 @@ func dirUnderAllowedRoots(dir string, allowedRoots []string) bool {
 		if root == "" {
 			continue
 		}
-		// Ensure root ends with separator so "/foobar" is not matched by root "/foo".
 		rootPrefix := filepath.Clean(root) + string(filepath.Separator)
 		cleaned := filepath.Clean(dir) + string(filepath.Separator)
 		if cleaned == rootPrefix || strings.HasPrefix(cleaned, rootPrefix) {

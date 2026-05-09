@@ -29,21 +29,22 @@ type Runner struct {
 	logger *slog.Logger
 
 	// Startup configuration set once via Options.
-	persistenceHandle    PersistenceHandle
-	store                RunnerStore
-	workspaceRoot        string
-	rootPathRule         func(string) string
-	trustedResourceRoots []string
-	workspace            *Workspace
-	eventStream          *streampkg.Stream
-	plan                 *CoarsePlan
-	initialNodes         map[string]*Node
-	plannerSkill         *llm.Skill
-	skillSummaries       []SkillSummary
-	planNodeBuilder      PlanNodeBuilder
-	skillSessionStore    llm.SessionStore
-	skillSessionIDs      map[string]string
-	skillSessionMu       sync.Mutex
+	persistenceHandle       PersistenceHandle
+	store                   RunnerStore
+	workspaceRoot           string
+	rootPathRule            func(string) string
+	trustedResourceRoots    []string
+	promptTemplateOverrides map[string]string
+	workspace               *Workspace
+	eventStream             *streampkg.Stream
+	plan                    *CoarsePlan
+	initialNodes            map[string]*Node
+	plannerSkill            *llm.Skill
+	skillSummaries          []SkillSummary
+	planNodeBuilder         PlanNodeBuilder
+	skillSessionStore       llm.SessionStore
+	skillSessionIDs         map[string]string
+	skillSessionMu          sync.Mutex
 
 	// Engine-level lifecycle state.
 	stateMu sync.RWMutex
@@ -650,14 +651,16 @@ func (r *Runner) runEngine(ctx context.Context) error {
 				return finish(RunnerStatusFailed, err)
 			}
 
-			output := r.annotateExchangeOutput(n, res.output)
-			outputs[res.nodeID] = output
-			if err := emitEvent(RunnerEvent{Type: EventNodeCompleted, NodeID: res.nodeID, Data: output}); err != nil {
+			outputs[res.nodeID] = res.output
+			if err := emitEvent(RunnerEvent{Type: EventNodeCompleted, NodeID: res.nodeID, Data: res.output}); err != nil {
 				return finish(RunnerStatusFailed, err)
 			}
-			r.emitExchangeDocumentEvents(ctx, n, output)
+			r.emitChannelDocumentEvents(ctx, n, res.output)
 
 			for _, child := range children[res.nodeID] {
+				if err := r.deliverHandoffToSuccessor(ctx, n, child); err != nil {
+					return finish(RunnerStatusFailed, err)
+				}
 				pendingParents[child.Id]--
 				if pendingParents[child.Id] == 0 {
 					if err := runNode(child); err != nil {

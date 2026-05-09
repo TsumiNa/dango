@@ -32,6 +32,24 @@ func executorPromptRenderer() (*builtinpromptspkg.Renderer, error) {
 	return executorPromptRendererInst, executorPromptRendererErr
 }
 
+func (e *Executor) promptRenderer() (*builtinpromptspkg.Renderer, error) {
+	if len(e.promptTemplateOverrides) == 0 {
+		return executorPromptRenderer()
+	}
+	return builtinpromptspkg.NewRenderer(builtinpromptspkg.WithTemplateOverrides(e.promptTemplateOverrides))
+}
+
+func cloneStringMap(in map[string]string) map[string]string {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make(map[string]string, len(in))
+	for k, v := range in {
+		out[k] = v
+	}
+	return out
+}
+
 func (e *Executor) polishExchange(ctx context.Context) (string, error) {
 	defaultBody := strings.TrimSpace(fmt.Sprintf("Task description:\n\n%s\n\nPlanner version: %d\n\nReason:\n%s\n\nSolution:\n%s",
 		e.planner.TaskDescription,
@@ -143,24 +161,11 @@ func (e *Executor) renderStageOutputs(stage string, intent string, toNodes []str
 		if err := os.WriteFile(filepath.Join(paths.exchangeDir, fileName), []byte(exchangeMarkdown), 0o644); err != nil {
 			return "", fmt.Errorf("orchestrate: write exchange markdown: %w", err)
 		}
-		if e.planner != nil && e.planner.ArtifactsDir != "" {
-			exchangesDir := filepath.Join(e.planner.ArtifactsDir, "exchanges")
-			if err := os.MkdirAll(exchangesDir, 0o755); err != nil {
-				return "", fmt.Errorf("orchestrate: create artifact exchanges dir: %w", err)
-			}
-			if err := os.WriteFile(filepath.Join(exchangesDir, fileName), []byte(exchangeMarkdown), 0o644); err != nil {
-				return "", fmt.Errorf("orchestrate: write artifact exchange markdown: %w", err)
-			}
-		}
 	}
 	if err := e.snapshotMemos(stage, paths, nodeID, skillName, runnerID); err != nil {
 		return "", err
 	}
-	reasoning := ""
-	if runtime != nil {
-		reasoning = latestReasoning(runtime)
-	}
-	return e.legacyExchangeMarkdown(stage, runnerID, nodeID, skillName, toNodes, body, reasoning)
+	return handoffMarkdown, nil
 }
 
 func (e *Executor) exchangeDocMarkdown(runnerID string, nodeID string, skillName string, stage string, body string) (string, error) {
@@ -173,49 +178,6 @@ func (e *Executor) exchangeDocMarkdown(runnerID string, nodeID string, skillName
 		Body:      strings.TrimSpace(body),
 	}
 	return exchange.Markdown()
-}
-
-func (e *Executor) legacyExchangeMarkdown(stage string, runnerID string, nodeID string, skillName string, toNodes []string, body string, reasoning string) (string, error) {
-	taskDescription := ""
-	if e.planner != nil {
-		taskDescription = e.planner.TaskDescription
-	}
-	doc := runnerpkg.ExchangeDocument{
-		RunnerID:        runnerID,
-		NodeID:          nodeID,
-		SkillName:       skillName,
-		TaskDescription: taskDescription,
-		Memo:            "Handoff emitted through workspace outbox.",
-		Reasoning:       strings.TrimSpace(reasoning),
-		Handoff:         strings.TrimSpace(body),
-	}
-	switch stage {
-	case "polish":
-		doc.Stage = runnerpkg.ExchangeStagePolish
-	case "report":
-		doc.Stage = runnerpkg.ExchangeStageReport
-	default:
-		doc.Stage = runnerpkg.ExchangeStageExecute
-	}
-	for _, to := range toNodes {
-		handoff := runnerpkg.ExchangeHandoff{
-			To:      runnerpkg.ExchangeRecipientDownstream,
-			Intent:  runnerpkg.ExchangeIntentContinue,
-			Summary: "Use this output for the next execution stage.",
-		}
-		if to == "orchestrator" {
-			handoff.To = runnerpkg.ExchangeRecipientOrchestrator
-			if stage == "polish" {
-				handoff.Intent = runnerpkg.ExchangeIntentReview
-				handoff.Summary = "Review the polished plan handoff."
-			} else {
-				handoff.Intent = runnerpkg.ExchangeIntentSummarize
-				handoff.Summary = "Summarize this report handoff."
-			}
-		}
-		doc.Handoffs = append(doc.Handoffs, handoff)
-	}
-	return doc.Markdown()
 }
 
 func (e *Executor) snapshotMemos(stage string, paths executorWorkspacePaths, nodeID string, skillName string, runnerID string) error {
@@ -348,7 +310,7 @@ func (e *Executor) executionPrompt(parentOutputs map[string]any) string {
 	if e.planner != nil {
 		sourceInput = e.planner.SourceInput
 	}
-	renderer, err := executorPromptRenderer()
+	renderer, err := e.promptRenderer()
 	if err != nil {
 		return "Execute the assigned task."
 	}
@@ -372,7 +334,7 @@ func (e *Executor) executionPrompt(parentOutputs map[string]any) string {
 }
 
 func (e *Executor) polishPrompt() string {
-	renderer, err := executorPromptRenderer()
+	renderer, err := e.promptRenderer()
 	if err != nil {
 		return "Polish the assigned task plan before execution."
 	}
@@ -397,7 +359,7 @@ func (e *Executor) polishPrompt() string {
 }
 
 func (e *Executor) reportPrompt(output any) string {
-	renderer, err := executorPromptRenderer()
+	renderer, err := e.promptRenderer()
 	if err != nil {
 		return "Summarize this executor output for final orchestration."
 	}

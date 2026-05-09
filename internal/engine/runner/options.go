@@ -69,8 +69,8 @@ func WithPersistenceHandle(handle PersistenceHandle) Option {
 	}
 }
 
-// WithTrustedResourceRoots installs additional trusted roots for exchange
-// resource filtering and tool access.
+// WithTrustedResourceRoots installs additional trusted roots for handoff
+// artifact filtering and tool access.
 //
 // Existing directories are canonicalized and kept on the runner. Non-existent
 // or invalid paths are ignored. The runner stores canonical string paths, not
@@ -97,6 +97,19 @@ func WithRootPathRule(rule func(string) string) Option {
 		if rule != nil {
 			r.rootPathRule = rule
 		}
+	}
+}
+
+// WithPromptTemplateOverrides installs advanced executor prompt template
+// overrides for executors prepared by this Runner.
+//
+// The Runner keeps its own copy of overrides and forwards it to executors that
+// support prompt template override configuration. Template names must match the
+// built-in executor prompt template names such as "polish.tmpl",
+// "execute.tmpl", or "report.tmpl".
+func WithPromptTemplateOverrides(overrides map[string]string) Option {
+	return func(r *Runner) {
+		r.promptTemplateOverrides = cloneStringMap(overrides)
 	}
 }
 
@@ -141,4 +154,15 @@ func WithPlanNodeBuilder(builder PlanNodeBuilder) Option {
 	return func(r *Runner) {
 		r.planNodeBuilder = builder
 	}
+}
+
+func cloneStringMap(in map[string]string) map[string]string {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make(map[string]string, len(in))
+	for k, v := range in {
+		out[k] = v
+	}
+	return out
 }

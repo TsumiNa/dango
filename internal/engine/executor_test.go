@@ -166,14 +166,14 @@ func TestExecute_NoRunEReturnsMarkdownFallback(t *testing.T) {
 	if !ok {
 		t.Fatalf("Execute output type = %T, want string; value = %v", out, out)
 	}
-	doc, err := runnerpkg.ParseExchangeMarkdown(outStr)
+	doc, err := runnerpkg.ParseHandoffMarkdown(outStr)
 	if err != nil {
-		t.Fatalf("ParseExchangeMarkdown: %v", err)
+		t.Fatalf("ParseHandoffMarkdown: %v", err)
 	}
-	if doc.Stage != runnerpkg.ExchangeStageExecute {
-		t.Fatalf("Stage = %q, want execute", doc.Stage)
+	if doc.Intent != "continue" {
+		t.Fatalf("Intent = %q, want continue", doc.Intent)
 	}
-	if strings.TrimSpace(doc.Handoff) == "" {
+	if strings.TrimSpace(doc.Body) == "" {
 		t.Fatal("expected fallback handoff to be populated")
 	}
 }
@@ -188,7 +188,7 @@ func TestExecute_NoRunERequiresRunnerBinding(t *testing.T) {
 	}
 }
 
-func TestExecutionPromptIncludesArtifactsRoot(t *testing.T) {
+func TestExecutionPromptDoesNotExposeArtifactsRoot(t *testing.T) {
 	artifactsDir := t.TempDir()
 	exec, err := NewExecutor(loadLightweightTestSkill(t), &ExecutionPlanner{
 		TaskDescription: "Write durable outputs.",
@@ -198,11 +198,25 @@ func TestExecutionPromptIncludesArtifactsRoot(t *testing.T) {
 		t.Fatalf("NewExecutor: %v", err)
 	}
 	prompt := exec.executionPrompt(nil)
-	if !strings.Contains(prompt, "Artifacts root:") || !strings.Contains(prompt, artifactsDir) {
-		t.Fatalf("execution prompt missing artifacts root %q:\n%s", artifactsDir, prompt)
+	if strings.Contains(prompt, artifactsDir) || strings.Contains(prompt, "Artifacts root:") {
+		t.Fatalf("execution prompt exposed artifacts root %q:\n%s", artifactsDir, prompt)
 	}
-	if !strings.Contains(prompt, "skill-specific subdirectory") || !strings.Contains(prompt, "artifact metadata") {
-		t.Fatalf("execution prompt missing artifact handoff guidance:\n%s", prompt)
+}
+
+func TestExecutionPromptUsesAdvancedTemplateOverride(t *testing.T) {
+	exec, err := NewExecutor(loadLightweightTestSkill(t), &ExecutionPlanner{
+		TaskDescription: "Override task.",
+	}, llm.DefaultConversationConfig(), WithExecutorClient(&llm.Client{}))
+	if err != nil {
+		t.Fatalf("NewExecutor: %v", err)
+	}
+	exec.SetPromptTemplateOverrides(map[string]string{
+		"execute.tmpl": "advanced override: {{.TaskDescription}}",
+	})
+
+	prompt := exec.executionPrompt(nil)
+	if prompt != "advanced override: Override task." {
+		t.Fatalf("executionPrompt = %q", prompt)
 	}
 }
 
@@ -340,7 +354,7 @@ func TestBindForRunnerConfiguresRuntimeSkillAccessibleDirs(t *testing.T) {
 	}
 }
 
-func TestPolish_ReturnsExchangeMarkdown(t *testing.T) {
+func TestPolish_ReturnsHandoffMarkdown(t *testing.T) {
 	exec, err := NewExecutor(loadLightweightTestSkill(t), &ExecutionPlanner{
 		id:              "node-1",
 		TaskDescription: "Plan the work.",
@@ -356,17 +370,17 @@ func TestPolish_ReturnsExchangeMarkdown(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Polish: %v", err)
 	}
-	doc, err := runnerpkg.ParseExchangeMarkdown(fragment.(string))
+	doc, err := runnerpkg.ParseHandoffMarkdown(fragment.(string))
 	if err != nil {
-		t.Fatalf("ParseExchangeMarkdown: %v", err)
+		t.Fatalf("ParseHandoffMarkdown: %v", err)
 	}
-	if doc.Stage != runnerpkg.ExchangeStagePolish || doc.NodeID != "node-1" {
-		t.Fatalf("doc metadata = %+v, want polish/node-1", doc)
+	if doc.Intent != "review" || doc.FromNode != "node-1" {
+		t.Fatalf("doc metadata = %+v, want review/node-1", doc)
 	}
-	if len(doc.Handoffs) != 1 || doc.Handoffs[0].To != runnerpkg.ExchangeRecipientOrchestrator {
-		t.Fatalf("handoffs = %+v, want orchestrator", doc.Handoffs)
+	if len(doc.ToNodes) != 1 || doc.ToNodes[0] != "orchestrator" {
+		t.Fatalf("to_nodes = %+v, want orchestrator", doc.ToNodes)
 	}
-	if strings.TrimSpace(doc.Handoff) == "" {
+	if strings.TrimSpace(doc.Body) == "" {
 		t.Fatalf("doc handoff not populated: %+v", doc)
 	}
 }
@@ -426,19 +440,19 @@ func TestPolish_UsesRuntimeSkillWhenBound(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Polish: %v", err)
 	}
-	doc, err := runnerpkg.ParseExchangeMarkdown(fragment.(string))
+	doc, err := runnerpkg.ParseHandoffMarkdown(fragment.(string))
 	if err != nil {
-		t.Fatalf("ParseExchangeMarkdown: %v", err)
+		t.Fatalf("ParseHandoffMarkdown: %v", err)
 	}
-	if doc.Handoff != "Use the GP package environment after elevation enrichment." {
-		t.Fatalf("handoff = %q, want skill polish output", doc.Handoff)
+	if doc.Body != "Use the GP package environment after elevation enrichment." {
+		t.Fatalf("handoff = %q, want skill polish output", doc.Body)
 	}
 	if !strings.Contains(requestBody, "Polish the assigned task plan before execution") {
 		t.Fatalf("polish request missing polish prompt: %s", requestBody)
 	}
 }
 
-func TestReport_ReturnsExchangeMarkdownFallback(t *testing.T) {
+func TestReport_ReturnsHandoffMarkdownFallback(t *testing.T) {
 	exec, err := NewExecutor(loadLightweightTestSkill(t), &ExecutionPlanner{
 		id:              "node-1",
 		TaskDescription: "Report the work.",
@@ -454,14 +468,14 @@ func TestReport_ReturnsExchangeMarkdownFallback(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Report: %v", err)
 	}
-	doc, err := runnerpkg.ParseExchangeMarkdown(summary.(string))
+	doc, err := runnerpkg.ParseHandoffMarkdown(summary.(string))
 	if err != nil {
-		t.Fatalf("ParseExchangeMarkdown: %v", err)
+		t.Fatalf("ParseHandoffMarkdown: %v", err)
 	}
-	if doc.Stage != runnerpkg.ExchangeStageReport {
-		t.Fatalf("Stage = %q, want report", doc.Stage)
+	if doc.Intent != "summarize" {
+		t.Fatalf("Intent = %q, want summarize", doc.Intent)
 	}
-	if strings.TrimSpace(doc.Handoff) == "" {
+	if strings.TrimSpace(doc.Body) == "" {
 		t.Fatal("expected report handoff to include output")
 	}
 }

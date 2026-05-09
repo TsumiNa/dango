@@ -9,8 +9,6 @@ import (
 	streampkg "github.com/tsumina/dango/internal/engine/stream"
 )
 
-const exchangeMemoStreamTextLimit = 4096
-
 // SubscribeStream attaches a subscriber to the runner's structured event
 // stream. Replay and filtering are handled by the stream package.
 func (r *Runner) SubscribeStream(filter streampkg.Filter, opts ...streampkg.SubscribeOption) (*streampkg.Subscription, error) {
@@ -194,53 +192,6 @@ func (r *Runner) emitSkillStreamEvent(ctx context.Context, eventType string, sta
 		streampkg.Scope{RunnerID: r.id, NodeID: nodeID},
 		metadata,
 	)
-}
-
-func (r *Runner) emitExchangeDocumentEvents(ctx context.Context, node *Node, output any) {
-	if r.eventStream == nil || node == nil {
-		return
-	}
-	text, ok := output.(string)
-	if !ok {
-		return
-	}
-	doc, err := ParseExchangeMarkdown(text)
-	if err != nil {
-		return
-	}
-	if memo := strings.TrimSpace(doc.Memo); memo != "" {
-		truncated := false
-		if len(memo) > exchangeMemoStreamTextLimit {
-			memo = memo[:exchangeMemoStreamTextLimit]
-			truncated = true
-		}
-		delta := map[string]any{"memo": memo}
-		if doc.Stage != "" {
-			delta["stage"] = doc.Stage
-		}
-		if truncated {
-			delta["truncated"] = true
-		}
-		r.emitSkillStreamEvent(ctx, streampkg.EventSkillMemoDelta, streampkg.StatusCompleted, node.Id, node, delta)
-	}
-
-	for _, resource := range doc.Resources {
-		path := strings.TrimSpace(resource.Path)
-		if path == "" {
-			continue
-		}
-		delta := map[string]any{"path": path}
-		if resource.Type != "" {
-			delta["resource_type"] = resource.Type
-		}
-		if resource.Description != "" {
-			delta["description"] = resource.Description
-		}
-		if doc.Stage != "" {
-			delta["stage"] = doc.Stage
-		}
-		r.emitExecutorStreamEvent(ctx, streampkg.EventArtifactCreated, streampkg.StatusCompleted, node.Id, node, delta)
-	}
 }
 
 func (r *Runner) emitStreamEventFrom(ctx context.Context, source streampkg.Source, eventType string, status string, delta any, scope streampkg.Scope, metadata map[string]any) {

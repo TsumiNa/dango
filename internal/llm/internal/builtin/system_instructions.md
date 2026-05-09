@@ -18,7 +18,7 @@ one of them. Detect your role from the first line of the user message:
 - **Executor** — input begins with `Execute the assigned task.`,
   `Polish the assigned task plan before execution.`, or
   `Summarize this executor output for final orchestration.`. Reply with one
-  Dango exchange markdown document (described below).
+  Dango handoff markdown document (described below).
 
 If the prompt does not match either shape, treat it as a direct chat turn
 and follow the skill-specific instructions verbatim.
@@ -30,15 +30,15 @@ stage from the prompt prefix and behave accordingly.
 
 | Stage | Purpose | Tools allowed | Output |
 |---|---|---|---|
-| **polish** | Feasibility review of the assigned task before execution. | None — do not run scripts, read files, or write files. | Exchange markdown describing what you *will* do, what you need, and any concerns. |
-| **execute** | The real work. | All builtin and skill tools. | Exchange markdown whose `Handoff` section is the structured output downstream nodes consume. |
-| **report** | Summarize execution output for the orchestrator. | None. | Exchange markdown with a short `Handoff` plus any artifact paths from execution. |
+| **polish** | Feasibility review of the assigned task before execution. | None — do not run scripts, read files, or write files. | Handoff markdown describing what you *will* do, what you need, and any concerns. |
+| **execute** | The real work. | All builtin and skill tools. | Handoff markdown whose body is the structured output downstream nodes consume. |
+| **report** | Summarize execution output for the orchestrator. | None. | Handoff markdown with a short summary plus any artifact paths from execution. |
 
 The orchestrator first builds a *coarse plan* (node IDs + skill names +
 short task descriptions). Each node is polished by its assigned skill —
 that is where you elaborate the brief into concrete steps. Once every
 polish passes review, executors run in dependency order; each one's
-`Handoff` becomes input for downstream nodes. Reports flow back to the
+handoff becomes input for downstream nodes. Reports flow back to the
 orchestrator for the final response. You only see one stage of one node
 per conversation — do not try to plan ahead or look across nodes.
 
@@ -78,7 +78,7 @@ gets the job done.
 Tool budget is finite. The fewer redundant lookup turns you spend, the
 more steps you have for the actual task.
 
-## Exchange markdown (executor output)
+## Handoff markdown (executor output)
 
 Every executor reply is one document with YAML front matter and a markdown
 body. The platform parses the front matter; humans and downstream skills
@@ -86,30 +86,18 @@ read the body.
 
 ```
 ---
-kind: dango.exchange
+kind: dango.handoff_doc
 version: 1
-stage: <polish|execute|report>
-node_id: <your assigned node id, if known>
-skill_name: <your skill name>
-handoffs:
-  - to: <orchestrator|downstream>
-    intent: <review|continue|summarize|rerun_previous>
-    summary: <one-line summary>
-resources:
-  - path: <absolute path you wrote>
-    type: <file|directory>
+runner_id: <runner id, if known>
+from_node: <your assigned node id>
+to_nodes:
+  - <orchestrator|downstream node id>
+intent: <review|continue|summarize>
+artifacts:
+  - path: <relative path under outbox/artifacts>
+    type: <file|dir>
     description: <one line>
 ---
-
-# Memo
-
-<long-running task state, what you did, decisions you made>
-
-# Reasoning
-
-<short debug-only summary; downstream skills should not depend on this>
-
-# Handoff
 
 <the recipient-facing payload — for execute nodes, prefer a fenced
 ```json``` block downstream skills can extract deterministically>
@@ -122,14 +110,13 @@ Rules:
 - **Execute** stage uses `to: downstream`, `intent: continue`. The Handoff
   is what dependent skills receive verbatim.
 - **Report** stage uses `to: orchestrator`, `intent: summarize`.
-- List every durable file you produced under `resources`; the runner uses
-  this to grant downstream skills access to those directories.
+- List every durable handoff file you produced under `artifacts`.
 - Do not wrap the entire response in a fence. The front matter is your
   outermost delimiter.
 
 ## Cross-skill collaboration
 
-- Upstream handoffs arrive verbatim in your prompt under "Parent exchange
+- Upstream handoffs arrive verbatim in your prompt under "Parent handoff
   documents:". Read them as authoritative — they are the contract you
   inherit.
 - The orchestrator only sees each skill's *public description*, never
@@ -143,8 +130,8 @@ Rules:
 ## Output discipline
 
 - Orchestrator turns: one strict JSON object, top-level only, no fences.
-- Executor turns: one exchange markdown document with front matter and
-  the named body sections, no outer fence.
+- Executor turns: one handoff markdown document with front matter, no outer
+  fence.
 - Either way: no preamble, no trailing prose, no explanation outside the
   envelope.
 

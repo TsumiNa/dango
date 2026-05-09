@@ -79,11 +79,12 @@ type RejectReason struct {
 }
 
 type requestStartup struct {
-	logger            *slog.Logger
-	persistence       persistencepkg.Backend
-	runnerPathRule    persistencepkg.PathRule
-	orchestratorSkill *llm.Skill
-	skillConfigs      map[string]SkillRegistration
+	logger                  *slog.Logger
+	persistence             persistencepkg.Backend
+	runnerPathRule          persistencepkg.PathRule
+	promptTemplateOverrides map[string]string
+	orchestratorSkill       *llm.Skill
+	skillConfigs            map[string]SkillRegistration
 }
 
 // StartRequest is the outer-facing request entrypoint.
@@ -107,11 +108,12 @@ func (o *Orchestrator) StartRequest(ctx context.Context, req Request) (*Response
 	o.mu.Lock()
 	o.configLocked = true
 	startup := requestStartup{
-		logger:            o.logger,
-		persistence:       o.persistence,
-		runnerPathRule:    o.runnerPathRule,
-		orchestratorSkill: o.orchestratorSkill,
-		skillConfigs:      cloneSkillRegistrations(o.skills),
+		logger:                  o.logger,
+		persistence:             o.persistence,
+		runnerPathRule:          o.runnerPathRule,
+		promptTemplateOverrides: cloneStringMap(o.promptTemplateOverrides),
+		orchestratorSkill:       o.orchestratorSkill,
+		skillConfigs:            cloneSkillRegistrations(o.skills),
 	}
 	o.mu.Unlock()
 	var eventLogStore storepkg.EventLogStore
@@ -375,7 +377,7 @@ func (o *Orchestrator) startRequestWithStream(ctx context.Context, req Request, 
 		streamMerges = append(streamMerges, merge)
 	}
 
-	runner, err := newRunnerFromPlan(ctx, startup.logger, startup.persistence, startup.runnerPathRule, req, plan, startup.skillConfigs, plannerSkill, skillSummaries)
+	runner, err := newRunnerFromPlan(ctx, startup.logger, startup.persistence, startup.runnerPathRule, startup.promptTemplateOverrides, req, plan, startup.skillConfigs, plannerSkill, skillSummaries)
 	if err != nil {
 		return err
 	}
@@ -458,7 +460,7 @@ func stopStreamMerges(merges []*streampkg.Merge) {
 	}
 }
 
-func newRunnerFromPlan(ctx context.Context, logger *slog.Logger, backend persistencepkg.Backend, pathRule persistencepkg.PathRule, req Request, plan *CoarsePlan, skills map[string]SkillRegistration, plannerSkill *llm.Skill, skillSummaries []runnerpkg.SkillSummary) (*runnerpkg.Runner, error) {
+func newRunnerFromPlan(ctx context.Context, logger *slog.Logger, backend persistencepkg.Backend, pathRule persistencepkg.PathRule, promptOverrides map[string]string, req Request, plan *CoarsePlan, skills map[string]SkillRegistration, plannerSkill *llm.Skill, skillSummaries []runnerpkg.SkillSummary) (*runnerpkg.Runner, error) {
 	if req.ArtifactsDir != "" {
 		if err := os.MkdirAll(req.ArtifactsDir, 0o755); err != nil {
 			return nil, fmt.Errorf("orchestrate: create artifacts dir %q: %w", req.ArtifactsDir, err)
@@ -473,7 +475,7 @@ func newRunnerFromPlan(ctx context.Context, logger *slog.Logger, backend persist
 		runnerpkg.WithLogger(logger),
 		runnerpkg.WithPersistenceHandle(backend),
 		runnerpkg.WithRootPathRule(pathRule),
-		runnerpkg.WithTrustedResourceRoots(req.ArtifactsDir),
+		runnerpkg.WithPromptTemplateOverrides(promptOverrides),
 		runnerpkg.WithInitialPlan(plan, nodes),
 		runnerpkg.WithPlannerSkill(plannerSkill),
 		runnerpkg.WithSkillSummaries(skillSummaries),

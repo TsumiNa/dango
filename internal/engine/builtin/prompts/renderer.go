@@ -15,13 +15,50 @@ type Renderer struct {
 	templates *template.Template
 }
 
+type rendererConfig struct {
+	overrides map[string]string
+}
+
+// RendererOption adjusts a built-in prompt renderer.
+type RendererOption func(*rendererConfig)
+
+// WithTemplateOverrides replaces embedded prompt templates by template name.
+//
+// This is an advanced extension hook. The renderer keeps its own copy of the
+// map; callers may mutate their input map after construction.
+func WithTemplateOverrides(overrides map[string]string) RendererOption {
+	return func(cfg *rendererConfig) {
+		if len(overrides) == 0 {
+			return
+		}
+		cfg.overrides = make(map[string]string, len(overrides))
+		for name, body := range overrides {
+			cfg.overrides[name] = body
+		}
+	}
+}
+
 // NewRenderer returns a renderer backed by embedded prompt templates.
-func NewRenderer() (*Renderer, error) {
+func NewRenderer(opts ...RendererOption) (*Renderer, error) {
+	var cfg rendererConfig
+	for _, opt := range opts {
+		if opt != nil {
+			opt(&cfg)
+		}
+	}
 	tpl, err := template.New("executor_prompts").Funcs(template.FuncMap{
 		"trim": strings.TrimSpace,
 	}).ParseFS(templateFS, "*.tmpl")
 	if err != nil {
 		return nil, fmt.Errorf("engine/builtin/prompts: parse templates: %w", err)
+	}
+	for name, body := range cfg.overrides {
+		if strings.TrimSpace(name) == "" {
+			return nil, fmt.Errorf("engine/builtin/prompts: override template name must not be empty")
+		}
+		if _, err := tpl.New(name).Parse(body); err != nil {
+			return nil, fmt.Errorf("engine/builtin/prompts: parse override %s: %w", name, err)
+		}
 	}
 	return &Renderer{templates: tpl}, nil
 }

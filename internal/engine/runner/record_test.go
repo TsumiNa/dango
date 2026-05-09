@@ -2,10 +2,12 @@ package runner
 
 import "testing"
 
-func TestStoredRunnerEventStoresExchangeMarkdownAsMarkdownText(t *testing.T) {
-	raw, err := (ExchangeDocument{
-		Stage:   ExchangeStageExecute,
-		Handoff: "output",
+func TestStoredRunnerEventStoresHandoffMarkdownAsMarkdownText(t *testing.T) {
+	raw, err := (HandoffDoc{
+		RunnerID: "runner-1",
+		FromNode: "node-1",
+		ToNodes:  []string{"node-2"},
+		Body:     "output",
 	}).Markdown()
 	if err != nil {
 		t.Fatalf("Markdown: %v", err)

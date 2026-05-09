@@ -13,6 +13,11 @@ import (
 type bindRecorderExecutor struct {
 	calls       int
 	seenSession []string
+	overrides   map[string]string
+}
+
+func (e *bindRecorderExecutor) SetPromptTemplateOverrides(overrides map[string]string) {
+	e.overrides = cloneStringMap(overrides)
 }
 
 func (e *bindRecorderExecutor) BindForRunner(sessID *string, accessibleDirs []string, sessStores ...llm.SessionStore) (string, error) {
@@ -26,6 +31,20 @@ func (e *bindRecorderExecutor) BindForRunner(sessID *string, accessibleDirs []st
 	}
 	e.seenSession = append(e.seenSession, "")
 	return "session-1", nil
+}
+
+func TestRunner_PrepareNodeExecutor_ForwardsPromptTemplateOverrides(t *testing.T) {
+	exec := &bindRecorderExecutor{}
+	r := New(WithLogger(testLogger), WithPromptTemplateOverrides(map[string]string{
+		"execute.tmpl": "override",
+	}))
+
+	if err := r.prepareNodeExecutor("only", exec, nil); err != nil {
+		t.Fatalf("prepareNodeExecutor: %v", err)
+	}
+	if exec.overrides["execute.tmpl"] != "override" {
+		t.Fatalf("overrides = %+v, want execute override", exec.overrides)
+	}
 }
 
 func (e *bindRecorderExecutor) Execute(ctx context.Context, parentOutputs map[string]any) (any, []*Node, error) {

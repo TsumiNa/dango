@@ -131,13 +131,18 @@ func TestRendererSummarizesRunningExchangeDraft(t *testing.T) {
 		From:      streampkg.Source{Layer: "skill", ID: "train"},
 		Status:    streampkg.StatusRunning,
 		Delta: mustJSONString(t, `---
-resources: []
+kind: dango.handoff_doc
+version: 1
+runner_id: runner-1
+from_node: train
+to_nodes:
+  - downstream
+created_at: 2026-05-01T12:00:00Z
 ---
-# Memo
-drafting a long exchange document`),
+drafting a long handoff document`),
 	})
-	if !strings.Contains(line, "drafting exchange") || strings.Contains(line, "resources") || strings.Contains(line, "# Memo") {
-		t.Fatalf("running exchange draft line = %q", line)
+	if !strings.Contains(line, "drafting exchange") || strings.Contains(line, "dango.handoff_doc") {
+		t.Fatalf("running handoff draft line = %q", line)
 	}
 }
 
@@ -247,12 +252,14 @@ func TestRendererWritesExchangeMarkdownReferences(t *testing.T) {
 		Status:         streampkg.StatusCompleted,
 		SequenceNumber: 7,
 		Delta: mustJSONString(t, `---
-kind: dango.exchange
+kind: dango.handoff_doc
 version: 1
-stage: execute
+runner_id: runner-1
+from_node: writer
+to_nodes:
+  - downstream
+created_at: 2026-05-01T12:00:00Z
 ---
-
-## Memo
 
 done`),
 	})
@@ -273,14 +280,13 @@ func TestRendererWritesDraftExchangeMarkdownReferences(t *testing.T) {
 		Status:         streampkg.StatusCompleted,
 		SequenceNumber: 9,
 		Delta: mustJSONString(t, `---
-kind: dango_exchange
-status: ready
+kind: dango.exchange_doc
+version: 1
+runner_id: runner-1
+node_id: writer
+created_at: 2026-05-01T12:00:00Z
 ---
 
-# Memo
-done
-
-# Handoff
 payload`),
 	})
 	if !strings.Contains(line, "exchange=file://") || !strings.Contains(line, "exchange-000000000009.md") {
@@ -290,8 +296,8 @@ payload`),
 	if err != nil {
 		t.Fatalf("exchange file not written: %v", err)
 	}
-	if !strings.Contains(string(written), "kind: dango_exchange") || !strings.Contains(string(written), "# Handoff") {
-		t.Fatalf("draft exchange file was not preserved raw:\n%s", string(written))
+	if !strings.Contains(string(written), "kind: dango.exchange_doc") || !strings.Contains(string(written), "payload") {
+		t.Fatalf("exchange doc file was not preserved raw:\n%s", string(written))
 	}
 }
 
