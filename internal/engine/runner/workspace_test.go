@@ -53,8 +53,10 @@ func TestProvisionWorkspaceCreatesLayoutAndAccessibleDirs(t *testing.T) {
 	if err != nil {
 		t.Fatalf("AccessibleDirs(alpha): %v", err)
 	}
-	if !containsPath(alphaDirs, alpha.MemoDir) || !containsPath(alphaDirs, alpha.InboxDir) || !containsPath(alphaDirs, alpha.OutboxDir) || !containsPath(alphaDirs, alpha.WorkingDir) || !containsPath(alphaDirs, workspace.ExchangeDir()) {
-		t.Fatalf("alpha accessible dirs = %v, want own dirs + exchange", alphaDirs)
+	for _, wantPath := range []string{alpha.MemoDir, alpha.InboxDir, alpha.OutboxDir, alpha.WorkingDir, workspace.ExchangeDir()} {
+		if !containsPath(alphaDirs, wantPath) {
+			t.Fatalf("alpha accessible dirs = %v, missing %q", alphaDirs, wantPath)
+		}
 	}
 	if containsPath(alphaDirs, beta.MemoDir) || containsPath(alphaDirs, beta.OutboxDir) || containsPath(alphaDirs, beta.WorkingDir) {
 		t.Fatalf("alpha accessible dirs leaked beta private paths: %v", alphaDirs)
