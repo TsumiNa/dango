@@ -13,10 +13,11 @@ import (
 // Runners keep references to the returned objects for their entire lifecycle.
 // Callers must ensure these objects remain valid while a runner may still use
 // them and must provide synchronization when sharing mutable implementations.
-// WorkspaceRoot returns the global root; runners combine it with a path rule to
-// provision their own per-runner workspace directory.
 type PersistenceHandle interface {
+	// RunnerStore returns the append/load store used for runner lifecycle records.
 	RunnerStore() RunnerStore
+	// WorkspaceRoot returns the global workspace root. Runners combine it with a
+	// path rule to provision their own per-runner workspace directory.
 	WorkspaceRoot() string
 }
 
@@ -71,7 +72,9 @@ func WithPersistenceHandle(handle PersistenceHandle) Option {
 // resource filtering and tool access.
 //
 // Existing directories are canonicalized and kept on the runner. Non-existent
-// or invalid paths are ignored.
+// or invalid paths are ignored. The runner stores canonical string paths, not
+// live handles; callers may manage the source roots independently, but changing
+// filesystem contents after construction can change what tools can read/write.
 func WithTrustedResourceRoots(roots ...string) Option {
 	return func(r *Runner) {
 		canonicalRoots := make([]string, 0, len(roots))
