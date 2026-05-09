@@ -111,11 +111,11 @@ case apart.
 
 ### At-a-glance comparison
 
-| Channel  | Audience              | Routing             | Storage location                          | Schema strictness         |
-| -------- | --------------------- | ------------------- | ----------------------------------------- | ------------------------- |
-| Memo     | Skill + runner only   | None (filesystem)   | `<skill-workspace>/memo/`                 | None (free-form markdown) |
-| Exchange | All skills + subs     | Broadcast           | `<runner-root>/exchange/`                 | Front matter required     |
-| Handoff  | Listed successors     | DAG one-to-many     | Successor `<skill-workspace>/inbox/`      | Front matter required     |
+| Channel  | Audience            | Routing           | Storage location                     | Schema strictness         |
+| -------- | ------------------- | ----------------- | ------------------------------------ | ------------------------- |
+| Memo     | Skill + runner only | None (filesystem) | `<skill-workspace>/memo/`            | None (free-form markdown) |
+| Exchange | All skills + subs   | Broadcast         | `<runner-root>/exchange/`            | Front matter required     |
+| Handoff  | Listed successors   | DAG one-to-many   | Successor `<skill-workspace>/inbox/` | Front matter required     |
 
 ## Workspace Layout
 
@@ -372,10 +372,10 @@ keep a clear seam for future user override.
 - A small `prompts.Renderer` in the same package owns embedding, parsing, and
   rendering. Code that today builds prompts inline (`polishPrompt`,
   `executionPrompt`, `reportPrompt`) calls the renderer instead.
-- The renderer accepts an optional override map keyed by template path. The
-  override hook is wired but kept internal to the engine in this refactor;
-  exposing it on `OrchestratorOption` / `RunnerOption` is a follow-up once
-  the surface stabilises.
+- The renderer accepts an optional override map keyed by template path.
+  Exposing that hook through public orchestrator/runner options is approved
+  as advanced usage. The docs should mark the option as advanced, and the
+  initial public surface does not need a dedicated example.
 
 ## Hard Requirements
 
@@ -617,17 +617,21 @@ tracked without rewriting historical PR notes.
 
 ## Open Questions / Deferred
 
-- Override hook for built-in prompts is internal in this refactor;
-  externalising it (per-orchestrator or per-skill template overrides) is a
-  follow-up once we have a real consumer asking for it.
-- Privacy labels, redaction policy, and per-recipient visibility on
-  exchange/handoff are still deferred. The new types should not preclude
-  adding a `visibility:` front-matter field later.
-- SQLite/Postgres persistence backends are out of scope; the unified
-  interface lands in PR 4 and the second backend can come later without
-  schema churn.
-- Cross-runner exchange (sharing whiteboards between sibling runners) is
-  out of scope. Runner-local exchange is the contract.
+1. **Prompt override public surface:** resolved. The built-in prompt override
+  hook no longer needs to stay internal. A follow-up may expose it as a public
+  advanced API on orchestrator/runner configuration. Documentation must label
+  it advanced usage, and no example is required for the initial public surface.
+2. **Visibility/redaction controls:** accepted as deferred. Privacy labels,
+  redaction policy, and per-recipient visibility on exchange/handoff remain out
+  of scope. The new types should not preclude adding a `visibility:`
+  front-matter field later.
+3. **SQLite/Postgres persistence backends:** moved to
+  `docs/runner-persistence-rdb-backends-memo.md`. The follow-up should be a
+  multi-PR plan where every PR has one clear target and enough tests to be
+  completed inside that PR.
+4. **Cross-runner exchange:** no active plan. Runner-local exchange remains the
+  contract for now, while recording that sibling-runner whiteboard sharing may
+  become useful later.
 
 ## Non-Goals For This Branch
 
@@ -637,4 +641,5 @@ tracked without rewriting historical PR notes.
 - Do not merge stream persistence and exchange/handoff persistence into
   one storage row format; the unified interface routes them but their
   on-disk shapes stay distinct.
-- Do not expose template overrides on the public engine API yet.
+- Do not add a dedicated example for prompt template overrides; document the
+  public surface as advanced usage instead.
