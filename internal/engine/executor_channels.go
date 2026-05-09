@@ -135,33 +135,87 @@ func (e *Executor) renderStageOutputs(stage string, intent string, toNodes []str
 		}
 	}
 	if paths.exchangeDir != "" {
-		exchange := runnerpkg.ExchangeDoc{
-			RunnerID:  runnerID,
-			NodeID:    nodeID,
-			SkillName: skillName,
-			Title:     stage,
-			CreatedAt: time.Now(),
-			Body:      strings.TrimSpace(body),
-		}
-		exchangeMarkdown, exchangeErr := exchange.Markdown()
+		fileName := fmt.Sprintf("%s-%s-%d.md", stage, nodeID, time.Now().UnixNano())
+		exchangeMarkdown, exchangeErr := e.exchangeDocMarkdown(runnerID, nodeID, skillName, stage, body)
 		if exchangeErr != nil {
 			return "", exchangeErr
 		}
-		fileName := fmt.Sprintf("%s-%s-%d.md", stage, nodeID, time.Now().UnixNano())
 		if err := os.WriteFile(filepath.Join(paths.exchangeDir, fileName), []byte(exchangeMarkdown), 0o644); err != nil {
 			return "", fmt.Errorf("orchestrate: write exchange markdown: %w", err)
+		}
+		if e.planner != nil && e.planner.ArtifactsDir != "" {
+			exchangesDir := filepath.Join(e.planner.ArtifactsDir, "exchanges")
+			if err := os.MkdirAll(exchangesDir, 0o755); err != nil {
+				return "", fmt.Errorf("orchestrate: create artifact exchanges dir: %w", err)
+			}
+			if err := os.WriteFile(filepath.Join(exchangesDir, fileName), []byte(exchangeMarkdown), 0o644); err != nil {
+				return "", fmt.Errorf("orchestrate: write artifact exchange markdown: %w", err)
+			}
 		}
 	}
 	if err := e.snapshotMemos(stage, paths, nodeID, skillName, runnerID); err != nil {
 		return "", err
 	}
+	reasoning := ""
 	if runtime != nil {
-		reasoning := latestReasoning(runtime)
-		if reasoning != "" && !strings.Contains(handoffMarkdown, reasoning) {
-			handoffMarkdown = strings.TrimSpace(handoffMarkdown + "\n\n" + reasoning + "\n")
-		}
+		reasoning = latestReasoning(runtime)
 	}
-	return handoffMarkdown, nil
+	return e.legacyExchangeMarkdown(stage, runnerID, nodeID, skillName, toNodes, body, reasoning)
+}
+
+func (e *Executor) exchangeDocMarkdown(runnerID string, nodeID string, skillName string, stage string, body string) (string, error) {
+	exchange := runnerpkg.ExchangeDoc{
+		RunnerID:  runnerID,
+		NodeID:    nodeID,
+		SkillName: skillName,
+		Title:     stage,
+		CreatedAt: time.Now(),
+		Body:      strings.TrimSpace(body),
+	}
+	return exchange.Markdown()
+}
+
+func (e *Executor) legacyExchangeMarkdown(stage string, runnerID string, nodeID string, skillName string, toNodes []string, body string, reasoning string) (string, error) {
+	taskDescription := ""
+	if e.planner != nil {
+		taskDescription = e.planner.TaskDescription
+	}
+	doc := runnerpkg.ExchangeDocument{
+		RunnerID:        runnerID,
+		NodeID:          nodeID,
+		SkillName:       skillName,
+		TaskDescription: taskDescription,
+		Memo:            "Handoff emitted through workspace outbox.",
+		Reasoning:       strings.TrimSpace(reasoning),
+		Handoff:         strings.TrimSpace(body),
+	}
+	switch stage {
+	case "polish":
+		doc.Stage = runnerpkg.ExchangeStagePolish
+	case "report":
+		doc.Stage = runnerpkg.ExchangeStageReport
+	default:
+		doc.Stage = runnerpkg.ExchangeStageExecute
+	}
+	for _, to := range toNodes {
+		handoff := runnerpkg.ExchangeHandoff{
+			To:      runnerpkg.ExchangeRecipientDownstream,
+			Intent:  runnerpkg.ExchangeIntentContinue,
+			Summary: "Use this output for the next execution stage.",
+		}
+		if to == "orchestrator" {
+			handoff.To = runnerpkg.ExchangeRecipientOrchestrator
+			if stage == "polish" {
+				handoff.Intent = runnerpkg.ExchangeIntentReview
+				handoff.Summary = "Review the polished plan handoff."
+			} else {
+				handoff.Intent = runnerpkg.ExchangeIntentSummarize
+				handoff.Summary = "Summarize this report handoff."
+			}
+		}
+		doc.Handoffs = append(doc.Handoffs, handoff)
+	}
+	return doc.Markdown()
 }
 
 func (e *Executor) snapshotMemos(stage string, paths executorWorkspacePaths, nodeID string, skillName string, runnerID string) error {

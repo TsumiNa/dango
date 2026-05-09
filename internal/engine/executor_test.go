@@ -164,14 +164,14 @@ func TestExecute_NoRunEReturnsMarkdownFallback(t *testing.T) {
 	if !ok {
 		t.Fatalf("Execute output type = %T, want string; value = %v", out, out)
 	}
-	doc, err := runnerpkg.ParseHandoffMarkdown(outStr)
+	doc, err := runnerpkg.ParseExchangeMarkdown(outStr)
 	if err != nil {
-		t.Fatalf("ParseHandoffMarkdown: %v", err)
+		t.Fatalf("ParseExchangeMarkdown: %v", err)
 	}
-	if doc.Intent != "continue" {
-		t.Fatalf("Intent = %q, want continue", doc.Intent)
+	if doc.Stage != runnerpkg.ExchangeStageExecute {
+		t.Fatalf("Stage = %q, want execute", doc.Stage)
 	}
-	if strings.TrimSpace(doc.Body) == "" {
+	if strings.TrimSpace(doc.Handoff) == "" {
 		t.Fatal("expected fallback handoff to be populated")
 	}
 }
@@ -338,7 +338,7 @@ func TestBindForRunnerConfiguresRuntimeSkillAccessibleDirs(t *testing.T) {
 	}
 }
 
-func TestPolish_ReturnsHandoffMarkdown(t *testing.T) {
+func TestPolish_ReturnsExchangeMarkdown(t *testing.T) {
 	exec, err := NewExecutor(loadLightweightTestSkill(t), &ExecutionPlanner{
 		id:              "node-1",
 		TaskDescription: "Plan the work.",
@@ -354,18 +354,18 @@ func TestPolish_ReturnsHandoffMarkdown(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Polish: %v", err)
 	}
-	doc, err := runnerpkg.ParseHandoffMarkdown(fragment.(string))
+	doc, err := runnerpkg.ParseExchangeMarkdown(fragment.(string))
 	if err != nil {
-		t.Fatalf("ParseHandoffMarkdown: %v", err)
+		t.Fatalf("ParseExchangeMarkdown: %v", err)
 	}
-	if doc.FromNode != "node-1" {
-		t.Fatalf("doc metadata = %+v, want from_node=node-1", doc)
+	if doc.Stage != runnerpkg.ExchangeStagePolish || doc.NodeID != "node-1" {
+		t.Fatalf("doc metadata = %+v, want polish/node-1", doc)
 	}
-	if len(doc.ToNodes) != 1 || doc.ToNodes[0] != "orchestrator" {
-		t.Fatalf("to_nodes = %+v, want orchestrator", doc.ToNodes)
+	if len(doc.Handoffs) != 1 || doc.Handoffs[0].To != runnerpkg.ExchangeRecipientOrchestrator {
+		t.Fatalf("handoffs = %+v, want orchestrator", doc.Handoffs)
 	}
-	if strings.TrimSpace(doc.Body) == "" {
-		t.Fatalf("doc body not populated: %+v", doc)
+	if strings.TrimSpace(doc.Handoff) == "" {
+		t.Fatalf("doc handoff not populated: %+v", doc)
 	}
 }
 
@@ -424,19 +424,19 @@ func TestPolish_UsesRuntimeSkillWhenBound(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Polish: %v", err)
 	}
-	doc, err := runnerpkg.ParseHandoffMarkdown(fragment.(string))
+	doc, err := runnerpkg.ParseExchangeMarkdown(fragment.(string))
 	if err != nil {
-		t.Fatalf("ParseHandoffMarkdown: %v", err)
+		t.Fatalf("ParseExchangeMarkdown: %v", err)
 	}
-	if doc.Body != "Use the GP package environment after elevation enrichment." {
-		t.Fatalf("handoff body = %q, want skill polish output", doc.Body)
+	if doc.Handoff != "Use the GP package environment after elevation enrichment." {
+		t.Fatalf("handoff = %q, want skill polish output", doc.Handoff)
 	}
 	if !strings.Contains(requestBody, "Polish the assigned task plan before execution") {
 		t.Fatalf("polish request missing polish prompt: %s", requestBody)
 	}
 }
 
-func TestReport_ReturnsHandoffMarkdownFallback(t *testing.T) {
+func TestReport_ReturnsExchangeMarkdownFallback(t *testing.T) {
 	exec, err := NewExecutor(loadLightweightTestSkill(t), &ExecutionPlanner{
 		id:              "node-1",
 		TaskDescription: "Report the work.",
@@ -452,14 +452,14 @@ func TestReport_ReturnsHandoffMarkdownFallback(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Report: %v", err)
 	}
-	doc, err := runnerpkg.ParseHandoffMarkdown(summary.(string))
+	doc, err := runnerpkg.ParseExchangeMarkdown(summary.(string))
 	if err != nil {
-		t.Fatalf("ParseHandoffMarkdown: %v", err)
+		t.Fatalf("ParseExchangeMarkdown: %v", err)
 	}
-	if doc.Intent != "summarize" {
-		t.Fatalf("Intent = %q, want summarize", doc.Intent)
+	if doc.Stage != runnerpkg.ExchangeStageReport {
+		t.Fatalf("Stage = %q, want report", doc.Stage)
 	}
-	if strings.TrimSpace(doc.Body) == "" {
+	if strings.TrimSpace(doc.Handoff) == "" {
 		t.Fatal("expected report handoff to include output")
 	}
 }

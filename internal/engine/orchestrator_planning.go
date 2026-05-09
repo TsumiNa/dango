@@ -83,7 +83,7 @@ func planningHandoffMarkdown(request string, runtimeSkill *llm.Skill, raw string
 	if strings.TrimSpace(raw) == "" {
 		return "", nil
 	}
-	body := strings.TrimSpace(raw)
+	body := "Planner produced the bootstrap plan handoff."
 	if reasoning := strings.TrimSpace(latestReasoning(runtimeSkill)); reasoning != "" {
 		body = body + "\n\nReasoning:\n" + reasoning
 	}
@@ -93,10 +93,7 @@ func planningHandoffMarkdown(request string, runtimeSkill *llm.Skill, raw string
 		ToNodes:   []string{"runner.bootstrap"},
 		Intent:    "plan",
 		CreatedAt: time.Now(),
-		Body: strings.TrimSpace(fmt.Sprintf("Request:\n%s\n\nPlan:\n%s",
-			request,
-			body,
-		)),
+		Body:      strings.TrimSpace(body),
 	}
 	return doc.Markdown()
 }

@@ -631,7 +631,7 @@ func TestStartRequest_StreamsPlannerReasoningAndPlanningExchange(t *testing.T) {
 			if err != nil {
 				continue
 			}
-			if doc.FromNode == "orchestrator" && doc.Intent == "plan" && strings.Contains(doc.Body, "run a single node") && strings.Contains(doc.Body, planOutput) && strings.Contains(doc.Body, "checked the available skills") {
+			if doc.FromNode == "orchestrator" && doc.Intent == "plan" && strings.Contains(doc.Body, "bootstrap plan handoff") && strings.Contains(doc.Body, "checked the available skills") {
 				sawPlanningHandoff = true
 			}
 		}
