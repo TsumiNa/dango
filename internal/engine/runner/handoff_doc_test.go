@@ -99,6 +99,20 @@ func TestHandoffDocMarkdownRejectsUnsafeArtifactPath(t *testing.T) {
 	}
 }
 
+func TestHandoffDocMarkdownRejectsCollapsedTraversalArtifactPath(t *testing.T) {
+	_, err := (HandoffDoc{
+		RunnerID: "runner-1",
+		FromNode: "node-a",
+		ToNodes:  []string{"node-b"},
+		Artifacts: []HandoffArtifact{{
+			Path: "foo/..",
+		}},
+	}).Markdown()
+	if err == nil || !strings.Contains(err.Error(), "must not escape workspace") {
+		t.Fatalf("Markdown error = %v, want collapsed traversal artifact path rejection", err)
+	}
+}
+
 func TestParseHandoffMarkdownRejectsAbsoluteArtifactPath(t *testing.T) {
 	raw := `---
 kind: dango.handoff_doc

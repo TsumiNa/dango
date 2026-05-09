@@ -87,10 +87,10 @@ func (doc HandoffDoc) Markdown() (string, error) {
 		Version:   doc.Version,
 		RunnerID:  doc.RunnerID,
 		FromNode:  doc.FromNode,
-		ToNodes:   append([]string(nil), doc.ToNodes...),
+		ToNodes:   doc.ToNodes,
 		Intent:    doc.Intent,
 		CreatedAt: doc.CreatedAt,
-		Artifacts: append([]HandoffArtifact(nil), doc.Artifacts...),
+		Artifacts: doc.Artifacts,
 	}
 	front, err := yaml.Marshal(meta)
 	if err != nil {
@@ -150,10 +150,10 @@ func ParseHandoffMarkdown(raw string) (*HandoffDoc, error) {
 		Version:   meta.Version,
 		RunnerID:  meta.RunnerID,
 		FromNode:  meta.FromNode,
-		ToNodes:   append([]string(nil), meta.ToNodes...),
+		ToNodes:   meta.ToNodes,
 		Intent:    meta.Intent,
 		CreatedAt: meta.CreatedAt,
-		Artifacts: append([]HandoffArtifact(nil), meta.Artifacts...),
+		Artifacts: meta.Artifacts,
 		Body:      strings.TrimSpace(string(body)),
 	}, nil
 }
@@ -172,7 +172,7 @@ func validateHandoffArtifactPath(raw string) error {
 		return fmt.Errorf("runner: handoff doc artifact path must be relative: %q", trimmed)
 	}
 	clean := path.Clean(trimmed)
-	if clean == ".." || strings.HasPrefix(clean, "../") || strings.Contains(clean, "/../") {
+	if clean == "." || clean == ".." || strings.HasPrefix(clean, "../") {
 		return fmt.Errorf("runner: handoff doc artifact path must not escape workspace: %q", trimmed)
 	}
 	return nil
