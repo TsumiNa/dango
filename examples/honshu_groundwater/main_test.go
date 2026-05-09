@@ -284,10 +284,8 @@ func TestRunHonshuGroundwaterExampleExecutesNeededSkills(t *testing.T) {
 			t.Fatalf("logs missing %q:\n%s", want, logs.String())
 		}
 	}
-	for _, want := range []string{"request persisted"} {
-		if !strings.Contains(logs.String(), want) {
-			t.Fatalf("logs missing %q:\n%s", want, logs.String())
-		}
+	if !strings.Contains(logs.String(), "request persisted") {
+		t.Fatalf("logs missing %q:\n%s", "request persisted", logs.String())
 	}
 	if err := ensureNoPDFSkill(view.Plan); err != nil {
 		t.Fatal(err)
@@ -303,14 +301,19 @@ func TestRunHonshuGroundwaterExampleExecutesNeededSkills(t *testing.T) {
 	if err != nil {
 		t.Fatalf("completedNodeMarkdown(train_model): %v", err)
 	}
-	if strings.Contains(trainCompletedRaw, "uv: command not found") {
+	if _, err := exec.LookPath("uv"); err != nil {
 		t.Skip("uv not available in PATH; skipping artifact marker assertions")
 	}
-	markerText := strings.ToLower(trainHandoff.Body + "\n" + trainCompletedRaw)
-	for _, marker := range []string{".csv", ".svg", "prediction_count"} {
-		if !strings.Contains(markerText, marker) {
-			t.Fatalf("train output missing marker %q:\n%s", marker, trainCompletedRaw)
-		}
+	completedText := strings.ToLower(trainCompletedRaw)
+	if !strings.Contains(completedText, ".csv") {
+		t.Fatalf("train completed output missing %q marker:\n%s", ".csv", trainCompletedRaw)
+	}
+	if !strings.Contains(completedText, ".svg") {
+		t.Fatalf("train completed output missing %q marker:\n%s", ".svg", trainCompletedRaw)
+	}
+	handoffText := strings.ToLower(trainHandoff.Body)
+	if !strings.Contains(handoffText, "prediction_count") {
+		t.Fatalf("train handoff body missing %q marker:\n%s", "prediction_count", trainHandoff.Body)
 	}
 }
 
