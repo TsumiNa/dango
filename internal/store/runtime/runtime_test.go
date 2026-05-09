@@ -6,6 +6,8 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -270,6 +272,29 @@ func TestCompositeEventLogStore_AppendEventIgnoresMirrorFailure(t *testing.T) {
 	}
 }
 
+func TestCompositeEventLogStore_AppendEventReturnsPrimaryFailure(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	event := runtimeTestEvent("req_composite_event_primary_failure", 1)
+	primary := &runtimeTestEventLogStore{appendErr: errors.New("primary append failed")}
+	mirror := &runtimeTestEventLogStore{}
+	store := &compositeEventLogStore{
+		primary: primary,
+		mirror:  mirror,
+	}
+
+	if err := store.AppendEvent(ctx, event); err == nil {
+		t.Fatal("AppendEvent succeeded, want primary failure")
+	}
+	if primary.appendCalls != 1 {
+		t.Fatalf("primary append calls = %d, want 1", primary.appendCalls)
+	}
+	if mirror.appendCalls != 0 {
+		t.Fatalf("mirror append calls = %d, want 0 when primary fails", mirror.appendCalls)
+	}
+}
+
 func TestCompositeRunnerStore_AppendKeepsCallerSequence(t *testing.T) {
 	t.Parallel()
 
@@ -312,6 +337,69 @@ func TestCompositeRunnerStore_AppendKeepsCallerSequence(t *testing.T) {
 	}
 	if mirrorRec == rec {
 		t.Fatal("mirror append received caller record pointer; want clone")
+	}
+}
+
+func TestCompositeRunnerStore_AppendSerializesPerRunner(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	var (
+		primaryCalls atomic.Int64
+		nextSeq      int64
+		nextSeqMu    sync.Mutex
+	)
+	firstMirrorStarted := make(chan struct{})
+	releaseFirstMirror := make(chan struct{})
+	primary := &runtimeTestRunnerStore{
+		appendFn: func(_ context.Context, _ string, in *runnerpkg.RunnerRecord) (int64, error) {
+			primaryCalls.Add(1)
+			nextSeqMu.Lock()
+			nextSeq++
+			seq := nextSeq
+			nextSeqMu.Unlock()
+			in.Seq = seq
+			return seq, nil
+		},
+	}
+	mirror := &runtimeTestRunnerStore{
+		appendFn: func(_ context.Context, _ string, in *runnerpkg.RunnerRecord) (int64, error) {
+			if in.Seq == 1 {
+				close(firstMirrorStarted)
+				<-releaseFirstMirror
+			}
+			return in.Seq, nil
+		},
+	}
+	store := &compositeRunnerStore{primary: primary, mirror: mirror}
+
+	firstDone := make(chan error, 1)
+	go func() {
+		_, err := store.Append(ctx, "run_composite_lock", &runnerpkg.RunnerRecord{Kind: runnerpkg.RunnerRecordInit})
+		firstDone <- err
+	}()
+	<-firstMirrorStarted
+
+	secondDone := make(chan error, 1)
+	go func() {
+		_, err := store.Append(ctx, "run_composite_lock", &runnerpkg.RunnerRecord{Kind: runnerpkg.RunnerRecordStatus})
+		secondDone <- err
+	}()
+
+	time.Sleep(50 * time.Millisecond)
+	if got := primaryCalls.Load(); got != 1 {
+		t.Fatalf("primary append calls before releasing first mirror = %d, want 1", got)
+	}
+
+	close(releaseFirstMirror)
+	if err := <-firstDone; err != nil {
+		t.Fatalf("first append: %v", err)
+	}
+	if err := <-secondDone; err != nil {
+		t.Fatalf("second append: %v", err)
+	}
+	if got := primaryCalls.Load(); got != 2 {
+		t.Fatalf("primary append calls after both appends = %d, want 2", got)
 	}
 }
 

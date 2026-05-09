@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"hash/fnv"
 	"os"
 	"path/filepath"
 	"strings"
@@ -231,8 +232,7 @@ type compositeRunnerStore struct {
 	primary runnerpkg.RunnerStore
 	mirror  runnerpkg.RunnerStore
 
-	mu    sync.Mutex
-	locks map[string]*sync.Mutex
+	appendLocks [64]sync.Mutex
 }
 
 func (s *compositeRunnerStore) Append(ctx context.Context, runnerID string, rec *runnerpkg.RunnerRecord) (int64, error) {
@@ -246,9 +246,9 @@ func (s *compositeRunnerStore) Append(ctx context.Context, runnerID string, rec 
 	if err != nil {
 		return 0, fmt.Errorf("runtime persistence append primary runner record: %w", err)
 	}
-	mirrorRec := *rec
+	mirrorRec := cloneRunnerRecord(rec)
 	mirrorRec.Seq = seq
-	if _, err := s.mirror.Append(ctx, runnerID, &mirrorRec); err != nil {
+	if _, err := s.mirror.Append(ctx, runnerID, mirrorRec); err != nil {
 		return 0, fmt.Errorf("runtime persistence append markdown mirror runner record: %w", err)
 	}
 	rec.Seq = seq
@@ -276,19 +276,27 @@ func (s *compositeRunnerStore) Delete(ctx context.Context, runnerID string) erro
 }
 
 func (s *compositeRunnerStore) lock(runnerID string) func() {
-	s.mu.Lock()
-	if s.locks == nil {
-		s.locks = make(map[string]*sync.Mutex)
-	}
-	lock := s.locks[runnerID]
-	if lock == nil {
-		lock = &sync.Mutex{}
-		s.locks[runnerID] = lock
-	}
-	s.mu.Unlock()
-
+	lock := &s.appendLocks[compositeRunnerLockIndex(runnerID)]
 	lock.Lock()
 	return lock.Unlock
+}
+
+func compositeRunnerLockIndex(runnerID string) uint32 {
+	h := fnv.New32a()
+	_, _ = h.Write([]byte(runnerID))
+	return h.Sum32() % uint32(len((compositeRunnerStore{}).appendLocks))
+}
+
+func cloneRunnerRecord(rec *runnerpkg.RunnerRecord) *runnerpkg.RunnerRecord {
+	clone := *rec
+	if rec.Event != nil {
+		eventClone := *rec.Event
+		if rec.Event.DataJSON != nil {
+			eventClone.DataJSON = append([]byte(nil), rec.Event.DataJSON...)
+		}
+		clone.Event = &eventClone
+	}
+	return &clone
 }
 
 type compositeSnapshotCursorStore struct {
