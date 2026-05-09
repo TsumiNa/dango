@@ -49,6 +49,11 @@ const (
 	EventExecutorReportCompleted  = "executor.report.completed"
 	EventExecutorReportFailed     = "executor.report.failed"
 
+	EventExchangePublished = "exchange.published"
+	EventHandoffEmitted    = "handoff.emitted"
+	EventHandoffDelivered  = "handoff.delivered"
+	EventMemoSnapshot      = "memo.snapshot"
+
 	EventSkillMemoDelta  = "skill.memo.delta"
 	EventArtifactCreated = "artifact.created"
 )
