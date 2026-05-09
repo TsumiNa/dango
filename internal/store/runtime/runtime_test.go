@@ -7,7 +7,6 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
-	"sync/atomic"
 	"testing"
 	"time"
 
@@ -344,21 +343,23 @@ func TestCompositeRunnerStore_AppendSerializesPerRunner(t *testing.T) {
 	t.Parallel()
 
 	ctx := context.Background()
-	var (
-		primaryCalls atomic.Int64
-		nextSeq      int64
-		nextSeqMu    sync.Mutex
-	)
+	var nextSeq int64
+	var nextSeqMu sync.Mutex
 	firstMirrorStarted := make(chan struct{})
 	releaseFirstMirror := make(chan struct{})
+	secondPrimaryEntered := make(chan struct{})
+	allowSecondPrimary := make(chan struct{})
 	primary := &runtimeTestRunnerStore{
 		appendFn: func(_ context.Context, _ string, in *runnerpkg.RunnerRecord) (int64, error) {
-			primaryCalls.Add(1)
 			nextSeqMu.Lock()
 			nextSeq++
 			seq := nextSeq
 			nextSeqMu.Unlock()
 			in.Seq = seq
+			if seq == 2 {
+				close(secondPrimaryEntered)
+				<-allowSecondPrimary
+			}
 			return seq, nil
 		},
 	}
@@ -381,25 +382,27 @@ func TestCompositeRunnerStore_AppendSerializesPerRunner(t *testing.T) {
 	<-firstMirrorStarted
 
 	secondDone := make(chan error, 1)
+	secondAttempted := make(chan struct{})
 	go func() {
+		close(secondAttempted)
 		_, err := store.Append(ctx, "run_composite_lock", &runnerpkg.RunnerRecord{Kind: runnerpkg.RunnerRecordStatus})
 		secondDone <- err
 	}()
+	<-secondAttempted
 
-	time.Sleep(50 * time.Millisecond)
-	if got := primaryCalls.Load(); got != 1 {
-		t.Fatalf("primary append calls before releasing first mirror = %d, want 1", got)
+	select {
+	case <-secondPrimaryEntered:
+		t.Fatal("second append reached primary while first mirror append was still blocked")
+	default:
 	}
 
 	close(releaseFirstMirror)
 	if err := <-firstDone; err != nil {
 		t.Fatalf("first append: %v", err)
 	}
+	close(allowSecondPrimary)
 	if err := <-secondDone; err != nil {
 		t.Fatalf("second append: %v", err)
-	}
-	if got := primaryCalls.Load(); got != 2 {
-		t.Fatalf("primary append calls after both appends = %d, want 2", got)
 	}
 }
 

@@ -232,8 +232,10 @@ type compositeRunnerStore struct {
 	primary runnerpkg.RunnerStore
 	mirror  runnerpkg.RunnerStore
 
-	appendLocks [64]sync.Mutex
+	appendLocks [compositeRunnerLockCount]sync.Mutex
 }
+
+const compositeRunnerLockCount = 64
 
 func (s *compositeRunnerStore) Append(ctx context.Context, runnerID string, rec *runnerpkg.RunnerRecord) (int64, error) {
 	if s == nil || s.primary == nil || s.mirror == nil {
@@ -246,12 +248,11 @@ func (s *compositeRunnerStore) Append(ctx context.Context, runnerID string, rec 
 	if err != nil {
 		return 0, fmt.Errorf("runtime persistence append primary runner record: %w", err)
 	}
+	rec.Seq = seq
 	mirrorRec := cloneRunnerRecord(rec)
-	mirrorRec.Seq = seq
 	if _, err := s.mirror.Append(ctx, runnerID, mirrorRec); err != nil {
 		return 0, fmt.Errorf("runtime persistence append markdown mirror runner record: %w", err)
 	}
-	rec.Seq = seq
 	return seq, nil
 }
 
@@ -284,7 +285,7 @@ func (s *compositeRunnerStore) lock(runnerID string) func() {
 func compositeRunnerLockIndex(runnerID string) uint32 {
 	h := fnv.New32a()
 	_, _ = h.Write([]byte(runnerID))
-	return h.Sum32() % uint32(len((compositeRunnerStore{}).appendLocks))
+	return h.Sum32() % uint32(compositeRunnerLockCount)
 }
 
 func cloneRunnerRecord(rec *runnerpkg.RunnerRecord) *runnerpkg.RunnerRecord {
