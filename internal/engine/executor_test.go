@@ -3,7 +3,9 @@ package engine
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
+	"io/fs"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -476,6 +478,17 @@ func TestExecutorStagesWriteWorkspaceHandoffAndMemoSnapshot(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(skillWS.MemoDir, "plan.md"), []byte("memo body"), 0o644); err != nil {
 		t.Fatalf("WriteFile(memo): %v", err)
 	}
+	externalMemo := filepath.Join(t.TempDir(), "external.md")
+	if err := os.WriteFile(externalMemo, []byte("external"), 0o644); err != nil {
+		t.Fatalf("WriteFile(external memo): %v", err)
+	}
+	symlinkMemo := filepath.Join(skillWS.MemoDir, "external_link.md")
+	if err := os.Symlink(externalMemo, symlinkMemo); err != nil {
+		if errors.Is(err, fs.ErrPermission) {
+			t.Skipf("symlink not permitted: %v", err)
+		}
+		t.Fatalf("Symlink(external memo): %v", err)
+	}
 	accessible, err := workspace.AccessibleDirs("node-1")
 	if err != nil {
 		t.Fatalf("AccessibleDirs: %v", err)
@@ -505,8 +518,12 @@ func TestExecutorStagesWriteWorkspaceHandoffAndMemoSnapshot(t *testing.T) {
 	if handoff.FromNode != "node-1" {
 		t.Fatalf("handoff.FromNode = %q, want node-1", handoff.FromNode)
 	}
-	archiveMemo := filepath.Join(workspace.ArchiveDir(), "memo", "node-1", "polish", "plan.md.md")
+	archiveMemo := filepath.Join(workspace.ArchiveDir(), "memo", "node-1", "polish", "plan.md.memo.md")
 	if _, err := os.Stat(archiveMemo); err != nil {
 		t.Fatalf("memo snapshot stat(%s): %v", archiveMemo, err)
+	}
+	archiveLinkedMemo := filepath.Join(workspace.ArchiveDir(), "memo", "node-1", "polish", "external_link.md.memo.md")
+	if _, err := os.Stat(archiveLinkedMemo); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("symlink memo should be skipped, stat err = %v", err)
 	}
 }

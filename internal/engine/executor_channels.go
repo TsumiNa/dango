@@ -222,6 +222,14 @@ func (e *Executor) snapshotMemos(stage string, paths executorWorkspacePaths, nod
 	if paths.memoDir == "" || paths.archiveMemoDir == "" {
 		return nil
 	}
+	memoRoot, err := filepath.EvalSymlinks(paths.memoDir)
+	if err != nil {
+		return fmt.Errorf("orchestrate: resolve memo dir: %w", err)
+	}
+	memoRoot, err = filepath.Abs(memoRoot)
+	if err != nil {
+		return fmt.Errorf("orchestrate: resolve memo dir abs path: %w", err)
+	}
 	stageRoot := filepath.Join(paths.archiveMemoDir, stage)
 	if err := os.MkdirAll(stageRoot, 0o755); err != nil {
 		return fmt.Errorf("orchestrate: create memo snapshot dir: %w", err)
@@ -232,6 +240,20 @@ func (e *Executor) snapshotMemos(stage string, paths executorWorkspacePaths, nod
 		}
 		if d.IsDir() {
 			return nil
+		}
+		if d.Type()&os.ModeSymlink != 0 {
+			return nil
+		}
+		resolvedPath, err := filepath.EvalSymlinks(path)
+		if err != nil {
+			return err
+		}
+		resolvedPath, err = filepath.Abs(resolvedPath)
+		if err != nil {
+			return err
+		}
+		if !pathWithinDir(memoRoot, resolvedPath) {
+			return fmt.Errorf("orchestrate: memo snapshot path escapes memo dir: %s", path)
 		}
 		rel, err := filepath.Rel(paths.memoDir, path)
 		if err != nil {
@@ -253,12 +275,23 @@ func (e *Executor) snapshotMemos(stage string, paths executorWorkspacePaths, nod
 		if err != nil {
 			return err
 		}
-		dst := filepath.Join(stageRoot, rel+".md")
+		dst := filepath.Join(stageRoot, rel+".memo.md")
 		if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
 			return err
 		}
 		return os.WriteFile(dst, []byte(raw), 0o644)
 	})
+}
+
+func pathWithinDir(root string, target string) bool {
+	rel, err := filepath.Rel(root, target)
+	if err != nil {
+		return false
+	}
+	if rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return false
+	}
+	return true
 }
 
 type executorWorkspacePaths struct {

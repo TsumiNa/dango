@@ -65,7 +65,7 @@ func planWithOrchestrator(ctx context.Context, req Request, skills []runnerpkg.S
 			streampkg.StatusCompleted,
 			handoff,
 			streampkg.Scope{},
-			map[string]any{"stage": "plan"},
+			map[string]any{"stage": "planning"},
 		)
 	}
 	emitEngineStreamEvent(ctx, requestStream,
