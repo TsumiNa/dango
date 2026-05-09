@@ -158,6 +158,8 @@ func ParseHandoffMarkdown(raw string) (*HandoffDoc, error) {
 	}, nil
 }
 
+// validateHandoffArtifactPath validates that artifact paths are non-empty,
+// relative, and do not escape the workspace via parent traversal.
 func validateHandoffArtifactPath(raw string) error {
 	trimmed := strings.TrimSpace(raw)
 	if trimmed == "" {
