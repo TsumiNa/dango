@@ -7,6 +7,7 @@ require (
 	github.com/charmbracelet/x/ansi v0.11.7
 	github.com/gin-gonic/gin v1.12.0
 	github.com/golang-migrate/migrate/v4 v4.19.1
+	github.com/jackc/pgx/v5 v5.5.4
 	github.com/joho/godotenv v1.5.1
 	github.com/muesli/termenv v0.16.0
 	github.com/openai/openai-go/v3 v3.34.0
@@ -29,6 +30,10 @@ require (
 	github.com/clipperhouse/displaywidth v0.11.0 // indirect
 	github.com/clipperhouse/uax29/v2 v2.7.0 // indirect
 	github.com/dustin/go-humanize v1.0.1 // indirect
+	github.com/jackc/pgpassfile v1.0.0 // indirect
+	github.com/jackc/pgservicefile v0.0.0-20221227161230-091c0ba34f0a // indirect
+	github.com/jackc/puddle/v2 v2.2.1 // indirect
+	github.com/lib/pq v1.10.9 // indirect
 	github.com/lucasb-eyer/go-colorful v1.4.0 // indirect
 	github.com/mattn/go-runewidth v0.0.23 // indirect
 	github.com/ncruces/go-strftime v1.0.0 // indirect
@@ -39,6 +44,7 @@ require (
 	github.com/tidwall/sjson v1.2.5 // indirect
 	github.com/xo/terminfo v0.0.0-20220910002029-abceb7e1c41e // indirect
 	golang.org/x/exp v0.0.0-20260410095643-746e56fc9e2f // indirect
+	golang.org/x/sync v0.20.0 // indirect
 )
 
 require (

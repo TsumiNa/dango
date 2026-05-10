@@ -1,6 +1,6 @@
 # Runner Persistence RDB Backends Memo
 
-Last updated: 2026-05-09
+Last updated: 2026-05-10
 
 This memo turns the deferred SQLite/Postgres backend question from
 `docs/exchange-system-upgrade-memo.md` into a follow-up implementation plan for
@@ -190,6 +190,16 @@ Test signal:
   append behavior, cursor update ordering, and load-by-runner/request queries.
 - If CI cannot run Postgres tests in this PR, do not merge the backend yet.
 
+Implementation notes (2026-05-10):
+
+- Added a new Postgres store package under `internal/store/postgres` with
+  embedded migrations and runner persistence store implementations for
+  request stream events, runner records, and snapshot cursors.
+- Added `DANGO_POSTGRES_TEST_DSN` as the local/CI Postgres integration test
+  switch used by Postgres package tests and backend conformance/runtime tests.
+- Default local test runs remain unchanged when the environment variable is not
+  set.
+
 ### PR 6 - Postgres Runtime Wiring And Documentation
 
 Goal: expose Postgres as an operational option after the backend is proven.
@@ -207,6 +217,16 @@ Test signal:
   integration target documented in PR 5.
 - Tests prove a caller can choose `Postgres`, `Composite(Postgres, Markdown)`,
   or existing non-RDB backends without changing runner/orchestrator call sites.
+
+Implementation notes (2026-05-10):
+
+- Runtime config now supports Postgres through:
+  `PostgresDSN`, `PostgresWorkspaceRoot`, and `PostgresMarkdownMirror`.
+- Runtime startup rejects ambiguous configuration when both SQLite and Postgres
+  are configured in the same `runtime.Config`.
+- `Composite(Postgres, Markdown)` mirrors writes to
+  `<PostgresWorkspaceRoot>/.markdown-mirror` while reads continue to use
+  Postgres.
 
 ## Non-Goals
 
