@@ -94,7 +94,7 @@ to_nodes:
   - <orchestrator|downstream node id>
 intent: <review|continue|summarize>
 artifacts:
-  - path: <relative path under outbox/artifacts>
+  - path: <relative path under downstream/artifacts>
     type: <file|dir>
     description: <one line>
 ---

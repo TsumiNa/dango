@@ -43,7 +43,7 @@ func TestPR3EventPayloadJSONRoundTrip(t *testing.T) {
 		FromNode: "node_1",
 		ToNodes:  []string{"node_2", "node_3"},
 		Intent:   "bootstrap",
-		Path:     "skills/node_1/outbox/handoff.md",
+		Path:     "skills/node_1/downstream/handoff.md",
 		Document: "---\nkind: dango.handoff_doc\n---\n",
 		Artifacts: []HandoffArtifactPayload{
 			{Path: "artifacts/data.csv", Type: "csv", Description: "training rows"},
@@ -54,9 +54,9 @@ func TestPR3EventPayloadJSONRoundTrip(t *testing.T) {
 		RunnerID:      "run_1",
 		FromNode:      "node_1",
 		ToNode:        "node_2",
-		InboxPath:     "skills/node_2/inbox/node_1",
-		HandoffPath:   "skills/node_2/inbox/node_1/handoff.md",
-		ArtifactPaths: []string{"skills/node_2/inbox/node_1/artifacts/data.csv"},
+		InboxPath:     "skills/node_2/upstream/node_1",
+		HandoffPath:   "skills/node_2/upstream/node_1/handoff.md",
+		ArtifactPaths: []string{"skills/node_2/upstream/node_1/artifacts/data.csv"},
 		Artifacts: []HandoffArtifactPayload{
 			{Path: "artifacts/data.csv", Type: "csv", Description: "training rows"},
 		},
@@ -131,15 +131,15 @@ func TestPR3EventFamilyFilterAndReplay(t *testing.T) {
 		RunnerID: "run_1",
 		FromNode: "node_1",
 		ToNodes:  []string{"node_2"},
-		Path:     "skills/node_1/outbox/handoff.md",
+		Path:     "skills/node_1/downstream/handoff.md",
 		Document: "---\nkind: dango.handoff_doc\n---\n",
 	})
 	emitPayload(EventHandoffDelivered, HandoffDeliveredPayload{
 		RunnerID:    "run_1",
 		FromNode:    "node_1",
 		ToNode:      "node_2",
-		InboxPath:   "skills/node_2/inbox/node_1",
-		HandoffPath: "skills/node_2/inbox/node_1/handoff.md",
+		InboxPath:   "skills/node_2/upstream/node_1",
+		HandoffPath: "skills/node_2/upstream/node_1/handoff.md",
 	})
 	emitPayload(EventMemoSnapshot, MemoSnapshotPayload{
 		RunnerID:    "run_1",

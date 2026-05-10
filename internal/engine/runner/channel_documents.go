@@ -38,7 +38,7 @@ func (r *Runner) emitHandoffEvents(ctx context.Context, node *Node, doc *Handoff
 	}
 	if r.workspace != nil {
 		if ws, ok := r.workspace.Skill(node.Id); ok {
-			payload.Path = filepath.Join(ws.OutboxDir, "handoff.md")
+			payload.Path = filepath.Join(ws.DownstreamDir, "handoff.md")
 		}
 	}
 	r.emitSkillStreamEvent(ctx, streampkg.EventHandoffEmitted, streampkg.StatusCompleted, node.Id, node, payloadMap(payload))
@@ -94,7 +94,7 @@ func (r *Runner) deliverHandoffToSuccessor(ctx context.Context, producer *Node, 
 	if !ok {
 		return nil
 	}
-	inboxPath := filepath.Join(successorWS.InboxDir, producer.Id)
+	inboxPath := filepath.Join(successorWS.UpstreamDir, producer.Id)
 	payload := streampkg.HandoffDeliveredPayload{
 		RunnerID:    r.id,
 		FromNode:    producer.Id,

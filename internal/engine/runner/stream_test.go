@@ -263,7 +263,7 @@ func TestRunnerEmitsArtifactCreatedEventsFromHandoffOutput(t *testing.T) {
 		ToNodes:  []string{"downstream"},
 		Intent:   "continue",
 		Artifacts: []HandoffArtifact{{
-			Path:        "outbox/artifacts/predictions.csv",
+			Path:        "downstream/artifacts/predictions.csv",
 			Type:        HandoffArtifactFile,
 			Description: "prediction table",
 		}},
@@ -312,7 +312,7 @@ func TestRunnerEmitsArtifactCreatedEventsFromHandoffOutput(t *testing.T) {
 	if err := json.Unmarshal(event.Delta, &delta); err != nil {
 		t.Fatalf("unmarshal delta: %v", err)
 	}
-	if delta["path"] != "outbox/artifacts/predictions.csv" {
+	if delta["path"] != "downstream/artifacts/predictions.csv" {
 		t.Fatalf("delta path = %v", delta["path"])
 	}
 	if delta["resource_type"] != HandoffArtifactFile {

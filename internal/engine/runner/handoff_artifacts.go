@@ -54,6 +54,7 @@ func resolveHandoffArtifactPath(workspace SkillWorkspace, declaredPath string) (
 		return "", false
 	}
 	clean := filepath.Clean(filepath.FromSlash(declaredPath))
+	clean = normalizeLegacyWorkspacePath(clean)
 	if clean == "." || clean == ".." || strings.HasPrefix(clean, ".."+string(filepath.Separator)) {
 		return "", false
 	}
@@ -62,6 +63,24 @@ func resolveHandoffArtifactPath(workspace SkillWorkspace, declaredPath string) (
 		return "", false
 	}
 	return resolved, true
+}
+
+func normalizeLegacyWorkspacePath(path string) string {
+	path = rewriteLeadingPathSegment(path, "outbox", "downstream")
+	path = rewriteLeadingPathSegment(path, "inbox", "upstream")
+	path = rewriteLeadingPathSegment(path, "workspace", "scratch")
+	return path
+}
+
+func rewriteLeadingPathSegment(path string, old string, new string) string {
+	if path == old {
+		return new
+	}
+	prefix := old + string(filepath.Separator)
+	if strings.HasPrefix(path, prefix) {
+		return filepath.Join(new, strings.TrimPrefix(path, prefix))
+	}
+	return path
 }
 
 func handoffArtifactDir(artifact HandoffArtifact, allowedRoots []string) (string, bool) {

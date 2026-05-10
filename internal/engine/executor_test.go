@@ -64,7 +64,7 @@ func TestExecutorExposesBoundSkillRuntimeEventStream(t *testing.T) {
 	if exec.EventStream() != nil {
 		t.Fatal("EventStream() before binding is non-nil")
 	}
-	if _, err := exec.BindForRunner(nil, nil); err != nil {
+	if _, err := exec.BindForRunner(nil, runnerpkg.ExecutorRuntimePaths{}); err != nil {
 		t.Fatalf("BindForRunner: %v", err)
 	}
 	stream := exec.EventStream()
@@ -91,7 +91,7 @@ func TestNewExecutor_RejectsNilPlanner(t *testing.T) {
 	}
 }
 
-func TestExchangeDocMarkdownStripsNestedHandoffFrontMatter(t *testing.T) {
+func TestExchangeDocMarkdownTreatsBodyAsOpaqueMarkdown(t *testing.T) {
 	handoff, err := (runnerpkg.HandoffDoc{
 		RunnerID:  "runner-1",
 		FromNode:  "node-1",
@@ -113,18 +113,15 @@ func TestExchangeDocMarkdownStripsNestedHandoffFrontMatter(t *testing.T) {
 		t.Fatalf("exchangeDocMarkdown: %v", err)
 	}
 
-	if got := strings.Count(raw, "---\n"); got != 2 {
-		t.Fatalf("front matter fence count = %d, want 2 in one envelope:\n%s", got, raw)
-	}
-	if strings.Contains(raw, "kind: dango.handoff_doc") {
-		t.Fatalf("exchange doc preserved nested handoff front matter:\n%s", raw)
-	}
 	parsed, err := runnerpkg.ParseExchangeDocMarkdown(raw)
 	if err != nil {
 		t.Fatalf("ParseExchangeDocMarkdown: %v", err)
 	}
-	if parsed.Body != "handoff body" {
-		t.Fatalf("body = %q, want stripped handoff body", parsed.Body)
+	if parsed.Body != strings.TrimSpace(handoff) {
+		t.Fatalf("body = %q, want original markdown body %q", parsed.Body, strings.TrimSpace(handoff))
+	}
+	if !strings.Contains(parsed.Body, "kind: dango.handoff_doc") {
+		t.Fatalf("exchange body lost nested handoff markdown:\n%s", parsed.Body)
 	}
 }
 
@@ -172,7 +169,7 @@ func TestExecute_NoRunEReturnsMarkdownFallback(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewExecutor: %v", err)
 	}
-	if _, err := exec.BindForRunner(nil, nil); err != nil {
+	if _, err := exec.BindForRunner(nil, runnerpkg.ExecutorRuntimePaths{}); err != nil {
 		t.Fatalf("BindForRunner: %v", err)
 	}
 	out, nodes, err := exec.Execute(context.Background(), nil)
@@ -306,7 +303,7 @@ func TestBindForRunner_BindsLightweightSkillAndAllocatesSession(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewExecutor: %v", err)
 	}
-	sessionID, err := exec.BindForRunner(nil, nil, store)
+	sessionID, err := exec.BindForRunner(nil, runnerpkg.ExecutorRuntimePaths{}, store)
 	if err != nil {
 		t.Fatalf("BindForRunner: %v", err)
 	}
@@ -338,11 +335,11 @@ func TestBindForRunner_ReusesExistingSession(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewExecutor: %v", err)
 	}
-	firstSessionID, err := exec.BindForRunner(nil, nil, store)
+	firstSessionID, err := exec.BindForRunner(nil, runnerpkg.ExecutorRuntimePaths{}, store)
 	if err != nil {
 		t.Fatalf("BindForRunner(first): %v", err)
 	}
-	secondSessionID, err := exec.BindForRunner(&firstSessionID, nil, store)
+	secondSessionID, err := exec.BindForRunner(&firstSessionID, runnerpkg.ExecutorRuntimePaths{}, store)
 	if err != nil {
 		t.Fatalf("BindForRunner(second): %v", err)
 	}
@@ -351,20 +348,29 @@ func TestBindForRunner_ReusesExistingSession(t *testing.T) {
 	}
 }
 
-func TestBindForRunnerConfiguresRuntimeSkillAccessibleDirs(t *testing.T) {
+func TestBindForRunnerStoresRuntimePathsAndConfiguresAccessibleDirs(t *testing.T) {
 	resourceDir := t.TempDir()
 	exec, err := NewExecutor(loadLightweightTestSkill(t), &ExecutionPlanner{}, llm.DefaultConversationConfig(), WithExecutorClient(&llm.Client{}))
 	if err != nil {
 		t.Fatalf("NewExecutor: %v", err)
 	}
-	if _, err := exec.BindForRunner(nil, []string{resourceDir}); err != nil {
+	runtimePaths := runnerpkg.ExecutorRuntimePaths{
+		RunnerID:       "runner-1",
+		NodeID:         "node-1",
+		SkillName:      exec.Skill().Name,
+		AccessibleDirs: []string{resourceDir},
+	}
+	if _, err := exec.BindForRunner(nil, runtimePaths); err != nil {
 		t.Fatalf("BindForRunner: %v", err)
 	}
 	if exec.runtime == nil {
 		t.Fatal("runtime skill is nil")
 	}
-	if got := exec.accessibleDirs; len(got) != 1 || got[0] != resourceDir {
-		t.Fatalf("executor accessibleDirs = %v, want [%s]", got, resourceDir)
+	if got := exec.runtimePaths; got.RunnerID != "runner-1" || got.NodeID != "node-1" || got.SkillName != exec.Skill().Name {
+		t.Fatalf("executor runtime paths = %+v", got)
+	}
+	if got := exec.runtimePaths.AccessibleDirs; len(got) != 1 || got[0] != resourceDir {
+		t.Fatalf("executor runtime AccessibleDirs = %v, want [%s]", got, resourceDir)
 	}
 	if got := exec.runtime.AccessibleDirs(); len(got) != 1 {
 		t.Fatalf("runtime AccessibleDirs() = %v, want one dir", got)
@@ -382,7 +388,7 @@ func TestPolish_ReturnsHandoffMarkdown(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewExecutor: %v", err)
 	}
-	if _, err := exec.BindForRunner(nil, nil); err != nil {
+	if _, err := exec.BindForRunner(nil, runnerpkg.ExecutorRuntimePaths{}); err != nil {
 		t.Fatalf("BindForRunner: %v", err)
 	}
 
@@ -452,7 +458,7 @@ func TestPolish_UsesRuntimeSkillWhenBound(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewExecutor: %v", err)
 	}
-	if _, err := exec.BindForRunner(nil, nil); err != nil {
+	if _, err := exec.BindForRunner(nil, runnerpkg.ExecutorRuntimePaths{}); err != nil {
 		t.Fatalf("BindForRunner: %v", err)
 	}
 
@@ -480,7 +486,7 @@ func TestReport_ReturnsHandoffMarkdownFallback(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewExecutor: %v", err)
 	}
-	if _, err := exec.BindForRunner(nil, nil); err != nil {
+	if _, err := exec.BindForRunner(nil, runnerpkg.ExecutorRuntimePaths{}); err != nil {
 		t.Fatalf("BindForRunner: %v", err)
 	}
 
@@ -500,7 +506,7 @@ func TestReport_ReturnsHandoffMarkdownFallback(t *testing.T) {
 	}
 }
 
-func TestExecutorStagesWriteWorkspaceHandoffAndMemoSnapshot(t *testing.T) {
+func TestRenderStageOutputsWritesSingleHandoffExchangeEnvelopeAndMemoSnapshot(t *testing.T) {
 	workspace, err := runnerpkg.ProvisionWorkspace(t.TempDir(), "runner-1", []string{"node-1"}, nil)
 	if err != nil {
 		t.Fatalf("ProvisionWorkspace: %v", err)
@@ -534,29 +540,74 @@ func TestExecutorStagesWriteWorkspaceHandoffAndMemoSnapshot(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewExecutor: %v", err)
 	}
-	if _, err := exec.BindForRunner(nil, accessible); err != nil {
+	runtimePaths, err := workspace.ExecutorRuntimePaths("node-1", exec.Skill().Name, accessible)
+	if err != nil {
+		t.Fatalf("ExecutorRuntimePaths: %v", err)
+	}
+	if _, err := exec.BindForRunner(nil, runtimePaths); err != nil {
 		t.Fatalf("BindForRunner: %v", err)
 	}
 
-	if _, err := exec.Polish(context.Background()); err != nil {
-		t.Fatalf("Polish: %v", err)
-	}
-	handoffRaw, err := os.ReadFile(filepath.Join(skillWS.OutboxDir, "handoff.md"))
+	const body = "stage body"
+	handoffMarkdown, err := exec.renderStageOutputs("execute", "continue", []string{"downstream"}, body, nil)
 	if err != nil {
-		t.Fatalf("ReadFile(outbox handoff): %v", err)
+		t.Fatalf("renderStageOutputs: %v", err)
+	}
+	if got := strings.Count(handoffMarkdown, "---\n"); got != 2 {
+		t.Fatalf("returned handoff fence count = %d, want 2:\n%s", got, handoffMarkdown)
+	}
+	if strings.Contains(handoffMarkdown, "kind: dango.exchange_doc") {
+		t.Fatalf("returned handoff markdown contains nested exchange front matter:\n%s", handoffMarkdown)
+	}
+	handoffRaw, err := os.ReadFile(filepath.Join(skillWS.DownstreamDir, "handoff.md"))
+	if err != nil {
+		t.Fatalf("ReadFile(downstream handoff): %v", err)
+	}
+	if got := strings.Count(string(handoffRaw), "---\n"); got != 2 {
+		t.Fatalf("handoff fence count = %d, want 2:\n%s", got, string(handoffRaw))
+	}
+	if strings.Contains(string(handoffRaw), "kind: dango.exchange_doc") {
+		t.Fatalf("handoff markdown contains nested exchange front matter:\n%s", string(handoffRaw))
 	}
 	handoff, err := runnerpkg.ParseHandoffMarkdown(string(handoffRaw))
 	if err != nil {
-		t.Fatalf("ParseHandoffMarkdown(outbox): %v", err)
+		t.Fatalf("ParseHandoffMarkdown(downstream): %v", err)
 	}
 	if handoff.FromNode != "node-1" {
 		t.Fatalf("handoff.FromNode = %q, want node-1", handoff.FromNode)
 	}
-	archiveMemo := filepath.Join(workspace.ArchiveDir(), "memo", "node-1", "polish", "plan.md.memo.md")
+	if handoff.Body != body {
+		t.Fatalf("handoff.Body = %q, want %q", handoff.Body, body)
+	}
+	exchangeEntries, err := os.ReadDir(workspace.ExchangeDir())
+	if err != nil {
+		t.Fatalf("ReadDir(exchange): %v", err)
+	}
+	if len(exchangeEntries) != 1 {
+		t.Fatalf("exchange entry count = %d, want 1", len(exchangeEntries))
+	}
+	exchangeRaw, err := os.ReadFile(filepath.Join(workspace.ExchangeDir(), exchangeEntries[0].Name()))
+	if err != nil {
+		t.Fatalf("ReadFile(exchange): %v", err)
+	}
+	if got := strings.Count(string(exchangeRaw), "---\n"); got != 2 {
+		t.Fatalf("exchange fence count = %d, want 2:\n%s", got, string(exchangeRaw))
+	}
+	if strings.Contains(string(exchangeRaw), "kind: dango.handoff_doc") {
+		t.Fatalf("exchange markdown contains nested handoff front matter:\n%s", string(exchangeRaw))
+	}
+	exchange, err := runnerpkg.ParseExchangeDocMarkdown(string(exchangeRaw))
+	if err != nil {
+		t.Fatalf("ParseExchangeDocMarkdown(exchange): %v", err)
+	}
+	if exchange.Body != body {
+		t.Fatalf("exchange.Body = %q, want %q", exchange.Body, body)
+	}
+	archiveMemo := filepath.Join(workspace.ArchiveDir(), "memo", "node-1", "execute", "plan.md.memo.md")
 	if _, err := os.Stat(archiveMemo); err != nil {
 		t.Fatalf("memo snapshot stat(%s): %v", archiveMemo, err)
 	}
-	archiveLinkedMemo := filepath.Join(workspace.ArchiveDir(), "memo", "node-1", "polish", "external_link.md.memo.md")
+	archiveLinkedMemo := filepath.Join(workspace.ArchiveDir(), "memo", "node-1", "execute", "external_link.md.memo.md")
 	if _, err := os.Stat(archiveLinkedMemo); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("symlink memo should be skipped, stat err = %v", err)
 	}

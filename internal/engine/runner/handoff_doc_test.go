@@ -15,7 +15,7 @@ func TestHandoffDocMarkdownRoundTrip(t *testing.T) {
 		Intent:    "continue",
 		CreatedAt: createdAt,
 		Artifacts: []HandoffArtifact{{
-			Path:        "outbox/artifacts/report.md",
+			Path:        "downstream/artifacts/report.md",
 			Type:        "file",
 			Description: "report",
 		}},
@@ -38,7 +38,7 @@ func TestHandoffDocMarkdownRoundTrip(t *testing.T) {
 	if len(parsed.ToNodes) != 2 || parsed.ToNodes[0] != "node-b" || parsed.ToNodes[1] != "node-c" {
 		t.Fatalf("to_nodes = %#v", parsed.ToNodes)
 	}
-	if len(parsed.Artifacts) != 1 || parsed.Artifacts[0].Path != "outbox/artifacts/report.md" {
+	if len(parsed.Artifacts) != 1 || parsed.Artifacts[0].Path != "downstream/artifacts/report.md" {
 		t.Fatalf("artifacts = %#v", parsed.Artifacts)
 	}
 	if !parsed.CreatedAt.Equal(createdAt) {

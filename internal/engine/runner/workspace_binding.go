@@ -41,6 +41,23 @@ func (r *Runner) nodeAccessibleDirs(nodeID string, inputs map[string]any) []stri
 	return dirs
 }
 
+func (r *Runner) nodeRuntimePaths(nodeID string, skillName string, inputs map[string]any) ExecutorRuntimePaths {
+	paths := ExecutorRuntimePaths{
+		RunnerID:       r.id,
+		NodeID:         nodeID,
+		SkillName:      skillName,
+		AccessibleDirs: append([]string(nil), r.nodeAccessibleDirs(nodeID, inputs)...),
+	}
+	if r.workspace == nil || nodeID == "" {
+		return paths
+	}
+	workspacePaths, err := r.workspace.ExecutorRuntimePaths(nodeID, skillName, paths.AccessibleDirs)
+	if err != nil {
+		return paths
+	}
+	return workspacePaths
+}
+
 func (r *Runner) resourceAllowedRoots() []string {
 	var roots []string
 	if r.workspace != nil {

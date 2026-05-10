@@ -3,6 +3,7 @@ package runner
 import (
 	"context"
 	"encoding/json"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -13,6 +14,7 @@ import (
 type bindRecorderExecutor struct {
 	calls       int
 	seenSession []string
+	seenPaths   []ExecutorRuntimePaths
 	overrides   map[string]string
 }
 
@@ -20,8 +22,10 @@ func (e *bindRecorderExecutor) SetPromptTemplateOverrides(overrides map[string]s
 	e.overrides = cloneStringMap(overrides)
 }
 
-func (e *bindRecorderExecutor) BindForRunner(sessID *string, accessibleDirs []string, sessStores ...llm.SessionStore) (string, error) {
+func (e *bindRecorderExecutor) BindForRunner(sessID *string, runtimePaths ExecutorRuntimePaths, sessStores ...llm.SessionStore) (string, error) {
 	e.calls++
+	runtimePaths.AccessibleDirs = append([]string(nil), runtimePaths.AccessibleDirs...)
+	e.seenPaths = append(e.seenPaths, runtimePaths)
 	if len(sessStores) != 1 || sessStores[0] == nil {
 		return "", context.Canceled
 	}
@@ -39,7 +43,7 @@ func TestRunner_PrepareNodeExecutor_ForwardsPromptTemplateOverrides(t *testing.T
 		"execute.tmpl": "override",
 	}))
 
-	if err := r.prepareNodeExecutor("only", exec, nil); err != nil {
+	if err := r.prepareNodeExecutor("only", exec, ExecutorRuntimePaths{}); err != nil {
 		t.Fatalf("prepareNodeExecutor: %v", err)
 	}
 	if exec.overrides["execute.tmpl"] != "override" {
@@ -95,11 +99,52 @@ func TestRunner_PrepareNodeExecutors_ReusesStoredSessionID(t *testing.T) {
 	}
 }
 
+func TestRunner_PrepareNodeExecutor_ForwardsTypedRuntimePaths(t *testing.T) {
+	exec := &bindRecorderExecutor{}
+	r := newTestRunner()
+	workspace, err := ProvisionWorkspace(t.TempDir(), r.ID(), []string{"only"}, nil)
+	if err != nil {
+		t.Fatalf("ProvisionWorkspace: %v", err)
+	}
+	r.workspace = workspace
+	runtimePaths := r.nodeRuntimePaths("only", "skill-one", nil)
+
+	if err := r.prepareNodeExecutor("only", exec, runtimePaths); err != nil {
+		t.Fatalf("prepareNodeExecutor: %v", err)
+	}
+	if len(exec.seenPaths) != 1 {
+		t.Fatalf("seen runtime path count = %d, want 1", len(exec.seenPaths))
+	}
+	skillWS, ok := workspace.Skill("only")
+	if !ok {
+		t.Fatal("workspace.Skill(only) = false")
+	}
+	got := exec.seenPaths[0]
+	if got.RunnerID != r.ID() || got.NodeID != "only" || got.SkillName != "skill-one" {
+		t.Fatalf("runtime paths = %+v", got)
+	}
+	if got.MemoDir != skillWS.MemoDir || got.UpstreamDir != skillWS.UpstreamDir || got.DownstreamDir != skillWS.DownstreamDir || got.ScratchDir != skillWS.ScratchDir {
+		t.Fatalf("runtime dirs = %+v, want workspace dirs %+v", got, skillWS)
+	}
+	if got.ExchangeDir != workspace.ExchangeDir() {
+		t.Fatalf("ExchangeDir = %q, want %q", got.ExchangeDir, workspace.ExchangeDir())
+	}
+	wantArchiveMemoDir := filepath.Join(workspace.ArchiveDir(), "memo", "only")
+	if got.ArchiveMemoDir != wantArchiveMemoDir {
+		t.Fatalf("ArchiveMemoDir = %q, want %q", got.ArchiveMemoDir, wantArchiveMemoDir)
+	}
+	for _, wantDir := range []string{skillWS.MemoDir, skillWS.UpstreamDir, skillWS.DownstreamDir, skillWS.ScratchDir, workspace.ExchangeDir()} {
+		if !containsDir(got.AccessibleDirs, wantDir) {
+			t.Fatalf("runtime AccessibleDirs = %v, missing %q", got.AccessibleDirs, wantDir)
+		}
+	}
+}
+
 type streamingBindExecutor struct {
 	eventStream *streampkg.Stream
 }
 
-func (e *streamingBindExecutor) BindForRunner(sessID *string, accessibleDirs []string, sessStores ...llm.SessionStore) (string, error) {
+func (e *streamingBindExecutor) BindForRunner(sessID *string, runtimePaths ExecutorRuntimePaths, sessStores ...llm.SessionStore) (string, error) {
 	e.eventStream = streampkg.New(streampkg.Scope{NodeID: "owned-node"}, streampkg.DefaultConfig())
 	return "session-owned-stream", nil
 }
@@ -125,7 +170,7 @@ func TestRunner_PrepareNodeExecutor_MergesExecutorOwnedStream(t *testing.T) {
 	}
 	defer sub.Cancel()
 
-	if err := r.prepareNodeExecutor("owned-node", exec, nil); err != nil {
+	if err := r.prepareNodeExecutor("owned-node", exec, ExecutorRuntimePaths{}); err != nil {
 		t.Fatalf("prepareNodeExecutor: %v", err)
 	}
 	if exec.eventStream == nil {

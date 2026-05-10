@@ -10,6 +10,7 @@ import (
 // Workspace holds the runner-owned workspace directory layout.
 type Workspace struct {
 	globalRoot string
+	runnerID   string
 	root       string
 	exchange   string
 	archive    string
@@ -21,9 +22,9 @@ type SkillWorkspace struct {
 	NodeID         string
 	Root           string
 	MemoDir        string
-	InboxDir       string
-	OutboxDir      string
-	WorkingDir     string
+	UpstreamDir    string
+	DownstreamDir  string
+	ScratchDir     string
 	accessibleDirs []string
 }
 
@@ -69,6 +70,7 @@ func ProvisionWorkspace(globalRoot string, runnerID string, nodeIDs []string, ru
 
 	workspace := &Workspace{
 		globalRoot: root,
+		runnerID:   runnerID,
 		root:       runnerRoot,
 		exchange:   exchange,
 		archive:    archive,
@@ -80,10 +82,10 @@ func ProvisionWorkspace(globalRoot string, runnerID string, nodeIDs []string, ru
 		}
 		skillRoot := filepath.Join(skillsRoot, nodeID)
 		memo := filepath.Join(skillRoot, "memo")
-		inbox := filepath.Join(skillRoot, "inbox")
-		outbox := filepath.Join(skillRoot, "outbox")
-		work := filepath.Join(skillRoot, "workspace")
-		for _, dir := range []string{memo, inbox, outbox, work} {
+		upstream := filepath.Join(skillRoot, "upstream")
+		downstream := filepath.Join(skillRoot, "downstream")
+		scratch := filepath.Join(skillRoot, "scratch")
+		for _, dir := range []string{memo, upstream, downstream, scratch} {
 			if err := os.MkdirAll(dir, 0o755); err != nil {
 				return nil, fmt.Errorf("runner: create skill workspace dir: %w", err)
 			}
@@ -92,10 +94,10 @@ func ProvisionWorkspace(globalRoot string, runnerID string, nodeIDs []string, ru
 			NodeID:         nodeID,
 			Root:           skillRoot,
 			MemoDir:        memo,
-			InboxDir:       inbox,
-			OutboxDir:      outbox,
-			WorkingDir:     work,
-			accessibleDirs: []string{memo, inbox, outbox, work, exchange},
+			UpstreamDir:    upstream,
+			DownstreamDir:  downstream,
+			ScratchDir:     scratch,
+			accessibleDirs: []string{memo, upstream, downstream, scratch, exchange},
 		}
 	}
 	return workspace, nil
@@ -147,10 +149,10 @@ func (w *Workspace) AccessibleDirs(nodeID string) ([]string, error) {
 	return append([]string(nil), sk.accessibleDirs...), nil
 }
 
-// Handoff symlinks a producer's outbox handoff and artifacts into a successor
-// skill's inbox directory.
+// Handoff symlinks a producer's downstream handoff and artifacts into a
+// successor skill's upstream directory.
 //
-// Successor skills should treat inbox handoff/artifacts as read-only by policy.
+// Successor skills should treat upstream handoff/artifacts as read-only by policy.
 func (w *Workspace) Handoff(producerID string, successorID string) error {
 	producer, ok := w.Skill(producerID)
 	if !ok {
@@ -160,17 +162,17 @@ func (w *Workspace) Handoff(producerID string, successorID string) error {
 	if !ok {
 		return fmt.Errorf("runner: unknown successor skill %q", successorID)
 	}
-	dst := filepath.Join(successor.InboxDir, producerID)
+	dst := filepath.Join(successor.UpstreamDir, producerID)
 	if err := os.RemoveAll(dst); err != nil {
-		return fmt.Errorf("runner: reset inbox route dir: %w", err)
+		return fmt.Errorf("runner: reset upstream route dir: %w", err)
 	}
 	if err := os.MkdirAll(dst, 0o755); err != nil {
-		return fmt.Errorf("runner: create inbox route dir: %w", err)
+		return fmt.Errorf("runner: create upstream route dir: %w", err)
 	}
-	if err := symlinkFileIfExists(filepath.Join(producer.OutboxDir, "handoff.md"), filepath.Join(dst, "handoff.md")); err != nil {
+	if err := symlinkFileIfExists(filepath.Join(producer.DownstreamDir, "handoff.md"), filepath.Join(dst, "handoff.md")); err != nil {
 		return err
 	}
-	return symlinkTreeIfExists(filepath.Join(producer.OutboxDir, "artifacts"), filepath.Join(dst, "artifacts"))
+	return symlinkTreeIfExists(filepath.Join(producer.DownstreamDir, "artifacts"), filepath.Join(dst, "artifacts"))
 }
 
 func validateRulePath(subdir string) (string, error) {
