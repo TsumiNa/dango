@@ -397,133 +397,129 @@ func TestUpstreamFIFOPreservesOrder(t *testing.T) {
 	}
 }
 
-func TestUpstreamFIFOTryJoinAtHeadJoinsStringDeltas(t *testing.T) {
+func TestUpstreamFIFOPopJoinedHeadJoinsStringDeltas(t *testing.T) {
 	identity := upstreamIdentity{layer: "executor", id: "node_a"}
 	fifo := newUpstreamFIFO(identity, 10)
 
-	headEvent := Event{
-		EventType: EventLLMOutputDelta,
-		From:      Source{Layer: "executor", ID: "node_a"},
-		Status:    StatusRunning,
-		Delta:     json.RawMessage(`"hello"`),
-	}
-	nextEvent := Event{
-		EventType: EventLLMOutputDelta,
-		From:      Source{Layer: "executor", ID: "node_a"},
-		Status:    StatusRunning,
-		Delta:     json.RawMessage(`" world"`),
+	for _, event := range []Event{
+		{
+			EventType: EventLLMOutputDelta,
+			From:      Source{Layer: "executor", ID: "node_a"},
+			Status:    StatusRunning,
+			Delta:     json.RawMessage(`"hello"`),
+		},
+		{
+			EventType: EventLLMOutputDelta,
+			From:      Source{Layer: "executor", ID: "node_a"},
+			Status:    StatusRunning,
+			Delta:     json.RawMessage(`" world"`),
+		},
+		{
+			EventType: EventLLMOutputDelta,
+			From:      Source{Layer: "executor", ID: "node_a"},
+			Status:    StatusRunning,
+			Delta:     json.RawMessage(`"!"`),
+		},
+	} {
+		if err := fifo.enqueue(event); err != nil {
+			t.Fatalf("enqueue: %v", err)
+		}
 	}
 
-	if err := fifo.enqueue(headEvent); err != nil {
-		t.Fatalf("enqueue head: %v", err)
-	}
-
-	joined := fifo.tryJoinAtHead(nextEvent)
-	if !joined {
-		t.Fatalf("tryJoinAtHead = false, want true")
-	}
-
-	if fifo.len() != 1 {
-		t.Fatalf("len after join = %d, want 1", fifo.len())
-	}
-
-	result, ok := fifo.peek()
+	joined, ok := fifo.popJoinedHead()
 	if !ok {
-		t.Fatalf("peek after join = not ok")
+		t.Fatalf("popJoinedHead = not ok")
 	}
-
-	// The joined delta should be "hello world"
-	want := []byte(`"hello world"`)
-	if string(result.Delta) != string(want) {
-		t.Fatalf("joined delta = %s, want %s", result.Delta, want)
+	if string(joined.Delta) != `"hello world!"` {
+		t.Fatalf("joined delta = %s, want %s", joined.Delta, `"hello world!"`)
 	}
-}
-
-func TestUpstreamFIFOTryJoinRejectsNonStringDeltas(t *testing.T) {
-	identity := upstreamIdentity{layer: "executor", id: "node_a"}
-	fifo := newUpstreamFIFO(identity, 10)
-
-	headEvent := Event{
-		EventType: EventLLMOutputDelta,
-		From:      Source{Layer: "executor", ID: "node_a"},
-		Status:    StatusRunning,
-		Delta:     json.RawMessage(`{"key":"value"}`),
+	if fifo.len() != 0 {
+		t.Fatalf("len after joined pop = %d, want 0", fifo.len())
 	}
-	nextEvent := Event{
-		EventType: EventLLMOutputDelta,
-		From:      Source{Layer: "executor", ID: "node_a"},
-		Status:    StatusRunning,
-		Delta:     json.RawMessage(`"text"`),
-	}
-
-	if err := fifo.enqueue(headEvent); err != nil {
-		t.Fatalf("enqueue head: %v", err)
-	}
-
-	joined := fifo.tryJoinAtHead(nextEvent)
-	if joined {
-		t.Fatalf("tryJoinAtHead with non-string = true, want false")
-	}
-
-	if fifo.len() != 1 {
-		t.Fatalf("len after failed join = %d, want 1", fifo.len())
+	if _, ok := fifo.popJoinedHead(); ok {
+		t.Fatalf("popJoinedHead on empty FIFO = ok, want not ok")
 	}
 }
 
-func TestUpstreamFIFOTryJoinRejectsDifferentJoinKey(t *testing.T) {
+func TestUpstreamFIFOPopJoinedHeadKeepsNonJoinableQueued(t *testing.T) {
 	identity := upstreamIdentity{layer: "executor", id: "node_a"}
-	fifo := newUpstreamFIFO(identity, 10)
-
 	headEvent := Event{
 		EventType: EventLLMOutputDelta,
 		From:      Source{Layer: "executor", ID: "node_a"},
 		Status:    StatusRunning,
 		Delta:     json.RawMessage(`"hello"`),
 	}
-	// Different event type - should not join
-	nextEventDiffType := Event{
-		EventType: EventLLMReasoningDelta,
-		From:      Source{Layer: "executor", ID: "node_a"},
-		Status:    StatusRunning,
-		Delta:     json.RawMessage(`" world"`),
-	}
-	// Different status - should not join
-	nextEventDiffStatus := Event{
-		EventType: EventLLMOutputDelta,
-		From:      Source{Layer: "executor", ID: "node_a"},
-		Status:    StatusCompleted,
-		Delta:     json.RawMessage(`" world"`),
-	}
-	// Different upstream ID - should not join
-	nextEventDiffUpstream := Event{
-		EventType: EventLLMOutputDelta,
-		From:      Source{Layer: "executor", ID: "node_b"},
-		Status:    StatusRunning,
-		Delta:     json.RawMessage(`" world"`),
-	}
 
-	if err := fifo.enqueue(headEvent); err != nil {
-		t.Fatalf("enqueue head: %v", err)
-	}
-
-	testCases := []struct {
-		name      string
-		nextEvent Event
+	tests := []struct {
+		name string
+		next Event
 	}{
-		{"different event type", nextEventDiffType},
-		{"different status", nextEventDiffStatus},
-		{"different upstream", nextEventDiffUpstream},
+		{
+			name: "non-string delta",
+			next: Event{
+				EventType: EventLLMOutputDelta,
+				From:      Source{Layer: "executor", ID: "node_a"},
+				Status:    StatusRunning,
+				Delta:     json.RawMessage(`{"text":"object"}`),
+			},
+		},
+		{
+			name: "different event type",
+			next: Event{
+				EventType: EventLLMReasoningDelta,
+				From:      Source{Layer: "executor", ID: "node_a"},
+				Status:    StatusRunning,
+				Delta:     json.RawMessage(`"world"`),
+			},
+		},
+		{
+			name: "different status",
+			next: Event{
+				EventType: EventLLMOutputDelta,
+				From:      Source{Layer: "executor", ID: "node_a"},
+				Status:    StatusCompleted,
+				Delta:     json.RawMessage(`"world"`),
+			},
+		},
+		{
+			name: "different upstream",
+			next: Event{
+				EventType: EventLLMOutputDelta,
+				From:      Source{Layer: "executor", ID: "node_b"},
+				Status:    StatusRunning,
+				Delta:     json.RawMessage(`"world"`),
+			},
+		},
 	}
 
-	for i, tc := range testCases {
-		fifo := newUpstreamFIFO(identity, 10)
-		if err := fifo.enqueue(headEvent); err != nil {
-			t.Fatalf("enqueue %d: %v", i, err)
-		}
-		joined := fifo.tryJoinAtHead(tc.nextEvent)
-		if joined {
-			t.Fatalf("%s: tryJoinAtHead = true, want false", tc.name)
-		}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			fifo := newUpstreamFIFO(identity, 10)
+			if err := fifo.enqueue(headEvent); err != nil {
+				t.Fatalf("enqueue head: %v", err)
+			}
+			if err := fifo.enqueue(tc.next); err != nil {
+				t.Fatalf("enqueue next: %v", err)
+			}
+
+			gotHead, ok := fifo.popJoinedHead()
+			if !ok {
+				t.Fatalf("popJoinedHead = not ok")
+			}
+			if string(gotHead.Delta) != `"hello"` {
+				t.Fatalf("head delta = %s, want %s", gotHead.Delta, `"hello"`)
+			}
+			if fifo.len() != 1 {
+				t.Fatalf("len after non-joinable pop = %d, want 1", fifo.len())
+			}
+			queued, ok := fifo.pop()
+			if !ok {
+				t.Fatalf("queued pop = not ok")
+			}
+			if queued.EventType != tc.next.EventType || queued.Status != tc.next.Status || queued.From != tc.next.From || !bytes.Equal(queued.Delta, tc.next.Delta) {
+				t.Fatalf("queued event = %+v, want %+v", queued, tc.next)
+			}
+		})
 	}
 }
 
@@ -567,97 +563,51 @@ func TestUpstreamFIFODefaultMaxDepth(t *testing.T) {
 	}
 }
 
-func TestUpstreamFIFOPeekDoesNotRemove(t *testing.T) {
-	identity := upstreamIdentity{layer: "executor", id: "node_a"}
-	fifo := newUpstreamFIFO(identity, 10)
-
-	event := Event{EventType: EventStatusProgress, From: Source{Layer: "executor"}, Delta: json.RawMessage(`"test"`)}
-	if err := fifo.enqueue(event); err != nil {
-		t.Fatalf("enqueue: %v", err)
-	}
-
-	// Peek multiple times
-	for i := 0; i < 3; i++ {
-		peeked, ok := fifo.peek()
-		if !ok {
-			t.Fatalf("peek %d = not ok", i)
-		}
-		if peeked.EventType != event.EventType {
-			t.Fatalf("peek %d = %+v, want %+v", i, peeked, event)
-		}
-	}
-
-	// FIFO should still have the event
-	if fifo.len() != 1 {
-		t.Fatalf("len after multiple peeks = %d, want 1", fifo.len())
-	}
-
-	// Pop should get the same event
-	popped, ok := fifo.pop()
-	if !ok {
-		t.Fatalf("pop = not ok")
-	}
-	if popped.EventType != event.EventType {
-		t.Fatalf("pop = %+v, want %+v", popped, event)
-	}
-}
-
 func TestMergeHubTickEmitsBundleWithReadyEvents(t *testing.T) {
 	downstream := New(Scope{}, DefaultConfig())
 	t.Cleanup(downstream.Close)
 
-	hub := newMergeHub(t.Context(), downstream, 10*time.Millisecond, DefaultMergePerUpstreamBufferDepth)
+	hub := newMergeHub(t.Context(), downstream, time.Hour, DefaultMergePerUpstreamBufferDepth)
 	defer hub.Stop()
 
-	upstream1 := New(Scope{}, DefaultConfig())
-	upstream2 := New(Scope{}, DefaultConfig())
-	t.Cleanup(upstream1.Close)
-	t.Cleanup(upstream2.Close)
-
-	// Add upstreams to hub.
 	id1 := upstreamIdentity{layer: "executor", id: "node_1"}
 	id2 := upstreamIdentity{layer: "executor", id: "node_2"}
-
-	if err := hub.addUpstream(t.Context(), upstream1, id1, Filter{}); err != nil {
-		t.Fatalf("addUpstream 1: %v", err)
+	hub.beginRegistration()
+	if err := hub.registerPendingUpstream(id1, nil); err != nil {
+		t.Fatalf("registerPendingUpstream node_1: %v", err)
 	}
-	if err := hub.addUpstream(t.Context(), upstream2, id2, Filter{}); err != nil {
-		t.Fatalf("addUpstream 2: %v", err)
+	hub.beginRegistration()
+	if err := hub.registerPendingUpstream(id2, nil); err != nil {
+		t.Fatalf("registerPendingUpstream node_2: %v", err)
 	}
 
-	// Emit events from upstreams.
-	if err := upstream1.Emit(t.Context(), Event{
+	if err := hub.enqueue(id1, Event{
 		EventType: EventLLMOutputDelta,
 		From:      Source{Layer: "executor", ID: "node_1"},
 		Status:    StatusRunning,
 		Delta:     json.RawMessage(`"hello"`),
 	}); err != nil {
-		t.Fatalf("Emit upstream1: %v", err)
+		t.Fatalf("enqueue node_1: %v", err)
 	}
-
-	if err := upstream2.Emit(t.Context(), Event{
+	if err := hub.enqueue(id2, Event{
 		EventType: EventLLMOutputDelta,
 		From:      Source{Layer: "executor", ID: "node_2"},
 		Status:    StatusRunning,
 		Delta:     json.RawMessage(`"world"`),
 	}); err != nil {
-		t.Fatalf("Emit upstream2: %v", err)
+		t.Fatalf("enqueue node_2: %v", err)
 	}
 
-	// Subscribe to downstream to receive bundle.
 	sub, err := downstream.Subscribe(Filter{EventTypes: []string{EventMergeBundle}}, WithRawStream())
 	if err != nil {
 		t.Fatalf("Subscribe downstream: %v", err)
 	}
+	defer sub.Cancel()
 
-	// Wait for bundle event on the next tick.
-	bundleEvent, ok, err := sub.Next(t.Context())
-	if err != nil {
-		t.Fatalf("Next: %v", err)
+	if !hub.flushTick() {
+		t.Fatalf("flushTick = false, want bundle event")
 	}
-	if !ok {
-		t.Fatalf("Next = not ok, want bundle event")
-	}
+	bundleEvent := receiveEvent(t, sub.Events())
 
 	if bundleEvent.EventType != EventMergeBundle {
 		t.Fatalf("event type = %q, want %q", bundleEvent.EventType, EventMergeBundle)
@@ -682,58 +632,54 @@ func TestMergeHubJoinsConsecutiveStringDeltas(t *testing.T) {
 	downstream := New(Scope{}, DefaultConfig())
 	t.Cleanup(downstream.Close)
 
-	hub := newMergeHub(t.Context(), downstream, 10*time.Millisecond, DefaultMergePerUpstreamBufferDepth)
+	hub := newMergeHub(t.Context(), downstream, time.Hour, DefaultMergePerUpstreamBufferDepth)
 	defer hub.Stop()
 
-	upstream := New(Scope{}, DefaultConfig())
-	t.Cleanup(upstream.Close)
-
 	id := upstreamIdentity{layer: "executor", id: "node_a"}
-	if err := hub.addUpstream(t.Context(), upstream, id, Filter{}); err != nil {
-		t.Fatalf("addUpstream: %v", err)
+	hub.beginRegistration()
+	if err := hub.registerPendingUpstream(id, nil); err != nil {
+		t.Fatalf("registerPendingUpstream: %v", err)
 	}
 
-	// Emit multiple string deltas with same type/status (should join).
-	if err := upstream.Emit(t.Context(), Event{
-		EventType: EventLLMOutputDelta,
-		From:      Source{Layer: "executor", ID: "node_a"},
-		Status:    StatusRunning,
-		Delta:     json.RawMessage(`"hello"`),
+	if err := hub.enqueue(id, Event{
+		EventType:   EventLLMOutputDelta,
+		From:        Source{Layer: "executor", ID: "node_a"},
+		LogicalTime: 1,
+		Status:      StatusRunning,
+		Delta:       json.RawMessage(`"hello"`),
 	}); err != nil {
-		t.Fatalf("Emit 1: %v", err)
+		t.Fatalf("enqueue 1: %v", err)
 	}
 
-	if err := upstream.Emit(t.Context(), Event{
-		EventType: EventLLMOutputDelta,
-		From:      Source{Layer: "executor", ID: "node_a"},
-		Status:    StatusRunning,
-		Delta:     json.RawMessage(`" world"`),
+	if err := hub.enqueue(id, Event{
+		EventType:   EventLLMOutputDelta,
+		From:        Source{Layer: "executor", ID: "node_a"},
+		LogicalTime: 2,
+		Status:      StatusRunning,
+		Delta:       json.RawMessage(`" world"`),
 	}); err != nil {
-		t.Fatalf("Emit 2: %v", err)
+		t.Fatalf("enqueue 2: %v", err)
 	}
-	if err := upstream.Emit(t.Context(), Event{
-		EventType: EventLLMOutputDelta,
-		From:      Source{Layer: "executor", ID: "node_a"},
-		Status:    StatusRunning,
-		Delta:     json.RawMessage(`"!"`),
+	if err := hub.enqueue(id, Event{
+		EventType:   EventLLMOutputDelta,
+		From:        Source{Layer: "executor", ID: "node_a"},
+		LogicalTime: 3,
+		Status:      StatusRunning,
+		Delta:       json.RawMessage(`"!"`),
 	}); err != nil {
-		t.Fatalf("Emit 3: %v", err)
+		t.Fatalf("enqueue 3: %v", err)
 	}
 
-	// Subscribe to downstream.
 	sub, err := downstream.Subscribe(Filter{EventTypes: []string{EventMergeBundle}}, WithRawStream())
 	if err != nil {
 		t.Fatalf("Subscribe: %v", err)
 	}
+	defer sub.Cancel()
 
-	// Wait for bundle.
-	bundleEvent, ok, err := sub.Next(t.Context())
-	if err != nil {
-		t.Fatalf("Next: %v", err)
+	if !hub.flushTick() {
+		t.Fatalf("flushTick = false, want bundle")
 	}
-	if !ok {
-		t.Fatalf("Next = not ok")
-	}
+	bundleEvent := receiveEvent(t, sub.Events())
 
 	bundle, err := DecodeEventBatch(bundleEvent.Delta)
 	if err != nil {
@@ -763,8 +709,9 @@ func TestMergeHubJoinsOnlyAdjacentSameKeyDeltas(t *testing.T) {
 	defer hub.Stop()
 
 	identity := upstreamIdentity{layer: "executor", id: "node_a"}
-	if err := hub.registerUpstream(identity, nil); err != nil {
-		t.Fatalf("registerUpstream: %v", err)
+	hub.beginRegistration()
+	if err := hub.registerPendingUpstream(identity, nil); err != nil {
+		t.Fatalf("registerPendingUpstream: %v", err)
 	}
 
 	sub, err := downstream.Subscribe(Filter{EventTypes: []string{EventMergeBundle}}, WithRawStream())
@@ -834,8 +781,9 @@ func TestMergeHubStopsJoiningAtNonStringDelta(t *testing.T) {
 	defer hub.Stop()
 
 	identity := upstreamIdentity{layer: "executor", id: "node_a"}
-	if err := hub.registerUpstream(identity, nil); err != nil {
-		t.Fatalf("registerUpstream: %v", err)
+	hub.beginRegistration()
+	if err := hub.registerPendingUpstream(identity, nil); err != nil {
+		t.Fatalf("registerPendingUpstream: %v", err)
 	}
 
 	sub, err := downstream.Subscribe(Filter{EventTypes: []string{EventMergeBundle}}, WithRawStream())
@@ -888,51 +836,44 @@ func TestMergeHubKeepsNonJoinableDeltasQueued(t *testing.T) {
 	downstream := New(Scope{}, DefaultConfig())
 	t.Cleanup(downstream.Close)
 
-	hub := newMergeHub(t.Context(), downstream, 10*time.Millisecond, DefaultMergePerUpstreamBufferDepth)
+	hub := newMergeHub(t.Context(), downstream, time.Hour, DefaultMergePerUpstreamBufferDepth)
 	defer hub.Stop()
 
-	upstream := New(Scope{}, DefaultConfig())
-	t.Cleanup(upstream.Close)
-
 	id := upstreamIdentity{layer: "executor", id: "node_a"}
-	if err := hub.addUpstream(t.Context(), upstream, id, Filter{}); err != nil {
-		t.Fatalf("addUpstream: %v", err)
+	hub.beginRegistration()
+	if err := hub.registerPendingUpstream(id, nil); err != nil {
+		t.Fatalf("registerPendingUpstream: %v", err)
 	}
 
-	// Emit events with different types (should NOT join).
-	if err := upstream.Emit(t.Context(), Event{
+	if err := hub.enqueue(id, Event{
 		EventType: EventLLMOutputDelta,
 		From:      Source{Layer: "executor", ID: "node_a"},
 		Status:    StatusRunning,
 		Delta:     json.RawMessage(`"output"`),
 	}); err != nil {
-		t.Fatalf("Emit output: %v", err)
+		t.Fatalf("enqueue output: %v", err)
 	}
 
-	if err := upstream.Emit(t.Context(), Event{
+	if err := hub.enqueue(id, Event{
 		EventType: EventLLMReasoningDelta,
 		From:      Source{Layer: "executor", ID: "node_a"},
 		Status:    StatusRunning,
 		Delta:     json.RawMessage(`"reasoning"`),
 	}); err != nil {
-		t.Fatalf("Emit reasoning: %v", err)
+		t.Fatalf("enqueue reasoning: %v", err)
 	}
 
-	// Subscribe to downstream.
 	sub, err := downstream.Subscribe(Filter{EventTypes: []string{EventMergeBundle}}, WithRawStream())
 	if err != nil {
 		t.Fatalf("Subscribe: %v", err)
 	}
+	defer sub.Cancel()
 
-	// First tick should have only the output event (first in FIFO).
-	bundleEvent1, ok, err := sub.Next(t.Context())
-	if err != nil {
-		t.Fatalf("Next 1: %v", err)
-	}
-	if !ok {
-		t.Fatalf("Next 1 = not ok")
+	if !hub.flushTick() {
+		t.Fatalf("first flushTick = false, want first bundle")
 	}
 
+	bundleEvent1 := receiveEvent(t, sub.Events())
 	bundle1, err := DecodeEventBatch(bundleEvent1.Delta)
 	if err != nil {
 		t.Fatalf("DecodeEventBatch 1: %v", err)
@@ -945,15 +886,10 @@ func TestMergeHubKeepsNonJoinableDeltasQueued(t *testing.T) {
 		t.Fatalf("first event type = %q, want output", bundle1.Events[0].EventType)
 	}
 
-	// Second tick should have the reasoning event (delayed from previous tick).
-	bundleEvent2, ok, err := sub.Next(t.Context())
-	if err != nil {
-		t.Fatalf("Next 2: %v", err)
+	if !hub.flushTick() {
+		t.Fatalf("second flushTick = false, want second bundle")
 	}
-	if !ok {
-		t.Fatalf("Next 2 = not ok")
-	}
-
+	bundleEvent2 := receiveEvent(t, sub.Events())
 	bundle2, err := DecodeEventBatch(bundleEvent2.Delta)
 	if err != nil {
 		t.Fatalf("DecodeEventBatch 2: %v", err)
