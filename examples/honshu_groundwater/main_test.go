@@ -521,6 +521,45 @@ func TestRunHonshuGroundwaterExampleReopensPersistedState(t *testing.T) {
 	if cursor.EventSequence != view.SnapshotCursor().EventSequence {
 		t.Fatalf("LoadCursor(reopen) event_sequence = %d, want %d", cursor.EventSequence, view.SnapshotCursor().EventSequence)
 	}
+	runnerRoot := filepath.Join(reopened.Backend().WorkspaceRoot(), "task_"+result.RunnerID)
+	if stat, err := os.Stat(runnerRoot); err != nil || !stat.IsDir() {
+		t.Fatalf("runner workspace root after reopen stat = (%v, %v), want existing directory", stat, err)
+	}
+
+	exchangeFiles, err := filepath.Glob(filepath.Join(runnerRoot, "exchange", "*.md"))
+	if err != nil {
+		t.Fatalf("glob workspace exchange docs after reopen: %v", err)
+	}
+	if len(exchangeFiles) == 0 {
+		t.Fatal("workspace exchange docs missing after reopen")
+	}
+	if _, err := runnerpkg.ParseExchangeDocMarkdown(strings.TrimSpace(readFile(t, exchangeFiles[0]))); err != nil {
+		t.Fatalf("parse exchange doc after reopen %q: %v", exchangeFiles[0], err)
+	}
+
+	handoffFiles, err := filepath.Glob(filepath.Join(runnerRoot, "skills", "*", "outbox", "handoff.md"))
+	if err != nil {
+		t.Fatalf("glob outbox handoffs after reopen: %v", err)
+	}
+	if len(handoffFiles) == 0 {
+		t.Fatal("workspace outbox handoffs missing after reopen")
+	}
+	if _, err := runnerpkg.ParseHandoffMarkdown(strings.TrimSpace(readFile(t, handoffFiles[0]))); err != nil {
+		t.Fatalf("parse outbox handoff after reopen %q: %v", handoffFiles[0], err)
+	}
+
+	if _, err := os.Stat(filepath.Join(runnerRoot, "archive", "memo")); err != nil {
+		t.Fatalf("stat memo archive root after reopen: %v", err)
+	}
+	memoSnapshots, err := filepath.Glob(filepath.Join(runnerRoot, "archive", "memo", "*", "*", "*.memo.md"))
+	if err != nil {
+		t.Fatalf("glob memo snapshots after reopen: %v", err)
+	}
+	if len(memoSnapshots) > 0 {
+		if _, err := runnerpkg.ParseMemoMarkdown(strings.TrimSpace(readFile(t, memoSnapshots[0]))); err != nil {
+			t.Fatalf("parse memo snapshot after reopen %q: %v", memoSnapshots[0], err)
+		}
+	}
 }
 
 func TestWaitForPersistedTerminalRunnerStateLoadsOnlyNewEvents(t *testing.T) {
