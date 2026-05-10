@@ -339,15 +339,6 @@ func (f *upstreamFIFO) enqueue(event Event) error {
 	return nil
 }
 
-// peek returns the event at the head of the FIFO without removing it.
-// Returns nil and false if the FIFO is empty.
-func (f *upstreamFIFO) peek() (Event, bool) {
-	if len(f.events) == 0 {
-		return Event{}, false
-	}
-	return f.events[0], true
-}
-
 // pop removes and returns the event at the head of the FIFO.
 // Returns an empty event and false if the FIFO is empty.
 func (f *upstreamFIFO) pop() (Event, bool) {
@@ -397,34 +388,6 @@ func (f *upstreamFIFO) popJoinedHead() (Event, bool) {
 // len returns the number of events currently in the FIFO.
 func (f *upstreamFIFO) len() int {
 	return len(f.events)
-}
-
-// tryJoinAtHead attempts to join the second event with the first event at the
-// FIFO head by combining their string deltas.
-// If both events have the same join key and both have joinable string deltas,
-// the deltas are combined (merged as JSON strings) into the first event.
-// Returns true if join succeeded, false otherwise.
-func (f *upstreamFIFO) tryJoinAtHead(nextEvent Event) bool {
-	if len(f.events) < 1 {
-		return false
-	}
-	return joinEventDelta(&f.events[0], nextEvent)
-}
-
-func joinEventDelta(base *Event, next Event) bool {
-	if !canJoinEvents(*base, next) {
-		return false
-	}
-
-	// Combine the deltas as JSON strings:
-	// Remove quotes from both strings and merge the content.
-	// "hello" + " world" => "hello world"
-	prevStr := base.Delta[1 : len(base.Delta)-1]
-	nextStr := next.Delta[1 : len(next.Delta)-1]
-	combined := append([]byte(nil), append([]byte(`"`), append(prevStr, append(nextStr, '"')...)...)...)
-	base.Delta = combined
-
-	return true
 }
 
 func canJoinEvents(base Event, next Event) bool {
@@ -589,41 +552,6 @@ func newMergeHub(ctx context.Context, downstream *Stream, tickDuration time.Dura
 	return hub
 }
 
-// addUpstream adds a new upstream FIFO to the hub.
-// Returns error if the upstream is already registered.
-func (h *mergeHub) addUpstream(ctx context.Context, upstream *Stream, identity upstreamIdentity, filter Filter, opts ...SubscribeOption) error {
-	sub, err := upstream.Subscribe(filter, opts...)
-	if err != nil {
-		return err
-	}
-	if err := h.registerUpstream(identity, sub); err != nil {
-		sub.Cancel()
-		return err
-	}
-
-	// Start goroutine to feed events from upstream into the FIFO.
-	go h.feedUpstream(ctx, identity, sub)
-
-	return nil
-}
-
-func (h *mergeHub) registerUpstream(identity upstreamIdentity, sub *Subscription) error {
-	h.mu.Lock()
-	defer h.mu.Unlock()
-
-	select {
-	case <-h.ctx.Done():
-		return context.Canceled
-	default:
-	}
-	if _, exists := h.fifosByIdentity[identity]; exists {
-		return errors.New("upstream already registered")
-	}
-	h.fifosByIdentity[identity] = newUpstreamFIFO(identity, h.perUpstreamBufferDepth)
-	h.subscriptions[identity] = sub
-	return nil
-}
-
 func (h *mergeHub) beginRegistration() {
 	h.mu.Lock()
 	h.pendingRegistrations++
@@ -726,37 +654,6 @@ func (h *mergeHub) stopIfIdle() {
 
 func (h *mergeHub) idleLocked() bool {
 	return h.pendingRegistrations == 0 && len(h.subscriptions) == 0 && len(h.fifosByIdentity) == 0
-}
-
-// feedUpstream reads events from a subscription and enqueues them into the FIFO.
-// It stops when the subscription closes, the hub context is canceled, or an
-// error occurs.
-func (h *mergeHub) feedUpstream(ctx context.Context, identity upstreamIdentity, sub *Subscription) {
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-h.ctx.Done():
-			return
-		default:
-		}
-
-		event, ok, err := sub.Next(ctx)
-		if err != nil {
-			h.setErr(err)
-			h.closeUpstream(identity)
-			return
-		}
-		if !ok {
-			h.closeUpstream(identity)
-			return
-		}
-		if err := h.enqueue(identity, event); err != nil {
-			h.setErr(err)
-			h.closeUpstream(identity)
-			return
-		}
-	}
 }
 
 // run is the main hub loop that ticks and flushes bundle events.
