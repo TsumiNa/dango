@@ -107,7 +107,10 @@ func TestRunner_PrepareNodeExecutor_ForwardsTypedRuntimePaths(t *testing.T) {
 		t.Fatalf("ProvisionWorkspace: %v", err)
 	}
 	r.workspace = workspace
-	runtimePaths := r.nodeRuntimePaths("only", "skill-one", nil)
+	runtimePaths, err := r.nodeRuntimePaths("only", "skill-one", nil)
+	if err != nil {
+		t.Fatalf("nodeRuntimePaths: %v", err)
+	}
 
 	if err := r.prepareNodeExecutor("only", exec, runtimePaths); err != nil {
 		t.Fatalf("prepareNodeExecutor: %v", err)

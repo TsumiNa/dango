@@ -278,8 +278,10 @@ func readParentHandoffsFromUpstream(upstreamDir string) (string, error) {
 			continue
 		}
 		body := strings.TrimSpace(string(raw))
-		if parsed, parseErr := runnerpkg.ParseHandoffMarkdown(body); parseErr == nil && parsed != nil {
-			body = strings.TrimSpace(parsed.Body)
+		if strings.HasPrefix(body, "---\n") || strings.HasPrefix(body, "---\r\n") {
+			if parsed, parseErr := runnerpkg.ParseHandoffMarkdown(body); parseErr == nil && parsed != nil {
+				body = strings.TrimSpace(parsed.Body)
+			}
 		}
 		if body == "" {
 			continue

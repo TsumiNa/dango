@@ -128,12 +128,16 @@ func (r *Runner) prepareNodeExecutors(nodes map[string]*Node) error {
 		if node == nil || node.Executor == nil {
 			continue
 		}
+		runtimePaths, err := r.nodeRuntimePaths(id, node.SkillName, nil)
+		if err != nil {
+			return err
+		}
 		// Only bind the session here; do NOT merge the executor stream yet.
 		// runNode calls prepareNodeExecutor with the full runtime paths just
 		// before execution, which re-binds and creates a fresh EventStream.
 		// Merging here would subscribe to that first (throwaway) stream and
 		// leak the goroutine when the second bind replaces it.
-		if err := r.bindExecutorSession(id, node.Executor, r.nodeRuntimePaths(id, node.SkillName, nil)); err != nil {
+		if err := r.bindExecutorSession(id, node.Executor, runtimePaths); err != nil {
 			return err
 		}
 	}
