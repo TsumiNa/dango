@@ -5,7 +5,7 @@ import (
 	"testing"
 )
 
-func TestNodeRuntimePathsReturnsTypedWorkspacePaths(t *testing.T) {
+func TestNodeRuntimePathsWithValidWorkspace(t *testing.T) {
 	r := newTestRunner()
 	workspace, err := ProvisionWorkspace(t.TempDir(), r.ID(), []string{"only"}, nil)
 	if err != nil {
@@ -33,7 +33,7 @@ func TestNodeRuntimePathsReturnsTypedWorkspacePaths(t *testing.T) {
 	}
 }
 
-func TestNodeRuntimePathsReturnsWorkspaceResolutionError(t *testing.T) {
+func TestNodeRuntimePathsErrorOnMissingSkill(t *testing.T) {
 	r := newTestRunner()
 	workspace, err := ProvisionWorkspace(t.TempDir(), r.ID(), []string{"other"}, nil)
 	if err != nil {

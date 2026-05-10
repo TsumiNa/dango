@@ -125,7 +125,7 @@ func TestExchangeDocMarkdownTreatsBodyAsOpaqueMarkdown(t *testing.T) {
 	}
 }
 
-func TestFormatParentHandoffsReadsPlainUpstreamMarkdown(t *testing.T) {
+func TestFormatParentHandoffsWithPlainMarkdown(t *testing.T) {
 	workspace, err := runnerpkg.ProvisionWorkspace(t.TempDir(), "runner-1", []string{"node-1"}, nil)
 	if err != nil {
 		t.Fatalf("ProvisionWorkspace: %v", err)
