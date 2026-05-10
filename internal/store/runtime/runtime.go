@@ -194,7 +194,7 @@ func openPostgresCompositePersistence(dsn string, workspaceRoot string) (*Persis
 	if err != nil {
 		return nil, fmt.Errorf("runtime persistence open postgres: %w", err)
 	}
-	markdownRoot := filepath.Join(workspaceRoot, ".markdown-mirror")
+	markdownRoot := filepath.Join(postgresBackend.WorkspaceRoot(), ".markdown-mirror")
 	markdownBackend, err := persistencepkg.NewMarkdownBackend(markdownRoot)
 	if err != nil {
 		_ = postgresBackend.Close(context.Background())

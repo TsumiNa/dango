@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -18,6 +19,9 @@ const postgresTestDSNEnv = "DANGO_POSTGRES_TEST_DSN"
 
 func TestPostgresBackendStoresAndWorkspaceRootAfterReopen(t *testing.T) {
 	dsn := postgresTestDSN(t)
+	suffix := strconv.FormatInt(time.Now().UnixNano(), 10)
+	requestID := "req_postgres_backend_" + suffix
+	runnerID := "run_postgres_backend_" + suffix
 	ctx := context.Background()
 	workspaceRoot := filepath.Join(t.TempDir(), "workspace")
 
@@ -40,15 +44,15 @@ func TestPostgresBackendStoresAndWorkspaceRootAfterReopen(t *testing.T) {
 		Status:         streampkg.StatusRunning,
 		Delta:          json.RawMessage(`{"message":"ok"}`),
 		Timestamp:      time.Now().UTC(),
-		Scope:          streampkg.Scope{RequestID: "req_postgres_backend"},
+		Scope:          streampkg.Scope{RequestID: requestID},
 	}
 	if err := backend.EventLogStore().AppendEvent(ctx, event); err != nil {
 		t.Fatalf("AppendEvent: %v", err)
 	}
-	if _, err := backend.RunnerStore().Append(ctx, "run_postgres_backend", &runnerpkg.RunnerRecord{Kind: runnerpkg.RunnerRecordInit}); err != nil {
+	if _, err := backend.RunnerStore().Append(ctx, runnerID, &runnerpkg.RunnerRecord{Kind: runnerpkg.RunnerRecordInit}); err != nil {
 		t.Fatalf("Append(init): %v", err)
 	}
-	cursor := storepkg.SnapshotCursor{RequestID: "req_postgres_backend", RunnerID: "run_postgres_backend", EventSequence: 1}
+	cursor := storepkg.SnapshotCursor{RequestID: requestID, RunnerID: runnerID, EventSequence: 1}
 	if err := backend.SnapshotCursorStore().SaveCursor(ctx, cursor); err != nil {
 		t.Fatalf("SaveCursor: %v", err)
 	}
@@ -65,25 +69,25 @@ func TestPostgresBackendStoresAndWorkspaceRootAfterReopen(t *testing.T) {
 			t.Fatalf("Close(reopened backend): %v", err)
 		}
 	}()
-	events, err := reopened.EventLogStore().LoadEvents(ctx, streampkg.Scope{RequestID: "req_postgres_backend"}, 1, streampkg.Filter{})
+	events, err := reopened.EventLogStore().LoadEvents(ctx, streampkg.Scope{RequestID: requestID}, 1, streampkg.Filter{})
 	if err != nil {
 		t.Fatalf("LoadEvents: %v", err)
 	}
 	if len(events) != 1 || events[0].EventType != streampkg.EventStatusProgress {
 		t.Fatalf("events = %+v, want one progress event", events)
 	}
-	records, err := reopened.RunnerStore().Load(ctx, "run_postgres_backend")
+	records, err := reopened.RunnerStore().Load(ctx, runnerID)
 	if err != nil {
 		t.Fatalf("Load runner records: %v", err)
 	}
 	if len(records) != 1 || records[0].Kind != runnerpkg.RunnerRecordInit {
 		t.Fatalf("records = %+v, want one init", records)
 	}
-	loadedCursor, err := reopened.SnapshotCursorStore().LoadCursor(ctx, "req_postgres_backend")
+	loadedCursor, err := reopened.SnapshotCursorStore().LoadCursor(ctx, requestID)
 	if err != nil {
 		t.Fatalf("LoadCursor: %v", err)
 	}
-	if loadedCursor.RequestID != "req_postgres_backend" || loadedCursor.RunnerID != "run_postgres_backend" || loadedCursor.EventSequence != 1 {
+	if loadedCursor.RequestID != requestID || loadedCursor.RunnerID != runnerID || loadedCursor.EventSequence != 1 {
 		t.Fatalf("loaded cursor = %+v", loadedCursor)
 	}
 }

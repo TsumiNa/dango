@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -253,6 +254,9 @@ func TestOpen_SQLiteBackendCloseReleasesUnderlyingResources(t *testing.T) {
 
 func TestOpen_PostgresStoresSurviveReopen(t *testing.T) {
 	dsn := runtimePostgresTestDSN(t)
+	suffix := strconv.FormatInt(time.Now().UnixNano(), 10)
+	requestID := "req_postgres_runtime_" + suffix
+	runnerID := "run_postgres_runtime_" + suffix
 
 	ctx := context.Background()
 	workspaceRoot := filepath.Join(t.TempDir(), "workspace")
@@ -263,14 +267,14 @@ func TestOpen_PostgresStoresSurviveReopen(t *testing.T) {
 	if persistence.Backend().WorkspaceRoot() != workspaceRoot {
 		t.Fatalf("WorkspaceRoot() = %q, want %q", persistence.Backend().WorkspaceRoot(), workspaceRoot)
 	}
-	event := runtimeTestEvent("req_postgres_runtime", 1)
+	event := runtimeTestEvent(requestID, 1)
 	if err := persistence.EventLogStore().AppendEvent(ctx, event); err != nil {
 		t.Fatalf("AppendEvent: %v", err)
 	}
-	if _, err := persistence.RunnerStore().Append(ctx, "run_postgres_runtime", &runnerpkg.RunnerRecord{Kind: runnerpkg.RunnerRecordInit}); err != nil {
+	if _, err := persistence.RunnerStore().Append(ctx, runnerID, &runnerpkg.RunnerRecord{Kind: runnerpkg.RunnerRecordInit}); err != nil {
 		t.Fatalf("Append(init): %v", err)
 	}
-	cursor := storepkg.SnapshotCursor{RequestID: event.Scope.RequestID, RunnerID: "run_postgres_runtime", EventSequence: 1}
+	cursor := storepkg.SnapshotCursor{RequestID: event.Scope.RequestID, RunnerID: runnerID, EventSequence: 1}
 	if err := persistence.SnapshotCursorStore().SaveCursor(ctx, cursor); err != nil {
 		t.Fatalf("SaveCursor: %v", err)
 	}
@@ -294,7 +298,7 @@ func TestOpen_PostgresStoresSurviveReopen(t *testing.T) {
 	if len(loadedEvents) != 1 || loadedEvents[0].Scope.RequestID != event.Scope.RequestID {
 		t.Fatalf("loaded events = %+v, want persisted request %q", loadedEvents, event.Scope.RequestID)
 	}
-	records, err := reopened.RunnerStore().Load(ctx, "run_postgres_runtime")
+	records, err := reopened.RunnerStore().Load(ctx, runnerID)
 	if err != nil {
 		t.Fatalf("Load runner records(reopen): %v", err)
 	}
@@ -312,6 +316,9 @@ func TestOpen_PostgresStoresSurviveReopen(t *testing.T) {
 
 func TestOpen_PostgresWithMarkdownMirrorWritesMirrorFiles(t *testing.T) {
 	dsn := runtimePostgresTestDSN(t)
+	suffix := strconv.FormatInt(time.Now().UnixNano(), 10)
+	requestID := "req_postgres_mirror_" + suffix
+	runnerID := "run_postgres_mirror_" + suffix
 
 	ctx := context.Background()
 	workspaceRoot := filepath.Join(t.TempDir(), "workspace")
@@ -319,14 +326,14 @@ func TestOpen_PostgresWithMarkdownMirrorWritesMirrorFiles(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Open(postgres+mirror): %v", err)
 	}
-	event := runtimeTestEvent("req_postgres_mirror", 1)
+	event := runtimeTestEvent(requestID, 1)
 	if err := persistence.EventLogStore().AppendEvent(ctx, event); err != nil {
 		t.Fatalf("AppendEvent: %v", err)
 	}
-	if _, err := persistence.RunnerStore().Append(ctx, "run_postgres_mirror", &runnerpkg.RunnerRecord{Kind: runnerpkg.RunnerRecordInit}); err != nil {
+	if _, err := persistence.RunnerStore().Append(ctx, runnerID, &runnerpkg.RunnerRecord{Kind: runnerpkg.RunnerRecordInit}); err != nil {
 		t.Fatalf("Append(init): %v", err)
 	}
-	cursor := storepkg.SnapshotCursor{RequestID: event.Scope.RequestID, RunnerID: "run_postgres_mirror", EventSequence: 1}
+	cursor := storepkg.SnapshotCursor{RequestID: event.Scope.RequestID, RunnerID: runnerID, EventSequence: 1}
 	if err := persistence.SnapshotCursorStore().SaveCursor(ctx, cursor); err != nil {
 		t.Fatalf("SaveCursor: %v", err)
 	}
@@ -337,7 +344,7 @@ func TestOpen_PostgresWithMarkdownMirrorWritesMirrorFiles(t *testing.T) {
 	mirrorRoot := filepath.Join(workspaceRoot, ".markdown-mirror")
 	for _, file := range []string{
 		filepath.Join(mirrorRoot, "event-log", event.Scope.RequestID+".jsonl"),
-		filepath.Join(mirrorRoot, "runner-log", "run_postgres_mirror.jsonl"),
+		filepath.Join(mirrorRoot, "runner-log", runnerID+".jsonl"),
 		filepath.Join(mirrorRoot, "snapshot-cursor", event.Scope.RequestID+".json"),
 	} {
 		if _, err := os.Stat(file); err != nil {

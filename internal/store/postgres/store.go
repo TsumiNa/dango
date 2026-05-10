@@ -1,5 +1,4 @@
 package postgres
-package postgres
 
 import (
 	"context"
