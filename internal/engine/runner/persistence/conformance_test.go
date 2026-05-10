@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strconv"
 	"testing"
 	"time"
 
@@ -66,7 +67,7 @@ func TestBackendConformance(t *testing.T) {
 }
 
 func backendCases() []backendCase {
-	return []backendCase{
+	cases := []backendCase{
 		{
 			name: "none-noop",
 			open: func(t *testing.T) (persistencepkg.Backend, func()) {
@@ -122,16 +123,19 @@ func backendCases() []backendCase {
 			},
 		},
 	}
+
+	return cases
 }
 
 func newConformanceFixture(t *testing.T) conformanceFixture {
 	t.Helper()
 
+	suffix := strconv.FormatInt(time.Now().UnixNano(), 10)
+	requestID := "req_conformance_" + suffix
+	runnerID := "run_conformance_" + suffix
 	const (
-		requestID = "req_conformance_1"
-		runnerID  = "run_conformance_1"
-		fromNode  = "node_producer"
-		toNode    = "node_consumer"
+		fromNode = "node_producer"
+		toNode   = "node_consumer"
 	)
 	baseTime := time.Unix(1_700_000_000, 0).UTC()
 

@@ -42,6 +42,10 @@ backend with Markdown when callers want both behaviors.
   referenced by path/address.
 - Keep migrations backend-owned and deterministic. Startup should fail clearly
   if a configured durable backend cannot open, migrate, or prove writability.
+- Use SQLite as the default local development backend. Keep new table/column
+  definitions in a portable SQL subset (TEXT, BIGINT/INTEGER, explicit
+  primary/unique keys, simple indexes) so the same logical schema can be
+  extended to Postgres/MariaDB with minimal translation.
 - Add a backend conformance test suite before adding the second database. The
   same behavioral expectations should run against Markdown, SQLite, and
   Postgres where applicable.
