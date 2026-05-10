@@ -169,13 +169,17 @@ func (e *Executor) renderStageOutputs(stage string, intent string, toNodes []str
 }
 
 func (e *Executor) exchangeDocMarkdown(runnerID string, nodeID string, skillName string, stage string, body string) (string, error) {
+	trimmedBody := strings.TrimSpace(body)
+	if doc, err := runnerpkg.ParseHandoffMarkdown(trimmedBody); err == nil && doc != nil {
+		trimmedBody = strings.TrimSpace(doc.Body)
+	}
 	exchange := runnerpkg.ExchangeDoc{
 		RunnerID:  runnerID,
 		NodeID:    nodeID,
 		SkillName: skillName,
 		Title:     stage,
 		CreatedAt: time.Now(),
-		Body:      strings.TrimSpace(body),
+		Body:      trimmedBody,
 	}
 	return exchange.Markdown()
 }

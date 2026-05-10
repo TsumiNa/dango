@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/openai/openai-go/v3"
 	"github.com/openai/openai-go/v3/option"
@@ -87,6 +88,43 @@ func TestNewExecutor_RejectsNilSkill(t *testing.T) {
 func TestNewExecutor_RejectsNilPlanner(t *testing.T) {
 	if _, err := NewExecutor(loadLightweightTestSkill(t), nil, llm.DefaultConversationConfig()); err == nil {
 		t.Fatal("expected error for nil planner")
+	}
+}
+
+func TestExchangeDocMarkdownStripsNestedHandoffFrontMatter(t *testing.T) {
+	handoff, err := (runnerpkg.HandoffDoc{
+		RunnerID:  "runner-1",
+		FromNode:  "node-1",
+		ToNodes:   []string{"downstream"},
+		Intent:    "continue",
+		CreatedAt: time.Date(2026, 5, 1, 12, 0, 0, 0, time.UTC),
+		Body:      "handoff body",
+	}).Markdown()
+	if err != nil {
+		t.Fatalf("Handoff Markdown: %v", err)
+	}
+
+	exec, err := NewExecutor(loadLightweightTestSkill(t), &ExecutionPlanner{id: "node-1"}, llm.DefaultConversationConfig(), WithExecutorClient(&llm.Client{}))
+	if err != nil {
+		t.Fatalf("NewExecutor: %v", err)
+	}
+	raw, err := exec.exchangeDocMarkdown("runner-1", "node-1", "skill-1", "execute", handoff)
+	if err != nil {
+		t.Fatalf("exchangeDocMarkdown: %v", err)
+	}
+
+	if got := strings.Count(raw, "---\n"); got != 2 {
+		t.Fatalf("front matter fence count = %d, want 2 in one envelope:\n%s", got, raw)
+	}
+	if strings.Contains(raw, "kind: dango.handoff_doc") {
+		t.Fatalf("exchange doc preserved nested handoff front matter:\n%s", raw)
+	}
+	parsed, err := runnerpkg.ParseExchangeDocMarkdown(raw)
+	if err != nil {
+		t.Fatalf("ParseExchangeDocMarkdown: %v", err)
+	}
+	if parsed.Body != "handoff body" {
+		t.Fatalf("body = %q, want stripped handoff body", parsed.Body)
 	}
 }
 
