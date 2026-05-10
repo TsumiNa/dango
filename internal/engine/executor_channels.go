@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io/fs"
 	"os"
 	"path/filepath"
 	"sort"
@@ -116,22 +115,10 @@ func (e *Executor) reportExchange(ctx context.Context, output any) (string, erro
 }
 
 func (e *Executor) renderStageOutputs(stage string, intent string, toNodes []string, body string, runtime *llm.Skill) (string, error) {
-	paths := e.workspacePaths()
-	runnerID := paths.runnerID
-	if runnerID == "" {
-		runnerID = "runner"
-	}
-	nodeID := ""
-	skillName := ""
-	if e.planner != nil {
-		nodeID = e.planner.id
-	}
-	if e.skill != nil {
-		skillName = e.skill.Name
-	}
-	if nodeID == "" {
-		nodeID = "node"
-	}
+	paths := e.currentRuntimePaths()
+	runnerID := paths.RunnerID
+	nodeID := paths.NodeID
+	skillName := paths.SkillName
 	doc := runnerpkg.HandoffDoc{
 		RunnerID:  runnerID,
 		FromNode:  nodeID,
@@ -144,25 +131,25 @@ func (e *Executor) renderStageOutputs(stage string, intent string, toNodes []str
 	if err != nil {
 		return "", err
 	}
-	if paths.outboxDir != "" {
-		if err := os.MkdirAll(paths.outboxDir, 0o755); err != nil {
-			return "", fmt.Errorf("orchestrate: create outbox dir: %w", err)
+	if paths.DownstreamDir != "" {
+		if err := os.MkdirAll(paths.DownstreamDir, 0o755); err != nil {
+			return "", fmt.Errorf("orchestrate: create downstream dir: %w", err)
 		}
-		if err := os.WriteFile(filepath.Join(paths.outboxDir, "handoff.md"), []byte(handoffMarkdown), 0o644); err != nil {
+		if err := os.WriteFile(filepath.Join(paths.DownstreamDir, "handoff.md"), []byte(handoffMarkdown), 0o644); err != nil {
 			return "", fmt.Errorf("orchestrate: write handoff markdown: %w", err)
 		}
 	}
-	if paths.exchangeDir != "" {
+	if paths.ExchangeDir != "" {
 		fileName := fmt.Sprintf("%s-%s-%d.md", stage, nodeID, time.Now().UnixNano())
 		exchangeMarkdown, exchangeErr := e.exchangeDocMarkdown(runnerID, nodeID, skillName, stage, body)
 		if exchangeErr != nil {
 			return "", exchangeErr
 		}
-		if err := os.WriteFile(filepath.Join(paths.exchangeDir, fileName), []byte(exchangeMarkdown), 0o644); err != nil {
+		if err := os.WriteFile(filepath.Join(paths.ExchangeDir, fileName), []byte(exchangeMarkdown), 0o644); err != nil {
 			return "", fmt.Errorf("orchestrate: write exchange markdown: %w", err)
 		}
 	}
-	if err := e.snapshotMemos(stage, paths, nodeID, skillName, runnerID); err != nil {
+	if err := e.snapshotMemos(stage, paths); err != nil {
 		return "", err
 	}
 	return handoffMarkdown, nil
@@ -178,118 +165,6 @@ func (e *Executor) exchangeDocMarkdown(runnerID string, nodeID string, skillName
 		Body:      strings.TrimSpace(body),
 	}
 	return exchange.Markdown()
-}
-
-func (e *Executor) snapshotMemos(stage string, paths executorWorkspacePaths, nodeID string, skillName string, runnerID string) error {
-	if paths.memoDir == "" || paths.archiveMemoDir == "" {
-		return nil
-	}
-	memoRoot, err := filepath.EvalSymlinks(paths.memoDir)
-	if err != nil {
-		return fmt.Errorf("orchestrate: resolve memo dir: %w", err)
-	}
-	memoRoot, err = filepath.Abs(memoRoot)
-	if err != nil {
-		return fmt.Errorf("orchestrate: resolve memo dir abs path: %w", err)
-	}
-	stageRoot := filepath.Join(paths.archiveMemoDir, stage)
-	if err := os.MkdirAll(stageRoot, 0o755); err != nil {
-		return fmt.Errorf("orchestrate: create memo snapshot dir: %w", err)
-	}
-	return filepath.WalkDir(paths.memoDir, func(path string, d fs.DirEntry, walkErr error) error {
-		if walkErr != nil {
-			return walkErr
-		}
-		if d.IsDir() {
-			return nil
-		}
-		if d.Type()&os.ModeSymlink != 0 {
-			return nil
-		}
-		resolvedPath, err := filepath.EvalSymlinks(path)
-		if err != nil {
-			return err
-		}
-		resolvedPath, err = filepath.Abs(resolvedPath)
-		if err != nil {
-			return err
-		}
-		if !pathWithinDir(memoRoot, resolvedPath) {
-			return fmt.Errorf("orchestrate: memo snapshot path escapes memo dir: %s", path)
-		}
-		rel, err := filepath.Rel(paths.memoDir, path)
-		if err != nil {
-			return err
-		}
-		body, err := os.ReadFile(path)
-		if err != nil {
-			return err
-		}
-		doc := runnerpkg.MemoDocument{
-			RunnerID:  runnerID,
-			NodeID:    nodeID,
-			SkillName: skillName,
-			Path:      filepath.ToSlash(filepath.Join("memo", rel)),
-			CreatedAt: time.Now(),
-			Body:      string(body),
-		}
-		raw, err := doc.Markdown()
-		if err != nil {
-			return err
-		}
-		dst := filepath.Join(stageRoot, rel+".memo.md")
-		if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
-			return err
-		}
-		return os.WriteFile(dst, []byte(raw), 0o644)
-	})
-}
-
-func pathWithinDir(root string, target string) bool {
-	rel, err := filepath.Rel(root, target)
-	if err != nil {
-		return false
-	}
-	if rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
-		return false
-	}
-	return true
-}
-
-type executorWorkspacePaths struct {
-	memoDir        string
-	inboxDir       string
-	outboxDir      string
-	exchangeDir    string
-	archiveMemoDir string
-	runnerID       string
-}
-
-func (e *Executor) workspacePaths() executorWorkspacePaths {
-	var paths executorWorkspacePaths
-	for _, dir := range e.accessibleDirs {
-		switch filepath.Base(dir) {
-		case "memo":
-			paths.memoDir = dir
-		case "inbox":
-			paths.inboxDir = dir
-		case "outbox":
-			paths.outboxDir = dir
-		case "exchange":
-			paths.exchangeDir = dir
-		}
-	}
-	if paths.memoDir != "" && e.planner != nil {
-		skillRoot := filepath.Dir(paths.memoDir)
-		skillsRoot := filepath.Dir(skillRoot)
-		runnerRoot := filepath.Dir(skillsRoot)
-		paths.archiveMemoDir = filepath.Join(runnerRoot, "archive", "memo", e.planner.id)
-		base := filepath.Base(runnerRoot)
-		if strings.HasPrefix(base, "task_") {
-			paths.runnerID = strings.TrimPrefix(base, "task_")
-		}
-	}
-	return paths
 }
 
 func (e *Executor) runnableRuntimeSkill() (*llm.Skill, bool, error) {
@@ -325,7 +200,7 @@ func (e *Executor) executionPrompt(parentOutputs map[string]any) string {
 		SourceInput:     sourceInput,
 		ParentHandoffs:  parentHandoffs,
 		ArtifactsDir:    artifactsDir,
-		AccessibleDirs:  append([]string(nil), e.accessibleDirs...),
+		AccessibleDirs:  append([]string(nil), e.currentRuntimePaths().AccessibleDirs...),
 	})
 	if renderErr != nil {
 		return "Execute the assigned task."
@@ -373,9 +248,9 @@ func (e *Executor) reportPrompt(output any) string {
 }
 
 func (e *Executor) formatParentHandoffs(parentOutputs map[string]any) string {
-	paths := e.workspacePaths()
-	if paths.inboxDir != "" {
-		raw, err := readParentHandoffsFromInbox(paths.inboxDir)
+	paths := e.currentRuntimePaths()
+	if paths.UpstreamDir != "" {
+		raw, err := readParentHandoffsFromUpstream(paths.UpstreamDir)
 		if err == nil && strings.TrimSpace(raw) != "" {
 			return raw
 		}
@@ -383,8 +258,8 @@ func (e *Executor) formatParentHandoffs(parentOutputs map[string]any) string {
 	return formatParentOutputs(parentOutputs)
 }
 
-func readParentHandoffsFromInbox(inboxDir string) (string, error) {
-	entries, err := os.ReadDir(inboxDir)
+func readParentHandoffsFromUpstream(upstreamDir string) (string, error) {
+	entries, err := os.ReadDir(upstreamDir)
 	if err != nil {
 		return "", err
 	}
@@ -397,14 +272,16 @@ func readParentHandoffsFromInbox(inboxDir string) (string, error) {
 		if !entry.IsDir() {
 			continue
 		}
-		handoffPath := filepath.Join(inboxDir, entry.Name(), "handoff.md")
+		handoffPath := filepath.Join(upstreamDir, entry.Name(), "handoff.md")
 		raw, readErr := os.ReadFile(handoffPath)
 		if readErr != nil {
 			continue
 		}
 		body := strings.TrimSpace(string(raw))
-		if parsed, parseErr := runnerpkg.ParseHandoffMarkdown(body); parseErr == nil && parsed != nil {
-			body = strings.TrimSpace(parsed.Body)
+		if strings.HasPrefix(body, "---\n") || strings.HasPrefix(body, "---\r\n") {
+			if parsed, parseErr := runnerpkg.ParseHandoffMarkdown(body); parseErr == nil && parsed != nil {
+				body = strings.TrimSpace(parsed.Body)
+			}
 		}
 		if body == "" {
 			continue

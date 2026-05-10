@@ -162,7 +162,7 @@ func newConformanceFixture(t *testing.T) conformanceFixture {
 	baseTime := time.Unix(1_700_000_000, 0).UTC()
 
 	exchangePath := "exchange/node_producer.md"
-	handoffInboxPath := filepath.ToSlash(filepath.Join("skills", toNode, "inbox", fromNode))
+	handoffInboxPath := filepath.ToSlash(filepath.Join("skills", toNode, "upstream", fromNode))
 	handoffPath := filepath.ToSlash(filepath.Join(handoffInboxPath, "handoff.md"))
 	artifactPath := filepath.ToSlash(filepath.Join(handoffInboxPath, "artifacts", "predictions.csv"))
 	memoSnapshotDir := filepath.ToSlash(filepath.Join("skills", fromNode, "memo", "snapshots", "20260510T005530Z"))
@@ -230,7 +230,7 @@ func newConformanceFixture(t *testing.T) conformanceFixture {
 			},
 			Delta: mustJSON(t, map[string]any{
 				"path":          artifactPath,
-				"declared_path": "outbox/artifacts/predictions.csv",
+				"declared_path": "downstream/artifacts/predictions.csv",
 				"resource_type": runnerpkg.HandoffArtifactFile,
 				"description":   "Model predictions",
 				"intent":        "handoff downstream scoring input",
@@ -399,7 +399,7 @@ func assertEventLogContract(t *testing.T, backend persistencepkg.Backend, fixtur
 	if err := json.Unmarshal(loaded[2].Delta, &artifactDelta); err != nil {
 		t.Fatalf("unmarshal artifact payload: %v", err)
 	}
-	if artifactDelta["path"] != fixture.artifactPath || artifactDelta["declared_path"] != "outbox/artifacts/predictions.csv" || artifactDelta["resource_type"] != runnerpkg.HandoffArtifactFile {
+	if artifactDelta["path"] != fixture.artifactPath || artifactDelta["declared_path"] != "downstream/artifacts/predictions.csv" || artifactDelta["resource_type"] != runnerpkg.HandoffArtifactFile {
 		t.Fatalf("artifact delta = %+v", artifactDelta)
 	}
 

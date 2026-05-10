@@ -64,9 +64,9 @@ type Executor struct {
 	bindConfig              llm.ConversationConfig
 	runtime                 *llm.Skill
 	promptTemplateOverrides map[string]string
-	// accessibleDirs is the resource directory set most recently passed by the
-	// runner for this executor's runtime skill.
-	accessibleDirs []string
+	// runtimePaths is the runner-owned workspace context most recently passed by
+	// the runner for this executor's runtime skill.
+	runtimePaths runnerpkg.ExecutorRuntimePaths
 
 	// Result holds the structured outcome of the most recent execution.
 	Result *ExecutionResult
@@ -264,17 +264,18 @@ func (e *Executor) Report(ctx context.Context, output any) (any, error) {
 
 // BindForRunner binds the executor's skill for a runner-owned session.
 //
-// accessibleDirs extends the skill workspace for this runtime binding, so
-// request artifact roots and upstream exchange resources can be read or written
-// by standard skill tools. The returned string is the bound conversation session
+// runtimePaths carries the runner-owned workspace context for this binding.
+// runtimePaths.AccessibleDirs extends the skill workspace so request artifact
+// roots and runner-managed channel directories can be read or written by
+// standard skill tools. The returned string is the bound conversation session
 // id, when session persistence is configured.
-func (e *Executor) BindForRunner(sessID *string, accessibleDirs []string, sessStores ...llm.SessionStore) (string, error) {
+func (e *Executor) BindForRunner(sessID *string, runtimePaths runnerpkg.ExecutorRuntimePaths, sessStores ...llm.SessionStore) (string, error) {
 	if e.skill == nil {
 		return "", fmt.Errorf("orchestrate: executor requires a non-nil skill")
 	}
 	sk := e.skill
-	if len(accessibleDirs) > 0 {
-		dirs := append(e.skill.AccessibleDirs(), accessibleDirs...)
+	if len(runtimePaths.AccessibleDirs) > 0 {
+		dirs := append(e.skill.AccessibleDirs(), runtimePaths.AccessibleDirs...)
 		var err error
 		sk, err = e.skill.SetAccessibleDirsAndBuiltinTools(dirs...)
 		if err != nil {
@@ -293,7 +294,7 @@ func (e *Executor) BindForRunner(sessID *string, accessibleDirs []string, sessSt
 		return "", err
 	}
 	e.runtime = bound
-	e.accessibleDirs = append([]string(nil), accessibleDirs...)
+	e.runtimePaths = cloneExecutorRuntimePaths(runtimePaths)
 	if conv := bound.Conversation(); conv != nil {
 		return conv.SessionID(), nil
 	}

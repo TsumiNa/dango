@@ -11,7 +11,7 @@ import (
 )
 
 type skillBinder interface {
-	BindForRunner(sessID *string, accessibleDirs []string, sessStores ...llm.SessionStore) (string, error)
+	BindForRunner(sessID *string, runtimePaths ExecutorRuntimePaths, sessStores ...llm.SessionStore) (string, error)
 }
 
 type eventStreamProvider interface {
@@ -128,12 +128,16 @@ func (r *Runner) prepareNodeExecutors(nodes map[string]*Node) error {
 		if node == nil || node.Executor == nil {
 			continue
 		}
+		runtimePaths, err := r.nodeRuntimePaths(id, node.SkillName, nil)
+		if err != nil {
+			return err
+		}
 		// Only bind the session here; do NOT merge the executor stream yet.
-		// runNode calls prepareNodeExecutor with the real accessibleDirs just
+		// runNode calls prepareNodeExecutor with the full runtime paths just
 		// before execution, which re-binds and creates a fresh EventStream.
 		// Merging here would subscribe to that first (throwaway) stream and
 		// leak the goroutine when the second bind replaces it.
-		if err := r.bindExecutorSession(id, node.Executor); err != nil {
+		if err := r.bindExecutorSession(id, node.Executor, runtimePaths); err != nil {
 			return err
 		}
 	}
@@ -143,7 +147,7 @@ func (r *Runner) prepareNodeExecutors(nodes map[string]*Node) error {
 // bindExecutorSession binds a persistent session for executor without touching
 // the event stream. Stream merging is deferred to prepareNodeExecutor, which
 // is called with the correct accessibleDirs immediately before a node runs.
-func (r *Runner) bindExecutorSession(id string, executor Executor) error {
+func (r *Runner) bindExecutorSession(id string, executor Executor, runtimePaths ExecutorRuntimePaths) error {
 	if receiver, ok := executor.(promptTemplateOverrideReceiver); ok {
 		receiver.SetPromptTemplateOverrides(r.promptTemplateOverrides)
 	}
@@ -160,7 +164,7 @@ func (r *Runner) bindExecutorSession(id string, executor Executor) error {
 		existingCopy := existing
 		sessionID = &existingCopy
 	}
-	boundSessionID, err := binder.BindForRunner(sessionID, nil, r.skillSessionStore)
+	boundSessionID, err := binder.BindForRunner(sessionID, runtimePaths, r.skillSessionStore)
 	if err != nil {
 		return fmt.Errorf("bind node %q session: %w", id, err)
 	}
@@ -170,7 +174,7 @@ func (r *Runner) bindExecutorSession(id string, executor Executor) error {
 	return nil
 }
 
-func (r *Runner) prepareNodeExecutor(id string, executor Executor, accessibleDirs []string) error {
+func (r *Runner) prepareNodeExecutor(id string, executor Executor, runtimePaths ExecutorRuntimePaths) error {
 	if executor == nil || r.skillSessionStore == nil {
 		return nil
 	}
@@ -191,7 +195,7 @@ func (r *Runner) prepareNodeExecutor(id string, executor Executor, accessibleDir
 	if !ok {
 		return r.mergeExecutorStream(id, executor)
 	}
-	boundSessionID, err := binder.BindForRunner(sessionID, accessibleDirs, r.skillSessionStore)
+	boundSessionID, err := binder.BindForRunner(sessionID, runtimePaths, r.skillSessionStore)
 	if err != nil {
 		return fmt.Errorf("prepare node %q executor: %w", id, err)
 	}

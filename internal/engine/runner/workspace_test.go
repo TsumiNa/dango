@@ -27,13 +27,13 @@ func TestProvisionWorkspaceCreatesLayoutAndAccessibleDirs(t *testing.T) {
 		workspace.ExchangeDir(),
 		workspace.ArchiveDir(),
 		filepath.Join(workspace.Root(), "skills", "alpha", "memo"),
-		filepath.Join(workspace.Root(), "skills", "alpha", "inbox"),
-		filepath.Join(workspace.Root(), "skills", "alpha", "outbox"),
-		filepath.Join(workspace.Root(), "skills", "alpha", "workspace"),
+		filepath.Join(workspace.Root(), "skills", "alpha", "upstream"),
+		filepath.Join(workspace.Root(), "skills", "alpha", "downstream"),
+		filepath.Join(workspace.Root(), "skills", "alpha", "scratch"),
 		filepath.Join(workspace.Root(), "skills", "beta", "memo"),
-		filepath.Join(workspace.Root(), "skills", "beta", "inbox"),
-		filepath.Join(workspace.Root(), "skills", "beta", "outbox"),
-		filepath.Join(workspace.Root(), "skills", "beta", "workspace"),
+		filepath.Join(workspace.Root(), "skills", "beta", "upstream"),
+		filepath.Join(workspace.Root(), "skills", "beta", "downstream"),
+		filepath.Join(workspace.Root(), "skills", "beta", "scratch"),
 	} {
 		info, statErr := os.Stat(dir)
 		if statErr != nil {
@@ -56,13 +56,46 @@ func TestProvisionWorkspaceCreatesLayoutAndAccessibleDirs(t *testing.T) {
 	if err != nil {
 		t.Fatalf("AccessibleDirs(alpha): %v", err)
 	}
-	for _, wantPath := range []string{alpha.MemoDir, alpha.InboxDir, alpha.OutboxDir, alpha.WorkingDir, workspace.ExchangeDir()} {
+	for _, wantPath := range []string{alpha.MemoDir, alpha.UpstreamDir, alpha.DownstreamDir, alpha.ScratchDir, workspace.ExchangeDir()} {
 		if !containsPath(alphaDirs, wantPath) {
 			t.Fatalf("alpha accessible dirs = %v, missing %q", alphaDirs, wantPath)
 		}
 	}
-	if containsPath(alphaDirs, beta.MemoDir) || containsPath(alphaDirs, beta.OutboxDir) || containsPath(alphaDirs, beta.WorkingDir) {
+	if containsPath(alphaDirs, beta.MemoDir) || containsPath(alphaDirs, beta.DownstreamDir) || containsPath(alphaDirs, beta.ScratchDir) {
 		t.Fatalf("alpha accessible dirs leaked beta private paths: %v", alphaDirs)
+	}
+}
+
+func TestWorkspaceExecutorRuntimePathsIncludesTypedDirs(t *testing.T) {
+	workspace, err := ProvisionWorkspace(t.TempDir(), "runner-1", []string{"alpha"}, defaultWorkspacePathRule)
+	if err != nil {
+		t.Fatalf("ProvisionWorkspace: %v", err)
+	}
+	paths, err := workspace.ExecutorRuntimePaths("alpha", "skill-alpha", nil)
+	if err != nil {
+		t.Fatalf("ExecutorRuntimePaths: %v", err)
+	}
+	alpha, ok := workspace.Skill("alpha")
+	if !ok {
+		t.Fatal("workspace.Skill(alpha) = false")
+	}
+	if paths.RunnerID != "runner-1" || paths.NodeID != "alpha" || paths.SkillName != "skill-alpha" {
+		t.Fatalf("runtime paths = %+v", paths)
+	}
+	if paths.MemoDir != alpha.MemoDir || paths.UpstreamDir != alpha.UpstreamDir || paths.DownstreamDir != alpha.DownstreamDir || paths.ScratchDir != alpha.ScratchDir {
+		t.Fatalf("runtime dirs = %+v, want workspace dirs %+v", paths, alpha)
+	}
+	if paths.ExchangeDir != workspace.ExchangeDir() {
+		t.Fatalf("ExchangeDir = %q, want %q", paths.ExchangeDir, workspace.ExchangeDir())
+	}
+	wantArchiveMemoDir := filepath.Join(workspace.ArchiveDir(), "memo", "alpha")
+	if paths.ArchiveMemoDir != wantArchiveMemoDir {
+		t.Fatalf("ArchiveMemoDir = %q, want %q", paths.ArchiveMemoDir, wantArchiveMemoDir)
+	}
+	for _, wantPath := range []string{alpha.MemoDir, alpha.UpstreamDir, alpha.DownstreamDir, alpha.ScratchDir, workspace.ExchangeDir()} {
+		if !containsPath(paths.AccessibleDirs, wantPath) {
+			t.Fatalf("runtime AccessibleDirs = %v, missing %q", paths.AccessibleDirs, wantPath)
+		}
 	}
 }
 
@@ -111,7 +144,7 @@ func TestHandoffRejectsSymlinkSourceArtifact(t *testing.T) {
 		t.Fatal("downstream skill workspace missing")
 	}
 
-	artifactDir := filepath.Join(upstream.OutboxDir, "artifacts", "data")
+	artifactDir := filepath.Join(upstream.DownstreamDir, "artifacts", "data")
 	if err := os.MkdirAll(artifactDir, 0o755); err != nil {
 		t.Fatalf("MkdirAll(artifact dir): %v", err)
 	}
@@ -154,11 +187,11 @@ func TestHandoffSymlinksHandoffAndArtifacts(t *testing.T) {
 	if !ok {
 		t.Fatal("downstream skill workspace missing")
 	}
-	handoffPath := filepath.Join(upstream.OutboxDir, "handoff.md")
+	handoffPath := filepath.Join(upstream.DownstreamDir, "handoff.md")
 	if err := os.WriteFile(handoffPath, []byte("# handoff\n"), 0o644); err != nil {
 		t.Fatalf("WriteFile(handoff): %v", err)
 	}
-	artifactPath := filepath.Join(upstream.OutboxDir, "artifacts", "data", "sample.csv")
+	artifactPath := filepath.Join(upstream.DownstreamDir, "artifacts", "data", "sample.csv")
 	if err := os.MkdirAll(filepath.Dir(artifactPath), 0o755); err != nil {
 		t.Fatalf("MkdirAll(artifact parent): %v", err)
 	}
@@ -169,8 +202,8 @@ func TestHandoffSymlinksHandoffAndArtifacts(t *testing.T) {
 	if err := workspace.Handoff("upstream", "downstream"); err != nil {
 		t.Fatalf("Handoff: %v", err)
 	}
-	deliveredHandoff := filepath.Join(downstream.InboxDir, "upstream", "handoff.md")
-	deliveredArtifact := filepath.Join(downstream.InboxDir, "upstream", "artifacts", "data", "sample.csv")
+	deliveredHandoff := filepath.Join(downstream.UpstreamDir, "upstream", "handoff.md")
+	deliveredArtifact := filepath.Join(downstream.UpstreamDir, "upstream", "artifacts", "data", "sample.csv")
 	handoffContent, err := os.ReadFile(deliveredHandoff)
 	if err != nil {
 		t.Fatalf("ReadFile(delivered handoff): %v", err)

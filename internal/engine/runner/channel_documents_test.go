@@ -40,7 +40,7 @@ func TestRunnerEmitsHandoffArtifactEvents(t *testing.T) {
 	if !ok {
 		t.Fatal("node workspace missing")
 	}
-	artifactPath := filepath.Join(nodeWorkspace.OutboxDir, "artifacts", "predictions.csv")
+	artifactPath := filepath.Join(nodeWorkspace.DownstreamDir, "artifacts", "predictions.csv")
 	if err := os.MkdirAll(filepath.Dir(artifactPath), 0o755); err != nil {
 		t.Fatalf("MkdirAll(artifact parent): %v", err)
 	}
@@ -53,7 +53,7 @@ func TestRunnerEmitsHandoffArtifactEvents(t *testing.T) {
 		ToNodes:  []string{"node-2"},
 		Intent:   "continue",
 		Artifacts: []HandoffArtifact{{
-			Path:        "outbox/artifacts/predictions.csv",
+			Path:        "downstream/artifacts/predictions.csv",
 			Type:        HandoffArtifactFile,
 			Description: "Prediction CSV",
 		}},
@@ -98,12 +98,12 @@ func TestRunnerEmitsHandoffArtifactEvents(t *testing.T) {
 	if err := json.Unmarshal(event.Delta, &delta); err != nil {
 		t.Fatalf("Unmarshal delta: %v", err)
 	}
-	if delta["path"] != artifactPath || delta["declared_path"] != "outbox/artifacts/predictions.csv" || delta["resource_type"] != HandoffArtifactFile {
+	if delta["path"] != artifactPath || delta["declared_path"] != "downstream/artifacts/predictions.csv" || delta["resource_type"] != HandoffArtifactFile {
 		t.Fatalf("delta = %+v, want resolved handoff artifact", delta)
 	}
 }
 
-func TestRunnerDeliversHandoffToSuccessorInbox(t *testing.T) {
+func TestRunnerDeliversHandoffToSuccessorUpstreamDir(t *testing.T) {
 	root := t.TempDir()
 	workspace, err := ProvisionWorkspace(root, "runner-1", []string{"parent", "child"}, nil)
 	if err != nil {
@@ -113,7 +113,7 @@ func TestRunnerDeliversHandoffToSuccessorInbox(t *testing.T) {
 	if !ok {
 		t.Fatal("parent workspace missing")
 	}
-	if err := os.WriteFile(filepath.Join(parentWS.OutboxDir, "handoff.md"), []byte("handoff"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(parentWS.DownstreamDir, "handoff.md"), []byte("handoff"), 0o644); err != nil {
 		t.Fatalf("write handoff: %v", err)
 	}
 
@@ -126,7 +126,7 @@ func TestRunnerDeliversHandoffToSuccessorInbox(t *testing.T) {
 	if !ok {
 		t.Fatal("child workspace missing")
 	}
-	delivered := filepath.Join(childWS.InboxDir, "parent", "handoff.md")
+	delivered := filepath.Join(childWS.UpstreamDir, "parent", "handoff.md")
 	if _, err := os.Lstat(delivered); err != nil {
 		t.Fatalf("delivered handoff stat: %v", err)
 	}
@@ -183,7 +183,7 @@ func TestRunnerPassesRelativeHandoffArtifactDirsToChildBinder(t *testing.T) {
 	if !ok {
 		t.Fatal("parent workspace missing")
 	}
-	artifactPath := filepath.Join(parentWorkspace.OutboxDir, "artifacts", "predictions.csv")
+	artifactPath := filepath.Join(parentWorkspace.DownstreamDir, "artifacts", "predictions.csv")
 	if err := os.MkdirAll(filepath.Dir(artifactPath), 0o755); err != nil {
 		t.Fatalf("MkdirAll(artifact parent): %v", err)
 	}
@@ -195,7 +195,7 @@ func TestRunnerPassesRelativeHandoffArtifactDirsToChildBinder(t *testing.T) {
 		FromNode: "parent",
 		ToNodes:  []string{"child"},
 		Artifacts: []HandoffArtifact{{
-			Path: "outbox/artifacts/predictions.csv",
+			Path: "downstream/artifacts/predictions.csv",
 			Type: HandoffArtifactFile,
 		}},
 		Body: "parent output",
@@ -232,8 +232,8 @@ type resourceRecorderExecutor struct {
 	accessibleDirs []string
 }
 
-func (e *resourceRecorderExecutor) BindForRunner(sessID *string, accessibleDirs []string, sessStores ...llm.SessionStore) (string, error) {
-	e.accessibleDirs = append([]string(nil), accessibleDirs...)
+func (e *resourceRecorderExecutor) BindForRunner(sessID *string, runtimePaths ExecutorRuntimePaths, sessStores ...llm.SessionStore) (string, error) {
+	e.accessibleDirs = append([]string(nil), runtimePaths.AccessibleDirs...)
 	return "", nil
 }
 

@@ -592,15 +592,15 @@ func assertRunnerWorkspaceArtifacts(t *testing.T, runnerRoot string) {
 		t.Fatalf("parse exchange doc %q: %v", exchangeFiles[0], err)
 	}
 
-	handoffFiles, err := filepath.Glob(filepath.Join(runnerRoot, "skills", "*", "outbox", "handoff.md"))
+	handoffFiles, err := filepath.Glob(filepath.Join(runnerRoot, "skills", "*", "downstream", "handoff.md"))
 	if err != nil {
-		t.Fatalf("glob outbox handoffs: %v", err)
+		t.Fatalf("glob downstream handoffs: %v", err)
 	}
 	if len(handoffFiles) == 0 {
-		t.Fatal("workspace outbox handoffs missing")
+		t.Fatal("workspace downstream handoffs missing")
 	}
 	if _, err := runnerpkg.ParseHandoffMarkdown(strings.TrimSpace(readFile(t, handoffFiles[0]))); err != nil {
-		t.Fatalf("parse outbox handoff %q: %v", handoffFiles[0], err)
+		t.Fatalf("parse downstream handoff %q: %v", handoffFiles[0], err)
 	}
 
 	memoRoot := filepath.Join(runnerRoot, "archive", "memo")
@@ -1064,11 +1064,11 @@ func artifactsRootFromPrompt(prompt string) (string, error) {
 	}
 	for _, line := range strings.Split(prompt, "\n") {
 		dir := strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(line), "- "))
-		if filepath.Base(dir) == "outbox" {
+		if filepath.Base(dir) == "downstream" {
 			return filepath.Join(dir, "artifacts"), nil
 		}
 	}
-	return "", fmt.Errorf("prompt does not include artifacts root or outbox")
+	return "", fmt.Errorf("prompt does not include artifacts root or downstream")
 }
 
 func skillScriptCommand(skillDir string, script string, payload any) (string, error) {

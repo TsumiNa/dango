@@ -28,11 +28,11 @@ and follow the skill-specific instructions verbatim.
 The runner drives every executor node through three stages. Detect the
 stage from the prompt prefix and behave accordingly.
 
-| Stage | Purpose | Tools allowed | Output |
-|---|---|---|---|
-| **polish** | Feasibility review of the assigned task before execution. | None — do not run scripts, read files, or write files. | Handoff markdown describing what you *will* do, what you need, and any concerns. |
-| **execute** | The real work. | All builtin and skill tools. | Handoff markdown whose body is the structured output downstream nodes consume. |
-| **report** | Summarize execution output for the orchestrator. | None. | Handoff markdown with a short summary plus any artifact paths from execution. |
+| Stage       | Purpose                                                   | Tools allowed                                          | Output                                                                           |
+| ----------- | --------------------------------------------------------- | ------------------------------------------------------ | -------------------------------------------------------------------------------- |
+| **polish**  | Feasibility review of the assigned task before execution. | None — do not run scripts, read files, or write files. | Handoff markdown describing what you *will* do, what you need, and any concerns. |
+| **execute** | The real work.                                            | All builtin and skill tools.                           | Handoff markdown whose body is the structured output downstream nodes consume.   |
+| **report**  | Summarize execution output for the orchestrator.          | None.                                                  | Handoff markdown with a short summary plus any artifact paths from execution.    |
 
 The orchestrator first builds a *coarse plan* (node IDs + skill names +
 short task descriptions). Each node is polished by its assigned skill —
@@ -94,7 +94,7 @@ to_nodes:
   - <orchestrator|downstream node id>
 intent: <review|continue|summarize>
 artifacts:
-  - path: <relative path under outbox/artifacts>
+  - path: <relative path under downstream/artifacts>
     type: <file|dir>
     description: <one line>
 ---

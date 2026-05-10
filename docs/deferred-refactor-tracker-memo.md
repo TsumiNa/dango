@@ -1,6 +1,6 @@
 # Deferred Refactor Tracker Memo
 
-Last updated: 2026-05-10
+Last updated: 2026-05-11
 
 This memo records deferred refactor topics discussed before PR B.
 PR B is handled separately and should proceed now.
@@ -62,7 +62,32 @@ Decision criteria for later review:
 - Remove if only test-facing legacy artifacts with no production path.
 - Avoid compatibility layers unless explicitly required during that refactor.
 
+## PR E - Streamrender Extraction and Terminal UI Refactor (Deferred)
+
+Status: Deferred to independent package refactor after the immediate exchange/handoff fixes.
+
+Current intent:
+
+- Move `internal/streamrender` out of `internal` and make it a more independent rendering package.
+- Use it as the foundation for future `cmd` terminal UI work.
+- Separate terminal/UI rendering concerns from durable runtime message storage.
+- Avoid treating renderer-captured markdown snippets as canonical exchange files.
+
+Immediate bug context:
+
+- The Honshu example configured `streamrender.ExchangeDir` as `artifacts/exchanges`, creating a second exchange-like directory outside runner persistence.
+- `streamrender` currently writes any channel-looking markdown output as `exchange-<sequence>.md`; this captured an orchestrator planning handoff as a misleading `exchange-*` file.
+- The current PR should only make a minimal fix: stop creating the separate outer exchanges directory and stop labeling non-exchange channel markdown as canonical exchange storage.
+
+Open questions to resolve later:
+
+- Public package name and API shape once `streamrender` leaves `internal`.
+- Whether renderer output should write files at all, or only link to canonical runner persistence artifacts.
+- How future terminal UI commands should discover request, runner, exchange, handoff, memo, and debug event paths.
+- How much renderer state belongs in stream events versus external UI/session state.
+
 ## Immediate Action
 
-- Execute PR B now: remove confirmed dead code in stream merge internals and
-  keep tests aligned with current production path.
+- Finish the current exchange/handoff bug-fix PR with only the minimal
+  `streamrender` containment fix; defer full renderer extraction and terminal
+  UI architecture to PR E.
