@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -22,6 +23,8 @@ type backendCase struct {
 	open   func(t *testing.T) (persistencepkg.Backend, func())
 	isNoop bool
 }
+
+const postgresTestDSNEnv = "DANGO_POSTGRES_TEST_DSN"
 
 type conformanceFixture struct {
 	requestID string
@@ -102,6 +105,25 @@ func backendCases() []backendCase {
 				return backend, func() {
 					if err := backend.Close(context.Background()); err != nil {
 						t.Fatalf("sqlite backend Close: %v", err)
+					}
+				}
+			},
+		},
+		{
+			name: "postgres",
+			open: func(t *testing.T) (persistencepkg.Backend, func()) {
+				t.Helper()
+				dsn := strings.TrimSpace(os.Getenv(postgresTestDSNEnv))
+				if dsn == "" {
+					t.Skipf("%s is not set; skipping postgres conformance case", postgresTestDSNEnv)
+				}
+				backend, err := persistencepkg.NewPostgresBackend(dsn, filepath.Join(t.TempDir(), "workspace"))
+				if err != nil {
+					t.Fatalf("NewPostgresBackend: %v", err)
+				}
+				return backend, func() {
+					if err := backend.Close(context.Background()); err != nil {
+						t.Fatalf("postgres backend Close: %v", err)
 					}
 				}
 			},

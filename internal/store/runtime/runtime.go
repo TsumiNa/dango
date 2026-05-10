@@ -24,6 +24,16 @@ type Config struct {
 	// SQLiteMarkdownMirror enables JSON/JSONL markdown mirror stores alongside
 	// SQLite when SQLitePath is configured. Reads still use SQLite.
 	SQLiteMarkdownMirror bool
+	// PostgresDSN selects the durable Postgres backend. When set, callers must
+	// also provide PostgresWorkspaceRoot.
+	PostgresDSN string
+	// PostgresWorkspaceRoot is the global workspace root used by runner path
+	// rules when PostgresDSN is configured.
+	PostgresWorkspaceRoot string
+	// PostgresMarkdownMirror enables JSON/JSONL markdown mirror stores
+	// alongside Postgres when PostgresDSN is configured. Reads still use
+	// Postgres.
+	PostgresMarkdownMirror bool
 }
 
 // DefaultConfig returns the default startup persistence configuration.
@@ -39,11 +49,25 @@ type Persistence struct {
 
 // Open creates the startup-owned persistence bundle described by cfg.
 //
-// When cfg.SQLitePath is empty, Open creates a temporary JSON fallback rooted
-// under the system temp directory. Otherwise it opens the configured SQLite
-// backend. When cfg.SQLiteMarkdownMirror is true, Open mirrors writes to a
-// Markdown backend under the SQLite directory for human-readable inspection.
+// Open chooses one durable backend when configured. SQLite uses cfg.SQLitePath
+// while Postgres uses cfg.PostgresDSN with cfg.PostgresWorkspaceRoot. When
+// neither backend is configured, Open creates a temporary JSON fallback rooted
+// under the system temp directory.
 func Open(cfg Config) (*Persistence, error) {
+	hasSQLite := strings.TrimSpace(cfg.SQLitePath) != ""
+	hasPostgres := strings.TrimSpace(cfg.PostgresDSN) != ""
+	if hasSQLite && hasPostgres {
+		return nil, fmt.Errorf("runtime persistence only supports one durable backend at a time")
+	}
+	if hasPostgres {
+		if strings.TrimSpace(cfg.PostgresWorkspaceRoot) == "" {
+			return nil, fmt.Errorf("runtime persistence postgres requires PostgresWorkspaceRoot")
+		}
+		if cfg.PostgresMarkdownMirror {
+			return openPostgresCompositePersistence(cfg.PostgresDSN, cfg.PostgresWorkspaceRoot)
+		}
+		return openPostgresPersistence(cfg.PostgresDSN, cfg.PostgresWorkspaceRoot)
+	}
 	if strings.TrimSpace(cfg.SQLitePath) != "" {
 		if cfg.SQLiteMarkdownMirror {
 			return openSQLiteCompositePersistence(cfg.SQLitePath)
@@ -157,6 +181,46 @@ func openSQLiteCompositePersistence(path string) (*Persistence, error) {
 	return &Persistence{backend: backend}, nil
 }
 
+func openPostgresPersistence(dsn string, workspaceRoot string) (*Persistence, error) {
+	backend, err := persistencepkg.NewPostgresBackend(dsn, workspaceRoot)
+	if err != nil {
+		return nil, fmt.Errorf("runtime persistence open postgres: %w", err)
+	}
+	return &Persistence{backend: backend}, nil
+}
+
+func openPostgresCompositePersistence(dsn string, workspaceRoot string) (*Persistence, error) {
+	postgresBackend, err := persistencepkg.NewPostgresBackend(dsn, workspaceRoot)
+	if err != nil {
+		return nil, fmt.Errorf("runtime persistence open postgres: %w", err)
+	}
+	markdownRoot := filepath.Join(workspaceRoot, ".markdown-mirror")
+	markdownBackend, err := persistencepkg.NewMarkdownBackend(markdownRoot)
+	if err != nil {
+		_ = postgresBackend.Close(context.Background())
+		return nil, fmt.Errorf("runtime persistence open markdown mirror backend: %w", err)
+	}
+	backend := &compositeBackend{
+		eventLogStore: &compositeEventLogStore{
+			primary: postgresBackend.EventLogStore(),
+			mirror:  markdownBackend.EventLogStore(),
+		},
+		runnerStore: &compositeRunnerStore{
+			primary: postgresBackend.RunnerStore(),
+			mirror:  markdownBackend.RunnerStore(),
+		},
+		snapshotCursorStore: &compositeSnapshotCursorStore{
+			primary: postgresBackend.SnapshotCursorStore(),
+			mirror:  markdownBackend.SnapshotCursorStore(),
+		},
+		workspaceRoot: postgresBackend.WorkspaceRoot(),
+		closeOnce: sync.OnceValue(func() error {
+			return errors.Join(postgresBackend.Close(context.Background()), markdownBackend.Close(context.Background()))
+		}),
+	}
+	return &Persistence{backend: backend}, nil
+}
+
 func openJSONFallbackPersistence() (*Persistence, error) {
 	root, err := os.MkdirTemp("", "dango-runtime-persistence-*")
 	if err != nil {
@@ -176,10 +240,10 @@ func openJSONFallbackPersistence() (*Persistence, error) {
 	}, nil
 }
 
-// compositeBackend combines SQLite-backed stores with a filesystem workspace
+// compositeBackend combines durable-backed stores with a filesystem workspace
 // root used by runner markdown/workspace artifacts.
 //
-// The backend owns both the SQLite store and markdown workspace backend close
+// The backend owns both the durable store and markdown workspace backend close
 // lifecycle via closeOnce. Close joins those shutdown paths exactly once, so
 // callers may close either Persistence or the exposed Backend safely.
 type compositeBackend struct {
@@ -217,7 +281,7 @@ func (s *compositeEventLogStore) AppendEvent(ctx context.Context, event streampk
 	if err := s.primary.AppendEvent(ctx, event); err != nil {
 		return fmt.Errorf("runtime persistence append primary event log: %w", err)
 	}
-	// Mirror persistence is best-effort: once the primary SQLite write succeeds
+	// Mirror persistence is best-effort: once the primary durable write succeeds
 	// we must still return success to avoid retry ambiguity on unique keys.
 	_ = s.mirror.AppendEvent(ctx, event)
 	return nil

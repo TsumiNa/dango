@@ -6,5 +6,6 @@
 // runner checkpoint and row-oriented stores implemented by backend packages.
 // It also provides the lightweight JSON event-log and snapshot-cursor
 // fallbacks used by startup-owned runtime persistence. Backend-specific durable
-// implementations live in sibling packages such as internal/store/sqlite.
+// implementations live in sibling packages such as internal/store/sqlite and
+// internal/store/postgres.
 package store

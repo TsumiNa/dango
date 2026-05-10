@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -14,6 +15,8 @@ import (
 	streampkg "github.com/tsumina/dango/internal/engine/stream"
 	storepkg "github.com/tsumina/dango/internal/store"
 )
+
+const postgresTestDSNEnv = "DANGO_POSTGRES_TEST_DSN"
 
 func TestOpen_DefaultJSONFallbackCreatesUsableStoresAndCleansUp(t *testing.T) {
 	t.Parallel()
@@ -248,6 +251,140 @@ func TestOpen_SQLiteBackendCloseReleasesUnderlyingResources(t *testing.T) {
 	}
 }
 
+func TestOpen_PostgresStoresSurviveReopen(t *testing.T) {
+	dsn := runtimePostgresTestDSN(t)
+
+	ctx := context.Background()
+	workspaceRoot := filepath.Join(t.TempDir(), "workspace")
+	persistence, err := Open(Config{PostgresDSN: dsn, PostgresWorkspaceRoot: workspaceRoot})
+	if err != nil {
+		t.Fatalf("Open(postgres): %v", err)
+	}
+	if persistence.Backend().WorkspaceRoot() != workspaceRoot {
+		t.Fatalf("WorkspaceRoot() = %q, want %q", persistence.Backend().WorkspaceRoot(), workspaceRoot)
+	}
+	event := runtimeTestEvent("req_postgres_runtime", 1)
+	if err := persistence.EventLogStore().AppendEvent(ctx, event); err != nil {
+		t.Fatalf("AppendEvent: %v", err)
+	}
+	if _, err := persistence.RunnerStore().Append(ctx, "run_postgres_runtime", &runnerpkg.RunnerRecord{Kind: runnerpkg.RunnerRecordInit}); err != nil {
+		t.Fatalf("Append(init): %v", err)
+	}
+	cursor := storepkg.SnapshotCursor{RequestID: event.Scope.RequestID, RunnerID: "run_postgres_runtime", EventSequence: 1}
+	if err := persistence.SnapshotCursorStore().SaveCursor(ctx, cursor); err != nil {
+		t.Fatalf("SaveCursor: %v", err)
+	}
+	if err := persistence.Close(); err != nil {
+		t.Fatalf("Close(first): %v", err)
+	}
+
+	reopened, err := Open(Config{PostgresDSN: dsn, PostgresWorkspaceRoot: workspaceRoot})
+	if err != nil {
+		t.Fatalf("Open(reopen): %v", err)
+	}
+	defer func() {
+		if err := reopened.Close(); err != nil {
+			t.Fatalf("Close(reopen): %v", err)
+		}
+	}()
+	loadedEvents, err := reopened.EventLogStore().LoadEvents(ctx, streampkg.Scope{RequestID: event.Scope.RequestID}, 1, streampkg.Filter{})
+	if err != nil {
+		t.Fatalf("LoadEvents(reopen): %v", err)
+	}
+	if len(loadedEvents) != 1 || loadedEvents[0].Scope.RequestID != event.Scope.RequestID {
+		t.Fatalf("loaded events = %+v, want persisted request %q", loadedEvents, event.Scope.RequestID)
+	}
+	records, err := reopened.RunnerStore().Load(ctx, "run_postgres_runtime")
+	if err != nil {
+		t.Fatalf("Load runner records(reopen): %v", err)
+	}
+	if len(records) != 1 {
+		t.Fatalf("len(records) = %d, want 1", len(records))
+	}
+	loadedCursor, err := reopened.SnapshotCursorStore().LoadCursor(ctx, cursor.RequestID)
+	if err != nil {
+		t.Fatalf("LoadCursor(reopen): %v", err)
+	}
+	if loadedCursor.EventSequence != cursor.EventSequence {
+		t.Fatalf("loaded cursor event sequence = %d, want %d", loadedCursor.EventSequence, cursor.EventSequence)
+	}
+}
+
+func TestOpen_PostgresWithMarkdownMirrorWritesMirrorFiles(t *testing.T) {
+	dsn := runtimePostgresTestDSN(t)
+
+	ctx := context.Background()
+	workspaceRoot := filepath.Join(t.TempDir(), "workspace")
+	persistence, err := Open(Config{PostgresDSN: dsn, PostgresWorkspaceRoot: workspaceRoot, PostgresMarkdownMirror: true})
+	if err != nil {
+		t.Fatalf("Open(postgres+mirror): %v", err)
+	}
+	event := runtimeTestEvent("req_postgres_mirror", 1)
+	if err := persistence.EventLogStore().AppendEvent(ctx, event); err != nil {
+		t.Fatalf("AppendEvent: %v", err)
+	}
+	if _, err := persistence.RunnerStore().Append(ctx, "run_postgres_mirror", &runnerpkg.RunnerRecord{Kind: runnerpkg.RunnerRecordInit}); err != nil {
+		t.Fatalf("Append(init): %v", err)
+	}
+	cursor := storepkg.SnapshotCursor{RequestID: event.Scope.RequestID, RunnerID: "run_postgres_mirror", EventSequence: 1}
+	if err := persistence.SnapshotCursorStore().SaveCursor(ctx, cursor); err != nil {
+		t.Fatalf("SaveCursor: %v", err)
+	}
+	if err := persistence.Close(); err != nil {
+		t.Fatalf("Close(first): %v", err)
+	}
+
+	mirrorRoot := filepath.Join(workspaceRoot, ".markdown-mirror")
+	for _, file := range []string{
+		filepath.Join(mirrorRoot, "event-log", event.Scope.RequestID+".jsonl"),
+		filepath.Join(mirrorRoot, "runner-log", "run_postgres_mirror.jsonl"),
+		filepath.Join(mirrorRoot, "snapshot-cursor", event.Scope.RequestID+".json"),
+	} {
+		if _, err := os.Stat(file); err != nil {
+			t.Fatalf("Stat(%q): %v", file, err)
+		}
+	}
+
+	reopened, err := Open(Config{PostgresDSN: dsn, PostgresWorkspaceRoot: workspaceRoot})
+	if err != nil {
+		t.Fatalf("Open(reopen postgres-only): %v", err)
+	}
+	defer func() {
+		if err := reopened.Close(); err != nil {
+			t.Fatalf("Close(reopen): %v", err)
+		}
+	}()
+	loadedEvents, err := reopened.EventLogStore().LoadEvents(ctx, streampkg.Scope{RequestID: event.Scope.RequestID}, 1, streampkg.Filter{})
+	if err != nil {
+		t.Fatalf("LoadEvents(reopen): %v", err)
+	}
+	if len(loadedEvents) != 1 || loadedEvents[0].Scope.RequestID != event.Scope.RequestID {
+		t.Fatalf("loaded events = %+v, want persisted request %q", loadedEvents, event.Scope.RequestID)
+	}
+}
+
+func TestOpen_RejectsPostgresWithoutWorkspaceRoot(t *testing.T) {
+	t.Parallel()
+
+	_, err := Open(Config{PostgresDSN: "postgres://example"})
+	if err == nil {
+		t.Fatal("Open accepted postgres config without workspace root")
+	}
+}
+
+func TestOpen_RejectsConflictingDurableBackendConfig(t *testing.T) {
+	t.Parallel()
+
+	_, err := Open(Config{
+		SQLitePath:            filepath.Join(t.TempDir(), "dango.db"),
+		PostgresDSN:           "postgres://example",
+		PostgresWorkspaceRoot: filepath.Join(t.TempDir(), "workspace"),
+	})
+	if err == nil {
+		t.Fatal("Open accepted both sqlite and postgres durable backend config")
+	}
+}
+
 func TestCompositeEventLogStore_AppendEventIgnoresMirrorFailure(t *testing.T) {
 	t.Parallel()
 
@@ -479,4 +616,13 @@ func runtimeTestEvent(requestID string, sequence uint64) streampkg.Event {
 		Timestamp:      time.Unix(1_700_000_000+int64(sequence), 0).UTC(),
 		Scope:          streampkg.Scope{RequestID: requestID},
 	}
+}
+
+func runtimePostgresTestDSN(t *testing.T) string {
+	t.Helper()
+	dsn := strings.TrimSpace(os.Getenv(postgresTestDSNEnv))
+	if dsn == "" {
+		t.Skipf("%s is not set; skipping postgres integration test", postgresTestDSNEnv)
+	}
+	return dsn
 }
