@@ -131,7 +131,7 @@ func TestRendererSummarizesRunningExchangeDraft(t *testing.T) {
 		From:      streampkg.Source{Layer: "skill", ID: "train"},
 		Status:    streampkg.StatusRunning,
 		Delta: mustJSONString(t, `---
- kind: handoff
+kind: handoff
 version: 1
 runner_id: runner-1
 from_node: train
@@ -252,7 +252,7 @@ func TestRendererWritesExchangeMarkdownReferences(t *testing.T) {
 		Status:         streampkg.StatusCompleted,
 		SequenceNumber: 7,
 		Delta: mustJSONString(t, `---
- kind: handoff
+kind: handoff
 version: 1
 runner_id: runner-1
 from_node: writer
@@ -280,7 +280,7 @@ func TestRendererWritesDraftExchangeMarkdownReferences(t *testing.T) {
 		Status:         streampkg.StatusCompleted,
 		SequenceNumber: 9,
 		Delta: mustJSONString(t, `---
- kind: exchange
+kind: exchange
 version: 1
 runner_id: runner-1
 node_id: writer
