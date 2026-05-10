@@ -345,9 +345,6 @@ func TestRunHonshuGroundwaterExampleWritesPersistenceWorkspaceArtifacts(t *testi
 		t.Fatalf("PersistenceWorkRoot = %q, want %q", result.PersistenceWorkRoot, wantWorkspaceRoot)
 	}
 	runnerRoot := filepath.Join(result.PersistenceWorkRoot, "task_"+result.RunnerID)
-	if stat, err := os.Stat(runnerRoot); err != nil || !stat.IsDir() {
-		t.Fatalf("runner workspace root stat = (%v, %v), want existing directory", stat, err)
-	}
 	if _, err := os.Stat(filepath.Join(artifactsDir, "debug", "describe_view.json")); !os.IsNotExist(err) {
 		t.Fatalf("describe_view.json err = %v, want not exist", err)
 	}
@@ -357,41 +354,7 @@ func TestRunHonshuGroundwaterExampleWritesPersistenceWorkspaceArtifacts(t *testi
 	if _, err := os.Stat(filepath.Join(artifactsDir, "debug", "persistence_summary.json")); !os.IsNotExist(err) {
 		t.Fatalf("persistence_summary.json err = %v, want not exist", err)
 	}
-	exchangeFiles, err := filepath.Glob(filepath.Join(runnerRoot, "exchange", "*.md"))
-	if err != nil {
-		t.Fatalf("glob workspace exchange docs: %v", err)
-	}
-	if len(exchangeFiles) == 0 {
-		t.Fatal("workspace exchange docs missing")
-	}
-	firstExchange := strings.TrimSpace(readFile(t, exchangeFiles[0]))
-	if _, err := runnerpkg.ParseExchangeDocMarkdown(firstExchange); err != nil {
-		t.Fatalf("parse exchange doc %q: %v", exchangeFiles[0], err)
-	}
-	memoSnapshots, err := filepath.Glob(filepath.Join(runnerRoot, "archive", "memo", "*", "*", "*.memo.md"))
-	if err != nil {
-		t.Fatalf("glob memo snapshots: %v", err)
-	}
-	if _, err := os.Stat(filepath.Join(runnerRoot, "archive", "memo")); err != nil {
-		t.Fatalf("stat memo archive root: %v", err)
-	}
-	if len(memoSnapshots) > 0 {
-		firstMemo := strings.TrimSpace(readFile(t, memoSnapshots[0]))
-		if _, err := runnerpkg.ParseMemoMarkdown(firstMemo); err != nil {
-			t.Fatalf("parse memo snapshot %q: %v", memoSnapshots[0], err)
-		}
-	}
-	handoffFiles, err := filepath.Glob(filepath.Join(runnerRoot, "skills", "*", "outbox", "handoff.md"))
-	if err != nil {
-		t.Fatalf("glob outbox handoffs: %v", err)
-	}
-	if len(handoffFiles) == 0 {
-		t.Fatal("workspace outbox handoffs missing")
-	}
-	firstHandoff := strings.TrimSpace(readFile(t, handoffFiles[0]))
-	if _, err := runnerpkg.ParseHandoffMarkdown(firstHandoff); err != nil {
-		t.Fatalf("parse outbox handoff %q: %v", handoffFiles[0], err)
-	}
+	assertRunnerWorkspaceArtifacts(t, runnerRoot)
 }
 
 func TestRunHonshuGroundwaterExamplePersistsTerminalRequestState(t *testing.T) {
@@ -521,45 +484,7 @@ func TestRunHonshuGroundwaterExampleReopensPersistedState(t *testing.T) {
 	if cursor.EventSequence != view.SnapshotCursor().EventSequence {
 		t.Fatalf("LoadCursor(reopen) event_sequence = %d, want %d", cursor.EventSequence, view.SnapshotCursor().EventSequence)
 	}
-	runnerRoot := filepath.Join(reopened.Backend().WorkspaceRoot(), "task_"+result.RunnerID)
-	if stat, err := os.Stat(runnerRoot); err != nil || !stat.IsDir() {
-		t.Fatalf("runner workspace root after reopen stat = (%v, %v), want existing directory", stat, err)
-	}
-
-	exchangeFiles, err := filepath.Glob(filepath.Join(runnerRoot, "exchange", "*.md"))
-	if err != nil {
-		t.Fatalf("glob workspace exchange docs after reopen: %v", err)
-	}
-	if len(exchangeFiles) == 0 {
-		t.Fatal("workspace exchange docs missing after reopen")
-	}
-	if _, err := runnerpkg.ParseExchangeDocMarkdown(strings.TrimSpace(readFile(t, exchangeFiles[0]))); err != nil {
-		t.Fatalf("parse exchange doc after reopen %q: %v", exchangeFiles[0], err)
-	}
-
-	handoffFiles, err := filepath.Glob(filepath.Join(runnerRoot, "skills", "*", "outbox", "handoff.md"))
-	if err != nil {
-		t.Fatalf("glob outbox handoffs after reopen: %v", err)
-	}
-	if len(handoffFiles) == 0 {
-		t.Fatal("workspace outbox handoffs missing after reopen")
-	}
-	if _, err := runnerpkg.ParseHandoffMarkdown(strings.TrimSpace(readFile(t, handoffFiles[0]))); err != nil {
-		t.Fatalf("parse outbox handoff after reopen %q: %v", handoffFiles[0], err)
-	}
-
-	if _, err := os.Stat(filepath.Join(runnerRoot, "archive", "memo")); err != nil {
-		t.Fatalf("stat memo archive root after reopen: %v", err)
-	}
-	memoSnapshots, err := filepath.Glob(filepath.Join(runnerRoot, "archive", "memo", "*", "*", "*.memo.md"))
-	if err != nil {
-		t.Fatalf("glob memo snapshots after reopen: %v", err)
-	}
-	if len(memoSnapshots) > 0 {
-		if _, err := runnerpkg.ParseMemoMarkdown(strings.TrimSpace(readFile(t, memoSnapshots[0]))); err != nil {
-			t.Fatalf("parse memo snapshot after reopen %q: %v", memoSnapshots[0], err)
-		}
-	}
+	assertRunnerWorkspaceArtifacts(t, filepath.Join(reopened.Backend().WorkspaceRoot(), "task_"+result.RunnerID))
 }
 
 func TestWaitForPersistedTerminalRunnerStateLoadsOnlyNewEvents(t *testing.T) {
@@ -647,6 +572,55 @@ func readFile(t *testing.T, path string) string {
 		t.Fatalf("read %s: %v", path, err)
 	}
 	return string(data)
+}
+
+func assertRunnerWorkspaceArtifacts(t *testing.T, runnerRoot string) {
+	t.Helper()
+
+	if stat, err := os.Stat(runnerRoot); err != nil || !stat.IsDir() {
+		t.Fatalf("runner workspace root stat = (%v, %v), want existing directory", stat, err)
+	}
+
+	exchangeFiles, err := filepath.Glob(filepath.Join(runnerRoot, "exchange", "*.md"))
+	if err != nil {
+		t.Fatalf("glob workspace exchange docs: %v", err)
+	}
+	if len(exchangeFiles) == 0 {
+		t.Fatal("workspace exchange docs missing")
+	}
+	if _, err := runnerpkg.ParseExchangeDocMarkdown(strings.TrimSpace(readFile(t, exchangeFiles[0]))); err != nil {
+		t.Fatalf("parse exchange doc %q: %v", exchangeFiles[0], err)
+	}
+
+	handoffFiles, err := filepath.Glob(filepath.Join(runnerRoot, "skills", "*", "outbox", "handoff.md"))
+	if err != nil {
+		t.Fatalf("glob outbox handoffs: %v", err)
+	}
+	if len(handoffFiles) == 0 {
+		t.Fatal("workspace outbox handoffs missing")
+	}
+	if _, err := runnerpkg.ParseHandoffMarkdown(strings.TrimSpace(readFile(t, handoffFiles[0]))); err != nil {
+		t.Fatalf("parse outbox handoff %q: %v", handoffFiles[0], err)
+	}
+
+	memoRoot := filepath.Join(runnerRoot, "archive", "memo")
+	memoInfo, err := os.Stat(memoRoot)
+	if err != nil {
+		t.Fatalf("stat memo archive root: %v", err)
+	}
+	if !memoInfo.IsDir() {
+		t.Fatalf("memo archive root %q is not a directory", memoRoot)
+	}
+
+	memoSnapshots, err := filepath.Glob(filepath.Join(memoRoot, "*", "*", "*.memo.md"))
+	if err != nil {
+		t.Fatalf("glob memo snapshots: %v", err)
+	}
+	if len(memoSnapshots) > 0 {
+		if _, err := runnerpkg.ParseMemoMarkdown(strings.TrimSpace(readFile(t, memoSnapshots[0]))); err != nil {
+			t.Fatalf("parse memo snapshot %q: %v", memoSnapshots[0], err)
+		}
+	}
 }
 
 func hasPersistedRunnerRecord(records []runnerpkg.RunnerRecord, eventType string, nodeID string) bool {
