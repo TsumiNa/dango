@@ -28,13 +28,15 @@ func (r *Runner) emitChannelDocumentEvents(ctx context.Context, node *Node, outp
 
 func (r *Runner) emitHandoffEvents(ctx context.Context, node *Node, doc *HandoffDoc) {
 	payload := streampkg.HandoffEmittedPayload{
-		RunnerID:  r.id,
+		ChannelHeader: streampkg.ChannelHeader{
+			RunnerID:  r.id,
+			CreatedAt: doc.CreatedAt,
+		},
 		FromNode:  node.Id,
 		ToNodes:   append([]string(nil), doc.ToNodes...),
 		Intent:    doc.Intent,
 		Document:  strings.TrimSpace(doc.Body),
 		Artifacts: handoffArtifactPayloads(doc.Artifacts),
-		CreatedAt: doc.CreatedAt,
 	}
 	if r.workspace != nil {
 		if ws, ok := r.workspace.Skill(node.Id); ok {
@@ -71,11 +73,13 @@ func (r *Runner) emitHandoffEvents(ctx context.Context, node *Node, doc *Handoff
 
 func (r *Runner) emitExchangePublishedEvent(ctx context.Context, node *Node, doc *ExchangeDoc) {
 	payload := streampkg.ExchangePublishedPayload{
-		RunnerID:  r.id,
-		NodeID:    node.Id,
-		Document:  strings.TrimSpace(doc.Body),
-		Title:     doc.Title,
-		CreatedAt: doc.CreatedAt,
+		ChannelHeader: streampkg.ChannelHeader{
+			RunnerID:  r.id,
+			CreatedAt: doc.CreatedAt,
+		},
+		NodeID:   node.Id,
+		Document: strings.TrimSpace(doc.Body),
+		Title:    doc.Title,
 	}
 	if r.workspace != nil {
 		payload.Path = r.workspace.ExchangeDir()

@@ -31,24 +31,28 @@ func TestPR3EventPayloadJSONRoundTrip(t *testing.T) {
 	created := time.Date(2026, 5, 9, 9, 43, 21, 0, time.UTC)
 
 	exchange := ExchangePublishedPayload{
-		RunnerID:  "run_1",
-		NodeID:    "node_1",
-		Path:      "exchange/0001-node_1.md",
-		Document:  "---\nkind: dango.exchange_doc\n---\n",
-		Title:     "normalised schema",
-		CreatedAt: created,
+		ChannelHeader: ChannelHeader{
+			RunnerID:  "run_1",
+			CreatedAt: created,
+		},
+		NodeID:   "node_1",
+		Path:     "exchange/0001-node_1.md",
+		Document: "---\nkind: exchange\n---\n",
+		Title:    "normalised schema",
 	}
 	handoff := HandoffEmittedPayload{
-		RunnerID: "run_1",
+		ChannelHeader: ChannelHeader{
+			RunnerID:  "run_1",
+			CreatedAt: created,
+		},
 		FromNode: "node_1",
 		ToNodes:  []string{"node_2", "node_3"},
 		Intent:   "bootstrap",
 		Path:     "skills/node_1/downstream/handoff.md",
-		Document: "---\nkind: dango.handoff_doc\n---\n",
+		Document: "---\nkind: handoff\n---\n",
 		Artifacts: []HandoffArtifactPayload{
 			{Path: "artifacts/data.csv", Type: "csv", Description: "training rows"},
 		},
-		CreatedAt: created,
 	}
 	delivered := HandoffDeliveredPayload{
 		RunnerID:      "run_1",
@@ -122,17 +126,17 @@ func TestPR3EventFamilyFilterAndReplay(t *testing.T) {
 	}
 
 	emitPayload(EventExchangePublished, ExchangePublishedPayload{
-		RunnerID: "run_1",
-		NodeID:   "node_1",
-		Path:     "exchange/0001-node_1.md",
-		Document: "---\nkind: dango.exchange_doc\n---\n",
+		ChannelHeader: ChannelHeader{RunnerID: "run_1"},
+		NodeID:        "node_1",
+		Path:          "exchange/0001-node_1.md",
+		Document:      "---\nkind: exchange\n---\n",
 	})
 	emitPayload(EventHandoffEmitted, HandoffEmittedPayload{
-		RunnerID: "run_1",
-		FromNode: "node_1",
-		ToNodes:  []string{"node_2"},
-		Path:     "skills/node_1/downstream/handoff.md",
-		Document: "---\nkind: dango.handoff_doc\n---\n",
+		ChannelHeader: ChannelHeader{RunnerID: "run_1"},
+		FromNode:      "node_1",
+		ToNodes:       []string{"node_2"},
+		Path:          "skills/node_1/downstream/handoff.md",
+		Document:      "---\nkind: handoff\n---\n",
 	})
 	emitPayload(EventHandoffDelivered, HandoffDeliveredPayload{
 		RunnerID:    "run_1",

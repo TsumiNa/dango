@@ -258,10 +258,10 @@ func TestRunnerEngineStoppedAfterIdleIsCompletedStreamStatus(t *testing.T) {
 
 func TestRunnerEmitsArtifactCreatedEventsFromHandoffOutput(t *testing.T) {
 	raw, err := (HandoffDoc{
-		RunnerID: "runner-1",
-		FromNode: "artifact-node",
-		ToNodes:  []string{"downstream"},
-		Intent:   "continue",
+		ChannelHeader: streampkg.ChannelHeader{RunnerID: "runner-1"},
+		FromNode:      "artifact-node",
+		ToNodes:       []string{"downstream"},
+		Intent:        "continue",
 		Artifacts: []HandoffArtifact{{
 			Path:        "downstream/artifacts/predictions.csv",
 			Type:        HandoffArtifactFile,
@@ -331,11 +331,11 @@ func TestRunnerEmitsArtifactCreatedEventsFromHandoffOutput(t *testing.T) {
 
 func TestRunnerEmitsHandoffEventsFromHandoffOutput(t *testing.T) {
 	raw, err := (HandoffDoc{
-		RunnerID: "runner-1",
-		FromNode: "handoff-node",
-		ToNodes:  []string{"downstream"},
-		Intent:   "continue",
-		Body:     "Parsed inputs and prepared durable outputs.",
+		ChannelHeader: streampkg.ChannelHeader{RunnerID: "runner-1"},
+		FromNode:      "handoff-node",
+		ToNodes:       []string{"downstream"},
+		Intent:        "continue",
+		Body:          "Parsed inputs and prepared durable outputs.",
 	}).Markdown()
 	if err != nil {
 		t.Fatalf("Markdown: %v", err)
@@ -396,7 +396,12 @@ func TestRunnerEmitsHandoffEventsFromHandoffOutput(t *testing.T) {
 }
 
 func TestRunnerDoesNotEmitSkillMemoWithoutMemo(t *testing.T) {
-	raw, err := (HandoffDoc{RunnerID: "runner-1", FromNode: "no-memo", ToNodes: []string{"downstream"}, Body: "done"}).Markdown()
+	raw, err := (HandoffDoc{
+		ChannelHeader: streampkg.ChannelHeader{RunnerID: "runner-1"},
+		FromNode:      "no-memo",
+		ToNodes:       []string{"downstream"},
+		Body:          "done",
+	}).Markdown()
 	if err != nil {
 		t.Fatalf("Markdown: %v", err)
 	}
@@ -433,7 +438,12 @@ func TestRunnerDoesNotEmitSkillMemoWithoutMemo(t *testing.T) {
 }
 
 func TestRunnerDoesNotEmitArtifactCreatedWithoutResources(t *testing.T) {
-	raw, err := (HandoffDoc{RunnerID: "runner-1", FromNode: "no-artifact", ToNodes: []string{"downstream"}, Body: "done"}).Markdown()
+	raw, err := (HandoffDoc{
+		ChannelHeader: streampkg.ChannelHeader{RunnerID: "runner-1"},
+		FromNode:      "no-artifact",
+		ToNodes:       []string{"downstream"},
+		Body:          "done",
+	}).Markdown()
 	if err != nil {
 		t.Fatalf("Markdown: %v", err)
 	}

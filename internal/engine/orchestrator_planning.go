@@ -88,12 +88,14 @@ func planningHandoffMarkdown(request string, runtimeSkill *llm.Skill, raw string
 		body = body + "\n\nReasoning:\n" + reasoning
 	}
 	doc := runnerpkg.HandoffDoc{
-		RunnerID:  "orchestrator-plan",
-		FromNode:  "orchestrator",
-		ToNodes:   []string{"runner.bootstrap"},
-		Intent:    "plan",
-		CreatedAt: time.Now(),
-		Body:      strings.TrimSpace(body),
+		ChannelHeader: streampkg.ChannelHeader{
+			RunnerID:  "orchestrator-plan",
+			CreatedAt: time.Now(),
+		},
+		FromNode: "orchestrator",
+		ToNodes:  []string{"runner.bootstrap"},
+		Intent:   "plan",
+		Body:     strings.TrimSpace(body),
 	}
 	return doc.Markdown()
 }

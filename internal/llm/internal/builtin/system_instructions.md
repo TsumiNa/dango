@@ -86,7 +86,7 @@ read the body.
 
 ```
 ---
-kind: dango.handoff_doc
+kind: handoff
 version: 1
 runner_id: <runner id, if known>
 from_node: <your assigned node id>

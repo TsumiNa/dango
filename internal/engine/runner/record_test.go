@@ -1,13 +1,17 @@
 package runner
 
-import "testing"
+import (
+	"testing"
+
+	streampkg "github.com/tsumina/dango/internal/engine/stream"
+)
 
 func TestStoredRunnerEventStoresHandoffMarkdownAsMarkdownText(t *testing.T) {
 	raw, err := (HandoffDoc{
-		RunnerID: "runner-1",
-		FromNode: "node-1",
-		ToNodes:  []string{"node-2"},
-		Body:     "output",
+		ChannelHeader: streampkg.ChannelHeader{RunnerID: "runner-1"},
+		FromNode:      "node-1",
+		ToNodes:       []string{"node-2"},
+		Body:          "output",
 	}).Markdown()
 	if err != nil {
 		t.Fatalf("Markdown: %v", err)

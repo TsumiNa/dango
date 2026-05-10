@@ -9,6 +9,7 @@ import (
 	"time"
 
 	runnerpkg "github.com/tsumina/dango/internal/engine/runner"
+	streampkg "github.com/tsumina/dango/internal/engine/stream"
 )
 
 func cloneExecutorRuntimePaths(in runnerpkg.ExecutorRuntimePaths) runnerpkg.ExecutorRuntimePaths {
@@ -80,11 +81,13 @@ func (e *Executor) snapshotMemos(stage string, paths runnerpkg.ExecutorRuntimePa
 			return err
 		}
 		doc := runnerpkg.MemoDocument{
-			RunnerID:  paths.RunnerID,
+			ChannelHeader: streampkg.ChannelHeader{
+				RunnerID:  paths.RunnerID,
+				CreatedAt: time.Now(),
+			},
 			NodeID:    paths.NodeID,
 			SkillName: paths.SkillName,
 			Path:      filepath.ToSlash(filepath.Join("memo", rel)),
-			CreatedAt: time.Now(),
 			Body:      string(body),
 		}
 		raw, err := doc.Markdown()

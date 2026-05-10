@@ -6,41 +6,33 @@ import (
 	"time"
 
 	"github.com/adrg/frontmatter"
+	streampkg "github.com/tsumina/dango/internal/engine/stream"
 	"gopkg.in/yaml.v2"
 )
-
-// MemoDocumentKind is the front matter kind used by memo snapshot documents.
-const MemoDocumentKind = "dango.memo"
 
 // MemoDocumentVersion is the schema version for [MemoDocument] markdown.
 const MemoDocumentVersion = 1
 
 // MemoDocument is a front-mattered markdown snapshot of one skill memo file.
 type MemoDocument struct {
-	Kind      string    `json:"kind" yaml:"kind"`
-	Version   int       `json:"version" yaml:"version"`
-	RunnerID  string    `json:"runner_id" yaml:"runner_id"`
-	NodeID    string    `json:"node_id" yaml:"node_id"`
-	SkillName string    `json:"skill_name,omitempty" yaml:"skill_name,omitempty"`
-	Path      string    `json:"path" yaml:"path"`
-	CreatedAt time.Time `json:"created_at" yaml:"created_at"`
-	Body      string    `json:"body,omitempty" yaml:"-"`
+	streampkg.ChannelHeader `json:",inline" yaml:",inline"`
+	NodeID                  string `json:"node_id" yaml:"node_id"`
+	SkillName               string `json:"skill_name,omitempty" yaml:"skill_name,omitempty"`
+	Path                    string `json:"path" yaml:"path"`
+	Body                    string `json:"body,omitempty" yaml:"-"`
 }
 
 type memoFrontMatter struct {
-	Kind      string    `yaml:"kind"`
-	Version   int       `yaml:"version"`
-	RunnerID  string    `yaml:"runner_id"`
-	NodeID    string    `yaml:"node_id"`
-	SkillName string    `yaml:"skill_name,omitempty"`
-	Path      string    `yaml:"path"`
-	CreatedAt time.Time `yaml:"created_at"`
+	streampkg.ChannelHeader `yaml:",inline"`
+	NodeID                  string `yaml:"node_id"`
+	SkillName               string `yaml:"skill_name,omitempty"`
+	Path                    string `yaml:"path"`
 }
 
 // Markdown renders doc as a canonical memo markdown document.
 func (doc MemoDocument) Markdown() (string, error) {
 	if doc.Kind == "" {
-		doc.Kind = MemoDocumentKind
+		doc.Kind = streampkg.ChannelKindMemo
 	}
 	if doc.Version == 0 {
 		doc.Version = MemoDocumentVersion
@@ -59,13 +51,15 @@ func (doc MemoDocument) Markdown() (string, error) {
 	}
 
 	meta := memoFrontMatter{
-		Kind:      doc.Kind,
-		Version:   doc.Version,
-		RunnerID:  doc.RunnerID,
+		ChannelHeader: streampkg.ChannelHeader{
+			Kind:      doc.Kind,
+			Version:   doc.Version,
+			RunnerID:  doc.RunnerID,
+			CreatedAt: doc.CreatedAt,
+		},
 		NodeID:    doc.NodeID,
 		SkillName: doc.SkillName,
 		Path:      doc.Path,
-		CreatedAt: doc.CreatedAt,
 	}
 	front, err := yaml.Marshal(meta)
 	if err != nil {
@@ -88,8 +82,8 @@ func ParseMemoMarkdown(raw string) (*MemoDocument, error) {
 	if err != nil {
 		return nil, fmt.Errorf("runner: parse memo front matter: %w", err)
 	}
-	if meta.Kind != MemoDocumentKind {
-		return nil, fmt.Errorf("runner: memo document kind = %q, want %q", meta.Kind, MemoDocumentKind)
+	if !streampkg.AcceptsChannelKind(meta.Kind, streampkg.ChannelKindMemo) {
+		return nil, fmt.Errorf("runner: memo document kind = %q, want %q", meta.Kind, streampkg.ChannelKindMemo)
 	}
 	if meta.Version != MemoDocumentVersion {
 		return nil, fmt.Errorf("runner: memo document version = %d, want %d", meta.Version, MemoDocumentVersion)
@@ -107,13 +101,15 @@ func ParseMemoMarkdown(raw string) (*MemoDocument, error) {
 		return nil, fmt.Errorf("runner: memo document created_at must not be empty")
 	}
 	return &MemoDocument{
-		Kind:      meta.Kind,
-		Version:   meta.Version,
-		RunnerID:  meta.RunnerID,
+		ChannelHeader: streampkg.ChannelHeader{
+			Kind:      meta.Kind,
+			Version:   meta.Version,
+			RunnerID:  meta.RunnerID,
+			CreatedAt: meta.CreatedAt,
+		},
 		NodeID:    meta.NodeID,
 		SkillName: meta.SkillName,
 		Path:      meta.Path,
-		CreatedAt: meta.CreatedAt,
 		Body:      strings.TrimSpace(string(body)),
 	}, nil
 }

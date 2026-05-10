@@ -7,11 +7,9 @@ import (
 	"time"
 
 	"github.com/adrg/frontmatter"
+	streampkg "github.com/tsumina/dango/internal/engine/stream"
 	"gopkg.in/yaml.v2"
 )
-
-// HandoffDocKind is the front matter kind used by directed handoff documents.
-const HandoffDocKind = "dango.handoff_doc"
 
 // HandoffDocVersion is the schema version for [HandoffDoc] markdown.
 const HandoffDocVersion = 1
@@ -25,32 +23,26 @@ type HandoffArtifact struct {
 
 // HandoffDoc is a front-mattered markdown parcel routed to downstream skills.
 type HandoffDoc struct {
-	Kind      string            `json:"kind" yaml:"kind"`
-	Version   int               `json:"version" yaml:"version"`
-	RunnerID  string            `json:"runner_id" yaml:"runner_id"`
-	FromNode  string            `json:"from_node" yaml:"from_node"`
-	ToNodes   []string          `json:"to_nodes" yaml:"to_nodes"`
-	Intent    string            `json:"intent,omitempty" yaml:"intent,omitempty"`
-	CreatedAt time.Time         `json:"created_at" yaml:"created_at"`
-	Artifacts []HandoffArtifact `json:"artifacts,omitempty" yaml:"artifacts,omitempty"`
-	Body      string            `json:"body,omitempty" yaml:"-"`
+	streampkg.ChannelHeader `json:",inline" yaml:",inline"`
+	FromNode                string            `json:"from_node" yaml:"from_node"`
+	ToNodes                 []string          `json:"to_nodes" yaml:"to_nodes"`
+	Intent                  string            `json:"intent,omitempty" yaml:"intent,omitempty"`
+	Artifacts               []HandoffArtifact `json:"artifacts,omitempty" yaml:"artifacts,omitempty"`
+	Body                    string            `json:"body,omitempty" yaml:"-"`
 }
 
 type handoffDocFrontMatter struct {
-	Kind      string            `yaml:"kind"`
-	Version   int               `yaml:"version"`
-	RunnerID  string            `yaml:"runner_id"`
-	FromNode  string            `yaml:"from_node"`
-	ToNodes   []string          `yaml:"to_nodes"`
-	Intent    string            `yaml:"intent,omitempty"`
-	CreatedAt time.Time         `yaml:"created_at"`
-	Artifacts []HandoffArtifact `yaml:"artifacts,omitempty"`
+	streampkg.ChannelHeader `yaml:",inline"`
+	FromNode                string            `yaml:"from_node"`
+	ToNodes                 []string          `yaml:"to_nodes"`
+	Intent                  string            `yaml:"intent,omitempty"`
+	Artifacts               []HandoffArtifact `yaml:"artifacts,omitempty"`
 }
 
 // Markdown renders doc as a canonical handoff markdown document.
 func (doc HandoffDoc) Markdown() (string, error) {
 	if doc.Kind == "" {
-		doc.Kind = HandoffDocKind
+		doc.Kind = streampkg.ChannelKindHandoff
 	}
 	if doc.Version == 0 {
 		doc.Version = HandoffDocVersion
@@ -83,13 +75,15 @@ func (doc HandoffDoc) Markdown() (string, error) {
 	}
 
 	meta := handoffDocFrontMatter{
-		Kind:      doc.Kind,
-		Version:   doc.Version,
-		RunnerID:  doc.RunnerID,
+		ChannelHeader: streampkg.ChannelHeader{
+			Kind:      doc.Kind,
+			Version:   doc.Version,
+			RunnerID:  doc.RunnerID,
+			CreatedAt: doc.CreatedAt,
+		},
 		FromNode:  doc.FromNode,
 		ToNodes:   doc.ToNodes,
 		Intent:    doc.Intent,
-		CreatedAt: doc.CreatedAt,
 		Artifacts: doc.Artifacts,
 	}
 	front, err := yaml.Marshal(meta)
@@ -113,8 +107,8 @@ func ParseHandoffMarkdown(raw string) (*HandoffDoc, error) {
 	if err != nil {
 		return nil, fmt.Errorf("runner: parse handoff doc front matter: %w", err)
 	}
-	if meta.Kind != HandoffDocKind {
-		return nil, fmt.Errorf("runner: handoff doc kind = %q, want %q", meta.Kind, HandoffDocKind)
+	if !streampkg.AcceptsChannelKind(meta.Kind, streampkg.ChannelKindHandoff) {
+		return nil, fmt.Errorf("runner: handoff doc kind = %q, want %q", meta.Kind, streampkg.ChannelKindHandoff)
 	}
 	if meta.Version != HandoffDocVersion {
 		return nil, fmt.Errorf("runner: handoff doc version = %d, want %d", meta.Version, HandoffDocVersion)
@@ -146,13 +140,15 @@ func ParseHandoffMarkdown(raw string) (*HandoffDoc, error) {
 		return nil, fmt.Errorf("runner: handoff doc created_at must not be empty")
 	}
 	return &HandoffDoc{
-		Kind:      meta.Kind,
-		Version:   meta.Version,
-		RunnerID:  meta.RunnerID,
+		ChannelHeader: streampkg.ChannelHeader{
+			Kind:      meta.Kind,
+			Version:   meta.Version,
+			RunnerID:  meta.RunnerID,
+			CreatedAt: meta.CreatedAt,
+		},
 		FromNode:  meta.FromNode,
 		ToNodes:   meta.ToNodes,
 		Intent:    meta.Intent,
-		CreatedAt: meta.CreatedAt,
 		Artifacts: meta.Artifacts,
 		Body:      strings.TrimSpace(string(body)),
 	}, nil

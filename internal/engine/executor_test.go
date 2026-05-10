@@ -18,6 +18,7 @@ import (
 	"github.com/openai/openai-go/v3"
 	"github.com/openai/openai-go/v3/option"
 	runnerpkg "github.com/tsumina/dango/internal/engine/runner"
+	streampkg "github.com/tsumina/dango/internal/engine/stream"
 	"github.com/tsumina/dango/internal/llm"
 )
 
@@ -93,12 +94,14 @@ func TestNewExecutor_RejectsNilPlanner(t *testing.T) {
 
 func TestExchangeDocMarkdownTreatsBodyAsOpaqueMarkdown(t *testing.T) {
 	handoff, err := (runnerpkg.HandoffDoc{
-		RunnerID:  "runner-1",
-		FromNode:  "node-1",
-		ToNodes:   []string{"downstream"},
-		Intent:    "continue",
-		CreatedAt: time.Date(2026, 5, 1, 12, 0, 0, 0, time.UTC),
-		Body:      "handoff body",
+		ChannelHeader: streampkg.ChannelHeader{
+			RunnerID:  "runner-1",
+			CreatedAt: time.Date(2026, 5, 1, 12, 0, 0, 0, time.UTC),
+		},
+		FromNode: "node-1",
+		ToNodes:  []string{"downstream"},
+		Intent:   "continue",
+		Body:     "handoff body",
 	}).Markdown()
 	if err != nil {
 		t.Fatalf("Handoff Markdown: %v", err)
@@ -120,7 +123,7 @@ func TestExchangeDocMarkdownTreatsBodyAsOpaqueMarkdown(t *testing.T) {
 	if parsed.Body != strings.TrimSpace(handoff) {
 		t.Fatalf("body = %q, want original markdown body %q", parsed.Body, strings.TrimSpace(handoff))
 	}
-	if !strings.Contains(parsed.Body, "kind: dango.handoff_doc") {
+	if !strings.Contains(parsed.Body, "kind: handoff") {
 		t.Fatalf("exchange body lost nested handoff markdown:\n%s", parsed.Body)
 	}
 }
@@ -595,7 +598,7 @@ func TestRenderStageOutputsWritesSingleHandoffExchangeEnvelopeAndMemoSnapshot(t 
 	if got := strings.Count(handoffMarkdown, "---\n"); got != 2 {
 		t.Fatalf("returned handoff fence count = %d, want 2:\n%s", got, handoffMarkdown)
 	}
-	if strings.Contains(handoffMarkdown, "kind: dango.exchange_doc") {
+	if strings.Contains(handoffMarkdown, "kind: exchange") {
 		t.Fatalf("returned handoff markdown contains nested exchange front matter:\n%s", handoffMarkdown)
 	}
 	handoffRaw, err := os.ReadFile(filepath.Join(skillWS.DownstreamDir, "handoff.md"))
@@ -605,7 +608,7 @@ func TestRenderStageOutputsWritesSingleHandoffExchangeEnvelopeAndMemoSnapshot(t 
 	if got := strings.Count(string(handoffRaw), "---\n"); got != 2 {
 		t.Fatalf("handoff fence count = %d, want 2:\n%s", got, string(handoffRaw))
 	}
-	if strings.Contains(string(handoffRaw), "kind: dango.exchange_doc") {
+	if strings.Contains(string(handoffRaw), "kind: exchange") {
 		t.Fatalf("handoff markdown contains nested exchange front matter:\n%s", string(handoffRaw))
 	}
 	handoff, err := runnerpkg.ParseHandoffMarkdown(string(handoffRaw))
@@ -632,7 +635,7 @@ func TestRenderStageOutputsWritesSingleHandoffExchangeEnvelopeAndMemoSnapshot(t 
 	if got := strings.Count(string(exchangeRaw), "---\n"); got != 2 {
 		t.Fatalf("exchange fence count = %d, want 2:\n%s", got, string(exchangeRaw))
 	}
-	if strings.Contains(string(exchangeRaw), "kind: dango.handoff_doc") {
+	if strings.Contains(string(exchangeRaw), "kind: handoff") {
 		t.Fatalf("exchange markdown contains nested handoff front matter:\n%s", string(exchangeRaw))
 	}
 	exchange, err := runnerpkg.ParseExchangeDocMarkdown(string(exchangeRaw))

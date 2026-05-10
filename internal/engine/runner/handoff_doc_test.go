@@ -4,16 +4,20 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	streampkg "github.com/tsumina/dango/internal/engine/stream"
 )
 
 func TestHandoffDocMarkdownRoundTrip(t *testing.T) {
 	createdAt := time.Date(2026, 5, 1, 12, 0, 0, 0, time.UTC)
 	raw, err := (HandoffDoc{
-		RunnerID:  "runner-1",
-		FromNode:  "node-a",
-		ToNodes:   []string{"node-b", "node-c"},
-		Intent:    "continue",
-		CreatedAt: createdAt,
+		ChannelHeader: streampkg.ChannelHeader{
+			RunnerID:  "runner-1",
+			CreatedAt: createdAt,
+		},
+		FromNode: "node-a",
+		ToNodes:  []string{"node-b", "node-c"},
+		Intent:   "continue",
 		Artifacts: []HandoffArtifact{{
 			Path:        "downstream/artifacts/report.md",
 			Type:        "file",
@@ -29,7 +33,7 @@ func TestHandoffDocMarkdownRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ParseHandoffMarkdown: %v", err)
 	}
-	if parsed.Kind != HandoffDocKind || parsed.Version != HandoffDocVersion {
+	if parsed.Kind != streampkg.ChannelKindHandoff || parsed.Version != HandoffDocVersion {
 		t.Fatalf("kind/version = %q/%d", parsed.Kind, parsed.Version)
 	}
 	if parsed.RunnerID != "runner-1" || parsed.FromNode != "node-a" {
@@ -50,7 +54,10 @@ func TestHandoffDocMarkdownRoundTrip(t *testing.T) {
 }
 
 func TestHandoffDocMarkdownRejectsMissingFields(t *testing.T) {
-	_, err := (HandoffDoc{RunnerID: "runner-1", FromNode: "node-a"}).Markdown()
+	_, err := (HandoffDoc{
+		ChannelHeader: streampkg.ChannelHeader{RunnerID: "runner-1"},
+		FromNode:      "node-a",
+	}).Markdown()
 	if err == nil || !strings.Contains(err.Error(), "to_nodes must not be empty") {
 		t.Fatalf("Markdown error = %v, want missing to_nodes", err)
 	}
@@ -58,9 +65,9 @@ func TestHandoffDocMarkdownRejectsMissingFields(t *testing.T) {
 
 func TestHandoffDocMarkdownRejectsWhitespacePaddedToNodes(t *testing.T) {
 	_, err := (HandoffDoc{
-		RunnerID: "runner-1",
-		FromNode: "node-a",
-		ToNodes:  []string{" node-b "},
+		ChannelHeader: streampkg.ChannelHeader{RunnerID: "runner-1"},
+		FromNode:      "node-a",
+		ToNodes:       []string{" node-b "},
 	}).Markdown()
 	if err == nil || !strings.Contains(err.Error(), "leading or trailing whitespace") {
 		t.Fatalf("Markdown error = %v, want whitespace to_nodes rejection", err)
@@ -69,7 +76,7 @@ func TestHandoffDocMarkdownRejectsWhitespacePaddedToNodes(t *testing.T) {
 
 func TestParseHandoffMarkdownRejectsWhitespacePaddedToNodes(t *testing.T) {
 	raw := `---
-kind: dango.handoff_doc
+kind: handoff
 version: 1
 runner_id: runner-1
 from_node: node-a
@@ -87,9 +94,9 @@ handoff body`
 
 func TestHandoffDocMarkdownRejectsUnsafeArtifactPath(t *testing.T) {
 	_, err := (HandoffDoc{
-		RunnerID: "runner-1",
-		FromNode: "node-a",
-		ToNodes:  []string{"node-b"},
+		ChannelHeader: streampkg.ChannelHeader{RunnerID: "runner-1"},
+		FromNode:      "node-a",
+		ToNodes:       []string{"node-b"},
 		Artifacts: []HandoffArtifact{{
 			Path: "../secret.txt",
 		}},
@@ -101,9 +108,9 @@ func TestHandoffDocMarkdownRejectsUnsafeArtifactPath(t *testing.T) {
 
 func TestHandoffDocMarkdownRejectsCollapsedTraversalArtifactPath(t *testing.T) {
 	_, err := (HandoffDoc{
-		RunnerID: "runner-1",
-		FromNode: "node-a",
-		ToNodes:  []string{"node-b"},
+		ChannelHeader: streampkg.ChannelHeader{RunnerID: "runner-1"},
+		FromNode:      "node-a",
+		ToNodes:       []string{"node-b"},
 		Artifacts: []HandoffArtifact{{
 			Path: "foo/..",
 		}},
@@ -115,7 +122,7 @@ func TestHandoffDocMarkdownRejectsCollapsedTraversalArtifactPath(t *testing.T) {
 
 func TestParseHandoffMarkdownRejectsAbsoluteArtifactPath(t *testing.T) {
 	raw := `---
-kind: dango.handoff_doc
+kind: handoff
 version: 1
 runner_id: runner-1
 from_node: node-a
@@ -133,7 +140,28 @@ handoff body`
 	}
 }
 
-func TestParseHandoffMarkdownRejectsLegacyExchangeKind(t *testing.T) {
+func TestParseHandoffMarkdownAcceptsLegacyKind(t *testing.T) {
+	raw := `---
+kind: dango.handoff_doc
+version: 1
+runner_id: runner-1
+from_node: node-a
+to_nodes:
+  - node-b
+created_at: 2026-05-01T12:00:00Z
+---
+
+legacy handoff body`
+	parsed, err := ParseHandoffMarkdown(raw)
+	if err != nil {
+		t.Fatalf("ParseHandoffMarkdown: %v", err)
+	}
+	if parsed.Kind != streampkg.LegacyChannelKindHandoffDoc {
+		t.Fatalf("parsed.Kind = %q, want legacy kind preserved", parsed.Kind)
+	}
+}
+
+func TestParseHandoffMarkdownRejectsUnsupportedKind(t *testing.T) {
 	raw := `---
 kind: dango.exchange
 version: 1
@@ -146,7 +174,7 @@ created_at: 2026-05-01T12:00:00Z
 
 legacy handoff body`
 	_, err := ParseHandoffMarkdown(raw)
-	if err == nil || !strings.Contains(err.Error(), "want \""+HandoffDocKind+"\"") {
+	if err == nil || !strings.Contains(err.Error(), `want "handoff"`) {
 		t.Fatalf("ParseHandoffMarkdown error = %v, want kind mismatch", err)
 	}
 }

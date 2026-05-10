@@ -181,12 +181,14 @@ func newConformanceFixture(t *testing.T) conformanceFixture {
 				NodeID:    fromNode,
 			},
 			Delta: mustJSON(t, streampkg.ExchangePublishedPayload{
-				RunnerID:  runnerID,
-				NodeID:    fromNode,
-				Path:      exchangePath,
-				Document:  "exchange result",
-				Title:     "Producer result",
-				CreatedAt: baseTime,
+				ChannelHeader: streampkg.ChannelHeader{
+					RunnerID:  runnerID,
+					CreatedAt: baseTime,
+				},
+				NodeID:   fromNode,
+				Path:     exchangePath,
+				Document: "exchange result",
+				Title:    "Producer result",
 			}),
 		},
 		{
