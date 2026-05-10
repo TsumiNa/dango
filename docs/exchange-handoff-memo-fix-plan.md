@@ -70,6 +70,26 @@ The observed debug stream contains model reasoning mentioning "memo", but the to
 
 The absence of memo files is primarily a generic prompt/instruction problem, not a per-skill `SKILL.md` problem. Memo is a universal workspace capability, so individual domain skills should not need to document it in their own skill instructions. The common runtime instructions should teach every bound skill that `memo/` exists, when to use it, and how it differs from handoff and exchange.
 
+### 6. Terminal renderer creates a second, misleading exchange directory
+
+The Honshu example currently configures `streamrender` with `ExchangeDir = artifacts/exchanges`. That directory is outside the runner persistence workspace and is separate from the canonical runner exchange directory under `artifacts/persistence/workspace/task_<runner>/exchange`.
+
+The observed file `artifacts/exchanges/exchange-000000001912.md` is not a normal runner exchange entry. It is the orchestrator planning handoff captured from an `llm.output.delta` event because the renderer treats any channel-looking markdown as an exchange reference. The result is misleading in three ways:
+
+- the file is named `exchange-*` even though its front matter is `handoff`;
+- it lives outside the runner's canonical exchange directory;
+- it mixes terminal UI/debug capture concerns with durable runtime message storage.
+
+This is a real bug, but `streamrender` is slated for a larger independent refactor so it can leave `internal` and become the foundation for future command terminal UI work. The immediate fix should therefore be minimal: stop the Honshu example from creating a separate `artifacts/exchanges` store and prevent the renderer from labeling arbitrary channel markdown as canonical exchange storage. Deeper renderer architecture changes belong in the deferred `streamrender` refactor.
+
+### 7. Handoff bodies duplicate large artifact data
+
+The shared executor instructions currently encourage execute-stage handoff bodies to contain structured downstream output and explicitly suggest a fenced JSON block. In the observed Honshu run, the skill had already written `enriched_observations.json` as a handoff artifact and referenced it in front matter, but it also copied the full JSON payload into the handoff body. Because executor stage packaging writes the same stage body into the exchange entry, the canonical exchange file also received a huge duplicated data block.
+
+This violates the channel contract: durable data belongs in `downstream/artifacts`, and handoff bodies should carry concise recipient-facing guidance, schema notes, counts, quality notes, and artifact references. They should not inline large data blocks, long examples, or generated code when those bytes are already stored as artifacts.
+
+The immediate fix should update the shared runtime prompt/instructions to prohibit large fenced data/code blocks in handoff bodies and to require artifact references for large outputs. A follow-up implementation guard should reject or compact handoff bodies that appear to inline large JSON/code payloads despite having declared artifacts, so malformed model output does not silently pollute handoff and exchange storage.
+
 ## Target Architecture
 
 ### Runner responsibilities
@@ -260,6 +280,8 @@ The instruction layer should also include decision guidance:
 - Write memo files when the task has non-obvious assumptions, complex field mapping, data-quality concerns, long tool workflows, retry/failure information, model assumptions, or decisions that should survive context loss.
 - Prefer stable names such as `memo/plan.md`, `memo/data_quality.md`, `memo/model_notes.md`, and `memo/tool_runs.md`.
 - Keep handoff bodies focused on downstream-readable results. If a memo exists, the handoff may briefly mention it for auditability, but downstream correctness must not depend on reading memo files.
+- Keep large data and generated files out of handoff bodies. Store them under `downstream/artifacts/`, list them in handoff front matter, and describe the schema, row counts, caveats, and intended downstream use in short prose.
+- Do not inline large fenced `json`, `csv`, source-code, or model-output blocks in handoff bodies when the content is available as a declared artifact. Small snippets are acceptable only when they clarify schema or usage and are not the data payload itself.
 
 Prompt plumbing changes:
 
@@ -267,7 +289,22 @@ Prompt plumbing changes:
 - Include typed workspace paths in the prompt data from runner-owned runtime context, not by asking executor prompt code to rediscover paths from `accessibleDirs`.
 - Rename prompt fields so they reflect channel semantics: use `ParentHandoffs` for directed input, `ExchangeContext` only for shared public context, and `MemoDir`/`DownstreamDir`/`ArtifactsDir`/`ScratchDir` for writable locations.
 - Remove wording such as "memo-like progress in prose" from `execute.tmpl`; replace it with explicit memo-file guidance.
+- Remove wording that asks execute-stage handoffs to prefer fenced JSON payloads. Replace it with artifact-first guidance and short body summaries.
 - Ensure polish prompts remain no-tool/no-file when the phase is a pure feasibility review; memo writing should be available in execute/report only when tools and workspace writes are allowed.
+
+### Phase 5B: Add handoff body size and artifact-reference safeguards
+
+- Add stage-output validation or normalization that detects large fenced JSON/code/data blocks in handoff bodies, especially when the handoff already declares artifacts.
+- Prefer failing the malformed stage output with a clear error or compacting it into a short artifact-reference summary. Do not silently duplicate large artifact payloads into exchange entries.
+- Keep the check narrow and explainable: it should target obvious large blocks, not normal short markdown summaries.
+- Add tests covering a handoff with a declared artifact plus a large fenced JSON body and assert the system does not write that large payload into the exchange document.
+
+### Phase 5C: Minimal streamrender exchange capture fix
+
+- Remove the Honshu example's separate `artifacts/exchanges` renderer directory, or point any UI-only exchange references at canonical runner-persistence exchange paths when those paths are available.
+- In `streamrender`, avoid naming captured channel markdown `exchange-*` unless the payload is actually an exchange document. Handoff-looking markdown should not be represented as a canonical exchange file.
+- Keep this fix intentionally small. Do not reorganize renderer APIs, package boundaries, or terminal UI architecture in this PR; those belong to the deferred streamrender extraction/refactor.
+- Update Honshu tests so they assert canonical exchange files under `artifacts/persistence/workspace/task_<runner>/exchange` rather than the old outer `artifacts/exchanges` directory.
 
 Tests for this phase should assert that rendered generic prompts mention `memo/` as a writable private workspace channel and do not require individual domain `SKILL.md` files to document memo usage.
 
@@ -291,3 +328,5 @@ The example docs and skill prompts still use older wording such as "exchange mar
 - Prompt code, workspace code, stage entrypoints, and document packaging are in separate focused files.
 - Memo snapshots are produced only when skills actually write memo files, and tests cover both memo-present and memo-absent cases.
 - Honshu example artifacts/tests use handoff/exchange/memo terminology consistently.
+- The Honshu example does not create a second outer `artifacts/exchanges` directory for renderer-captured channel markdown.
+- Handoff bodies do not duplicate large artifact payloads; large JSON/data outputs are stored in `downstream/artifacts` and referenced from front matter plus short prose.
