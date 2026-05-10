@@ -7,22 +7,22 @@ import (
 
 func TestNodeRuntimePathsWithValidWorkspace(t *testing.T) {
 	r := newTestRunner()
-	workspace, err := ProvisionWorkspace(t.TempDir(), r.ID(), []string{"only"}, nil)
+	workspace, err := ProvisionWorkspace(t.TempDir(), r.ID(), []string{"node-1"}, nil)
 	if err != nil {
 		t.Fatalf("ProvisionWorkspace: %v", err)
 	}
 	r.workspace = workspace
 
-	paths, err := r.nodeRuntimePaths("only", "skill-one", nil)
+	paths, err := r.nodeRuntimePaths("node-1", "skill-one", nil)
 	if err != nil {
 		t.Fatalf("nodeRuntimePaths: %v", err)
 	}
 
-	skillWS, ok := workspace.Skill("only")
+	skillWS, ok := workspace.Skill("node-1")
 	if !ok {
-		t.Fatal("workspace.Skill(only) = false")
+		t.Fatal("workspace.Skill(node-1) = false")
 	}
-	if paths.RunnerID != r.ID() || paths.NodeID != "only" || paths.SkillName != "skill-one" {
+	if paths.RunnerID != r.ID() || paths.NodeID != "node-1" || paths.SkillName != "skill-one" {
 		t.Fatalf("runtime paths = %+v", paths)
 	}
 	if paths.MemoDir != skillWS.MemoDir || paths.UpstreamDir != skillWS.UpstreamDir || paths.DownstreamDir != skillWS.DownstreamDir || paths.ScratchDir != skillWS.ScratchDir {
@@ -35,7 +35,7 @@ func TestNodeRuntimePathsWithValidWorkspace(t *testing.T) {
 
 func TestNodeRuntimePathsErrorOnMissingSkill(t *testing.T) {
 	r := newTestRunner()
-	workspace, err := ProvisionWorkspace(t.TempDir(), r.ID(), []string{"other"}, nil)
+	workspace, err := ProvisionWorkspace(t.TempDir(), r.ID(), []string{"node-1"}, nil)
 	if err != nil {
 		t.Fatalf("ProvisionWorkspace: %v", err)
 	}
