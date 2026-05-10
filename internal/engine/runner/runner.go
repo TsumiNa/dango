@@ -549,7 +549,11 @@ func (r *Runner) runEngine(ctx context.Context) error {
 		for _, p := range n.Parents {
 			inputs[p.Id] = outputs[p.Id]
 		}
-		if err := r.prepareNodeExecutor(n.Id, n.Executor, r.nodeRuntimePaths(n.Id, n.SkillName, inputs)); err != nil {
+		runtimePaths, err := r.nodeRuntimePaths(n.Id, n.SkillName, inputs)
+		if err != nil {
+			return err
+		}
+		if err := r.prepareNodeExecutor(n.Id, n.Executor, runtimePaths); err != nil {
 			return err
 		}
 
