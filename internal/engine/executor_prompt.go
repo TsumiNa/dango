@@ -9,7 +9,6 @@ import (
 
 	builtinpromptspkg "github.com/tsumina/dango/internal/engine/builtin/prompts"
 	runnerpkg "github.com/tsumina/dango/internal/engine/runner"
-	"github.com/tsumina/dango/internal/llm"
 )
 
 var (
@@ -165,17 +164,4 @@ func readParentHandoffsFromUpstream(upstreamDir string) (string, error) {
 		b.WriteString("\n\n")
 	}
 	return strings.TrimSpace(b.String()), nil
-}
-
-func latestReasoning(sk *llm.Skill) string {
-	if sk == nil || sk.Conversation() == nil {
-		return ""
-	}
-	turns := sk.Conversation().Turns()
-	for i := len(turns) - 1; i >= 0; i-- {
-		if turns[i].Role == llm.RoleReasoning && turns[i].Text != "" {
-			return turns[i].Text
-		}
-	}
-	return ""
 }

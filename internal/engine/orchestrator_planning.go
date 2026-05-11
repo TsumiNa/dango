@@ -191,3 +191,16 @@ func normalizeContext(ctx context.Context) context.Context {
 	}
 	return ctx
 }
+
+func latestReasoning(sk *llm.Skill) string {
+	if sk == nil || sk.Conversation() == nil {
+		return ""
+	}
+	turns := sk.Conversation().Turns()
+	for i := len(turns) - 1; i >= 0; i-- {
+		if turns[i].Role == llm.RoleReasoning && turns[i].Text != "" {
+			return turns[i].Text
+		}
+	}
+	return ""
+}
