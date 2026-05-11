@@ -634,7 +634,7 @@ func TestPolish_UsesRuntimeSkillWhenBound(t *testing.T) {
 	if doc.Body != "Use the GP package environment after elevation enrichment." {
 		t.Fatalf("handoff = %q, want skill polish output", doc.Body)
 	}
-	if !strings.Contains(requestBody, "Polish the assigned task plan before execution") {
+	if !strings.Contains(requestBody, "# Polish stage note") {
 		t.Fatalf("polish request missing polish prompt: %s", requestBody)
 	}
 }
