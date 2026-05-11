@@ -13,6 +13,7 @@ import (
 
 	builtinpromptspkg "github.com/tsumina/dango/internal/engine/builtin/prompts"
 	runnerpkg "github.com/tsumina/dango/internal/engine/runner"
+	streampkg "github.com/tsumina/dango/internal/engine/stream"
 	"github.com/tsumina/dango/internal/llm"
 )
 
@@ -120,12 +121,14 @@ func (e *Executor) renderStageOutputs(stage string, intent string, toNodes []str
 	nodeID := paths.NodeID
 	skillName := paths.SkillName
 	doc := runnerpkg.HandoffDoc{
-		RunnerID:  runnerID,
-		FromNode:  nodeID,
-		ToNodes:   append([]string(nil), toNodes...),
-		Intent:    intent,
-		CreatedAt: time.Now(),
-		Body:      strings.TrimSpace(body),
+		ChannelHeader: streampkg.ChannelHeader{
+			RunnerID:  runnerID,
+			CreatedAt: time.Now(),
+		},
+		FromNode: nodeID,
+		ToNodes:  append([]string(nil), toNodes...),
+		Intent:   intent,
+		Body:     strings.TrimSpace(body),
 	}
 	handoffMarkdown, err := doc.Markdown()
 	if err != nil {
@@ -157,11 +160,13 @@ func (e *Executor) renderStageOutputs(stage string, intent string, toNodes []str
 
 func (e *Executor) exchangeDocMarkdown(runnerID string, nodeID string, skillName string, stage string, body string) (string, error) {
 	exchange := runnerpkg.ExchangeDoc{
-		RunnerID:  runnerID,
+		ChannelHeader: streampkg.ChannelHeader{
+			RunnerID:  runnerID,
+			CreatedAt: time.Now(),
+		},
 		NodeID:    nodeID,
 		SkillName: skillName,
 		Title:     stage,
-		CreatedAt: time.Now(),
 		Body:      strings.TrimSpace(body),
 	}
 	return exchange.Markdown()

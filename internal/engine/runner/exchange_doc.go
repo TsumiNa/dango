@@ -6,41 +6,33 @@ import (
 	"time"
 
 	"github.com/adrg/frontmatter"
+	streampkg "github.com/tsumina/dango/internal/engine/stream"
 	"gopkg.in/yaml.v2"
 )
-
-// ExchangeDocKind is the front matter kind used by exchange entry documents.
-const ExchangeDocKind = "dango.exchange_doc"
 
 // ExchangeDocVersion is the schema version for [ExchangeDoc] markdown.
 const ExchangeDocVersion = 1
 
 // ExchangeDoc is a front-mattered markdown entry for the shared exchange space.
 type ExchangeDoc struct {
-	Kind      string    `json:"kind" yaml:"kind"`
-	Version   int       `json:"version" yaml:"version"`
-	RunnerID  string    `json:"runner_id" yaml:"runner_id"`
-	NodeID    string    `json:"node_id" yaml:"node_id"`
-	SkillName string    `json:"skill_name,omitempty" yaml:"skill_name,omitempty"`
-	Title     string    `json:"title,omitempty" yaml:"title,omitempty"`
-	CreatedAt time.Time `json:"created_at" yaml:"created_at"`
-	Body      string    `json:"body,omitempty" yaml:"-"`
+	streampkg.ChannelHeader `json:",inline" yaml:",inline"`
+	NodeID                  string `json:"node_id" yaml:"node_id"`
+	SkillName               string `json:"skill_name,omitempty" yaml:"skill_name,omitempty"`
+	Title                   string `json:"title,omitempty" yaml:"title,omitempty"`
+	Body                    string `json:"body,omitempty" yaml:"-"`
 }
 
 type exchangeDocFrontMatter struct {
-	Kind      string    `yaml:"kind"`
-	Version   int       `yaml:"version"`
-	RunnerID  string    `yaml:"runner_id"`
-	NodeID    string    `yaml:"node_id"`
-	SkillName string    `yaml:"skill_name,omitempty"`
-	Title     string    `yaml:"title,omitempty"`
-	CreatedAt time.Time `yaml:"created_at"`
+	streampkg.ChannelHeader `yaml:",inline"`
+	NodeID                  string `yaml:"node_id"`
+	SkillName               string `yaml:"skill_name,omitempty"`
+	Title                   string `yaml:"title,omitempty"`
 }
 
 // Markdown renders doc as a canonical exchange-entry markdown document.
 func (doc ExchangeDoc) Markdown() (string, error) {
 	if doc.Kind == "" {
-		doc.Kind = ExchangeDocKind
+		doc.Kind = streampkg.ChannelKindExchange
 	}
 	if doc.Version == 0 {
 		doc.Version = ExchangeDocVersion
@@ -56,13 +48,15 @@ func (doc ExchangeDoc) Markdown() (string, error) {
 	}
 
 	meta := exchangeDocFrontMatter{
-		Kind:      doc.Kind,
-		Version:   doc.Version,
-		RunnerID:  doc.RunnerID,
+		ChannelHeader: streampkg.ChannelHeader{
+			Kind:      doc.Kind,
+			Version:   doc.Version,
+			RunnerID:  doc.RunnerID,
+			CreatedAt: doc.CreatedAt,
+		},
 		NodeID:    doc.NodeID,
 		SkillName: doc.SkillName,
 		Title:     doc.Title,
-		CreatedAt: doc.CreatedAt,
 	}
 	front, err := yaml.Marshal(meta)
 	if err != nil {
@@ -85,8 +79,8 @@ func ParseExchangeDocMarkdown(raw string) (*ExchangeDoc, error) {
 	if err != nil {
 		return nil, fmt.Errorf("runner: parse exchange doc front matter: %w", err)
 	}
-	if meta.Kind != ExchangeDocKind {
-		return nil, fmt.Errorf("runner: exchange doc kind = %q, want %q", meta.Kind, ExchangeDocKind)
+	if meta.Kind != streampkg.ChannelKindExchange {
+		return nil, fmt.Errorf("runner: exchange doc kind = %q, want %q", meta.Kind, streampkg.ChannelKindExchange)
 	}
 	if meta.Version != ExchangeDocVersion {
 		return nil, fmt.Errorf("runner: exchange doc version = %d, want %d", meta.Version, ExchangeDocVersion)
@@ -101,13 +95,15 @@ func ParseExchangeDocMarkdown(raw string) (*ExchangeDoc, error) {
 		return nil, fmt.Errorf("runner: exchange doc created_at must not be empty")
 	}
 	return &ExchangeDoc{
-		Kind:      meta.Kind,
-		Version:   meta.Version,
-		RunnerID:  meta.RunnerID,
+		ChannelHeader: streampkg.ChannelHeader{
+			Kind:      meta.Kind,
+			Version:   meta.Version,
+			RunnerID:  meta.RunnerID,
+			CreatedAt: meta.CreatedAt,
+		},
 		NodeID:    meta.NodeID,
 		SkillName: meta.SkillName,
 		Title:     meta.Title,
-		CreatedAt: meta.CreatedAt,
 		Body:      strings.TrimSpace(string(body)),
 	}, nil
 }

@@ -131,7 +131,7 @@ func TestRendererSummarizesRunningExchangeDraft(t *testing.T) {
 		From:      streampkg.Source{Layer: "skill", ID: "train"},
 		Status:    streampkg.StatusRunning,
 		Delta: mustJSONString(t, `---
-kind: dango.handoff_doc
+kind: handoff
 version: 1
 runner_id: runner-1
 from_node: train
@@ -141,7 +141,7 @@ created_at: 2026-05-01T12:00:00Z
 ---
 drafting a long handoff document`),
 	})
-	if !strings.Contains(line, "drafting exchange") || strings.Contains(line, "dango.handoff_doc") {
+	if !strings.Contains(line, "drafting exchange") || strings.Contains(line, "kind: handoff") {
 		t.Fatalf("running handoff draft line = %q", line)
 	}
 }
@@ -252,7 +252,7 @@ func TestRendererWritesExchangeMarkdownReferences(t *testing.T) {
 		Status:         streampkg.StatusCompleted,
 		SequenceNumber: 7,
 		Delta: mustJSONString(t, `---
-kind: dango.handoff_doc
+kind: handoff
 version: 1
 runner_id: runner-1
 from_node: writer
@@ -280,7 +280,7 @@ func TestRendererWritesDraftExchangeMarkdownReferences(t *testing.T) {
 		Status:         streampkg.StatusCompleted,
 		SequenceNumber: 9,
 		Delta: mustJSONString(t, `---
-kind: dango.exchange_doc
+kind: exchange
 version: 1
 runner_id: runner-1
 node_id: writer
@@ -296,7 +296,7 @@ payload`),
 	if err != nil {
 		t.Fatalf("exchange file not written: %v", err)
 	}
-	if !strings.Contains(string(written), "kind: dango.exchange_doc") || !strings.Contains(string(written), "payload") {
+	if !strings.Contains(string(written), "kind: exchange") || !strings.Contains(string(written), "payload") {
 		t.Fatalf("exchange doc file was not preserved raw:\n%s", string(written))
 	}
 }

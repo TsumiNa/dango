@@ -1101,11 +1101,11 @@ func findTool(t *testing.T, tools []llm.Tool, name string) llm.Tool {
 
 func polishExchangeMarkdown(prompt string) (string, error) {
 	doc := runnerpkg.HandoffDoc{
-		RunnerID: "runner-1",
-		FromNode: "node",
-		ToNodes:  []string{"orchestrator"},
-		Intent:   "review",
-		Body:     "Proceed with this skill only if the assigned task matches its stated responsibility.\n\n" + prompt,
+		ChannelHeader: streampkg.ChannelHeader{RunnerID: "runner-1"},
+		FromNode:      "node",
+		ToNodes:       []string{"orchestrator"},
+		Intent:        "review",
+		Body:          "Proceed with this skill only if the assigned task matches its stated responsibility.\n\n" + prompt,
 	}
 	return doc.Markdown()
 }
@@ -1146,22 +1146,22 @@ func missingSkills(prompt plannerPrompt, required ...string) []string {
 
 func executionExchangeMarkdown(toolOutput string) (string, error) {
 	doc := runnerpkg.HandoffDoc{
-		RunnerID: "runner-1",
-		FromNode: "node",
-		ToNodes:  []string{"downstream"},
-		Intent:   "continue",
-		Body:     fencedJSON(toolOutput),
+		ChannelHeader: streampkg.ChannelHeader{RunnerID: "runner-1"},
+		FromNode:      "node",
+		ToNodes:       []string{"downstream"},
+		Intent:        "continue",
+		Body:          fencedJSON(toolOutput),
 	}
 	return doc.Markdown()
 }
 
 func reportExchangeMarkdown(output string) (string, error) {
 	doc := runnerpkg.HandoffDoc{
-		RunnerID: "runner-1",
-		FromNode: "node",
-		ToNodes:  []string{"orchestrator"},
-		Intent:   "summarize",
-		Body:     summarizeReportOutput(output),
+		ChannelHeader: streampkg.ChannelHeader{RunnerID: "runner-1"},
+		FromNode:      "node",
+		ToNodes:       []string{"orchestrator"},
+		Intent:        "summarize",
+		Body:          summarizeReportOutput(output),
 	}
 	return doc.Markdown()
 }

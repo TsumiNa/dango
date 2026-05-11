@@ -607,7 +607,7 @@ Resolved in the follow-up PR:
 1. **Legacy `ExchangeDocument` compatibility was removed.**
    - Legacy exchange symbols, parsers, draft helpers, resource metadata, and
      executor legacy return paths were deleted.
-   - Executor stage paths now return `dango.handoff_doc` markdown.
+   - Executor stage paths now return `handoff` markdown.
 2. **`Request.ArtifactsDir` no longer participates in runner trusted roots.**
    - `newRunnerFromPlan` no longer forwards request artifacts through
      `runnerpkg.WithTrustedResourceRoots`.

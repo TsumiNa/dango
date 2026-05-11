@@ -1144,7 +1144,7 @@ func looksLikeExchangeDraft(text string) bool {
 		return true
 	}
 	return strings.HasPrefix(trimmed, "---") &&
-		(strings.Contains(trimmed, "kind: "+runnerpkg.HandoffDocKind) ||
-			strings.Contains(trimmed, "kind: "+runnerpkg.ExchangeDocKind) ||
-			strings.Contains(trimmed, "kind: "+runnerpkg.MemoDocumentKind))
+		(strings.Contains(trimmed, "kind: "+string(streampkg.ChannelKindHandoff)) ||
+			strings.Contains(trimmed, "kind: "+string(streampkg.ChannelKindExchange)) ||
+			strings.Contains(trimmed, "kind: "+string(streampkg.ChannelKindMemo)))
 }

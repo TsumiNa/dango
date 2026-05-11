@@ -14,12 +14,14 @@ import (
 
 func TestRunnerStoresHandoffMarkdownOutput(t *testing.T) {
 	raw, err := (HandoffDoc{
-		RunnerID:  "runner-1",
-		FromNode:  "node-1",
-		ToNodes:   []string{"node-2"},
-		Intent:    "continue",
-		CreatedAt: time.Date(2026, 4, 30, 12, 0, 0, 0, time.UTC),
-		Body:      "output",
+		ChannelHeader: stream.ChannelHeader{
+			RunnerID:  "runner-1",
+			CreatedAt: time.Date(2026, 4, 30, 12, 0, 0, 0, time.UTC),
+		},
+		FromNode: "node-1",
+		ToNodes:  []string{"node-2"},
+		Intent:   "continue",
+		Body:     "output",
 	}).Markdown()
 	if err != nil {
 		t.Fatalf("Markdown: %v", err)
@@ -48,7 +50,10 @@ func TestRunnerEmitsHandoffArtifactEvents(t *testing.T) {
 		t.Fatalf("WriteFile(artifact): %v", err)
 	}
 	raw, err := (HandoffDoc{
-		RunnerID: "wrong-runner",
+		ChannelHeader: stream.ChannelHeader{
+			RunnerID:  "wrong-runner",
+			CreatedAt: time.Date(2026, 4, 30, 12, 0, 0, 0, time.UTC),
+		},
 		FromNode: "wrong-node",
 		ToNodes:  []string{"node-2"},
 		Intent:   "continue",
@@ -57,8 +62,7 @@ func TestRunnerEmitsHandoffArtifactEvents(t *testing.T) {
 			Type:        HandoffArtifactFile,
 			Description: "Prediction CSV",
 		}},
-		CreatedAt: time.Date(2026, 4, 30, 12, 0, 0, 0, time.UTC),
-		Body:      "output",
+		Body: "output",
 	}).Markdown()
 	if err != nil {
 		t.Fatalf("Markdown: %v", err)
@@ -139,9 +143,9 @@ func TestRunnerSkipsExternalArtifactsWithoutTrustedRoots(t *testing.T) {
 		t.Fatalf("write resource: %v", err)
 	}
 	parentOutput, err := (HandoffDoc{
-		RunnerID: "runner-1",
-		FromNode: "parent",
-		ToNodes:  []string{"child"},
+		ChannelHeader: stream.ChannelHeader{RunnerID: "runner-1"},
+		FromNode:      "parent",
+		ToNodes:       []string{"child"},
 		Artifacts: []HandoffArtifact{{
 			Path: resourceFile,
 			Type: HandoffArtifactFile,
@@ -191,9 +195,9 @@ func TestRunnerPassesRelativeHandoffArtifactDirsToChildBinder(t *testing.T) {
 		t.Fatalf("WriteFile(artifact): %v", err)
 	}
 	parentOutput, err := (HandoffDoc{
-		RunnerID: "runner-1",
-		FromNode: "parent",
-		ToNodes:  []string{"child"},
+		ChannelHeader: stream.ChannelHeader{RunnerID: "runner-1"},
+		FromNode:      "parent",
+		ToNodes:       []string{"child"},
 		Artifacts: []HandoffArtifact{{
 			Path: "downstream/artifacts/predictions.csv",
 			Type: HandoffArtifactFile,

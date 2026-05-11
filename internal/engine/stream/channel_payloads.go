@@ -4,12 +4,11 @@ import "time"
 
 // ExchangePublishedPayload is the JSON payload for [EventExchangePublished].
 type ExchangePublishedPayload struct {
-	RunnerID  string    `json:"runner_id"`
-	NodeID    string    `json:"node_id"`
-	Path      string    `json:"path"`
-	Document  string    `json:"document"`
-	Title     string    `json:"title,omitempty"`
-	CreatedAt time.Time `json:"created_at,omitempty"`
+	ChannelHeader `json:",inline"`
+	NodeID        string `json:"node_id"`
+	Path          string `json:"path"`
+	Document      string `json:"document"`
+	Title         string `json:"title,omitempty"`
 }
 
 // HandoffArtifactPayload describes one artifact in handoff stream payloads.
@@ -21,14 +20,13 @@ type HandoffArtifactPayload struct {
 
 // HandoffEmittedPayload is the JSON payload for [EventHandoffEmitted].
 type HandoffEmittedPayload struct {
-	RunnerID  string                   `json:"runner_id"`
-	FromNode  string                   `json:"from_node"`
-	ToNodes   []string                 `json:"to_nodes"`
-	Intent    string                   `json:"intent,omitempty"`
-	Path      string                   `json:"path"`
-	Document  string                   `json:"document"`
-	Artifacts []HandoffArtifactPayload `json:"artifacts,omitempty"`
-	CreatedAt time.Time                `json:"created_at,omitempty"`
+	ChannelHeader `json:",inline"`
+	FromNode      string                   `json:"from_node"`
+	ToNodes       []string                 `json:"to_nodes"`
+	Intent        string                   `json:"intent,omitempty"`
+	Path          string                   `json:"path"`
+	Document      string                   `json:"document"`
+	Artifacts     []HandoffArtifactPayload `json:"artifacts,omitempty"`
 }
 
 // HandoffDeliveredPayload is the JSON payload for [EventHandoffDelivered].
