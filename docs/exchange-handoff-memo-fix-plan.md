@@ -261,6 +261,13 @@ After the executor code is structurally split, refactor the built-in prompt syst
 - Change executor stage invocation so it passes only the minimal stage objective plus stable runtime context. Do not pre-compose a fully interpreted request by copying upstream handoff/exchange content into a fixed template whenever the skill can read the source material itself.
 - Keep the built-in instructions markdown-first and readable as runtime policy docs. Avoid introducing a new structured prompt DSL or another layer of stage-specific Go template data structs as the replacement.
 - Ensure the migration preserves the current tool-access boundary: the skill should inspect only the files and directories that the runner intentionally exposes through runtime context and accessible dirs.
+- Define an explicit conversation bootstrap order for every new skill conversation:
+  1. load shared built-in instructions first, so the skill learns the Dango workflow, stage model, tool usage, memo guidance, and channel semantics;
+  2. load the skill's own `SKILL.md`, so the skill learns its domain capability, scripts, schemas, and task-specific operating guidance;
+  3. provide references to currently relevant exchange files, including their locations and front matter summaries, so the skill knows what shared public context exists and can decide which files to inspect;
+  4. provide the concrete task description for the current stage;
+  5. when a directed upstream handoff exists, provide its location and basic metadata so the skill can inspect it directly and decide how to use it.
+- Keep exchange and handoff references lightweight at bootstrap time. The runtime should tell the skill where these documents are and what they are, but should avoid pre-interpreting all of their contents into one filled request.
 - Add tests that assert the shared built-in instructions:
   - describe the runtime workflow and channel contract;
   - tell skills to use tools to inspect upstream handoff/exchange inputs when needed;
@@ -308,12 +315,23 @@ The instruction layer should also include decision guidance:
 - Keep large data and generated files out of handoff bodies. Store them under `downstream/artifacts/`, list them in handoff front matter, and describe the schema, row counts, caveats, and intended downstream use in short prose.
 - Do not inline large fenced `json`, `csv`, source-code, or model-output blocks in handoff bodies when the content is available as a declared artifact. Small snippets are acceptable only when they clarify schema or usage and are not the data payload itself.
 
+The instruction layer should also make the context loading order explicit:
+
+1. shared built-in instructions;
+2. bound skill `SKILL.md`;
+3. exchange file references and front matter summaries for shared public context;
+4. the concrete stage task;
+5. optional handoff location and metadata for directed upstream input.
+
+This ordering ensures the skill first understands how to operate inside Dango, then understands its own domain capability, then learns which runtime artifacts are available for inspection, and only then receives the specific work it must complete.
+
 Instruction-set follow-up changes:
 
 - Move the workspace channel contract out of domain `SKILL.md` files and into the common skill runtime/system instructions.
 - Pass typed workspace paths and stage identity as runtime context, but avoid making prompt-data structs the semantic contract for how a skill consumes upstream work.
 - Replace template-specific wording such as "memo-like progress in prose" and "prefer fenced JSON payloads" with markdown instruction text that teaches artifact-first and memo-file behavior.
 - Keep stage notes minimal: they should state the objective and constraints of the stage, not pre-read all upstream context on the skill's behalf.
+- Expose exchange and handoff documents as inspectable references with stable paths and concise metadata, not as eagerly flattened prose payloads.
 - Ensure polish guidance remains lightweight when the phase is a pure feasibility review; memo writing should be available in execute/report only when tools and workspace writes are allowed.
 
 ### Phase 5B: Add handoff body size and artifact-reference safeguards
