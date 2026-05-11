@@ -82,11 +82,19 @@ func (e *Executor) Report(ctx context.Context, output any) (any, error) {
 }
 
 func (e *Executor) runPolishStage(ctx context.Context) (string, error) {
+	var task, reason, solution string
+	var version uint32
+	if e.planner != nil {
+		task = e.planner.TaskDescription
+		version = e.planner.Version
+		reason = e.planner.Reason
+		solution = e.planner.Solution
+	}
 	defaultBody := strings.TrimSpace(fmt.Sprintf("Task description:\n\n%s\n\nPlanner version: %d\n\nReason:\n%s\n\nSolution:\n%s",
-		e.planner.TaskDescription,
-		e.planner.Version,
-		e.planner.Reason,
-		e.planner.Solution,
+		task,
+		version,
+		reason,
+		solution,
 	))
 	runtime, ok, err := e.runnableRuntimeSkill()
 	if err != nil {
@@ -107,7 +115,11 @@ func (e *Executor) runPolishStage(ctx context.Context) (string, error) {
 }
 
 func (e *Executor) runExecuteStage(ctx context.Context, parentOutputs map[string]any) (string, error) {
-	fallback := fallbackExecutionHandoff(e.planner.TaskDescription, parentOutputs)
+	task := ""
+	if e.planner != nil {
+		task = e.planner.TaskDescription
+	}
+	fallback := fallbackExecutionHandoff(task, parentOutputs)
 	runtime, ok, err := e.runnableRuntimeSkill()
 	if err != nil {
 		return "", err
