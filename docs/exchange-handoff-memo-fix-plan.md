@@ -50,11 +50,13 @@ The `inbox/` and `outbox/` names are also generic mailbox terms. They do not des
 - `downstream/handoff.md` for this node's directed output;
 - `downstream/artifacts/` for artifacts referenced by the directed handoff.
 
-### 4. Prompt construction is too late and too entangled
+### 4. Template-based prompt construction is too late and too entangled
 
 Prompt rendering currently happens in executor stage methods. The prompt data includes workspace/accessibility details that should be part of a runner-provided runtime context at bind time or stage invocation time.
 
-Prompt construction should be separated from message routing. At minimum, prompt rendering should live in a focused executor prompt file. Longer term, the skill binding/runtime context should provide stable instructions and paths before execution starts, not require stage output code to rediscover them.
+The bigger issue is that the executor currently assembles a mostly complete LLM request from stage-specific templates and injected handoff/exchange content. That keeps the request shape explicit and may reduce turns, but it also hard-codes one interpretation path for upstream inputs. When parent handoffs vary in structure or when a task needs a longer tool-driven investigation, the fixed template becomes a constraint instead of a runtime aid.
+
+Prompt construction should be separated from message routing. Short term, prompt code should live in a focused executor prompt file. Longer term, the runtime should stop treating built-in prompts as filled request templates and instead provide agentic built-in instructions that teach the skill how Dango works, which tools and workspace channels exist, and how to inspect upstream exchange/handoff context for itself.
 
 ### 4A. Header fields and kind definitions are scattered
 
@@ -126,6 +128,8 @@ A skill should produce explicit runtime messages:
 4. Put durable downstream artifacts in `downstream/artifacts` and reference them in handoff front matter.
 
 Domain `SKILL.md` files should stay focused on domain behavior: capability, canonical scripts, input/output schemas, and task-specific constraints. They should not repeat generic channel mechanics such as how to use `memo/`, how to format handoff front matter, or which workspace directories exist. Those generic mechanics belong in the shared runtime prompt/instruction layer so all skills receive the same channel contract.
+
+The shared runtime prompt/instruction layer should teach skills how to operate in Dango, not pre-solve each stage by assembling one filled prompt from upstream content. Skills should be able to inspect exchange/handoff artifacts agentically through tools, use memo when the task spans multiple steps, and decide how much upstream context is relevant instead of inheriting one template-defined reading path.
 
 ### Message header model
 
@@ -242,6 +246,27 @@ Replace the current catch-all file with focused files:
 
 Do not add adapter layers for old private function names; update call sites directly.
 
+### Phase 3A: Replace template-built prompts with agentic built-in instructions
+
+After the executor code is structurally split, refactor the built-in prompt system away from stage-specific template filling and toward markdown instructions that teach runtime behavior.
+
+- Stop treating `polish.tmpl`, `execute.tmpl`, and `report.tmpl` as the long-term execution contract. They may remain temporarily during migration, but the target is to remove template-filled stage prompts as the primary way skills receive work.
+- Replace the renderer/template package with versioned markdown built-in instructions and small stage notes that explain:
+  - the role of the current stage (`polish`, `execute`, `report`);
+  - the Dango runtime workflow and the skill's responsibility within it;
+  - available tools and when to use them;
+  - the workspace channel contract for `memo/`, `upstream/`, `downstream/`, `downstream/artifacts/`, `scratch/`, and `exchange/`;
+  - when to inspect upstream handoff/exchange content directly with tools rather than relying on pre-injected summaries;
+  - when to create memo files for long call chains, planning, failed attempts, data-quality concerns, and decisions that should survive context loss.
+- Change executor stage invocation so it passes only the minimal stage objective plus stable runtime context. Do not pre-compose a fully interpreted request by copying upstream handoff/exchange content into a fixed template whenever the skill can read the source material itself.
+- Keep the built-in instructions markdown-first and readable as runtime policy docs. Avoid introducing a new structured prompt DSL or another layer of stage-specific Go template data structs as the replacement.
+- Ensure the migration preserves the current tool-access boundary: the skill should inspect only the files and directories that the runner intentionally exposes through runtime context and accessible dirs.
+- Add tests that assert the shared built-in instructions:
+  - describe the runtime workflow and channel contract;
+  - tell skills to use tools to inspect upstream handoff/exchange inputs when needed;
+  - explain memo usage as file writes under `memo/`, not memo-like prose in handoff bodies;
+  - do not require each domain `SKILL.md` to restate the generic Dango workflow.
+
 ### Phase 4: Move routing decisions to runner kind parsing
 
 Create one focused parser/routing function for channel documents, for example a small internal result type with kind-specific payloads. The runner should parse front matter once and branch on `kind` rather than trying `ParseHandoffMarkdown` then `ParseExchangeDocMarkdown` in multiple places.
@@ -270,7 +295,7 @@ The shared instruction layer should include a concise "Workspace channel contrac
 - `memo/` is private durable scratch for the current skill/node. Use it for plans, assumptions, data-quality notes, model notes, failed attempts, or other information useful across polish/execute/report turns. It is not delivered to downstream skills.
 - `downstream/handoff.md` is the directed downstream message. Return or write exactly one handoff document when a stage needs to pass results to downstream nodes or the orchestrator.
 - `downstream/artifacts/` stores durable files referenced by handoff front matter.
-- `upstream/<node>/handoff.md` contains directed upstream input from a parent node. Read parent handoffs from the prompt or upstream directory, not from the shared exchange unless the task explicitly asks for shared public context.
+- `upstream/<node>/handoff.md` contains directed upstream input from a parent node. Read parent handoffs from runner-exposed upstream context, not from the shared exchange unless the task explicitly asks for shared public context.
 - `scratch/` is private working space for temporary glue code and intermediate files that are not memo notes and not downstream artifacts.
 - `exchange/` is runner-scoped shared public context. Publish exchange documents for public progress/reporting, not for directed downstream delivery.
 
@@ -283,14 +308,13 @@ The instruction layer should also include decision guidance:
 - Keep large data and generated files out of handoff bodies. Store them under `downstream/artifacts/`, list them in handoff front matter, and describe the schema, row counts, caveats, and intended downstream use in short prose.
 - Do not inline large fenced `json`, `csv`, source-code, or model-output blocks in handoff bodies when the content is available as a declared artifact. Small snippets are acceptable only when they clarify schema or usage and are not the data payload itself.
 
-Prompt plumbing changes:
+Instruction-set follow-up changes:
 
 - Move the workspace channel contract out of domain `SKILL.md` files and into the common skill runtime/system instructions.
-- Include typed workspace paths in the prompt data from runner-owned runtime context, not by asking executor prompt code to rediscover paths from `accessibleDirs`.
-- Rename prompt fields so they reflect channel semantics: use `ParentHandoffs` for directed input, `ExchangeContext` only for shared public context, and `MemoDir`/`DownstreamDir`/`ArtifactsDir`/`ScratchDir` for writable locations.
-- Remove wording such as "memo-like progress in prose" from `execute.tmpl`; replace it with explicit memo-file guidance.
-- Remove wording that asks execute-stage handoffs to prefer fenced JSON payloads. Replace it with artifact-first guidance and short body summaries.
-- Ensure polish prompts remain no-tool/no-file when the phase is a pure feasibility review; memo writing should be available in execute/report only when tools and workspace writes are allowed.
+- Pass typed workspace paths and stage identity as runtime context, but avoid making prompt-data structs the semantic contract for how a skill consumes upstream work.
+- Replace template-specific wording such as "memo-like progress in prose" and "prefer fenced JSON payloads" with markdown instruction text that teaches artifact-first and memo-file behavior.
+- Keep stage notes minimal: they should state the objective and constraints of the stage, not pre-read all upstream context on the skill's behalf.
+- Ensure polish guidance remains lightweight when the phase is a pure feasibility review; memo writing should be available in execute/report only when tools and workspace writes are allowed.
 
 ### Phase 5B: Add handoff body size and artifact-reference safeguards
 
@@ -306,7 +330,7 @@ Prompt plumbing changes:
 - Keep this fix intentionally small. Do not reorganize renderer APIs, package boundaries, or terminal UI architecture in this PR; those belong to the deferred streamrender extraction/refactor.
 - Update Honshu tests so they assert canonical exchange files under `artifacts/persistence/workspace/task_<runner>/exchange` rather than the old outer `artifacts/exchanges` directory.
 
-Tests for this phase should assert that rendered generic prompts mention `memo/` as a writable private workspace channel and do not require individual domain `SKILL.md` files to document memo usage.
+Tests for this phase should assert that shared built-in instructions mention `memo/` as a writable private workspace channel, tell the skill to inspect upstream handoffs/exchange context with tools when needed, and do not require individual domain `SKILL.md` files to document generic Dango workflow usage.
 
 ### Phase 6: Align the Honshu example vocabulary
 
@@ -326,6 +350,7 @@ The example docs and skill prompts still use older wording such as "exchange mar
 - Per-skill runtime directories use directional names (`upstream`, `downstream`) and `scratch` instead of nested `workspace`.
 - Stream events and markdown channel documents share a central base header model rather than duplicating ad-hoc header fields.
 - Prompt code, workspace code, stage entrypoints, and document packaging are in separate focused files.
+- Built-in executor instructions are markdown workflow guidance rather than filled prompt templates that pre-interpret upstream handoff/exchange content.
 - Memo snapshots are produced only when skills actually write memo files, and tests cover both memo-present and memo-absent cases.
 - Honshu example artifacts/tests use handoff/exchange/memo terminology consistently.
 - The Honshu example does not create a second outer `artifacts/exchanges` directory for renderer-captured channel markdown.
