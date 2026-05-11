@@ -18,10 +18,6 @@ type eventStreamProvider interface {
 	EventStream() *streampkg.Stream
 }
 
-type promptTemplateOverrideReceiver interface {
-	SetPromptTemplateOverrides(map[string]string)
-}
-
 type memorySessionStore struct {
 	mu       sync.Mutex
 	sessions map[string][]llm.Event
@@ -148,10 +144,6 @@ func (r *Runner) prepareNodeExecutors(nodes map[string]*Node) error {
 // the event stream. Stream merging is deferred to prepareNodeExecutor, which
 // is called with the correct accessibleDirs immediately before a node runs.
 func (r *Runner) bindExecutorSession(id string, executor Executor, runtimePaths ExecutorRuntimePaths) error {
-	if receiver, ok := executor.(promptTemplateOverrideReceiver); ok {
-		receiver.SetPromptTemplateOverrides(r.promptTemplateOverrides)
-	}
-
 	r.skillSessionMu.Lock()
 	defer r.skillSessionMu.Unlock()
 
@@ -178,10 +170,6 @@ func (r *Runner) prepareNodeExecutor(id string, executor Executor, runtimePaths 
 	if executor == nil || r.skillSessionStore == nil {
 		return nil
 	}
-	if receiver, ok := executor.(promptTemplateOverrideReceiver); ok {
-		receiver.SetPromptTemplateOverrides(r.promptTemplateOverrides)
-	}
-
 	r.skillSessionMu.Lock()
 	defer r.skillSessionMu.Unlock()
 
