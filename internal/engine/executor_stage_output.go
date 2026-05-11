@@ -41,6 +41,9 @@ func (e *Executor) renderStageOutputs(stage string, intent string, toNodes []str
 		}
 	}
 	if paths.ExchangeDir != "" {
+		if err := os.MkdirAll(paths.ExchangeDir, 0o755); err != nil {
+			return "", fmt.Errorf("orchestrate: create exchange dir: %w", err)
+		}
 		fileName := fmt.Sprintf("%s-%s-%d.md", stage, nodeID, time.Now().UnixNano())
 		exchangeMarkdown, exchangeErr := e.exchangeDocMarkdown(runnerID, nodeID, skillName, stage, body)
 		if exchangeErr != nil {

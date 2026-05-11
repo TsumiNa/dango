@@ -128,6 +128,49 @@ func TestExchangeDocMarkdownTreatsBodyAsOpaqueMarkdown(t *testing.T) {
 	}
 }
 
+func TestRenderStageOutputsRecreatesMissingExchangeDir(t *testing.T) {
+	workspace, err := runnerpkg.ProvisionWorkspace(t.TempDir(), "runner-1", []string{"node-1"}, nil)
+	if err != nil {
+		t.Fatalf("ProvisionWorkspace: %v", err)
+	}
+	if _, ok := workspace.Skill("node-1"); !ok {
+		t.Fatal("workspace.Skill(node-1) = false")
+	}
+	accessible, err := workspace.AccessibleDirs("node-1")
+	if err != nil {
+		t.Fatalf("AccessibleDirs: %v", err)
+	}
+	exec, err := NewExecutor(loadLightweightTestSkill(t), &ExecutionPlanner{
+		id:              "node-1",
+		TaskDescription: "Render stage outputs.",
+	}, llm.DefaultConversationConfig(), WithExecutorClient(&llm.Client{}))
+	if err != nil {
+		t.Fatalf("NewExecutor: %v", err)
+	}
+	runtimePaths, err := workspace.ExecutorRuntimePaths("node-1", exec.Skill().Name, accessible)
+	if err != nil {
+		t.Fatalf("ExecutorRuntimePaths: %v", err)
+	}
+	if _, err := exec.BindForRunner(nil, runtimePaths); err != nil {
+		t.Fatalf("BindForRunner: %v", err)
+	}
+	if err := os.RemoveAll(workspace.ExchangeDir()); err != nil {
+		t.Fatalf("RemoveAll(exchange dir): %v", err)
+	}
+
+	if _, err := exec.renderStageOutputs("execute", "continue", []string{"downstream"}, "stage body"); err != nil {
+		t.Fatalf("renderStageOutputs: %v", err)
+	}
+
+	entries, err := os.ReadDir(workspace.ExchangeDir())
+	if err != nil {
+		t.Fatalf("ReadDir(exchange): %v", err)
+	}
+	if len(entries) != 1 {
+		t.Fatalf("exchange entry count = %d, want 1", len(entries))
+	}
+}
+
 func TestFormatParentHandoffsWithPlainMarkdown(t *testing.T) {
 	workspace, err := runnerpkg.ProvisionWorkspace(t.TempDir(), "runner-1", []string{"node-1"}, nil)
 	if err != nil {
