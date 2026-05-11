@@ -49,7 +49,7 @@ func TestMemoDocumentMarkdownRejectsMissingFields(t *testing.T) {
 	}
 }
 
-func TestParseMemoMarkdownAcceptsLegacyKind(t *testing.T) {
+func TestParseMemoMarkdownRejectsLegacyKind(t *testing.T) {
 	raw := `---
 kind: dango.memo
 version: 1
@@ -60,12 +60,9 @@ created_at: 2026-05-01T12:00:00Z
 ---
 
 memo body`
-	parsed, err := ParseMemoMarkdown(raw)
-	if err != nil {
-		t.Fatalf("ParseMemoMarkdown: %v", err)
-	}
-	if parsed.Kind != streampkg.LegacyChannelKindMemoDoc {
-		t.Fatalf("parsed.Kind = %q, want legacy kind preserved", parsed.Kind)
+	_, err := ParseMemoMarkdown(raw)
+	if err == nil || !strings.Contains(err.Error(), `want "memo"`) {
+		t.Fatalf("ParseMemoMarkdown error = %v, want legacy kind rejection", err)
 	}
 }
 

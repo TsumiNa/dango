@@ -82,7 +82,7 @@ func ParseMemoMarkdown(raw string) (*MemoDocument, error) {
 	if err != nil {
 		return nil, fmt.Errorf("runner: parse memo front matter: %w", err)
 	}
-	if !streampkg.AcceptsChannelKind(meta.Kind, streampkg.ChannelKindMemo) {
+	if meta.Kind != streampkg.ChannelKindMemo {
 		return nil, fmt.Errorf("runner: memo document kind = %q, want %q", meta.Kind, streampkg.ChannelKindMemo)
 	}
 	if meta.Version != MemoDocumentVersion {

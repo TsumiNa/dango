@@ -107,7 +107,7 @@ func ParseHandoffMarkdown(raw string) (*HandoffDoc, error) {
 	if err != nil {
 		return nil, fmt.Errorf("runner: parse handoff doc front matter: %w", err)
 	}
-	if !streampkg.AcceptsChannelKind(meta.Kind, streampkg.ChannelKindHandoff) {
+	if meta.Kind != streampkg.ChannelKindHandoff {
 		return nil, fmt.Errorf("runner: handoff doc kind = %q, want %q", meta.Kind, streampkg.ChannelKindHandoff)
 	}
 	if meta.Version != HandoffDocVersion {

@@ -49,7 +49,7 @@ func TestExchangeDocMarkdownRejectsMissingFields(t *testing.T) {
 	}
 }
 
-func TestParseExchangeDocMarkdownAcceptsLegacyKind(t *testing.T) {
+func TestParseExchangeDocMarkdownRejectsLegacyKind(t *testing.T) {
 	raw := `---
 kind: dango.exchange_doc
 version: 1
@@ -59,12 +59,9 @@ created_at: 2026-05-01T12:00:00Z
 ---
 
 legacy body`
-	parsed, err := ParseExchangeDocMarkdown(raw)
-	if err != nil {
-		t.Fatalf("ParseExchangeDocMarkdown: %v", err)
-	}
-	if parsed.Kind != streampkg.LegacyChannelKindExchangeDoc {
-		t.Fatalf("parsed.Kind = %q, want legacy kind preserved", parsed.Kind)
+	_, err := ParseExchangeDocMarkdown(raw)
+	if err == nil || !strings.Contains(err.Error(), `want "exchange"`) {
+		t.Fatalf("ParseExchangeDocMarkdown error = %v, want legacy kind rejection", err)
 	}
 }
 

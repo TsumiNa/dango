@@ -140,7 +140,7 @@ handoff body`
 	}
 }
 
-func TestParseHandoffMarkdownAcceptsLegacyKind(t *testing.T) {
+func TestParseHandoffMarkdownRejectsLegacyKind(t *testing.T) {
 	raw := `---
 kind: dango.handoff_doc
 version: 1
@@ -152,12 +152,9 @@ created_at: 2026-05-01T12:00:00Z
 ---
 
 legacy handoff body`
-	parsed, err := ParseHandoffMarkdown(raw)
-	if err != nil {
-		t.Fatalf("ParseHandoffMarkdown: %v", err)
-	}
-	if parsed.Kind != streampkg.LegacyChannelKindHandoffDoc {
-		t.Fatalf("parsed.Kind = %q, want legacy kind preserved", parsed.Kind)
+	_, err := ParseHandoffMarkdown(raw)
+	if err == nil || !strings.Contains(err.Error(), `want "handoff"`) {
+		t.Fatalf("ParseHandoffMarkdown error = %v, want legacy kind rejection", err)
 	}
 }
 

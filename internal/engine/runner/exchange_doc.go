@@ -79,7 +79,7 @@ func ParseExchangeDocMarkdown(raw string) (*ExchangeDoc, error) {
 	if err != nil {
 		return nil, fmt.Errorf("runner: parse exchange doc front matter: %w", err)
 	}
-	if !streampkg.AcceptsChannelKind(meta.Kind, streampkg.ChannelKindExchange) {
+	if meta.Kind != streampkg.ChannelKindExchange {
 		return nil, fmt.Errorf("runner: exchange doc kind = %q, want %q", meta.Kind, streampkg.ChannelKindExchange)
 	}
 	if meta.Version != ExchangeDocVersion {
