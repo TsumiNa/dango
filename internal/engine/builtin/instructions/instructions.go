@@ -26,6 +26,9 @@ func StageNote(stage string) (string, error) {
 }
 
 func validStageName(name string) bool {
+	if name == "" {
+		return false
+	}
 	for _, r := range name {
 		if r >= 'a' && r <= 'z' {
 			continue

@@ -63,6 +63,9 @@ func (e *Executor) stagePrompt(stage string, task string) string {
 func (e *Executor) stagePromptWithUpstreamReferences(stage string, task string, upstreamRefs []string) string {
 	note, err := builtininstructions.StageNote(stage)
 	if err != nil {
+		if e.logger != nil {
+			e.logger.Warn("failed to load executor stage note", "stage", stage, "error", err)
+		}
 		note = "# " + stage + " stage"
 	}
 	var b strings.Builder

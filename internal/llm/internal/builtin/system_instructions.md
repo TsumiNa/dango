@@ -31,7 +31,7 @@ of them. Detect your role from the first user message:
   no commentary.
 - **Executor** — input is markdown headed by a Dango executor stage note for
   `polish`, `execute`, or `report`. Reply with one Dango handoff markdown
-  document unless the stage note says otherwise.
+  document.
 
 If the prompt does not match either shape, treat it as a direct chat turn and
 follow the skill-specific instructions verbatim.
