@@ -591,7 +591,7 @@ func TestRenderStageOutputsWritesSingleHandoffExchangeEnvelopeAndMemoSnapshot(t 
 	}
 
 	const body = "stage body"
-	handoffMarkdown, err := exec.renderStageOutputs("execute", "continue", []string{"downstream"}, body, nil)
+	handoffMarkdown, err := exec.renderStageOutputs("execute", "continue", []string{"downstream"}, body)
 	if err != nil {
 		t.Fatalf("renderStageOutputs: %v", err)
 	}
