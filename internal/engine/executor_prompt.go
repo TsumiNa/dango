@@ -18,8 +18,9 @@ func (e *Executor) executionPrompt(parentOutputs map[string]any) string {
 		task = e.planner.TaskDescription
 		sourceInput = e.planner.SourceInput
 	}
-	prompt := e.stagePrompt("execute", task)
-	if sourceInput != "" && len(parentOutputs) == 0 && !e.hasUpstreamHandoffReferences() {
+	upstreamRefs := e.upstreamHandoffReferences()
+	prompt := e.stagePromptWithUpstreamReferences("execute", task, upstreamRefs)
+	if sourceInput != "" && len(parentOutputs) == 0 && len(upstreamRefs) == 0 {
 		prompt = appendMarkdownSection(prompt, "Original root request input", sourceInput)
 	}
 	return prompt
@@ -56,6 +57,10 @@ func (e *Executor) reportPrompt(output any) string {
 }
 
 func (e *Executor) stagePrompt(stage string, task string) string {
+	return e.stagePromptWithUpstreamReferences(stage, task, e.upstreamHandoffReferences())
+}
+
+func (e *Executor) stagePromptWithUpstreamReferences(stage string, task string, upstreamRefs []string) string {
 	note, err := builtininstructions.StageNote(stage)
 	if err != nil {
 		note = "# " + stage + " stage"
@@ -72,7 +77,7 @@ func (e *Executor) stagePrompt(stage string, task string) string {
 		b.WriteString(strings.TrimSpace(task))
 	}
 	b.WriteString("\n\n")
-	b.WriteString(e.upstreamHandoffReferencesMarkdown())
+	b.WriteString(e.upstreamHandoffReferencesMarkdown(upstreamRefs))
 	return strings.TrimSpace(b.String())
 }
 
@@ -166,12 +171,11 @@ func (e *Executor) exchangeReferencesMarkdown() string {
 	return strings.TrimSpace(b.String())
 }
 
-func (e *Executor) upstreamHandoffReferencesMarkdown() string {
+func (e *Executor) upstreamHandoffReferencesMarkdown(refs []string) string {
 	paths := e.currentRuntimePaths()
 	if paths.UpstreamDir == "" {
 		return "## Directed upstream handoff references\n\nNo directed upstream handoff directory is available."
 	}
-	refs := e.upstreamHandoffReferences()
 	var b strings.Builder
 	b.WriteString("## Directed upstream handoff references\n\n")
 	b.WriteString("Inspect these directed upstream handoffs with tools when the task depends on parent output.\n\n")
@@ -184,10 +188,6 @@ func (e *Executor) upstreamHandoffReferencesMarkdown() string {
 		b.WriteByte('\n')
 	}
 	return strings.TrimSpace(b.String())
-}
-
-func (e *Executor) hasUpstreamHandoffReferences() bool {
-	return len(e.upstreamHandoffReferences()) > 0
 }
 
 func (e *Executor) upstreamHandoffReferences() []string {

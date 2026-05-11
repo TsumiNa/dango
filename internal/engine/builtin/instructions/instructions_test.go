@@ -32,3 +32,9 @@ func TestExecuteStageNoteTeachesAgenticInputInspection(t *testing.T) {
 		}
 	}
 }
+
+func TestStageNoteRejectsInvalidStageNames(t *testing.T) {
+	if _, err := StageNote("../execute"); err == nil {
+		t.Fatal("expected invalid stage name error")
+	}
+}
