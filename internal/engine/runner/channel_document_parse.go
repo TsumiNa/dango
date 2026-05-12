@@ -15,6 +15,9 @@ type parsedChannelDocument struct {
 	memo     *MemoDocument
 }
 
+// channelDocumentFrontMatter captures the shared runner channel header plus the
+// union of kind-specific fields so the runner can parse front matter once and
+// route validation by kind.
 type channelDocumentFrontMatter struct {
 	streampkg.ChannelHeader `yaml:",inline"`
 	FromNode                string            `yaml:"from_node"`
@@ -60,7 +63,7 @@ func parseChannelDocument(raw string) (*parsedChannelDocument, error) {
 			Path:          meta.Path,
 		}, trimmedBody)
 	default:
-		return nil, fmt.Errorf("runner: channel document kind = %q, want one of %q, %q, or %q", meta.Kind, streampkg.ChannelKindHandoff, streampkg.ChannelKindExchange, streampkg.ChannelKindMemo)
+		return nil, fmt.Errorf("runner: channel document kind = %q, want handoff, exchange, or memo", meta.Kind)
 	}
 	if err != nil {
 		return nil, err
