@@ -394,7 +394,7 @@ func TestExecutionPromptListsRuntimeReferencesWithoutInliningBodies(t *testing.T
 
 	prompt := exec.executionPrompt(nil)
 	for _, want := range []string{
-		"Use tools to inspect exchange and upstream handoff references",
+		"Use tools to inspect the exchange and upstream handoff references listed in the runtime context",
 		exchangePath,
 		"Upstream summary",
 		handoffPath,
