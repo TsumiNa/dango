@@ -140,8 +140,8 @@ func (e *Executor) exchangeReferencesMarkdown(stage string) string {
 			continue
 		}
 		path := filepath.Join(paths.ExchangeDir, entry.Name())
-		raw, readErr := os.ReadFile(path)
-		if readErr != nil {
+		raw, err := os.ReadFile(path)
+		if err != nil {
 			continue
 		}
 		if doc, parseErr := runnerpkg.ParseExchangeDocMarkdown(string(raw)); parseErr == nil {
@@ -226,8 +226,8 @@ func (e *Executor) upstreamHandoffReferences() []string {
 			continue
 		}
 		handoffPath := filepath.Join(paths.UpstreamDir, entry.Name(), "handoff.md")
-		raw, readErr := os.ReadFile(handoffPath)
-		if readErr != nil {
+		raw, err := os.ReadFile(handoffPath)
+		if err != nil {
 			continue
 		}
 		line := fmt.Sprintf("- From `%s`: `%s`", entry.Name(), handoffPath)
