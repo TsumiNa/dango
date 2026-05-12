@@ -57,13 +57,12 @@ type SharedData struct {
 // tools, and bound LLM client to plan and run the task. The zero value is not
 // usable; construct instances with [NewExecutor].
 type Executor struct {
-	logger                  *slog.Logger
-	skill                   *llm.Skill
-	planner                 *ExecutionPlanner
-	bindClient              *llm.Client
-	bindConfig              llm.ConversationConfig
-	runtime                 *llm.Skill
-	promptTemplateOverrides map[string]string
+	logger     *slog.Logger
+	skill      *llm.Skill
+	planner    *ExecutionPlanner
+	bindClient *llm.Client
+	bindConfig llm.ConversationConfig
+	runtime    *llm.Skill
 	// runtimePaths is the runner-owned workspace context most recently passed by
 	// the runner for this executor's runtime skill.
 	runtimePaths runnerpkg.ExecutorRuntimePaths
@@ -103,19 +102,6 @@ func WithExecutorClient(client *llm.Client) ExecutorOption {
 	return func(e *Executor) {
 		e.bindClient = client
 	}
-}
-
-// SetPromptTemplateOverrides installs advanced built-in prompt template
-// overrides forwarded by runner or orchestrator configuration.
-//
-// The Executor keeps its own copy of overrides. Template names must match the
-// built-in executor prompt template names such as "polish.tmpl",
-// "execute.tmpl", or "report.tmpl".
-func (e *Executor) SetPromptTemplateOverrides(overrides map[string]string) {
-	if e == nil {
-		return
-	}
-	e.promptTemplateOverrides = cloneStringMap(overrides)
 }
 
 // NewExecutor constructs an [Executor] bound to sk and planner.

@@ -942,7 +942,7 @@ func serveFakePlanner(w http.ResponseWriter, req *responsesRequest, prompt plann
 }
 
 func serveFakeSkill(w http.ResponseWriter, req *responsesRequest, userText string, instructions string) {
-	if strings.HasPrefix(userText, "Polish the assigned task plan") {
+	if strings.HasPrefix(userText, "Polish the assigned task plan") || strings.HasPrefix(userText, "# Polish stage note") {
 		doc, err := polishExchangeMarkdown(userText)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -951,7 +951,7 @@ func serveFakeSkill(w http.ResponseWriter, req *responsesRequest, userText strin
 		respondMaybeText(w, req, doc)
 		return
 	}
-	if strings.HasPrefix(userText, "Summarize this executor output") {
+	if strings.HasPrefix(userText, "Summarize this executor output") || strings.HasPrefix(userText, "# Report stage note") {
 		doc, err := reportExchangeMarkdown(userText)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -1064,6 +1064,17 @@ func artifactsRootFromPrompt(prompt string) (string, error) {
 	}
 	for _, line := range strings.Split(prompt, "\n") {
 		dir := strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(line), "- "))
+		if strings.HasPrefix(dir, "`downstream/artifacts/`:") {
+			_, pathValue, _ := strings.Cut(dir, ":")
+			root := strings.Trim(strings.TrimSpace(pathValue), "`")
+			if root != "" {
+				return root, nil
+			}
+		}
+		if strings.HasPrefix(dir, "`downstream/`:") {
+			_, pathValue, _ := strings.Cut(dir, ":")
+			dir = strings.Trim(strings.TrimSpace(pathValue), "`")
+		}
 		if filepath.Base(dir) == "downstream" {
 			return filepath.Join(dir, "artifacts"), nil
 		}

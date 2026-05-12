@@ -100,19 +100,6 @@ func WithRootPathRule(rule func(string) string) Option {
 	}
 }
 
-// WithPromptTemplateOverrides installs advanced executor prompt template
-// overrides for executors prepared by this Runner.
-//
-// The Runner keeps its own copy of overrides and forwards it to executors that
-// support prompt template override configuration. Template names must match the
-// built-in executor prompt template names such as "polish.tmpl",
-// "execute.tmpl", or "report.tmpl".
-func WithPromptTemplateOverrides(overrides map[string]string) Option {
-	return func(r *Runner) {
-		r.promptTemplateOverrides = cloneStringMap(overrides)
-	}
-}
-
 // WithInitialPlan installs the initial coarse plan and materialized node graph.
 //
 // The Runner clones plan and nodes before storing them, so callers may mutate
@@ -154,15 +141,4 @@ func WithPlanNodeBuilder(builder PlanNodeBuilder) Option {
 	return func(r *Runner) {
 		r.planNodeBuilder = builder
 	}
-}
-
-func cloneStringMap(in map[string]string) map[string]string {
-	if len(in) == 0 {
-		return nil
-	}
-	out := make(map[string]string, len(in))
-	for k, v := range in {
-		out[k] = v
-	}
-	return out
 }

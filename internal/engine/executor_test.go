@@ -305,23 +305,6 @@ func TestExecutionPromptDoesNotExposeArtifactsRoot(t *testing.T) {
 	}
 }
 
-func TestExecutionPromptUsesAdvancedTemplateOverride(t *testing.T) {
-	exec, err := NewExecutor(loadLightweightTestSkill(t), &ExecutionPlanner{
-		TaskDescription: "Override task.",
-	}, llm.DefaultConversationConfig(), WithExecutorClient(&llm.Client{}))
-	if err != nil {
-		t.Fatalf("NewExecutor: %v", err)
-	}
-	exec.SetPromptTemplateOverrides(map[string]string{
-		"execute.tmpl": "advanced override: {{.TaskDescription}}",
-	})
-
-	prompt := exec.executionPrompt(nil)
-	if prompt != "advanced override: Override task." {
-		t.Fatalf("executionPrompt = %q", prompt)
-	}
-}
-
 func TestExecutionPromptIncludesSourceInputForRootTask(t *testing.T) {
 	exec, err := NewExecutor(loadLightweightTestSkill(t), &ExecutionPlanner{
 		TaskDescription: "Normalize groundwater records.",
@@ -331,12 +314,136 @@ func TestExecutionPromptIncludesSourceInputForRootTask(t *testing.T) {
 		t.Fatalf("NewExecutor: %v", err)
 	}
 	prompt := exec.executionPrompt(nil)
-	if !strings.Contains(prompt, "Original request input for this root task:") || !strings.Contains(prompt, "Aomori-plain-01") {
+	if !strings.Contains(prompt, "Original root request input") || !strings.Contains(prompt, "Aomori-plain-01") {
 		t.Fatalf("execution prompt missing source input:\n%s", prompt)
 	}
 	withParent := exec.executionPrompt(map[string]any{"upstream": "exchange"})
-	if strings.Contains(withParent, "Original request input for this root task:") {
+	if strings.Contains(withParent, "Original root request input") {
 		t.Fatalf("execution prompt leaked source input when parent exchange exists:\n%s", withParent)
+	}
+}
+
+func TestExecutionPromptListsRuntimeReferencesWithoutInliningBodies(t *testing.T) {
+	workspace, err := runnerpkg.ProvisionWorkspace(t.TempDir(), "runner-1", []string{"parent-1", "node-1"}, nil)
+	if err != nil {
+		t.Fatalf("ProvisionWorkspace: %v", err)
+	}
+	exchangeMarkdown, err := (runnerpkg.ExchangeDoc{
+		ChannelHeader: streampkg.ChannelHeader{
+			RunnerID:  "runner-1",
+			CreatedAt: time.Date(2026, 5, 11, 12, 0, 0, 0, time.UTC),
+		},
+		NodeID:    "parent-1",
+		SkillName: "upstream-skill",
+		Title:     "Upstream summary",
+		Body:      "exchange body should be inspected only by tool",
+	}).Markdown()
+	if err != nil {
+		t.Fatalf("ExchangeDoc Markdown: %v", err)
+	}
+	exchangePath := filepath.Join(workspace.ExchangeDir(), "parent-1-execute.md")
+	if err := os.WriteFile(exchangePath, []byte(exchangeMarkdown), 0o644); err != nil {
+		t.Fatalf("WriteFile(exchange): %v", err)
+	}
+	handoffMarkdown, err := (runnerpkg.HandoffDoc{
+		ChannelHeader: streampkg.ChannelHeader{
+			RunnerID:  "runner-1",
+			CreatedAt: time.Date(2026, 5, 11, 12, 30, 0, 0, time.UTC),
+		},
+		FromNode: "parent-1",
+		ToNodes:  []string{"node-1"},
+		Intent:   "continue",
+		Artifacts: []runnerpkg.HandoffArtifact{{
+			Path:        "results.csv",
+			Type:        "file",
+			Description: "results",
+		}},
+		Body: "handoff body should be inspected only by tool",
+	}).Markdown()
+	if err != nil {
+		t.Fatalf("HandoffDoc Markdown: %v", err)
+	}
+	childWS, ok := workspace.Skill("node-1")
+	if !ok {
+		t.Fatal("workspace.Skill(node-1) = false")
+	}
+	parentDir := filepath.Join(childWS.UpstreamDir, "parent-1")
+	if err := os.MkdirAll(parentDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll(parentDir): %v", err)
+	}
+	handoffPath := filepath.Join(parentDir, "handoff.md")
+	if err := os.WriteFile(handoffPath, []byte(handoffMarkdown), 0o644); err != nil {
+		t.Fatalf("WriteFile(handoff): %v", err)
+	}
+	accessible, err := workspace.AccessibleDirs("node-1")
+	if err != nil {
+		t.Fatalf("AccessibleDirs: %v", err)
+	}
+	runtimePaths, err := workspace.ExecutorRuntimePaths("node-1", "skill-1", accessible)
+	if err != nil {
+		t.Fatalf("ExecutorRuntimePaths: %v", err)
+	}
+	exec, err := NewExecutor(loadLightweightTestSkill(t), &ExecutionPlanner{
+		id:              "node-1",
+		TaskDescription: "Use upstream references.",
+	}, llm.DefaultConversationConfig(), WithExecutorClient(&llm.Client{}))
+	if err != nil {
+		t.Fatalf("NewExecutor: %v", err)
+	}
+	exec.runtimePaths = runtimePaths
+
+	prompt := exec.executionPrompt(nil)
+	for _, want := range []string{
+		"Use tools to inspect the exchange and upstream handoff references listed in the runtime context",
+		exchangePath,
+		"Upstream summary",
+		handoffPath,
+		"results.csv",
+		"`memo/`",
+		"`downstream/artifacts/`",
+	} {
+		if !strings.Contains(prompt, want) {
+			t.Fatalf("execution prompt missing %q:\n%s", want, prompt)
+		}
+	}
+	for _, forbidden := range []string{
+		"exchange body should be inspected only by tool",
+		"handoff body should be inspected only by tool",
+	} {
+		if strings.Contains(prompt, forbidden) {
+			t.Fatalf("execution prompt inlined %q:\n%s", forbidden, prompt)
+		}
+	}
+}
+
+func TestNoToolStagePromptsDoNotAskToInspectReferencesWithTools(t *testing.T) {
+	exec, err := NewExecutor(loadLightweightTestSkill(t), &ExecutionPlanner{
+		TaskDescription: "Summarize the current plan.",
+	}, llm.DefaultConversationConfig(), WithExecutorClient(&llm.Client{}))
+	if err != nil {
+		t.Fatalf("NewExecutor: %v", err)
+	}
+
+	for stage, prompt := range map[string]string{
+		"polish": exec.polishPrompt(),
+		"report": exec.reportPrompt(map[string]string{"status": "ok"}),
+	} {
+		for _, forbidden := range []string{
+			"Inspect these shared public exchange documents with tools",
+			"Inspect these directed upstream handoffs with tools",
+		} {
+			if strings.Contains(prompt, forbidden) {
+				t.Fatalf("%s prompt contained execute-only inspection guidance %q:\n%s", stage, forbidden, prompt)
+			}
+		}
+		for _, want := range []string{
+			"This stage does not allow tool use, so do not inspect exchange documents during this stage.",
+			"This stage does not allow tool use, so do not inspect directed upstream handoffs during this stage.",
+		} {
+			if !strings.Contains(prompt, want) {
+				t.Fatalf("%s prompt missing %q:\n%s", stage, want, prompt)
+			}
+		}
 	}
 }
 
@@ -558,7 +665,7 @@ func TestPolish_UsesRuntimeSkillWhenBound(t *testing.T) {
 	if doc.Body != "Use the GP package environment after elevation enrichment." {
 		t.Fatalf("handoff = %q, want skill polish output", doc.Body)
 	}
-	if !strings.Contains(requestBody, "Polish the assigned task plan before execution") {
+	if !strings.Contains(requestBody, "# Polish stage note") {
 		t.Fatalf("polish request missing polish prompt: %s", requestBody)
 	}
 }

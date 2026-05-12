@@ -28,18 +28,17 @@ type Orchestrator struct {
 	envClient         *llm.Client
 	envClientErr      error
 
-	mu                      sync.RWMutex
-	configLocked            bool
-	persistence             persistencepkg.Backend
-	runnerPathRule          persistencepkg.PathRule
-	promptTemplateOverrides map[string]string
-	maxRunningRunners       int
-	skills                  map[string]SkillRegistration
-	runners                 map[string]*runnerpkg.Runner
-	runningRunnerIDs        map[string]struct{}
-	queuedRunnerByID        map[string]*queuedRunner
-	queuedRunners           runnerStartQueue
-	nextQueueOrder          uint64
+	mu                sync.RWMutex
+	configLocked      bool
+	persistence       persistencepkg.Backend
+	runnerPathRule    persistencepkg.PathRule
+	maxRunningRunners int
+	skills            map[string]SkillRegistration
+	runners           map[string]*runnerpkg.Runner
+	runningRunnerIDs  map[string]struct{}
+	queuedRunnerByID  map[string]*queuedRunner
+	queuedRunners     runnerStartQueue
+	nextQueueOrder    uint64
 }
 
 // OrchestratorOption adjusts a constructed [Orchestrator] before it is returned.
@@ -90,18 +89,6 @@ func WithRunnerPathRule(rule persistencepkg.PathRule) OrchestratorOption {
 		if rule != nil {
 			o.runnerPathRule = rule
 		}
-	}
-}
-
-// WithPromptTemplateOverrides installs advanced executor prompt template
-// overrides for runners created by this Orchestrator.
-//
-// The Orchestrator keeps its own copy of overrides and forwards it to each
-// runner. Template names must match the built-in executor prompt template names
-// such as "polish.tmpl", "execute.tmpl", or "report.tmpl".
-func WithPromptTemplateOverrides(overrides map[string]string) OrchestratorOption {
-	return func(o *Orchestrator) {
-		o.promptTemplateOverrides = cloneStringMap(overrides)
 	}
 }
 
