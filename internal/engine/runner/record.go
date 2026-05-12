@@ -102,14 +102,6 @@ func isRunnerChannelMarkdown(raw string) bool {
 	if !strings.HasPrefix(raw, "---\n") {
 		return false
 	}
-	if _, err := ParseHandoffMarkdown(raw); err == nil {
-		return true
-	}
-	if _, err := ParseExchangeDocMarkdown(raw); err == nil {
-		return true
-	}
-	if _, err := ParseMemoMarkdown(raw); err == nil {
-		return true
-	}
-	return false
+	_, err := parseChannelDocument(raw)
+	return err == nil
 }

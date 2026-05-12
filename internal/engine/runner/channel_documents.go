@@ -17,12 +17,16 @@ func (r *Runner) emitChannelDocumentEvents(ctx context.Context, node *Node, outp
 	if !ok {
 		return
 	}
-	if doc, err := ParseHandoffMarkdown(text); err == nil {
-		r.emitHandoffEvents(ctx, node, doc)
+	doc, err := parseChannelDocument(text)
+	if err != nil {
 		return
 	}
-	if doc, err := ParseExchangeDocMarkdown(text); err == nil {
-		r.emitExchangePublishedEvent(ctx, node, doc)
+	if doc.handoff != nil {
+		r.emitHandoffEvents(ctx, node, doc.handoff)
+		return
+	}
+	if doc.exchange != nil {
+		r.emitExchangePublishedEvent(ctx, node, doc.exchange)
 	}
 }
 

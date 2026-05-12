@@ -82,6 +82,10 @@ func ParseMemoMarkdown(raw string) (*MemoDocument, error) {
 	if err != nil {
 		return nil, fmt.Errorf("runner: parse memo front matter: %w", err)
 	}
+	return buildMemoDocument(meta, strings.TrimSpace(string(body)))
+}
+
+func buildMemoDocument(meta memoFrontMatter, body string) (*MemoDocument, error) {
 	if meta.Kind != streampkg.ChannelKindMemo {
 		return nil, fmt.Errorf("runner: memo document kind = %q, want %q", meta.Kind, streampkg.ChannelKindMemo)
 	}
@@ -110,6 +114,6 @@ func ParseMemoMarkdown(raw string) (*MemoDocument, error) {
 		NodeID:    meta.NodeID,
 		SkillName: meta.SkillName,
 		Path:      meta.Path,
-		Body:      strings.TrimSpace(string(body)),
+		Body:      body,
 	}, nil
 }

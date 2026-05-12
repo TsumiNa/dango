@@ -27,11 +27,11 @@ func handoffArtifactDirsFromOutputs(outputs map[string]any, allowedRoots []strin
 		if !ok {
 			continue
 		}
-		doc, err := ParseHandoffMarkdown(text)
-		if err != nil {
+		doc, err := parseChannelDocument(text)
+		if err != nil || doc.handoff == nil {
 			continue
 		}
-		for _, artifact := range doc.Artifacts {
+		for _, artifact := range doc.handoff.Artifacts {
 			resolvedPath, ok := resolveHandoffArtifactPath(producerWorkspace, artifact.Path)
 			if !ok {
 				continue

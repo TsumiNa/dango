@@ -3,6 +3,7 @@ package runner
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -104,6 +105,81 @@ func TestRunnerEmitsHandoffArtifactEvents(t *testing.T) {
 	}
 	if delta["path"] != artifactPath || delta["declared_path"] != "downstream/artifacts/predictions.csv" || delta["resource_type"] != HandoffArtifactFile {
 		t.Fatalf("delta = %+v, want resolved handoff artifact", delta)
+	}
+}
+
+func TestRunnerEmitsExchangePublishedEvents(t *testing.T) {
+	workspace, err := ProvisionWorkspace(t.TempDir(), "runner-1", []string{"node-1"}, nil)
+	if err != nil {
+		t.Fatalf("ProvisionWorkspace: %v", err)
+	}
+	raw, err := (ExchangeDoc{
+		ChannelHeader: stream.ChannelHeader{
+			RunnerID:  "wrong-runner",
+			CreatedAt: time.Date(2026, 4, 30, 12, 0, 0, 0, time.UTC),
+		},
+		NodeID: "wrong-node",
+		Title:  "shared update",
+		Body:   "published output",
+	}).Markdown()
+	if err != nil {
+		t.Fatalf("Markdown: %v", err)
+	}
+
+	r := newTestRunner()
+	r.workspace = workspace
+	sub, err := r.SubscribeStream(stream.Filter{EventTypes: []string{stream.EventExchangePublished}}, stream.WithSubscriberBuffer(8))
+	if err != nil {
+		t.Fatalf("SubscribeStream(exchange): %v", err)
+	}
+	defer sub.Cancel()
+
+	r.emitChannelDocumentEvents(context.Background(), &Node{Id: "node-1"}, raw)
+
+	event, ok, err := sub.Next(context.Background())
+	if err != nil || !ok {
+		t.Fatalf("Next exchange event = %v/%v", ok, err)
+	}
+	var delta map[string]any
+	if err := json.Unmarshal(event.Delta, &delta); err != nil {
+		t.Fatalf("Unmarshal delta: %v", err)
+	}
+	if delta["runner_id"] != r.ID() || delta["node_id"] != "node-1" {
+		t.Fatalf("delta = %+v, want authoritative runner/node ids", delta)
+	}
+	if delta["path"] != workspace.ExchangeDir() || delta["title"] != "shared update" {
+		t.Fatalf("delta = %+v, want exchange path and title", delta)
+	}
+}
+
+func TestRunnerIgnoresMemoChannelOutputEvents(t *testing.T) {
+	raw, err := (MemoDocument{
+		ChannelHeader: stream.ChannelHeader{
+			RunnerID:  "runner-1",
+			CreatedAt: time.Date(2026, 4, 30, 12, 0, 0, 0, time.UTC),
+		},
+		NodeID: "node-1",
+		Path:   "memo/plan.md",
+		Body:   "memo body",
+	}).Markdown()
+	if err != nil {
+		t.Fatalf("Markdown: %v", err)
+	}
+
+	r := newTestRunner()
+	sub, err := r.SubscribeStream(stream.Filter{EventTypes: []string{stream.EventHandoffEmitted, stream.EventExchangePublished}}, stream.WithSubscriberBuffer(8))
+	if err != nil {
+		t.Fatalf("SubscribeStream(channel events): %v", err)
+	}
+	defer sub.Cancel()
+
+	r.emitChannelDocumentEvents(context.Background(), &Node{Id: "node-1"}, raw)
+
+	readCtx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	_, ok, err := sub.Next(readCtx)
+	if !errors.Is(err, context.DeadlineExceeded) || ok {
+		t.Fatalf("Next memo event = %v/%v, want deadline exceeded with no events", ok, err)
 	}
 }
 

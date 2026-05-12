@@ -107,6 +107,10 @@ func ParseHandoffMarkdown(raw string) (*HandoffDoc, error) {
 	if err != nil {
 		return nil, fmt.Errorf("runner: parse handoff doc front matter: %w", err)
 	}
+	return buildHandoffDoc(meta, strings.TrimSpace(string(body)))
+}
+
+func buildHandoffDoc(meta handoffDocFrontMatter, body string) (*HandoffDoc, error) {
 	if meta.Kind != streampkg.ChannelKindHandoff {
 		return nil, fmt.Errorf("runner: handoff doc kind = %q, want %q", meta.Kind, streampkg.ChannelKindHandoff)
 	}
@@ -150,7 +154,7 @@ func ParseHandoffMarkdown(raw string) (*HandoffDoc, error) {
 		ToNodes:   meta.ToNodes,
 		Intent:    meta.Intent,
 		Artifacts: meta.Artifacts,
-		Body:      strings.TrimSpace(string(body)),
+		Body:      body,
 	}, nil
 }
 
