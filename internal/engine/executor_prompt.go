@@ -71,7 +71,7 @@ func (e *Executor) stagePromptWithUpstreamReferences(stage string, task string, 
 	var b strings.Builder
 	b.WriteString(note)
 	b.WriteString("\n\n")
-	b.WriteString(e.runtimeContextMarkdown())
+	b.WriteString(e.runtimeContextMarkdown(stage))
 	b.WriteString("\n\n")
 	b.WriteString("## Stage task\n\n")
 	if strings.TrimSpace(task) == "" {
@@ -80,11 +80,11 @@ func (e *Executor) stagePromptWithUpstreamReferences(stage string, task string, 
 		b.WriteString(strings.TrimSpace(task))
 	}
 	b.WriteString("\n\n")
-	b.WriteString(e.upstreamHandoffReferencesMarkdown(upstreamRefs))
+	b.WriteString(e.upstreamHandoffReferencesMarkdown(stage, upstreamRefs))
 	return strings.TrimSpace(b.String())
 }
 
-func (e *Executor) runtimeContextMarkdown() string {
+func (e *Executor) runtimeContextMarkdown(stage string) string {
 	paths := e.currentRuntimePaths()
 	var b strings.Builder
 	b.WriteString("## Runtime context\n\n")
@@ -116,18 +116,19 @@ func (e *Executor) runtimeContextMarkdown() string {
 		}
 	}
 	b.WriteString("\n")
-	b.WriteString(e.exchangeReferencesMarkdown())
+	b.WriteString(e.exchangeReferencesMarkdown(stage))
 	return strings.TrimSpace(b.String())
 }
 
-func (e *Executor) exchangeReferencesMarkdown() string {
+func (e *Executor) exchangeReferencesMarkdown(stage string) string {
 	paths := e.currentRuntimePaths()
+	intro := exchangeReferenceInstruction(stage)
 	if paths.ExchangeDir == "" {
-		return "### Exchange references\n\nNo exchange directory is available."
+		return "### Exchange references\n\n" + intro + "\n\nNo exchange directory is available."
 	}
 	entries, err := os.ReadDir(paths.ExchangeDir)
 	if err != nil {
-		return fmt.Sprintf("### Exchange references\n\nExchange directory: `%s`\n\nNo exchange references are currently readable.", paths.ExchangeDir)
+		return fmt.Sprintf("### Exchange references\n\n%s\n\nExchange directory: `%s`\n\nNo exchange references are currently readable.", intro, paths.ExchangeDir)
 	}
 	type reference struct {
 		name string
@@ -139,8 +140,8 @@ func (e *Executor) exchangeReferencesMarkdown() string {
 			continue
 		}
 		path := filepath.Join(paths.ExchangeDir, entry.Name())
-		raw, readErr := os.ReadFile(path)
-		if readErr != nil {
+		raw, err := os.ReadFile(path)
+		if err != nil {
 			continue
 		}
 		if doc, parseErr := runnerpkg.ParseExchangeDocMarkdown(string(raw)); parseErr == nil {
@@ -162,7 +163,8 @@ func (e *Executor) exchangeReferencesMarkdown() string {
 	sort.Slice(refs, func(i, j int) bool { return refs[i].name < refs[j].name })
 	var b strings.Builder
 	b.WriteString("### Exchange references\n\n")
-	b.WriteString("Inspect these shared public exchange documents with tools only when the stage task needs their contents.\n\n")
+	b.WriteString(intro)
+	b.WriteString("\n\n")
 	if len(refs) == 0 {
 		b.WriteString("No exchange references are currently available.")
 		return b.String()
@@ -174,14 +176,16 @@ func (e *Executor) exchangeReferencesMarkdown() string {
 	return strings.TrimSpace(b.String())
 }
 
-func (e *Executor) upstreamHandoffReferencesMarkdown(refs []string) string {
+func (e *Executor) upstreamHandoffReferencesMarkdown(stage string, refs []string) string {
 	paths := e.currentRuntimePaths()
+	intro := upstreamHandoffReferenceInstruction(stage)
 	if paths.UpstreamDir == "" {
-		return "## Directed upstream handoff references\n\nNo directed upstream handoff directory is available."
+		return "## Directed upstream handoff references\n\n" + intro + "\n\nNo directed upstream handoff directory is available."
 	}
 	var b strings.Builder
 	b.WriteString("## Directed upstream handoff references\n\n")
-	b.WriteString("Inspect these directed upstream handoffs with tools when the task depends on parent output.\n\n")
+	b.WriteString(intro)
+	b.WriteString("\n\n")
 	if len(refs) == 0 {
 		b.WriteString("No directed upstream handoffs are currently available.")
 		return b.String()
@@ -191,6 +195,20 @@ func (e *Executor) upstreamHandoffReferencesMarkdown(refs []string) string {
 		b.WriteByte('\n')
 	}
 	return strings.TrimSpace(b.String())
+}
+
+func exchangeReferenceInstruction(stage string) string {
+	if stage == "execute" {
+		return "Inspect these shared public exchange documents with tools only when the stage task needs their contents."
+	}
+	return "This stage does not allow tool use, so do not inspect exchange documents during this stage."
+}
+
+func upstreamHandoffReferenceInstruction(stage string) string {
+	if stage == "execute" {
+		return "Inspect these directed upstream handoffs with tools when the task depends on parent output."
+	}
+	return "This stage does not allow tool use, so do not inspect directed upstream handoffs during this stage."
 }
 
 func (e *Executor) upstreamHandoffReferences() []string {
@@ -208,8 +226,8 @@ func (e *Executor) upstreamHandoffReferences() []string {
 			continue
 		}
 		handoffPath := filepath.Join(paths.UpstreamDir, entry.Name(), "handoff.md")
-		raw, readErr := os.ReadFile(handoffPath)
-		if readErr != nil {
+		raw, err := os.ReadFile(handoffPath)
+		if err != nil {
 			continue
 		}
 		line := fmt.Sprintf("- From `%s`: `%s`", entry.Name(), handoffPath)

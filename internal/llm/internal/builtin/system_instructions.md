@@ -149,7 +149,7 @@ to_nodes:
   - <orchestrator|downstream node id>
 intent: <review|continue|summarize>
 artifacts:
-  - path: <relative path under downstream/artifacts>
+  - path: <workspace-root-relative path, for example downstream/artifacts/result.csv>
     type: <file|dir>
     description: <one line>
 ---

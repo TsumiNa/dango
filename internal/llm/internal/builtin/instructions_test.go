@@ -16,6 +16,7 @@ func TestSystemInstructionsTeachAgenticRuntimeWorkflow(t *testing.T) {
 		"`exchange/` is runner-scoped shared public context",
 		"Use tools to inspect referenced exchange or handoff files",
 		"Memo means writing files under the provided `memo/` directory",
+		"workspace-root-relative path",
 		"Domain `SKILL.md`",
 		"do not need to restate these generic workflow rules",
 	} {

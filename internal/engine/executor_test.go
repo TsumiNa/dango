@@ -394,7 +394,7 @@ func TestExecutionPromptListsRuntimeReferencesWithoutInliningBodies(t *testing.T
 
 	prompt := exec.executionPrompt(nil)
 	for _, want := range []string{
-		"Use tools to inspect exchange and upstream handoff references",
+		"Use tools to inspect the exchange and upstream handoff references listed in the runtime context",
 		exchangePath,
 		"Upstream summary",
 		handoffPath,
@@ -412,6 +412,37 @@ func TestExecutionPromptListsRuntimeReferencesWithoutInliningBodies(t *testing.T
 	} {
 		if strings.Contains(prompt, forbidden) {
 			t.Fatalf("execution prompt inlined %q:\n%s", forbidden, prompt)
+		}
+	}
+}
+
+func TestNoToolStagePromptsDoNotAskToInspectReferencesWithTools(t *testing.T) {
+	exec, err := NewExecutor(loadLightweightTestSkill(t), &ExecutionPlanner{
+		TaskDescription: "Summarize the current plan.",
+	}, llm.DefaultConversationConfig(), WithExecutorClient(&llm.Client{}))
+	if err != nil {
+		t.Fatalf("NewExecutor: %v", err)
+	}
+
+	for stage, prompt := range map[string]string{
+		"polish": exec.polishPrompt(),
+		"report": exec.reportPrompt(map[string]string{"status": "ok"}),
+	} {
+		for _, forbidden := range []string{
+			"Inspect these shared public exchange documents with tools",
+			"Inspect these directed upstream handoffs with tools",
+		} {
+			if strings.Contains(prompt, forbidden) {
+				t.Fatalf("%s prompt contained execute-only inspection guidance %q:\n%s", stage, forbidden, prompt)
+			}
+		}
+		for _, want := range []string{
+			"This stage does not allow tool use, so do not inspect exchange documents during this stage.",
+			"This stage does not allow tool use, so do not inspect directed upstream handoffs during this stage.",
+		} {
+			if !strings.Contains(prompt, want) {
+				t.Fatalf("%s prompt missing %q:\n%s", stage, want, prompt)
+			}
 		}
 	}
 }

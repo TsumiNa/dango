@@ -23,7 +23,7 @@ func TestExecuteStageNoteTeachesAgenticInputInspection(t *testing.T) {
 		t.Fatalf("StageNote: %v", err)
 	}
 	for _, want := range []string{
-		"Use tools to inspect exchange and upstream handoff references",
+		"Use tools to inspect the exchange and upstream handoff references listed in the runtime context",
 		"`downstream/artifacts/`",
 		"`memo/`",
 	} {
