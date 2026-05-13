@@ -169,7 +169,6 @@ func runHonshuGroundwaterExample(ctx context.Context, cfg exampleConfig) (_ *exa
 		return nil, err
 	}
 	renderCfg := streamrender.DefaultConfig()
-	renderCfg.ExchangeDir = filepath.Join(artifactsDir, "exchanges")
 	renderCfg.Debug = logger.Enabled(ctx, slog.LevelDebug)
 	if file, ok := cfg.Out.(*os.File); ok {
 		if info, err := file.Stat(); err == nil {

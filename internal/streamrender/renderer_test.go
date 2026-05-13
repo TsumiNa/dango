@@ -141,7 +141,7 @@ created_at: 2026-05-01T12:00:00Z
 ---
 drafting a long handoff document`),
 	})
-	if !strings.Contains(line, "drafting exchange") || strings.Contains(line, "kind: handoff") {
+	if !strings.Contains(line, "drafting handoff") || strings.Contains(line, "kind: handoff") {
 		t.Fatalf("running handoff draft line = %q", line)
 	}
 }
@@ -243,7 +243,7 @@ func TestRendererLinksArtifactPaths(t *testing.T) {
 	}
 }
 
-func TestRendererWritesExchangeMarkdownReferences(t *testing.T) {
+func TestRendererDoesNotWriteHandoffMarkdownAsExchangeReference(t *testing.T) {
 	dir := t.TempDir()
 	renderer := New(nil, Config{ExchangeDir: dir})
 	line := renderer.FormatEvent(streampkg.Event{
@@ -263,11 +263,18 @@ created_at: 2026-05-01T12:00:00Z
 
 done`),
 	})
-	if !strings.Contains(line, "exchange=file://") || !strings.Contains(line, "exchange-000000000007.md") {
-		t.Fatalf("exchange line = %q", line)
+	if strings.Contains(line, "exchange=file://") || strings.Contains(line, "exchange-000000000007.md") {
+		t.Fatalf("handoff line mislabeled as exchange = %q", line)
 	}
-	if _, err := os.Stat(filepath.Join(dir, "exchange-000000000007.md")); err != nil {
-		t.Fatalf("exchange file not written: %v", err)
+	for _, want := range []string{"handoff markdown captured", "bytes="} {
+		if !strings.Contains(line, want) {
+			t.Fatalf("handoff line missing %q:\n%s", want, line)
+		}
+	}
+	if entries, err := os.ReadDir(dir); err != nil {
+		t.Fatalf("ReadDir: %v", err)
+	} else if len(entries) != 0 {
+		t.Fatalf("renderer wrote unexpected files: %v", entries)
 	}
 }
 
