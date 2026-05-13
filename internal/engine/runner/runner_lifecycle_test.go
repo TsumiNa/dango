@@ -139,7 +139,7 @@ func TestRunnerFanOutPolishSkipsCompletedEventWhenMemoSnapshotFails(t *testing.T
 		t.Fatalf("ProvisionWorkspace: %v", err)
 	}
 	r.workspace = workspace
-	makeUnreadableMemoSnapshotStage(t, workspace, "A", "polish")
+	makeUnreadableMemoSnapshotDir(t, workspace, "A", "polish")
 	sub, err := r.SubscribeStream(streampkg.Filter{
 		EventTypes: []string{streampkg.EventExecutorPolishCompleted},
 		Scope:      streampkg.Scope{RunnerID: r.ID(), NodeID: "A"},
@@ -162,7 +162,7 @@ func TestRunnerFanOutReportSkipsCompletedEventWhenMemoSnapshotFails(t *testing.T
 		t.Fatalf("ProvisionWorkspace: %v", err)
 	}
 	r.workspace = workspace
-	makeUnreadableMemoSnapshotStage(t, workspace, "A", "report")
+	makeUnreadableMemoSnapshotDir(t, workspace, "A", "report")
 	sub, err := r.SubscribeStream(streampkg.Filter{
 		EventTypes: []string{streampkg.EventExecutorReportCompleted},
 		Scope:      streampkg.Scope{RunnerID: r.ID(), NodeID: "A"},
@@ -249,7 +249,7 @@ func TestRunner_AcceptPolishedPlanRunsEngineAndReports(t *testing.T) {
 	}
 }
 
-func makeUnreadableMemoSnapshotStage(t *testing.T, workspace *Workspace, nodeID string, stage string) {
+func makeUnreadableMemoSnapshotDir(t *testing.T, workspace *Workspace, nodeID string, stage string) {
 	t.Helper()
 	stageRoot := filepath.Join(workspace.ArchiveDir(), "memo", nodeID, stage)
 	if err := os.MkdirAll(stageRoot, 0o755); err != nil {

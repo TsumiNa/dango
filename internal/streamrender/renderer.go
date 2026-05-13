@@ -1159,8 +1159,11 @@ func looksLikeChannelDraft(text string, kind streampkg.ChannelKind) bool {
 		return false
 	}
 	frontMatter := trimmed[len("---\n"):]
-	if idx := strings.Index(frontMatter, "\n---"); idx >= 0 {
-		frontMatter = frontMatter[:idx]
+	for _, marker := range []string{"\n---\n", "\n---\r\n", "\n---"} {
+		if idx := strings.Index(frontMatter, marker); idx >= 0 {
+			frontMatter = frontMatter[:idx]
+			break
+		}
 	}
 	for _, line := range strings.Split(frontMatter, "\n") {
 		if strings.TrimSpace(line) == "kind: "+string(kind) {
