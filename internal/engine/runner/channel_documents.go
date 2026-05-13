@@ -158,6 +158,9 @@ func (r *Runner) deliverHandoffToSuccessor(ctx context.Context, producer *Node, 
 	return nil
 }
 
+// hasMemoSnapshots reports whether stageRoot contains any archived memo snapshot
+// files. It walks recursively because memo snapshot paths preserve nested
+// directories from the memo workspace.
 func hasMemoSnapshots(stageRoot string) (bool, error) {
 	info, err := os.Stat(stageRoot)
 	if os.IsNotExist(err) {

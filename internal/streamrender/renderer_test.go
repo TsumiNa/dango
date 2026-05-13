@@ -141,7 +141,10 @@ created_at: 2026-05-01T12:00:00Z
 ---
 drafting a long handoff document`),
 	})
-	if !strings.Contains(line, "drafting handoff") || strings.Contains(line, "kind: handoff") {
+	if !strings.Contains(line, "drafting handoff") {
+		t.Fatalf("running handoff draft line = %q", line)
+	}
+	if strings.Contains(line, "kind: handoff") {
 		t.Fatalf("running handoff draft line = %q", line)
 	}
 }

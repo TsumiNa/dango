@@ -468,10 +468,10 @@ func (r *Renderer) formatTextDelta(event streampkg.Event, kind string) string {
 	if event.Status == streampkg.StatusRunning {
 		return r.formatRunningText(event, kind, text)
 	}
-	if exchangeDocText(text) {
+	if isValidExchangeDocMarkdown(text) {
 		return fmt.Sprintf("%s %s %s=%s", r.tag(kind), r.dim("·"), r.colorKey("exchange"), r.colorPath(r.exchangeReference(event, text)))
 	}
-	if handoffDocText(text) {
+	if isValidHandoffDocMarkdown(text) {
 		return fmt.Sprintf("%s %s handoff markdown captured %s", r.tag(kind), r.dim("·"), r.kv("bytes", fmt.Sprint(len(text))))
 	}
 	if event.From.Layer == "orchestrator" && stringValue(event.Metadata["stage"]) == "planning" && kind == "output" {
@@ -1140,7 +1140,7 @@ func imagePath(path string) bool {
 	}
 }
 
-func exchangeDocText(text string) bool {
+func isValidExchangeDocMarkdown(text string) bool {
 	_, err := runnerpkg.ParseExchangeDocMarkdown(text)
 	return err == nil
 }
@@ -1159,7 +1159,7 @@ func looksLikeChannelDraft(text string, kind streampkg.ChannelKind) bool {
 		strings.Contains(trimmed, "kind: "+string(kind))
 }
 
-func handoffDocText(text string) bool {
+func isValidHandoffDocMarkdown(text string) bool {
 	_, err := runnerpkg.ParseHandoffMarkdown(text)
 	return err == nil
 }
