@@ -98,7 +98,7 @@ func (r *Runner) emitMemoSnapshotEvent(ctx context.Context, node *Node, stage st
 		return nil
 	}
 	stageRoot := filepath.Join(r.workspace.ArchiveDir(), "memo", node.Id, stage)
-	hasSnapshots, snapshotAt, err := memoSnapshotInfo(stageRoot)
+	hasSnapshots, err := hasMemoSnapshots(stageRoot)
 	if err != nil {
 		return err
 	}
@@ -110,7 +110,7 @@ func (r *Runner) emitMemoSnapshotEvent(ctx context.Context, node *Node, stage st
 		NodeID:      node.Id,
 		SkillName:   node.SkillName,
 		SnapshotDir: stageRoot,
-		SnapshotAt:  snapshotAt,
+		SnapshotAt:  time.Now().UTC(),
 	}
 	metadata := map[string]any{
 		"runner_id": r.id,
@@ -158,18 +158,18 @@ func (r *Runner) deliverHandoffToSuccessor(ctx context.Context, producer *Node, 
 	return nil
 }
 
-func memoSnapshotInfo(stageRoot string) (bool, time.Time, error) {
+func hasMemoSnapshots(stageRoot string) (bool, error) {
 	info, err := os.Stat(stageRoot)
 	if os.IsNotExist(err) {
-		return false, time.Time{}, nil
+		return false, nil
 	}
 	if err != nil {
-		return false, time.Time{}, err
+		return false, err
 	}
 	if !info.IsDir() {
-		return false, time.Time{}, nil
+		return false, nil
 	}
-	var latest time.Time
+	found := false
 	if err := filepath.WalkDir(stageRoot, func(path string, d fs.DirEntry, walkErr error) error {
 		if walkErr != nil {
 			return walkErr
@@ -177,21 +177,12 @@ func memoSnapshotInfo(stageRoot string) (bool, time.Time, error) {
 		if d.IsDir() {
 			return nil
 		}
-		fileInfo, err := d.Info()
-		if err != nil {
-			return err
-		}
-		if fileInfo.ModTime().After(latest) {
-			latest = fileInfo.ModTime()
-		}
-		return nil
+		found = true
+		return fs.SkipAll
 	}); err != nil {
-		return false, time.Time{}, err
+		return false, err
 	}
-	if latest.IsZero() {
-		return false, time.Time{}, nil
-	}
-	return true, latest.UTC(), nil
+	return found, nil
 }
 
 func (r *Runner) resolveNodeArtifactPath(nodeID string, declaredPath string) (string, bool) {
