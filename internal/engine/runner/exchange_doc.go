@@ -79,6 +79,10 @@ func ParseExchangeDocMarkdown(raw string) (*ExchangeDoc, error) {
 	if err != nil {
 		return nil, fmt.Errorf("runner: parse exchange doc front matter: %w", err)
 	}
+	return buildExchangeDoc(meta, strings.TrimSpace(string(body)))
+}
+
+func buildExchangeDoc(meta exchangeDocFrontMatter, body string) (*ExchangeDoc, error) {
 	if meta.Kind != streampkg.ChannelKindExchange {
 		return nil, fmt.Errorf("runner: exchange doc kind = %q, want %q", meta.Kind, streampkg.ChannelKindExchange)
 	}
@@ -104,6 +108,6 @@ func ParseExchangeDocMarkdown(raw string) (*ExchangeDoc, error) {
 		NodeID:    meta.NodeID,
 		SkillName: meta.SkillName,
 		Title:     meta.Title,
-		Body:      strings.TrimSpace(string(body)),
+		Body:      body,
 	}, nil
 }
