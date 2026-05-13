@@ -1146,21 +1146,17 @@ func exchangeDocText(text string) bool {
 }
 
 func looksLikeExchangeDraft(text string) bool {
-	trimmed := strings.TrimSpace(text)
-	if exchangeDocText(trimmed) {
-		return true
-	}
-	return strings.HasPrefix(trimmed, "---") &&
-		strings.Contains(trimmed, "kind: "+string(streampkg.ChannelKindExchange))
+	return looksLikeChannelDraft(text, streampkg.ChannelKindExchange)
 }
 
 func looksLikeHandoffDraft(text string) bool {
+	return looksLikeChannelDraft(text, streampkg.ChannelKindHandoff)
+}
+
+func looksLikeChannelDraft(text string, kind streampkg.ChannelKind) bool {
 	trimmed := strings.TrimSpace(text)
-	if handoffDocText(trimmed) {
-		return true
-	}
 	return strings.HasPrefix(trimmed, "---") &&
-		strings.Contains(trimmed, "kind: "+string(streampkg.ChannelKindHandoff))
+		strings.Contains(trimmed, "kind: "+string(kind))
 }
 
 func handoffDocText(text string) bool {

@@ -419,9 +419,6 @@ func (r *Runner) fanOutPolish(ctx context.Context, nodes map[string]*Node) (map[
 				mu.Unlock()
 				return
 			}
-			r.emitExecutorStreamEvent(ctx, streampkg.EventExecutorPolishCompleted, streampkg.StatusCompleted, id, node, map[string]any{
-				"stage": "polish",
-			})
 			r.emitChannelDocumentEvents(ctx, node, frag)
 			if err := r.emitMemoSnapshotEvent(ctx, node, "polish"); err != nil {
 				mu.Lock()
@@ -431,6 +428,9 @@ func (r *Runner) fanOutPolish(ctx context.Context, nodes map[string]*Node) (map[
 				mu.Unlock()
 				return
 			}
+			r.emitExecutorStreamEvent(ctx, streampkg.EventExecutorPolishCompleted, streampkg.StatusCompleted, id, node, map[string]any{
+				"stage": "polish",
+			})
 			mu.Lock()
 			fragments[id] = frag
 			mu.Unlock()
@@ -480,9 +480,6 @@ func (r *Runner) fanOutReport(ctx context.Context, nodes map[string]*Node, outpu
 				mu.Unlock()
 				return
 			}
-			r.emitExecutorStreamEvent(ctx, streampkg.EventExecutorReportCompleted, streampkg.StatusCompleted, id, node, map[string]any{
-				"stage": "report",
-			})
 			r.emitChannelDocumentEvents(ctx, node, summary)
 			if err := r.emitMemoSnapshotEvent(ctx, node, "report"); err != nil {
 				mu.Lock()
@@ -492,6 +489,9 @@ func (r *Runner) fanOutReport(ctx context.Context, nodes map[string]*Node, outpu
 				mu.Unlock()
 				return
 			}
+			r.emitExecutorStreamEvent(ctx, streampkg.EventExecutorReportCompleted, streampkg.StatusCompleted, id, node, map[string]any{
+				"stage": "report",
+			})
 			mu.Lock()
 			summaries[id] = summary
 			mu.Unlock()
