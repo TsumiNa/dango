@@ -1155,8 +1155,19 @@ func looksLikeHandoffDraft(text string) bool {
 
 func looksLikeChannelDraft(text string, kind streampkg.ChannelKind) bool {
 	trimmed := strings.TrimSpace(text)
-	return strings.HasPrefix(trimmed, "---") &&
-		strings.Contains(trimmed, "kind: "+string(kind))
+	if !strings.HasPrefix(trimmed, "---\n") {
+		return false
+	}
+	frontMatter := trimmed[len("---\n"):]
+	if idx := strings.Index(frontMatter, "\n---"); idx >= 0 {
+		frontMatter = frontMatter[:idx]
+	}
+	for _, line := range strings.Split(frontMatter, "\n") {
+		if strings.TrimSpace(line) == "kind: "+string(kind) {
+			return true
+		}
+	}
+	return false
 }
 
 func isValidHandoffDocMarkdown(text string) bool {
