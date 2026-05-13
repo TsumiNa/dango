@@ -423,6 +423,14 @@ func (r *Runner) fanOutPolish(ctx context.Context, nodes map[string]*Node) (map[
 				"stage": "polish",
 			})
 			r.emitChannelDocumentEvents(ctx, node, frag)
+			if err := r.emitMemoSnapshotEvent(ctx, node, "polish"); err != nil {
+				mu.Lock()
+				defer mu.Unlock()
+				if firstErr == nil {
+					firstErr = fmt.Errorf("polish %s: %w", id, err)
+				}
+				return
+			}
 			mu.Lock()
 			defer mu.Unlock()
 			fragments[id] = frag
@@ -476,6 +484,14 @@ func (r *Runner) fanOutReport(ctx context.Context, nodes map[string]*Node, outpu
 				"stage": "report",
 			})
 			r.emitChannelDocumentEvents(ctx, node, summary)
+			if err := r.emitMemoSnapshotEvent(ctx, node, "report"); err != nil {
+				mu.Lock()
+				defer mu.Unlock()
+				if firstErr == nil {
+					firstErr = fmt.Errorf("report %s: %w", id, err)
+				}
+				return
+			}
 			mu.Lock()
 			defer mu.Unlock()
 			summaries[id] = summary

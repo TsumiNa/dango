@@ -2,6 +2,8 @@ package runner
 
 import (
 	"context"
+	"io/fs"
+	"os"
 	"path/filepath"
 	"strings"
 	"time"
@@ -91,6 +93,43 @@ func (r *Runner) emitExchangePublishedEvent(ctx context.Context, node *Node, doc
 	r.emitSkillStreamEvent(ctx, streampkg.EventExchangePublished, streampkg.StatusCompleted, node.Id, node, payloadMap(payload))
 }
 
+func (r *Runner) emitMemoSnapshotEvent(ctx context.Context, node *Node, stage string) error {
+	if r.eventStream == nil || r.workspace == nil || node == nil || strings.TrimSpace(stage) == "" {
+		return nil
+	}
+	stageRoot := filepath.Join(r.workspace.ArchiveDir(), "memo", node.Id, stage)
+	hasSnapshots, snapshotAt, err := memoSnapshotInfo(stageRoot)
+	if err != nil {
+		return err
+	}
+	if !hasSnapshots {
+		return nil
+	}
+	payload := streampkg.MemoSnapshotPayload{
+		RunnerID:    r.id,
+		NodeID:      node.Id,
+		SkillName:   node.SkillName,
+		SnapshotDir: stageRoot,
+		SnapshotAt:  snapshotAt,
+	}
+	metadata := map[string]any{
+		"runner_id": r.id,
+		"node_id":   node.Id,
+	}
+	if node.SkillName != "" {
+		metadata["skill_name"] = node.SkillName
+	}
+	r.emitStreamEventFrom(ctx,
+		streampkg.Source{Layer: "executor", ID: node.Id, ParentID: r.id},
+		streampkg.EventMemoSnapshot,
+		streampkg.StatusCompleted,
+		payload,
+		streampkg.Scope{RunnerID: r.id, NodeID: node.Id},
+		metadata,
+	)
+	return nil
+}
+
 func (r *Runner) deliverHandoffToSuccessor(ctx context.Context, producer *Node, successor *Node) error {
 	if r.workspace == nil || producer == nil || successor == nil {
 		return nil
@@ -117,6 +156,42 @@ func (r *Runner) deliverHandoffToSuccessor(ctx context.Context, producer *Node, 
 		"to_node":   successor.Id,
 	})
 	return nil
+}
+
+func memoSnapshotInfo(stageRoot string) (bool, time.Time, error) {
+	info, err := os.Stat(stageRoot)
+	if os.IsNotExist(err) {
+		return false, time.Time{}, nil
+	}
+	if err != nil {
+		return false, time.Time{}, err
+	}
+	if !info.IsDir() {
+		return false, time.Time{}, nil
+	}
+	var latest time.Time
+	if err := filepath.WalkDir(stageRoot, func(path string, d fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if d.IsDir() {
+			return nil
+		}
+		fileInfo, err := d.Info()
+		if err != nil {
+			return err
+		}
+		if fileInfo.ModTime().After(latest) {
+			latest = fileInfo.ModTime()
+		}
+		return nil
+	}); err != nil {
+		return false, time.Time{}, err
+	}
+	if latest.IsZero() {
+		return false, time.Time{}, nil
+	}
+	return true, latest.UTC(), nil
 }
 
 func (r *Runner) resolveNodeArtifactPath(nodeID string, declaredPath string) (string, bool) {

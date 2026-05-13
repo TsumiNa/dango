@@ -659,6 +659,9 @@ func (r *Runner) runEngine(ctx context.Context) error {
 				return finish(RunnerStatusFailed, err)
 			}
 			r.emitChannelDocumentEvents(ctx, n, res.output)
+			if err := r.emitMemoSnapshotEvent(ctx, n, "execute"); err != nil {
+				return finish(RunnerStatusFailed, err)
+			}
 
 			for _, child := range children[res.nodeID] {
 				if err := r.deliverHandoffToSuccessor(ctx, n, child); err != nil {
