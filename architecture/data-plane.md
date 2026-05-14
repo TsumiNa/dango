@@ -37,7 +37,7 @@ handoff 的 `intent` 用于说明下一跳语义，当前常见值有：
 - `continue`
 - `summarize`
 
-`artifacts` 用于声明 handoff 携带的文件或目录。runner 会解析这些 artifacts，把 producer node 的 `downstream/artifacts/` 下的内容通过 successor 的 `upstream/<producer-node-id>/artifacts/` 交给 downstream executor。
+`artifacts` 用于声明 handoff 携带的文件或目录。runner 会解析这些 artifacts，把 producer node 的 `downstream/artifacts/` 下的内容通过 successor 的 `upstream/<producer-node-id>/artifacts/` 交给 downstream executor；如果 artifacts 目录不存在则跳过 symlink，producer node 失败时不会进入 successor handoff 传递。
 
 ## 谁负责生成和补齐 channel document
 
@@ -73,14 +73,14 @@ participant Ru as Runner
 participant Ex as Executor
 participant Sk as Skill runtime
 participant WS as Workspace
-participant St as Runner stream
+participant RS as Runner stream
 participant Nx as Downstream executor
 
 Ru->>WS: ProvisionWorkspace(runner_id, node_ids)
 WS-->>Ru: exchange/, skills/node-a/{memo,upstream,downstream,scratch}, archive/
 Ru->>Ex: prepareNodeExecutor(runtime paths)
 Ru->>Ex: Execute(parent outputs)
-Ex->>WS: read exchange/ references and upstream/parent-a/handoff.md metadata
+Ex->>WS: read exchange/ references and upstream/upstream-node-a/handoff.md metadata
 Ex->>Sk: runtime.Run(execution prompt)
 Sk-->>Ex: stage body
 Ex->>WS: write downstream/handoff.md as HandoffDoc(kind=handoff)
@@ -88,11 +88,11 @@ Ex->>WS: write exchange/execute-node-a-ts.md as ExchangeDoc(kind=exchange)
 Ex->>WS: snapshot memo/* to archive/memo/node-a/execute/*.memo.md as MemoDocument(kind=memo)
 Ex-->>Ru: handoff markdown
 Ru->>Ru: parseChannelDocument(handoff markdown)
-Ru->>St: emit handoff.emitted and artifact events
+Ru->>RS: emit handoff.emitted and artifact events
 Ru->>WS: check archive/memo/node-a/execute/
-Ru->>St: emit memo.snapshot when snapshots exist
+Ru->>RS: emit memo.snapshot when snapshots exist
 Ru->>WS: Handoff(producer node, successor node)
-WS-->>Nx: upstream/producer-node-a/handoff.md and artifacts/ symlinks
+WS-->>Nx: upstream/node-a/handoff.md and artifacts/ symlinks
 ```
 
 ## stream merge 现在怎么分层
