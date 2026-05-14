@@ -386,6 +386,7 @@ func knownEventType(eventType string) bool {
 		streampkg.EventExecutorPolishStarted, streampkg.EventExecutorPolishCompleted, streampkg.EventExecutorPolishFailed,
 		streampkg.EventExecutorExecuteStarted, streampkg.EventExecutorExecuteCompleted, streampkg.EventExecutorExecuteFailed,
 		streampkg.EventExecutorReportStarted, streampkg.EventExecutorReportCompleted, streampkg.EventExecutorReportFailed,
+		streampkg.EventExchangePublished,
 		streampkg.EventSkillMemoDelta,
 		streampkg.EventArtifactCreated,
 		streampkg.EventLLMToolCallStarted, streampkg.EventLLMToolCallDelta, streampkg.EventLLMToolCallCompleted,
@@ -445,6 +446,8 @@ func (r *Renderer) formatKnownEvent(event streampkg.Event, values map[string]any
 		streampkg.EventExecutorExecuteStarted, streampkg.EventExecutorExecuteCompleted, streampkg.EventExecutorExecuteFailed,
 		streampkg.EventExecutorReportStarted, streampkg.EventExecutorReportCompleted, streampkg.EventExecutorReportFailed:
 		return r.formatNodeEvent(event, values, strings.TrimPrefix(event.EventType, "executor."))
+	case streampkg.EventExchangePublished:
+		return r.formatExchangePublished(values)
 	case streampkg.EventSkillMemoDelta:
 		return r.formatSkillMemo(event, values)
 	case streampkg.EventArtifactCreated:
@@ -469,7 +472,10 @@ func (r *Renderer) formatTextDelta(event streampkg.Event, kind string) string {
 		return r.formatRunningText(event, kind, text)
 	}
 	if isValidExchangeDocMarkdown(text) {
-		return fmt.Sprintf("%s %s %s=%s", r.tag(kind), r.dim("·"), r.colorKey("exchange"), r.colorPath(r.exchangeReference(event, text)))
+		if ref, ok := r.exchangeReference(event, text); ok {
+			return fmt.Sprintf("%s %s %s=%s", r.tag(kind), r.dim("·"), r.colorKey("exchange"), r.colorPath(ref))
+		}
+		return fmt.Sprintf("%s %s exchange markdown captured %s", r.tag(kind), r.dim("·"), r.kv("bytes", fmt.Sprint(len(text))))
 	}
 	if isValidHandoffDocMarkdown(text) {
 		return fmt.Sprintf("%s %s handoff markdown captured %s", r.tag(kind), r.dim("·"), r.kv("bytes", fmt.Sprint(len(text))))
@@ -687,6 +693,19 @@ func (r *Renderer) formatArtifact(event streampkg.Event, values map[string]any) 
 		line += "\n" + inline
 	}
 	return line
+}
+
+func (r *Renderer) formatExchangePublished(values map[string]any) string {
+	parts := []string{}
+	if path := stringValue(values["path"]); path != "" {
+		parts = append(parts, r.colorKey("exchange")+"="+r.colorPath(fileURL(path)))
+	} else {
+		parts = append(parts, "exchange published")
+	}
+	if title := stringValue(values["title"]); title != "" {
+		parts = append(parts, r.kvQuoted("title", title))
+	}
+	return strings.Join(parts, " ")
 }
 
 func (r *Renderer) formatToolCall(event streampkg.Event, values map[string]any) string {
@@ -1044,18 +1063,18 @@ func estimateTokens(text string) int {
 	return tokens
 }
 
-func (r *Renderer) exchangeReference(event streampkg.Event, text string) string {
+func (r *Renderer) exchangeReference(event streampkg.Event, text string) (string, bool) {
 	if r.cfg.ExchangeDir == "" {
-		return fmt.Sprintf("inline:%d-bytes", len(text))
+		return "", false
 	}
 	if err := os.MkdirAll(r.cfg.ExchangeDir, 0o755); err != nil {
-		return fmt.Sprintf("write-error:%s", err)
+		return fmt.Sprintf("write-error:%s", err), true
 	}
 	path := filepath.Join(r.cfg.ExchangeDir, fmt.Sprintf("exchange-%012d.md", event.SequenceNumber))
 	if err := os.WriteFile(path, []byte(text), 0o644); err != nil {
-		return fmt.Sprintf("write-error:%s", err)
+		return fmt.Sprintf("write-error:%s", err), true
 	}
-	return fileURL(path)
+	return fileURL(path), true
 }
 
 func (r *Renderer) inlineImage(path string) string {

@@ -281,6 +281,32 @@ done`),
 	}
 }
 
+func TestRendererSummarizesExchangeMarkdownWithoutSyntheticReference(t *testing.T) {
+	renderer := New(nil, Config{})
+	line := renderer.FormatEvent(streampkg.Event{
+		EventType: streampkg.EventLLMOutputDelta,
+		From:      streampkg.Source{Layer: "skill", ID: "writer"},
+		Status:    streampkg.StatusCompleted,
+		Delta: mustJSONString(t, `---
+kind: exchange
+version: 1
+runner_id: runner-1
+node_id: writer
+created_at: 2026-05-01T12:00:00Z
+---
+
+payload`),
+	})
+	if strings.Contains(line, "exchange=inline:") {
+		t.Fatalf("exchange line used synthetic inline reference: %q", line)
+	}
+	for _, want := range []string{"exchange markdown captured", "bytes="} {
+		if !strings.Contains(line, want) {
+			t.Fatalf("exchange line missing %q:\n%s", want, line)
+		}
+	}
+}
+
 func TestRendererWritesDraftExchangeMarkdownReferences(t *testing.T) {
 	dir := t.TempDir()
 	renderer := New(nil, Config{ExchangeDir: dir})
@@ -308,6 +334,23 @@ payload`),
 	}
 	if !strings.Contains(string(written), "kind: exchange") || !strings.Contains(string(written), "payload") {
 		t.Fatalf("exchange doc file was not preserved raw:\n%s", string(written))
+	}
+}
+
+func TestRendererFormatsExchangePublishedEventWithCanonicalPath(t *testing.T) {
+	dir := t.TempDir()
+	renderer := New(nil, Config{})
+	line := renderer.FormatEvent(streampkg.Event{
+		EventType: streampkg.EventExchangePublished,
+		From:      streampkg.Source{Layer: "skill", ID: "writer"},
+		Status:    streampkg.StatusCompleted,
+		Scope:     streampkg.Scope{RunnerID: "runner-1", NodeID: "writer"},
+		Delta:     json.RawMessage(`{"path":` + string(mustJSONString(t, dir)) + `,"title":"report"}`),
+	})
+	for _, want := range []string{"exchange=file://", dir, `title="report"`} {
+		if !strings.Contains(line, want) {
+			t.Fatalf("line missing %q:\n%s", want, line)
+		}
 	}
 }
 

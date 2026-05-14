@@ -9,7 +9,7 @@ several locations on Honshu. The expected behavior is:
 1. The orchestrator plans only the skills needed for the user request.
 2. The elevation skill parses the messy observations and enriches each site
    with a deterministic elevation lookup through its own uv/Python project.
-3. The GP-model skill consumes the upstream markdown exchange document, trains
+3. The GP-model skill consumes the parent handoff markdown, trains
    a Gaussian process regressor through its own uv/Python project and
    `scikit-learn`, then writes prediction artifacts with `matplotlib`.
 4. The markdown-to-PDF skill is available as a distractor and must not be used
@@ -36,7 +36,7 @@ Generated files live under this example's `artifacts/` directory. Individual
 skills decide their own subdirectory layout under that root. The fixed Python
 scripts included in each skill are runnable entrypoints for common paths and
 tests; they are not the system contract. At runtime, a skill is expected to read
-its assigned task and upstream exchange markdown, decide what glue code is
+its assigned task and parent handoff markdown, decide what glue code is
 needed, write temporary code in its playground when helpful, and run package/API
 calls through the available command and filesystem tools.
 
@@ -51,9 +51,10 @@ settled run, the example also writes `artifacts/debug/describe_view.json`,
 to inspect without dumping raw request payloads to stdout.
 
 When a skill produces files for downstream use, it declares those paths in the
-Dango exchange markdown front matter as `resources`; the runner parses that
+Dango handoff front matter as `artifacts`; the runner parses that
 machine-readable metadata and makes the containing directories available to
-planned downstream skills.
+planned downstream skills. Shared exchange documents are for public
+progress/reporting rather than directed downstream delivery.
 
 Each `SKILL.md` also describes its Polish plan behavior. During the runner's
 managed lifecycle, skill-specific polish calls should preview requirements and

@@ -170,8 +170,8 @@ func TestTrainGPSkillScriptBuildsPredictionArtifacts(t *testing.T) {
 
 	artifactsDir := t.TempDir()
 	trainInput, err := json.Marshal(map[string]string{
-		"parent_exchange": "```json\n" + enriched + "\n```",
-		"artifacts_dir":   artifactsDir,
+		"parent_handoff": "```json\n" + enriched + "\n```",
+		"artifacts_dir":  artifactsDir,
 	})
 	if err != nil {
 		t.Fatalf("marshal train input: %v", err)
@@ -940,7 +940,7 @@ func serveFakePlanner(w http.ResponseWriter, req *responsesRequest, prompt plann
 
 func serveFakeSkill(w http.ResponseWriter, req *responsesRequest, userText string, instructions string) {
 	if strings.HasPrefix(userText, "Polish the assigned task plan") || strings.HasPrefix(userText, "# Polish stage note") {
-		doc, err := polishExchangeMarkdown(userText)
+		doc, err := polishHandoffMarkdown(userText)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
@@ -949,7 +949,7 @@ func serveFakeSkill(w http.ResponseWriter, req *responsesRequest, userText strin
 		return
 	}
 	if strings.HasPrefix(userText, "Summarize this executor output") || strings.HasPrefix(userText, "# Report stage note") {
-		doc, err := reportExchangeMarkdown(userText)
+		doc, err := reportHandoffMarkdown(userText)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
@@ -958,7 +958,7 @@ func serveFakeSkill(w http.ResponseWriter, req *responsesRequest, userText strin
 		return
 	}
 	if output := lastFunctionCallOutput(req.Input); output != "" {
-		doc, err := executionExchangeMarkdown(output)
+		doc, err := executionHandoffMarkdown(output)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
@@ -980,8 +980,8 @@ func serveFakeSkill(w http.ResponseWriter, req *responsesRequest, userText strin
 			return
 		}
 		command, err := skillScriptCommand(skillDir, "scripts/train.py", map[string]string{
-			"parent_exchange": userText,
-			"artifacts_dir":   filepath.Join(artifactsRoot, "train_gp_model"),
+			"parent_handoff": userText,
+			"artifacts_dir":  filepath.Join(artifactsRoot, "train_gp_model"),
 		})
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -1107,7 +1107,7 @@ func findTool(t *testing.T, tools []llm.Tool, name string) llm.Tool {
 	return nil
 }
 
-func polishExchangeMarkdown(prompt string) (string, error) {
+func polishHandoffMarkdown(prompt string) (string, error) {
 	doc := runnerpkg.HandoffDoc{
 		ChannelHeader: streampkg.ChannelHeader{RunnerID: "runner-1"},
 		FromNode:      "node",
@@ -1152,7 +1152,7 @@ func missingSkills(prompt plannerPrompt, required ...string) []string {
 	return missing
 }
 
-func executionExchangeMarkdown(toolOutput string) (string, error) {
+func executionHandoffMarkdown(toolOutput string) (string, error) {
 	doc := runnerpkg.HandoffDoc{
 		ChannelHeader: streampkg.ChannelHeader{RunnerID: "runner-1"},
 		FromNode:      "node",
@@ -1163,7 +1163,7 @@ func executionExchangeMarkdown(toolOutput string) (string, error) {
 	return doc.Markdown()
 }
 
-func reportExchangeMarkdown(output string) (string, error) {
+func reportHandoffMarkdown(output string) (string, error) {
 	doc := runnerpkg.HandoffDoc{
 		ChannelHeader: streampkg.ChannelHeader{RunnerID: "runner-1"},
 		FromNode:      "node",
