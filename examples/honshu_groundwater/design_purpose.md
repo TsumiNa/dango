@@ -51,7 +51,7 @@ settled run, the example also writes `artifacts/debug/describe_view.json`,
 to inspect without dumping raw request payloads to stdout.
 
 When a skill produces files for downstream use, it declares those paths in the
-Dango handoff front matter as `resources`; the runner parses that
+Dango handoff front matter as `artifacts`; the runner parses that
 machine-readable metadata and makes the containing directories available to
 planned downstream skills. Shared exchange documents are for public
 progress/reporting rather than directed downstream delivery.

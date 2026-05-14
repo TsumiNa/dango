@@ -23,8 +23,8 @@ The skill ships its own `uv`-managed Python environment with `scikit-learn`,
 
 `scripts/train.py` fits a `scikit-learn` `GaussianProcessRegressor` (RBF +
 WhiteKernel), saves a prediction CSV, and saves a surface plot SVG via
-`matplotlib`. Pass the parent handoff markdown verbatim — the script
-extracts the JSON block itself.
+`matplotlib`. Pass the full parent handoff markdown document verbatim — the
+script extracts the fenced JSON block itself.
 
 ```sh
 uv --directory <source workspace> run python scripts/train.py <<'JSON'
@@ -39,7 +39,7 @@ Stdin schema:
 
 ```
 {
-  "parent_handoff": "<full markdown body of the upstream handoff>",
+  "parent_handoff": "<full parent handoff markdown document as a string>",
   "artifacts_dir":  "<absolute directory where artifacts are written>"
 }
 ```
@@ -68,5 +68,5 @@ Stdout schema:
 ```
 
 Paste the script's stdout JSON verbatim inside a fenced ```json``` block as
-your Handoff body, and copy its `resources` array into your front matter
-`resources` so downstream skills can reach the CSV and SVG.
+your Handoff body, and copy its `resources` array into your handoff front
+matter `artifacts` so downstream skills can reach the CSV and SVG.
