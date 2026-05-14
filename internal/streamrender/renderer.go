@@ -468,8 +468,11 @@ func (r *Renderer) formatTextDelta(event streampkg.Event, kind string) string {
 	if event.Status == streampkg.StatusRunning {
 		return r.formatRunningText(event, kind, text)
 	}
-	if exchangeText(text) {
+	if isValidExchangeDocMarkdown(text) {
 		return fmt.Sprintf("%s %s %s=%s", r.tag(kind), r.dim("·"), r.colorKey("exchange"), r.colorPath(r.exchangeReference(event, text)))
+	}
+	if isValidHandoffDocMarkdown(text) {
+		return fmt.Sprintf("%s %s handoff markdown captured %s", r.tag(kind), r.dim("·"), r.kv("bytes", fmt.Sprint(len(text))))
 	}
 	if event.From.Layer == "orchestrator" && stringValue(event.Metadata["stage"]) == "planning" && kind == "output" {
 		return fmt.Sprintf("planning output captured %s", r.kv("status", string(event.Status)))
@@ -513,6 +516,9 @@ func (r *Renderer) formatRunningText(event streampkg.Event, kind string, text st
 	}
 	if looksLikeExchangeDraft(chunk) {
 		return fmt.Sprintf("%s %s drafting exchange %s", r.tag(kind), r.dim("·"), r.kv("bytes", fmt.Sprint(len(buf.text))))
+	}
+	if looksLikeHandoffDraft(chunk) {
+		return fmt.Sprintf("%s %s drafting handoff %s", r.tag(kind), r.dim("·"), r.kv("bytes", fmt.Sprint(len(buf.text))))
 	}
 	cleaned := compactWhitespace(chunk)
 	cleanedWidth := ansi.StringWidth(cleaned)
@@ -1134,17 +1140,40 @@ func imagePath(path string) bool {
 	}
 }
 
-func exchangeText(text string) bool {
-	return runnerpkg.LooksLikeChannelMarkdown(text)
+func isValidExchangeDocMarkdown(text string) bool {
+	_, err := runnerpkg.ParseExchangeDocMarkdown(text)
+	return err == nil
 }
 
 func looksLikeExchangeDraft(text string) bool {
+	return looksLikeChannelDraft(text, streampkg.ChannelKindExchange)
+}
+
+func looksLikeHandoffDraft(text string) bool {
+	return looksLikeChannelDraft(text, streampkg.ChannelKindHandoff)
+}
+
+func looksLikeChannelDraft(text string, kind streampkg.ChannelKind) bool {
 	trimmed := strings.TrimSpace(text)
-	if runnerpkg.LooksLikeChannelMarkdown(trimmed) {
-		return true
+	if !strings.HasPrefix(trimmed, "---\n") {
+		return false
 	}
-	return strings.HasPrefix(trimmed, "---") &&
-		(strings.Contains(trimmed, "kind: "+string(streampkg.ChannelKindHandoff)) ||
-			strings.Contains(trimmed, "kind: "+string(streampkg.ChannelKindExchange)) ||
-			strings.Contains(trimmed, "kind: "+string(streampkg.ChannelKindMemo)))
+	frontMatter := trimmed[len("---\n"):]
+	for _, marker := range []string{"\n---\n", "\n---\r\n", "\n---"} {
+		if idx := strings.Index(frontMatter, marker); idx >= 0 {
+			frontMatter = frontMatter[:idx]
+			break
+		}
+	}
+	for _, line := range strings.Split(frontMatter, "\n") {
+		if strings.TrimSpace(line) == "kind: "+string(kind) {
+			return true
+		}
+	}
+	return false
+}
+
+func isValidHandoffDocMarkdown(text string) bool {
+	_, err := runnerpkg.ParseHandoffMarkdown(text)
+	return err == nil
 }

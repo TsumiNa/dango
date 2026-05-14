@@ -804,3 +804,166 @@ func TestRenderStageOutputsWritesSingleHandoffExchangeEnvelopeAndMemoSnapshot(t 
 		t.Fatalf("symlink memo should be skipped, stat err = %v", err)
 	}
 }
+
+func TestRunnerEmitsMemoSnapshotEventForExecutionMemoSnapshots(t *testing.T) {
+	exec, err := NewExecutor(loadLightweightTestSkill(t), &ExecutionPlanner{
+		id:              "node-1",
+		TaskDescription: "Write memo-backed execution output.",
+	}, llm.DefaultConversationConfig(), WithExecutorClient(&llm.Client{}))
+	if err != nil {
+		t.Fatalf("NewExecutor: %v", err)
+	}
+	node := &runnerpkg.Node{
+		Id:        "node-1",
+		SkillName: "memo-writer",
+		Executor:  &memoFixtureExecutor{exec: exec, writeMemo: true},
+	}
+	workspaceRoot := t.TempDir()
+	r := runnerpkg.New(
+		runnerpkg.WithPersistenceHandle(staticWorkspaceHandle{root: workspaceRoot}),
+		runnerpkg.WithInitialPlan(nil, map[string]*runnerpkg.Node{"node-1": node}),
+	)
+	sub, err := r.SubscribeStream(streampkg.Filter{
+		EventTypes: []string{streampkg.EventMemoSnapshot},
+		Scope:      streampkg.Scope{RunnerID: r.ID(), NodeID: "node-1"},
+	}, streampkg.WithSubscriberBuffer(8))
+	if err != nil {
+		t.Fatalf("SubscribeStream(memo): %v", err)
+	}
+	defer sub.Cancel()
+	if err := r.Start(context.Background()); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	readCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	event, ok, err := sub.Next(readCtx)
+	if err != nil || !ok {
+		t.Fatalf("Next memo event = %v/%v", ok, err)
+	}
+	var payload streampkg.MemoSnapshotPayload
+	if err := json.Unmarshal(event.Delta, &payload); err != nil {
+		t.Fatalf("Unmarshal memo payload: %v", err)
+	}
+	runnerRoot := filepath.Join(workspaceRoot, "task_"+r.ID())
+	wantSnapshotDir := filepath.Join(runnerRoot, "archive", "memo", "node-1", "execute")
+	if payload.RunnerID != r.ID() || payload.NodeID != "node-1" || payload.SkillName != "memo-writer" {
+		t.Fatalf("memo payload ids = %+v", payload)
+	}
+	if payload.SnapshotDir != wantSnapshotDir || payload.SnapshotAt.IsZero() {
+		t.Fatalf("memo payload = %+v, want snapshot dir %q with timestamp", payload, wantSnapshotDir)
+	}
+	memoPath := filepath.Join(runnerRoot, "skills", "node-1", "memo", "plan.md")
+	if body, err := os.ReadFile(memoPath); err != nil || string(body) != "memo body" {
+		t.Fatalf("memo file = %q/%v, want memo body", body, err)
+	}
+	archivePath := filepath.Join(wantSnapshotDir, "plan.md.memo.md")
+	raw, err := os.ReadFile(archivePath)
+	if err != nil {
+		t.Fatalf("ReadFile(snapshot): %v", err)
+	}
+	parsed, err := runnerpkg.ParseMemoMarkdown(string(raw))
+	if err != nil {
+		t.Fatalf("ParseMemoMarkdown(snapshot): %v", err)
+	}
+	if parsed.Path != "memo/plan.md" || parsed.Body != "memo body" {
+		t.Fatalf("parsed snapshot = %+v", parsed)
+	}
+	waitForRunnerIdle(t, r)
+	if err := r.Complete(context.Background()); err != nil {
+		t.Fatalf("Complete: %v", err)
+	}
+	if err := r.Wait(context.Background()); err != nil {
+		t.Fatalf("Wait: %v", err)
+	}
+}
+
+func TestRunnerSkipsMemoSnapshotEventWhenExecutionProducesNoMemoFiles(t *testing.T) {
+	exec, err := NewExecutor(loadLightweightTestSkill(t), &ExecutionPlanner{
+		id:              "node-1",
+		TaskDescription: "Return execution output without memo files.",
+	}, llm.DefaultConversationConfig(), WithExecutorClient(&llm.Client{}))
+	if err != nil {
+		t.Fatalf("NewExecutor: %v", err)
+	}
+	node := &runnerpkg.Node{
+		Id:        "node-1",
+		SkillName: "memo-writer",
+		Executor:  &memoFixtureExecutor{exec: exec},
+	}
+	r := runnerpkg.New(
+		runnerpkg.WithPersistenceHandle(staticWorkspaceHandle{root: t.TempDir()}),
+		runnerpkg.WithInitialPlan(nil, map[string]*runnerpkg.Node{"node-1": node}),
+	)
+	sub, err := r.SubscribeStream(streampkg.Filter{
+		EventTypes: []string{streampkg.EventMemoSnapshot},
+		Scope:      streampkg.Scope{RunnerID: r.ID(), NodeID: "node-1"},
+	}, streampkg.WithSubscriberBuffer(8))
+	if err != nil {
+		t.Fatalf("SubscribeStream(memo): %v", err)
+	}
+	defer sub.Cancel()
+	if err := r.Start(context.Background()); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	waitForRunnerIdle(t, r)
+	readCtx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	_, ok, err := sub.Next(readCtx)
+	if !errors.Is(err, context.DeadlineExceeded) || ok {
+		t.Fatalf("Next memo event = %v/%v, want no memo event", ok, err)
+	}
+	if err := r.Complete(context.Background()); err != nil {
+		t.Fatalf("Complete: %v", err)
+	}
+	if err := r.Wait(context.Background()); err != nil {
+		t.Fatalf("Wait: %v", err)
+	}
+}
+
+type staticWorkspaceHandle struct {
+	root string
+}
+
+func (h staticWorkspaceHandle) RunnerStore() runnerpkg.RunnerStore { return nil }
+
+func (h staticWorkspaceHandle) WorkspaceRoot() string { return h.root }
+
+type memoFixtureExecutor struct {
+	exec      *Executor
+	writeMemo bool
+}
+
+func (e *memoFixtureExecutor) BindForRunner(sessID *string, runtimePaths runnerpkg.ExecutorRuntimePaths, sessStores ...llm.SessionStore) (string, error) {
+	return e.exec.BindForRunner(sessID, runtimePaths, sessStores...)
+}
+
+func (e *memoFixtureExecutor) Execute(ctx context.Context, parentOutputs map[string]any) (any, []*runnerpkg.Node, error) {
+	if e.writeMemo {
+		if err := os.WriteFile(filepath.Join(e.exec.currentRuntimePaths().MemoDir, "plan.md"), []byte("memo body"), 0o644); err != nil {
+			return nil, nil, err
+		}
+	}
+	output, err := e.exec.renderStageOutputs("execute", "continue", []string{"downstream"}, "executor output")
+	if err != nil {
+		return nil, nil, err
+	}
+	return output, nil, nil
+}
+
+func (e *memoFixtureExecutor) Polish(ctx context.Context) (any, error) { return nil, nil }
+
+func (e *memoFixtureExecutor) Report(ctx context.Context, output any) (any, error) {
+	return nil, nil
+}
+
+func waitForRunnerIdle(t *testing.T, r *runnerpkg.Runner) {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if r.State().Status == runnerpkg.RunnerStatusIdle {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("runner never reached idle state, got %q", r.State().Status)
+}

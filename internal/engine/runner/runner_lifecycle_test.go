@@ -3,9 +3,13 @@ package runner
 import (
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
 	"sync/atomic"
 	"testing"
 	"time"
+
+	streampkg "github.com/tsumina/dango/internal/engine/stream"
 )
 
 func newPolishNode(id string, polishFrag any) *Node {
@@ -128,6 +132,62 @@ func TestRunner_StartPolishFailureAborts(t *testing.T) {
 	}
 }
 
+func TestRunnerFanOutPolishSkipsCompletedEventWhenMemoSnapshotFails(t *testing.T) {
+	r := newTestRunner()
+	workspace, err := ProvisionWorkspace(t.TempDir(), r.ID(), []string{"A"}, nil)
+	if err != nil {
+		t.Fatalf("ProvisionWorkspace: %v", err)
+	}
+	r.workspace = workspace
+	makeUnreadableMemoSnapshotDir(t, workspace, "A", "polish")
+	sub, err := r.SubscribeStream(streampkg.Filter{
+		EventTypes: []string{streampkg.EventExecutorPolishCompleted},
+		Scope:      streampkg.Scope{RunnerID: r.ID(), NodeID: "A"},
+	}, streampkg.WithSubscriberBuffer(4))
+	if err != nil {
+		t.Fatalf("SubscribeStream(polish completed): %v", err)
+	}
+	defer sub.Cancel()
+
+	if _, err := r.fanOutPolish(context.Background(), map[string]*Node{"A": newPolishNode("A", "frag-A")}); err == nil {
+		t.Fatal("fanOutPolish error = nil, want memo snapshot failure")
+	}
+	assertNoStreamEventWithin(t, sub, 100*time.Millisecond)
+}
+
+func TestRunnerFanOutReportSkipsCompletedEventWhenMemoSnapshotFails(t *testing.T) {
+	r := newTestRunner()
+	workspace, err := ProvisionWorkspace(t.TempDir(), r.ID(), []string{"A"}, nil)
+	if err != nil {
+		t.Fatalf("ProvisionWorkspace: %v", err)
+	}
+	r.workspace = workspace
+	makeUnreadableMemoSnapshotDir(t, workspace, "A", "report")
+	sub, err := r.SubscribeStream(streampkg.Filter{
+		EventTypes: []string{streampkg.EventExecutorReportCompleted},
+		Scope:      streampkg.Scope{RunnerID: r.ID(), NodeID: "A"},
+	}, streampkg.WithSubscriberBuffer(4))
+	if err != nil {
+		t.Fatalf("SubscribeStream(report completed): %v", err)
+	}
+	defer sub.Cancel()
+
+	nodes := map[string]*Node{
+		"A": {
+			Id: "A",
+			Executor: &testExecutor{
+				report: func(ctx context.Context, output any) (any, error) {
+					return "sum-" + output.(string), nil
+				},
+			},
+		},
+	}
+	if _, err := r.fanOutReport(context.Background(), nodes, map[string]any{"A": "exec-A"}); err == nil {
+		t.Fatal("fanOutReport error = nil, want memo snapshot failure")
+	}
+	assertNoStreamEventWithin(t, sub, 100*time.Millisecond)
+}
+
 func TestRunner_AcceptPolishedPlanRunsEngineAndReports(t *testing.T) {
 	plan := &CoarsePlan{Request: "demo"}
 	var reportCalls atomic.Int32
@@ -186,6 +246,33 @@ func TestRunner_AcceptPolishedPlanRunsEngineAndReports(t *testing.T) {
 	}
 	if r.Phase() != PhaseSettled {
 		t.Fatalf("phase = %q, want PhaseSettled", r.Phase())
+	}
+}
+
+func makeUnreadableMemoSnapshotDir(t *testing.T, workspace *Workspace, nodeID string, stage string) {
+	t.Helper()
+	stageRoot := filepath.Join(workspace.ArchiveDir(), "memo", nodeID, stage)
+	if err := os.MkdirAll(stageRoot, 0o755); err != nil {
+		t.Fatalf("MkdirAll(%s): %v", stageRoot, err)
+	}
+	if err := os.WriteFile(filepath.Join(stageRoot, "plan.md.memo.md"), []byte("memo body"), 0o644); err != nil {
+		t.Fatalf("WriteFile(snapshot): %v", err)
+	}
+	if err := os.Chmod(stageRoot, 0o000); err != nil {
+		t.Fatalf("Chmod(%s): %v", stageRoot, err)
+	}
+	t.Cleanup(func() {
+		_ = os.Chmod(stageRoot, 0o755)
+	})
+}
+
+func assertNoStreamEventWithin(t *testing.T, sub *streampkg.Subscription, timeout time.Duration) {
+	t.Helper()
+	readCtx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	_, ok, err := sub.Next(readCtx)
+	if !errors.Is(err, context.DeadlineExceeded) || ok {
+		t.Fatalf("Next completed event = %v/%v, want no event", ok, err)
 	}
 }
 

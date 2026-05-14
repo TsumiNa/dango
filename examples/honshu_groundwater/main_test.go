@@ -272,13 +272,10 @@ func TestRunHonshuGroundwaterExampleExecutesNeededSkills(t *testing.T) {
 	if !hasPlannerOutputEvent(events) {
 		t.Fatalf("stream event log missing completed orchestrator planner output")
 	}
-	exchanges, err := filepath.Glob(filepath.Join(artifactsDir, "exchanges", "*.md"))
-	if err != nil {
-		t.Fatalf("glob exchanges: %v", err)
+	if _, err := os.Stat(filepath.Join(artifactsDir, "exchanges")); !os.IsNotExist(err) {
+		t.Fatalf("artifacts/exchanges err = %v, want not exist", err)
 	}
-	if len(exchanges) == 0 {
-		t.Fatal("expected exchange markdown files under artifacts/exchanges")
-	}
+	assertRunnerWorkspaceArtifacts(t, filepath.Join(result.PersistenceWorkRoot, "task_"+result.RunnerID))
 	for _, want := range []string{"submitting request to orchestrator", "runner created", "runner settled"} {
 		if !strings.Contains(logs.String(), want) {
 			t.Fatalf("logs missing %q:\n%s", want, logs.String())
