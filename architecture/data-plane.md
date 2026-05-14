@@ -37,7 +37,7 @@ handoff 的 `intent` 用于说明下一跳语义，当前常见值有：
 - `continue`
 - `summarize`
 
-`artifacts` 用于声明 handoff 携带的文件或目录。runner 会解析这些 artifact，把生产者 `downstream/artifacts/` 下的内容通过 successor 的 `upstream/<producer>/artifacts/` 交给 downstream executor。
+`artifacts` 用于声明 handoff 携带的文件或目录。runner 会解析这些 artifacts，把生产者 `downstream/artifacts/` 下的内容通过 successor 的 `upstream/<producer>/artifacts/` 交给 downstream executor。
 
 ## 谁负责生成和补齐 channel document
 
@@ -92,7 +92,7 @@ sequenceDiagram
 	Ru->>WS: check archive/memo/node-id/execute/
 	Ru->>St: emit memo.snapshot when snapshots exist
 	Ru->>WS: Handoff(producer, successor)
-	WS-->>Nx: upstream/producer-id/handoff.md and artifacts/ symlinks
+	WS-->>Nx: upstream/producer-node-id/handoff.md and artifacts/ symlinks
 ```
 
 ## stream merge 现在怎么分层
