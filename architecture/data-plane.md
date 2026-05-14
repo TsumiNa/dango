@@ -77,22 +77,22 @@ participant RS as Runner stream
 participant Nx as Downstream executor
 
 Ru->>WS: ProvisionWorkspace(runner_id, node_ids)
-WS-->>Ru: exchange/, skills/node-a/{memo,upstream,downstream,scratch}, archive/
+WS-->>Ru: exchange/, skills/{node-id}/{memo,upstream,downstream,scratch}, archive/
 Ru->>Ex: prepareNodeExecutor(runtime paths)
 Ru->>Ex: Execute(parent outputs)
-Ex->>WS: read exchange/ references and upstream/upstream-node-a/handoff.md metadata
+Ex->>WS: read exchange/ references and upstream/{parent-node-id}/handoff.md metadata
 Ex->>Sk: runtime.Run(execution prompt)
 Sk-->>Ex: stage body
 Ex->>WS: write downstream/handoff.md as HandoffDoc(kind=handoff)
-Ex->>WS: write exchange/execute-node-a-ts.md as ExchangeDoc(kind=exchange)
-Ex->>WS: snapshot memo/* to archive/memo/node-a/execute/*.memo.md as MemoDocument(kind=memo)
+Ex->>WS: write exchange/execute-{node-id}-ts.md as ExchangeDoc(kind=exchange)
+Ex->>WS: snapshot memo/* to archive/memo/{node-id}/execute/*.memo.md as MemoDocument(kind=memo)
 Ex-->>Ru: handoff markdown
 Ru->>Ru: parseChannelDocument(handoff markdown)
 Ru->>RS: emit handoff.emitted and artifact events
-Ru->>WS: check archive/memo/node-a/execute/
+Ru->>WS: check archive/memo/{node-id}/execute/
 Ru->>RS: emit memo.snapshot when snapshots exist
 Ru->>WS: Handoff(producer node, successor node)
-WS-->>Nx: upstream/node-a/handoff.md and artifacts/ symlinks
+WS-->>Nx: upstream/{node-id}/handoff.md and artifacts/ symlinks
 ```
 
 ## stream merge 现在怎么分层
