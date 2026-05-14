@@ -27,13 +27,13 @@ warnings.filterwarnings("ignore", category=ConvergenceWarning)
 
 def main() -> int:
     args = json.load(sys.stdin)
-    parent_exchange = args.get("parent_exchange", "")
+    parent_handoff = args.get("parent_handoff", "")
     artifacts_dir = args.get("artifacts_dir") or default_artifacts_dir()
     if not artifacts_dir:
         raise ValueError("artifacts_dir is required or DANGO_ARTIFACTS_DIR must be set")
     os.makedirs(artifacts_dir, exist_ok=True)
 
-    enriched = json.loads(extract_last_json_block(parent_exchange))
+    enriched = json.loads(extract_last_json_block(parent_handoff))
     observations = enriched.get("observations", [])
     if not observations:
         raise ValueError("no enriched observations for model training")

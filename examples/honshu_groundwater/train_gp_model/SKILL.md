@@ -23,14 +23,14 @@ The skill ships its own `uv`-managed Python environment with `scikit-learn`,
 
 `scripts/train.py` fits a `scikit-learn` `GaussianProcessRegressor` (RBF +
 WhiteKernel), saves a prediction CSV, and saves a surface plot SVG via
-`matplotlib`. Pass the upstream exchange markdown verbatim — the script
+`matplotlib`. Pass the parent handoff markdown verbatim — the script
 extracts the JSON block itself.
 
 ```sh
 uv --directory <source workspace> run python scripts/train.py <<'JSON'
 {
-  "parent_exchange": <upstream exchange markdown as a JSON string>,
-  "artifacts_dir":   "<artifacts root>/train_gp_model"
+  "parent_handoff": <parent handoff markdown as a JSON string>,
+  "artifacts_dir":  "<artifacts root>/train_gp_model"
 }
 JSON
 ```
@@ -39,12 +39,16 @@ Stdin schema:
 
 ```
 {
-  "parent_exchange": "<full markdown body of the upstream handoff>",
-  "artifacts_dir":   "<absolute directory where artifacts are written>"
+  "parent_handoff": "<full markdown body of the upstream handoff>",
+  "artifacts_dir":  "<absolute directory where artifacts are written>"
 }
 ```
 
 The script creates `artifacts_dir` if it does not exist.
+
+Treat that parent handoff as the directed upstream input. Use shared exchange
+documents only for public progress/reporting, and use `memo/` only for
+skill-private notes that should survive context loss.
 
 Stdout schema:
 
