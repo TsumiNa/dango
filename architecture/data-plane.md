@@ -37,7 +37,7 @@ handoff 的 `intent` 用于说明下一跳语义，当前常见值有：
 - `continue`
 - `summarize`
 
-`artifacts` 用于声明 handoff 携带的文件或目录。runner 会解析这些 artifacts，把生产者 `downstream/artifacts/` 下的内容通过 successor 的 `upstream/<producer>/artifacts/` 交给 downstream executor。
+`artifacts` 用于声明 handoff 携带的文件或目录。runner 会解析这些 artifacts，把 producer node 的 `downstream/artifacts/` 下的内容通过 successor 的 `upstream/<producer-node-id>/artifacts/` 交给 downstream executor。
 
 ## 谁负责生成和补齐 channel document
 
@@ -58,41 +58,41 @@ runner 不解释业务语义，但会做四件基础工作：
 1. 为每个 task 创建 `exchange/`、`skills/<node>/{memo,upstream,downstream,scratch}`、`archive/` 等 workspace。
 2. 解析 executor 返回的 handoff markdown，并发出 `handoff.emitted` / artifact 相关 stream event。
 3. 在 node 完成后检查 memo archive，并发出 `memo.snapshot` stream event。
-4. 将生产者 `downstream/handoff.md` 和 `downstream/artifacts/` symlink 到 successor 的 `upstream/<producer>/`。
+4. 将 producer node 的 `downstream/handoff.md` 和 `downstream/artifacts/` symlink 到 successor 的 `upstream/<producer-node-id>/`。
 
 这也是为什么 runner 能做 observability、handoff 传递和 memo 审计，而不用理解具体业务内容。
 
-## 一个 task 周期内三类 document 的组装与调用
+## 一个 task 周期内三类 document 的 assembly 与调用关系
 
 下面的 sequence diagram 展示最常见的 `execute` 周期。`polish` / `report` 使用同一个 `renderStageOutputs` 组装路径，只是 handoff 的 `intent` 和 `to_nodes` 不同。
 
 ```mermaid
 sequenceDiagram
-	autonumber
-	participant Ru as Runner
-	participant Ex as Executor
-	participant Sk as Skill runtime
-	participant WS as Workspace
-	participant St as Runner stream
-	participant Nx as Downstream executor
+    autonumber
+    participant Ru as Runner
+    participant Ex as Executor
+    participant Sk as Skill runtime
+    participant WS as Workspace
+    participant St as Runner stream
+    participant Nx as Downstream executor
 
-	Ru->>WS: ProvisionWorkspace(runner_id, node_ids)
-	WS-->>Ru: exchange/, skills/node-id/{memo,upstream,downstream,scratch}, archive/
-	Ru->>Ex: prepareNodeExecutor(runtime paths)
-	Ru->>Ex: Execute(parent outputs)
-	Ex->>WS: read exchange/ references and upstream/parent-id/handoff.md metadata
-	Ex->>Sk: runtime.Run(execution prompt)
-	Sk-->>Ex: stage body
-	Ex->>WS: write downstream/handoff.md as HandoffDoc(kind=handoff)
-	Ex->>WS: write exchange/stage-node-ts.md as ExchangeDoc(kind=exchange)
-	Ex->>WS: snapshot memo/* to archive/memo/node-id/execute/*.memo.md as MemoDocument(kind=memo)
-	Ex-->>Ru: handoff markdown
-	Ru->>Ru: parseChannelDocument(handoff markdown)
-	Ru->>St: emit handoff.emitted and artifact events
-	Ru->>WS: check archive/memo/node-id/execute/
-	Ru->>St: emit memo.snapshot when snapshots exist
-	Ru->>WS: Handoff(producer, successor)
-	WS-->>Nx: upstream/producer-node-id/handoff.md and artifacts/ symlinks
+    Ru->>WS: ProvisionWorkspace(runner_id, node_ids)
+    WS-->>Ru: exchange/, skills/node-id/{memo,upstream,downstream,scratch}, archive/
+    Ru->>Ex: prepareNodeExecutor(runtime paths)
+    Ru->>Ex: Execute(parent outputs)
+    Ex->>WS: read exchange/ references and upstream/parent-id/handoff.md metadata
+    Ex->>Sk: runtime.Run(execution prompt)
+    Sk-->>Ex: stage body
+    Ex->>WS: write downstream/handoff.md as HandoffDoc(kind=handoff)
+    Ex->>WS: write exchange/stage-node-ts.md as ExchangeDoc(kind=exchange)
+    Ex->>WS: snapshot memo/* to archive/memo/node-id/execute/*.memo.md as MemoDocument(kind=memo)
+    Ex-->>Ru: handoff markdown
+    Ru->>Ru: parseChannelDocument(handoff markdown)
+    Ru->>St: emit handoff.emitted and artifact events
+    Ru->>WS: check archive/memo/node-id/execute/
+    Ru->>St: emit memo.snapshot when snapshots exist
+    Ru->>WS: Handoff(producer node, successor node)
+    WS-->>Nx: upstream/producer-node-id/handoff.md and artifacts/ symlinks
 ```
 
 ## stream merge 现在怎么分层
