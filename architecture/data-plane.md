@@ -64,7 +64,7 @@ runner 不解释业务语义，但会做四件基础工作：
 
 ## 一个 task 周期内三类 document 的 assembly 与调用关系
 
-下面的 sequence diagram 展示最常见的 `execute` 周期。`polish` / `report` 使用同一个 `renderStageOutputs` 组装路径，只是 handoff 的 `intent` 和 `to_nodes` 不同。
+下面的 sequence diagram 展示最常见的 `execute` 周期。`polish` / `report` 使用同一个 `renderStageOutputs` 组装路径，只是 handoff 的 `intent` 和 `to_nodes` 不同。为了保持图可读，Ex/WS 之间读写的具体内容放在图后的文本说明。
 
 ```mermaid
 sequenceDiagram
@@ -80,9 +80,13 @@ Ru->>WS: ProvisionWorkspace(runner_id, node_ids)
 WS-->>Ru: exchange/, skills/{node-id}/{memo,upstream,downstream,scratch}, archive/
 Ru->>Ex: prepareNodeExecutor(runtime paths)
 Ru->>Ex: Execute(parent outputs)
-Ex->>WS: read exchange/ references and upstream/{parent-node-id}/handoff.md metadata
+Ex->>Ex: currentRuntimePaths() and executionPrompt(parent outputs)
+Ex->>WS: exchangeReferencesMarkdown execute reads exchange docs front matter
+Ex->>WS: upstreamHandoffReferences reads parent handoff metadata
+Ex->>WS: readParentHandoffsFromUpstream reads parent handoff bodies
 Ex->>Sk: runtime.Run(execution prompt)
 Sk-->>Ex: stage body
+Ex->>Ex: renderStageOutputs execute/continue/downstream
 Ex->>WS: write downstream/handoff.md as HandoffDoc(kind=handoff)
 Ex->>WS: write exchange/execute-{node-id}-ts.md as ExchangeDoc(kind=exchange)
 Ex->>WS: snapshot memo/* to archive/memo/{node-id}/execute/*.memo.md as MemoDocument(kind=memo)
@@ -94,6 +98,21 @@ Ru->>RS: emit memo.snapshot when snapshots exist
 Ru->>WS: Handoff(producer node, successor node)
 WS-->>Nx: upstream/{node-id}/handoff.md and artifacts/ symlinks
 ```
+
+### execute 周期中的主要函数读写
+
+- `Runner.prepareNodeExecutor(...)` 把 `ExecutorRuntimePaths` 注入 executor。这里的路径包括 `ExchangeDir`、`UpstreamDir`、`DownstreamDir`、`MemoDir`、`ArchiveMemoDir` 和 `AccessibleDirs`，后续 Ex/WS 交互都通过这些路径发生。
+- `Executor.executionPrompt(parentOutputs)` 会组装 skill prompt：
+  - `exchangeReferencesMarkdown("execute")` 扫描 `ExchangeDir` 下的 `*.md`，只读取 exchange front matter，输出给 skill 的引用行包含文件路径、`node_id`、`skill_name`、`title`、`created_at`。这一步只告诉 skill 有哪些共享 exchange 可查，不把正文直接塞进 prompt。
+  - `upstreamHandoffReferences()` 扫描 `UpstreamDir/<parent-node-id>/handoff.md`，读取 handoff front matter，输出给 skill 的引用行包含来源 node、handoff 路径、`intent`、`to_nodes`、`created_at` 和 `artifacts` 列表。
+  - `readParentHandoffsFromUpstream()` 读取同一批 upstream handoff 文件的正文；如果文件是 canonical handoff markdown，会先 `ParseHandoffMarkdown` 再取 `Body`，最后按 parent node 分组写入 prompt 的 parent handoff 区块。
+- `Executor.renderStageOutputs(...)` 使用 skill 返回的 stage body 同时生成三类投影：
+  - `HandoffDoc{FromNode, ToNodes, Intent, Body}` → `DownstreamDir/handoff.md`，并把同一份 handoff markdown 作为 executor 返回值交给 runner。
+  - `ExchangeDoc{NodeID, SkillName, Title: stage, Body}` → `ExchangeDir/<stage>-<node-id>-<timestamp>.md`，作为共享 exchange。
+  - `snapshotMemos(stage, paths)` 遍历 `MemoDir` 的普通文件，跳过目录和 symlink，把每个 memo 文件包装成 `MemoDocument{NodeID, SkillName, Path, Body}` 后写到 `ArchiveMemoDir/<stage>/<relative-path>.memo.md`。
+- `Runner.emitChannelDocumentEvents(...)` 只解析 executor 返回值。普通 stage 返回的是 handoff markdown，所以 runner 会发出 `handoff.emitted` 和 artifact event；exchange markdown 已经在 workspace 中作为共享文件存在，不依赖这个返回值。
+- `Runner.emitMemoSnapshotEvent(...)` 检查 `archive/memo/<node-id>/<stage>/` 是否有 snapshot 文件；有文件时发出 `memo.snapshot`，没有 memo 文件时不发事件。
+- `Runner.deliverHandoffToSuccessor(...)` 调用 `Workspace.Handoff(producer, successor)`，把 producer 的 `downstream/handoff.md` 和可选 `downstream/artifacts/` symlink 到 successor 的 `upstream/<producer-node-id>/`。如果 artifacts 目录不存在会跳过；如果 producer node 执行失败，runner 不会进入 successor handoff 传递。
 
 ## stream merge 现在怎么分层
 
