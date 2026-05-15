@@ -1,62 +1,118 @@
 # Exchange 数据面与可观察性
 
-当前代码里，跨 skill、跨 node、跨 request 观察面之间的共同载体已经比较统一：核心是 markdown exchange document，外围是 stream merge 和 append-only persistence。
+当前代码里，跨 skill、跨 node、跨 request 观察层之间的共同载体已经比较统一：核心是带 front matter 的 channel markdown document，外围是 workspace、stream merge 和 append-only persistence。
 
-## exchange document 是标准输出
+## exchange / handoff / memo 是三类 channel document
 
-定义位置：`internal/engine/runner/exchange.go`
+定义位置：
 
-一个 exchange document 由两部分组成：
+- `internal/engine/runner/exchange_doc.go`
+- `internal/engine/runner/handoff_doc.go`
+- `internal/engine/runner/memo.go`
+
+三类 document 都由两部分组成：
 
 - YAML front matter：放结构化元数据
-- markdown 正文：固定分成 `Memo`、`Reasoning`、`Handoff` 三段
+- markdown 正文：放 skill 产出的自然语言内容或 memo 快照正文
 
-默认 stage 常量定义了三类 node 生命周期输出：
+默认 stage 会复用同一组装逻辑，只改变 handoff 的 intent / to_nodes：
 
-- `polish`
-- `execute`
-- `report`
+- `polish`：`intent: review`，`to_nodes: [orchestrator]`
+- `execute`：`intent: continue`，`to_nodes: [downstream]`
+- `report`：`intent: summarize`，`to_nodes: [orchestrator]`
 
-此外，orchestrator planning 现在也会额外发一份 `stage: planning` 的 exchange markdown 到 request stream，虽然它不是 runner node 产物。
+此外，orchestrator planning 会生成一份 bootstrap handoff，作为初始 skill 的上游输入，而不是特例化的 exchange。
 
 ## front matter 里有哪些关键字段
 
-- `runner_id`
-- `node_id`
-- `skill_name`
-- `task_description`
-- `handoffs`
-- `resources`
+三类 document 共享 `kind`、`version`、`runner_id`、`created_at`。`kind` 是路由契约：
 
-`handoffs` 用于路由下一跳，当前常见 recipient / intent 有：
+- `kind: exchange`：共享上下文，关键字段是 `node_id`、`skill_name`、`title`
+- `kind: handoff`：定向交接，关键字段是 `from_node`、`to_nodes`、`intent`、`artifacts`
+- `kind: memo`：私有 memo 快照，关键字段是 `node_id`、`skill_name`、`path`
 
-- `to: orchestrator`, `intent: review`
-- `to: orchestrator`, `intent: summarize`
-- `to: orchestrator`, `intent: rerun_previous`
-- `to: downstream`, `intent: continue`
+handoff 的 `intent` 用于说明下一跳语义，当前常见值有：
 
-`resources` 用于声明 executor 产出的文件或目录。runner 会解析这些资源，把符合 `allowedResourceRoots` 限制的目录开放给 downstream executor 作为额外 accessible dirs。
+- `review`
+- `continue`
+- `summarize`
 
-## 谁负责生成和补齐 exchange
+`artifacts` 用于声明 handoff 携带的文件或目录。runner 会解析这些 artifacts，把 producer node 的 `downstream/artifacts/` 下的内容通过 successor 的 `upstream/<producer-node-id>/artifacts/` 交给 downstream executor；如果 artifacts 目录不存在则跳过 symlink，producer node 失败时不会进入 successor handoff 传递。
+
+## 谁负责生成和补齐 channel document
 
 ### Executor
 
-`internal/engine/executor_exchange.go` 负责默认的 exchange 行为：
+`internal/engine/executor_stage_output.go` 负责默认 stage 输出：
 
-- `Polish` 默认输出路由给 orchestrator review 的 exchange
-- `Execute` 默认输出路由给 downstream 的 exchange
-- `Report` 默认输出路由给 orchestrator summarize 的 exchange
+- 用 stage body 组装 `HandoffDoc`，写入当前 node 的 `downstream/handoff.md`
+- 用同一份 stage body 组装 `ExchangeDoc`，写入 runner 共享的 `exchange/`
+- 调用 `snapshotMemos`，把当前 skill `memo/` 下的文件包装成 `MemoDocument` 并写入 `archive/memo/<node>/<stage>/`
 
-如果 skill 没有返回合法 exchange markdown，executor 会按默认模板补成一份规范文档；如果 skill 返回了 draft 或纯文本，`NormalizeExchangeMarkdown` 会尽量归一化成 canonical exchange。
+因此 skill 的一次 stage 输出会同时投影成三种数据面：共享 exchange、定向 handoff、私有 memo 快照。executor 返回给 runner 的普通 stage 结果是 handoff markdown；exchange 和 memo 通过 workspace 文件被后续 prompt、审计和可观察性读取。
 
 ### Runner
 
-runner 不解释业务语义，但会做两件基础工作：
+runner 不解释业务语义，但会做四件基础工作：
 
-1. 用 node / runner 上下文补齐 exchange 元数据。
-2. 从 exchange 里提取 memo 和 resources，转成额外的 stream event。
+1. 为每个 task 创建 `exchange/`、`skills/<node>/{memo,upstream,downstream,scratch}`、`archive/` 等 workspace。
+2. 解析 executor 返回的 handoff markdown，并发出 `handoff.emitted` / artifact 相关 stream event。
+3. 在 node 完成后检查 memo archive，并发出 `memo.snapshot` stream event。
+4. 将 producer node 的 `downstream/handoff.md` 和 `downstream/artifacts/` symlink 到 successor 的 `upstream/<producer-node-id>/`。
 
-这也是为什么 runner 能对 exchange 做 observability 和资源传播，而不用理解具体业务内容。
+这也是为什么 runner 能做 observability、handoff 传递和 memo 审计，而不用理解具体业务内容。
+
+## 一个 task 周期内三类 document 的 assembly 与调用关系
+
+下面的 sequence diagram 展示最常见的 `execute` 周期。`polish` / `report` 使用同一个 `renderStageOutputs` 组装路径，只是 handoff 的 `intent` 和 `to_nodes` 不同。为了保持图可读，Ex/WS 之间读写的具体内容放在图后的文本说明。
+
+```mermaid
+sequenceDiagram
+autonumber
+participant Ru as Runner
+participant Ex as Executor
+participant Sk as Skill runtime
+participant WS as Workspace
+participant RS as Runner stream
+participant Nx as Downstream executor
+
+Ru->>WS: ProvisionWorkspace(runner_id, node_ids)
+WS-->>Ru: exchange/, skills/{node-id}/{memo,upstream,downstream,scratch}, archive/
+Ru->>Ex: prepareNodeExecutor(runtime paths)
+Ru->>Ex: Execute(parent outputs)
+Ex->>Ex: currentRuntimePaths() and executionPrompt(parent outputs)
+Ex->>WS: exchangeReferencesMarkdown execute reads exchange docs front matter
+Ex->>WS: upstreamHandoffReferences reads parent handoff metadata
+Ex->>WS: readParentHandoffsFromUpstream reads parent handoff bodies
+Ex->>Sk: runtime.Run(execution prompt)
+Sk-->>Ex: stage body
+Ex->>Ex: renderStageOutputs execute/continue/downstream
+Ex->>WS: write downstream/handoff.md as HandoffDoc(kind=handoff)
+Ex->>WS: write exchange/execute-{node-id}-ts.md as ExchangeDoc(kind=exchange)
+Ex->>WS: snapshot memo/* to archive/memo/{node-id}/execute/*.memo.md as MemoDocument(kind=memo)
+Ex-->>Ru: handoff markdown
+Ru->>Ru: parseChannelDocument(handoff markdown)
+Ru->>RS: emit handoff.emitted and artifact events
+Ru->>WS: check archive/memo/{node-id}/execute/
+Ru->>RS: emit memo.snapshot when snapshots exist
+Ru->>WS: Handoff(producer node, successor node)
+WS-->>Nx: upstream/{node-id}/handoff.md and artifacts/ symlinks
+```
+
+### execute 周期中的主要函数读写
+
+- `Runner.prepareNodeExecutor(...)` 把 `ExecutorRuntimePaths` 注入 executor。这里的路径包括 `ExchangeDir`、`UpstreamDir`、`DownstreamDir`、`MemoDir`、`ArchiveMemoDir` 和 `AccessibleDirs`，后续 Ex/WS 交互都通过这些路径发生。
+- `Executor.executionPrompt(parentOutputs)` 会组装 skill prompt：
+  - `exchangeReferencesMarkdown("execute")` 扫描 `ExchangeDir` 下的 `*.md`，只读取 exchange front matter，输出给 skill 的引用行包含文件路径、`node_id`、`skill_name`、`title`、`created_at`。这一步只告诉 skill 有哪些共享 exchange 可查，不把正文直接塞进 prompt。
+  - `upstreamHandoffReferences()` 扫描 `UpstreamDir/<parent-node-id>/handoff.md`，读取 handoff front matter，输出给 skill 的引用行包含来源 node、handoff 路径、`intent`、`to_nodes`、`created_at` 和 `artifacts` 列表。
+  - `readParentHandoffsFromUpstream()` 读取同一批 upstream handoff 文件的正文；如果文件是 canonical handoff markdown，会先 `ParseHandoffMarkdown` 再取 `Body`，最后按 parent node 分组写入 prompt 的 parent handoff 区块。
+- `Executor.renderStageOutputs(...)` 使用 skill 返回的 stage body 同时生成三类投影：
+  - `HandoffDoc{FromNode, ToNodes, Intent, Body}` → `DownstreamDir/handoff.md`，并把同一份 handoff markdown 作为 executor 返回值交给 runner。
+  - `ExchangeDoc{NodeID, SkillName, Title: stage, Body}` → `ExchangeDir/<stage>-<node-id>-<timestamp>.md`，作为共享 exchange。
+  - `snapshotMemos(stage, paths)` 遍历 `MemoDir` 的普通文件，跳过目录和 symlink，把每个 memo 文件包装成 `MemoDocument{NodeID, SkillName, Path, Body}` 后写到 `ArchiveMemoDir/<stage>/<relative-path>.memo.md`。
+- `Runner.emitChannelDocumentEvents(...)` 只解析 executor 返回值。普通 stage 返回的是 handoff markdown，所以 runner 会发出 `handoff.emitted` 和 artifact event；exchange markdown 已经在 workspace 中作为共享文件存在，不依赖这个返回值。
+- `Runner.emitMemoSnapshotEvent(...)` 检查 `archive/memo/<node-id>/<stage>/` 是否有 snapshot 文件；有文件时发出 `memo.snapshot`，没有 memo 文件时不发事件。
+- `Runner.deliverHandoffToSuccessor(...)` 调用 `Workspace.Handoff(producer, successor)`，把 producer 的 `downstream/handoff.md` 和可选 `downstream/artifacts/` symlink 到 successor 的 `upstream/<producer-node-id>/`。如果 artifacts 目录不存在会跳过；如果 producer node 执行失败，runner 不会进入 successor handoff 传递。
 
 ## stream merge 现在怎么分层
 
@@ -69,7 +125,7 @@ flowchart TB
 	ReviewS[(review/replan skill stream)]
 	RunS[(runner stream)]
 	SkillS[(executor-bound skill streams)]
-	ExDoc[(exchange markdown)]
+	ChDoc[(channel markdown)]
 	Runner[runner lifecycle]
 	Events[runner / executor / skill events]
 	RStore[(runner store)]
@@ -80,9 +136,9 @@ flowchart TB
 	ReviewS -->|MergeWithConfig| ReqS
 	RunS -->|MergeWithConfig| ReqS
 	SkillS -->|MergeWithConfig| RunS
-	ExDoc -->|node output / polish fragment / report summary| Runner
+	ChDoc -->|handoff / exchange / memo parsed by kind| Runner
 	Runner -->|phase + node lifecycle| Events
-	Runner -->|memo delta + artifact events| Events
+	Runner -->|handoff + memo snapshot + artifact events| Events
 	Events --> RunS
 	Runner -->|append RunnerRecord| RStore
 	ReqS -->|append raw events| ELog
@@ -128,7 +184,7 @@ flowchart TB
 
 一句话总结：
 
-- exchange markdown 是节点之间的业务载体
+- exchange / handoff / memo markdown 是节点之间的业务载体
 - stream 是运行时传播和观察载体
 - event log / runner store 是重放和审计载体
 
