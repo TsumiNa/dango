@@ -3,6 +3,7 @@ package builtin
 import (
 	"context"
 	"encoding/json"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -14,7 +15,7 @@ func TestToolsReturnsExpectedNames(t *testing.T) {
 		t.Fatalf("Tools: %v", err)
 	}
 	want := []string{"bash", "read_file", "write_file", "edit_file", "delete_file", "move_file", "grep"}
-	if got := toolNames(tools); !equalStringSlices(got, want) {
+	if got := toolNames(tools); !slices.Equal(got, want) {
 		t.Fatalf("Tools names = %v, want %v", got, want)
 	}
 }
@@ -26,7 +27,7 @@ func TestToolsAppendsExtras(t *testing.T) {
 		t.Fatalf("Tools: %v", err)
 	}
 	want := []string{"bash", "read_file", "write_file", "edit_file", "delete_file", "move_file", "grep", "list_dir", "pwd"}
-	if got := toolNames(tools); !equalStringSlices(got, want) {
+	if got := toolNames(tools); !slices.Equal(got, want) {
 		t.Fatalf("Tools names = %v, want %v", got, want)
 	}
 }
@@ -104,16 +105,4 @@ func toolNames(tools []tool) []string {
 		names[i] = tool.Name()
 	}
 	return names
-}
-
-func equalStringSlices(a, b []string) bool {
-	if len(a) != len(b) {
-		return false
-	}
-	for i := range a {
-		if a[i] != b[i] {
-			return false
-		}
-	}
-	return true
 }
