@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"slices"
+	"strings"
 	"testing"
 )
 
@@ -18,14 +20,40 @@ func TestBuiltinToolsReturnsDefaultToolSet(t *testing.T) {
 	if err != nil {
 		t.Fatalf("BuiltinTools: %v", err)
 	}
-	got := map[string]bool{}
-	for _, tool := range tools {
-		got[tool.Name()] = true
+	want := []string{"bash", "read_file", "write_file", "edit_file", "delete_file", "move_file", "grep"}
+	if got := llmToolNames(tools); !slices.Equal(got, want) {
+		t.Fatalf("BuiltinTools names = %v, want %v", got, want)
 	}
-	for _, want := range []string{"bash", "read_file", "write_file", "edit_file", "delete_file", "move_file", "list_dir", "grep", "pwd"} {
-		if !got[want] {
-			t.Errorf("BuiltinTools missing %q", want)
-		}
+}
+
+func TestBuiltinToolsRespectsBuiltinExtras(t *testing.T) {
+	skill, err := NewSkill(writeSkillDir(t, "---\nname: x\ndescription: d\n---\nbody\n"), SkillConfig{BuiltinExtras: []string{"list_dir", "pwd"}})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	cleanupSkillTemp(t, skill)
+	tools, err := skill.BuiltinTools()
+	if err != nil {
+		t.Fatalf("BuiltinTools: %v", err)
+	}
+	want := []string{"bash", "read_file", "write_file", "edit_file", "delete_file", "move_file", "grep", "list_dir", "pwd"}
+	if got := llmToolNames(tools); !slices.Equal(got, want) {
+		t.Fatalf("BuiltinTools names = %v, want %v", got, want)
+	}
+}
+
+func TestBuiltinToolsWrapsUnknownBuiltinExtra(t *testing.T) {
+	skill, err := NewSkill(writeSkillDir(t, "---\nname: x\ndescription: d\n---\nbody\n"), SkillConfig{BuiltinExtras: []string{"nope"}})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	cleanupSkillTemp(t, skill)
+	_, err = skill.BuiltinTools()
+	if err == nil {
+		t.Fatal("expected BuiltinTools error")
+	}
+	if !strings.Contains(err.Error(), "skill: configure built-in tools") || !strings.Contains(err.Error(), "nope") {
+		t.Fatalf("BuiltinTools error = %v, want skill context and extra name", err)
 	}
 }
 
@@ -171,4 +199,12 @@ func findTool(t *testing.T, tools []Tool, name string) Tool {
 	}
 	t.Fatalf("tool %q not found", name)
 	return nil
+}
+
+func llmToolNames(tools []Tool) []string {
+	names := make([]string, len(tools))
+	for i, tool := range tools {
+		names[i] = tool.Name()
+	}
+	return names
 }

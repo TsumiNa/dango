@@ -26,8 +26,8 @@ func defaultOrchestratorSkill() *llm.Skill {
 // loadOrchestratorSkill reads the embedded orchestrator SKILL.md, attaches the
 // supplied extra tools (typically registry-introspection helpers built from a
 // live Orchestrator), and gives the result the standard skill-workspace tool
-// set: bash, read_file, write_file, grep, list_dir, pwd, scoped to the skill's
-// own private temp playground.
+// set scoped to the skill's own private temp playground. The embedded prompt
+// also opts into list_dir and pwd for scratch-playground inspection.
 //
 // Built-in tools are scoped to the skill's temp playground, so the orchestrator
 // can write scratch notes or run small diagnostic commands while reasoning, but
@@ -41,7 +41,9 @@ func loadOrchestratorSkill(extraTools ...llm.Tool) (*llm.Skill, error) {
 	if len(extraTools) > 0 {
 		opts = append(opts, llm.WithTools(extraTools...))
 	}
-	sk, err := llm.NewSkill(sub, llm.DefaultSkillConfig(), opts...)
+	cfg := llm.DefaultSkillConfig()
+	cfg.BuiltinExtras = []string{"list_dir", "pwd"}
+	sk, err := llm.NewSkill(sub, cfg, opts...)
 	if err != nil {
 		return nil, fmt.Errorf("load embedded orchestrator skill: %w", err)
 	}

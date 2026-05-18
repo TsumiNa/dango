@@ -158,6 +158,30 @@ func TestNew_WithDir_CarriesBashAllowAndBlock(t *testing.T) {
 	}
 }
 
+func TestNewSkill_CarriesBuiltinExtras(t *testing.T) {
+	dir := writeSkillDir(t, "---\nname: x\ndescription: d\n---\n")
+	extras := []string{"list_dir", "pwd"}
+	sk, err := NewSkill(dir, SkillConfig{BuiltinExtras: extras})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	if got := sk.BuiltinExtras(); !equalStrings(got, extras) {
+		t.Errorf("BuiltinExtras() = %v, want %v", got, extras)
+	}
+	sk.BuiltinExtras()[0] = "mutated"
+	if sk.BuiltinExtras()[0] != "list_dir" {
+		t.Errorf("BuiltinExtras() returned a shared slice")
+	}
+
+	copySkill, err := sk.AddTools()
+	if err != nil {
+		t.Fatalf("AddTools: %v", err)
+	}
+	if got := copySkill.BuiltinExtras(); !equalStrings(got, extras) {
+		t.Errorf("copy BuiltinExtras() = %v, want %v", got, extras)
+	}
+}
+
 func TestNew_WithDir_ParsesMetadataWithoutClient(t *testing.T) {
 	const body = "This is a lightweight skill loading test.\n"
 	content := "---\n" +
@@ -410,7 +434,7 @@ func TestRuntimeInstructionPrependsPlatformSystemPrompt(t *testing.T) {
 }
 
 func TestSetAccessibleDirsAndBuiltinToolsPreservesCustomTools(t *testing.T) {
-	loaded, err := NewSkill(writeSkillDir(t, "---\nname: x\ndescription: d\n---\nbody\n"), DefaultSkillConfig())
+	loaded, err := NewSkill(writeSkillDir(t, "---\nname: x\ndescription: d\n---\nbody\n"), SkillConfig{BuiltinExtras: []string{"pwd"}})
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}

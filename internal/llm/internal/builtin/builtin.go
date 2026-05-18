@@ -15,6 +15,8 @@
 // allowlist after applying per-skill allow/block entries.
 package builtin
 
+import "fmt"
+
 type option func(*config)
 
 type config struct {
@@ -86,12 +88,30 @@ func withoutAllowlist() option {
 
 // Tools returns the default set of filesystem and shell tools scoped to ws,
 // in the order an agent sees them: bash first, then read/write/edit helpers,
-// delete/move, list_dir, grep, and pwd.
+// delete/move, and grep. Tool names in extras append opt-in built-ins such as
+// list_dir and pwd in caller order.
 //
 // bashAllow is added to the default bash allowlist, and bashBlock is removed
 // afterwards. Entries in bashBlock win when a name appears in both slices.
-func Tools(ws workspace, bashAllow []string, bashBlock []string) []tool {
+func Tools(ws workspace, bashAllow []string, bashBlock []string, extras []string) ([]tool, error) {
 	cfg := newConfig([]option{withAllowlistAdjust(bashAllow, bashBlock)})
+	tools := coreTools(ws, cfg)
+	seenExtras := make(map[string]struct{}, len(extras))
+	for _, name := range extras {
+		extra, ok := extraTool(ws, name)
+		if !ok {
+			return nil, fmt.Errorf("builtin: unknown extra tool %q", name)
+		}
+		if _, seen := seenExtras[name]; seen {
+			continue
+		}
+		seenExtras[name] = struct{}{}
+		tools = append(tools, extra)
+	}
+	return tools, nil
+}
+
+func coreTools(ws workspace, cfg *config) []tool {
 	return []tool{
 		newBashWithConfig(ws, cfg),
 		newReadFile(ws),
@@ -99,8 +119,17 @@ func Tools(ws workspace, bashAllow []string, bashBlock []string) []tool {
 		newEditFile(ws),
 		newDeleteFile(ws),
 		newMoveFile(ws),
-		newListDir(ws),
 		newGrep(ws),
-		newPwd(ws),
+	}
+}
+
+func extraTool(ws workspace, name string) (tool, bool) {
+	switch name {
+	case "list_dir":
+		return newListDir(ws), true
+	case "pwd":
+		return newPwd(ws), true
+	default:
+		return nil, false
 	}
 }

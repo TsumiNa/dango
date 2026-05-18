@@ -21,7 +21,10 @@ func (s *Skill) BuiltinTools() ([]Tool, error) {
 	if s.workspace == nil || s.workspace.TempRoot() == "" {
 		return nil, fmt.Errorf("skill: built-in tools require a temp workspace")
 	}
-	internalTools := builtin.Tools(s.workspace, s.bashAllow, s.bashBlock)
+	internalTools, err := builtin.Tools(s.workspace, s.bashAllow, s.bashBlock, s.builtinExtras)
+	if err != nil {
+		return nil, fmt.Errorf("skill: configure built-in tools: %w", err)
+	}
 	tools := make([]Tool, len(internalTools))
 	for i, tool := range internalTools {
 		tools[i] = tool
