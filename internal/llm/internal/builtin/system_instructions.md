@@ -83,8 +83,9 @@ misplanned. Say so in your handoff and stop rather than trying to escape.
 
 ## Built-in tools
 
-Every skill has the same baseline tool set. Use the lightest tool that gets the
-job done.
+Every skill has the same baseline tool set: `bash`, `read_file`, `write_file`,
+`edit_file`, `delete_file`, `move_file`, and `grep`. Use the lightest tool that
+gets the job done.
 
 - **bash** — shell commands. Working directory is the temp playground; reach the
   source workspace or accessible dirs by absolute path. Redirection targets must
@@ -95,8 +96,12 @@ job done.
 - **read_file** / **write_file** / **edit_file** — text I/O. Prefer these over
   `cat`, `echo`, or `sed` for clarity.
 - **delete_file** / **move_file** — only when the task requires it.
-- **list_dir** / **grep** — discovery. Do not list dirs the workspace block
-  already named or run `pwd` to learn your cwd; trust the block.
+- **grep** — discovery. Do not search paths the workspace block already named
+  unless their contents matter.
+- **list_dir** / **pwd** — optional extras. They are available only when the
+  host skill opts in via `BuiltinExtras`; otherwise use `ls` or `pwd` through
+  `bash` when needed. The workspace bootstrap block already names relevant
+  roots, so `pwd` is normally redundant.
 - Avoid re-reading `SKILL.md`; it is already loaded into the conversation.
 
 Tool budget is finite. The fewer redundant lookup turns you spend, the more

@@ -49,12 +49,13 @@ type Skill struct {
 	License     string `yaml:"license,omitempty" toml:"license,omitempty" json:"license,omitempty"`
 	Instruction string
 
-	dir       fs.FS
-	workspace *workspaceRoot
-	envFiles  []string
-	bashAllow []string
-	bashBlock []string
-	tools     []Tool
+	dir           fs.FS
+	workspace     *workspaceRoot
+	envFiles      []string
+	bashAllow     []string
+	bashBlock     []string
+	builtinExtras []string
+	tools         []Tool
 
 	conv        *Conversation
 	eventStream *streampkg.Stream
@@ -66,6 +67,9 @@ type SkillConfig struct {
 	BashAllow []string
 	// BashBlock lists command names blocked by built-in bash tools.
 	BashBlock []string
+	// BuiltinExtras lists opt-in built-in tool names to append after the
+	// default built-in tool set. Supported names include list_dir and pwd.
+	BuiltinExtras []string
 }
 
 // DefaultSkillConfig returns the default optional behaviour for [NewSkill].
@@ -216,6 +220,7 @@ func newFromFS(fs fs.FS, displayDir string, workspace *workspaceRoot, envFiles [
 	sk.envFiles = append([]string(nil), envFiles...)
 	sk.bashAllow = append([]string(nil), cfg.BashAllow...)
 	sk.bashBlock = append([]string(nil), cfg.BashBlock...)
+	sk.builtinExtras = append([]string(nil), cfg.BuiltinExtras...)
 
 	return &sk, nil
 }
@@ -318,6 +323,7 @@ func (s *Skill) copy() *Skill {
 	bound.workspace = s.workspace.copy()
 	bound.bashAllow = append([]string(nil), s.bashAllow...)
 	bound.bashBlock = append([]string(nil), s.bashBlock...)
+	bound.builtinExtras = append([]string(nil), s.builtinExtras...)
 	bound.envFiles = append([]string(nil), s.envFiles...)
 	bound.tools = append([]Tool(nil), s.tools...)
 	bound.conv = nil
@@ -468,6 +474,10 @@ func (s *Skill) BashAllow() []string { return append([]string(nil), s.bashAllow.
 // the built-in default bash allowlist. Entries in BashBlock override
 // both the default list and [Skill.BashAllow].
 func (s *Skill) BashBlock() []string { return append([]string(nil), s.bashBlock...) }
+
+// BuiltinExtras returns opt-in built-in tool names appended after the default
+// built-in tool set.
+func (s *Skill) BuiltinExtras() []string { return append([]string(nil), s.builtinExtras...) }
 
 // Conversation returns the underlying [Conversation]. Callers may
 // inspect its turns, usage, or session metadata but should not mutate

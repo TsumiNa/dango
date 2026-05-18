@@ -679,7 +679,7 @@ func TestHonshuOrchestratorRegistersAutonomousSkillRuntimes(t *testing.T) {
 		for _, spec := range bound.Conversation().Tools() {
 			tools[spec.Name] = true
 		}
-		for _, name := range []string{"bash", "read_file", "write_file", "grep", "pwd"} {
+		for _, name := range []string{"bash", "read_file", "write_file", "grep"} {
 			if !tools[name] {
 				t.Fatalf("%s missing runtime tool %q: %v", skillName, name, tools)
 			}

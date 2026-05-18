@@ -163,11 +163,13 @@ func main() {
 
 	bashAllow := []string(nil)
 	bashBlock := []string{"curl", "wget"}
+	builtinExtras := []string{"list_dir", "pwd"}
 	banner(3, "Tools", "built-in workspace tools plus one custom greet tool")
 	field("bash allow additions", formatSlice(bashAllow))
 	field("bash block removals", formatSlice(bashBlock))
+	field("builtin extras", formatSlice(builtinExtras))
 
-	baseSkill, err := llm.NewSkill(dir, llm.SkillConfig{BashAllow: bashAllow, BashBlock: bashBlock})
+	baseSkill, err := llm.NewSkill(dir, llm.SkillConfig{BashAllow: bashAllow, BashBlock: bashBlock, BuiltinExtras: builtinExtras})
 	if err != nil {
 		log.Fatalf("load skill: %v", err)
 	}

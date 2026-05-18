@@ -3,19 +3,42 @@ package builtin
 import (
 	"context"
 	"encoding/json"
+	"strings"
 	"testing"
 )
 
 func TestToolsReturnsExpectedNames(t *testing.T) {
 	root := t.TempDir()
-	got := map[string]bool{}
-	for _, tool := range Tools(testWorkspace{root}, nil, nil) {
-		got[tool.Name()] = true
+	tools, err := Tools(testWorkspace{root}, nil, nil, nil)
+	if err != nil {
+		t.Fatalf("Tools: %v", err)
 	}
-	for _, want := range []string{"bash", "read_file", "write_file", "edit_file", "delete_file", "move_file", "list_dir", "grep", "pwd"} {
-		if !got[want] {
-			t.Errorf("Tools missing %q", want)
-		}
+	want := []string{"bash", "read_file", "write_file", "edit_file", "delete_file", "move_file", "grep"}
+	if got := toolNames(tools); !equalStringSlices(got, want) {
+		t.Fatalf("Tools names = %v, want %v", got, want)
+	}
+}
+
+func TestToolsAppendsExtras(t *testing.T) {
+	root := t.TempDir()
+	tools, err := Tools(testWorkspace{root}, nil, nil, []string{"list_dir", "pwd"})
+	if err != nil {
+		t.Fatalf("Tools: %v", err)
+	}
+	want := []string{"bash", "read_file", "write_file", "edit_file", "delete_file", "move_file", "grep", "list_dir", "pwd"}
+	if got := toolNames(tools); !equalStringSlices(got, want) {
+		t.Fatalf("Tools names = %v, want %v", got, want)
+	}
+}
+
+func TestToolsRejectsUnknownExtra(t *testing.T) {
+	root := t.TempDir()
+	_, err := Tools(testWorkspace{root}, nil, nil, []string{"nope"})
+	if err == nil {
+		t.Fatal("expected unknown extra error")
+	}
+	if !strings.Contains(err.Error(), "nope") {
+		t.Fatalf("error = %v, want tool name", err)
 	}
 }
 
@@ -32,7 +55,10 @@ func TestBashForwardsAllowlistOption(t *testing.T) {
 func TestWithAllowlistAdjust(t *testing.T) {
 	root := t.TempDir()
 	// Block curl (default-allowed) and allow a bespoke command.
-	tools := Tools(testWorkspace{root}, []string{"helper-bin"}, []string{"curl"})
+	tools, err := Tools(testWorkspace{root}, []string{"helper-bin"}, []string{"curl"}, nil)
+	if err != nil {
+		t.Fatalf("Tools: %v", err)
+	}
 	var bash tool
 	for _, tool := range tools {
 		if tool.Name() == "bash" {
@@ -70,4 +96,24 @@ func TestWithAllowlistAdjust_BlockWinsOverAllow(t *testing.T) {
 	if _, ok := cfg.resolveAllowlist()["foo"]; ok {
 		t.Error("block should override allow for the same entry")
 	}
+}
+
+func toolNames(tools []tool) []string {
+	names := make([]string, len(tools))
+	for i, tool := range tools {
+		names[i] = tool.Name()
+	}
+	return names
+}
+
+func equalStringSlices(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
 }
