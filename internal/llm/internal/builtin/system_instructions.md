@@ -87,8 +87,11 @@ Every skill has the same baseline tool set. Use the lightest tool that gets the
 job done.
 
 - **bash** — shell commands. Working directory is the temp playground; reach the
-  source workspace or accessible dirs by absolute path. Pass multi-line input
-  via heredoc (`<<'TAG'`) when needed.
+  source workspace or accessible dirs by absolute path. Redirection targets must
+  be static and resolve inside the workspace; argument-level write targets (for
+  example `tee /etc/foo`) are not validated. Prefer `write_file` / `edit_file`
+  for non-trivial inside-workspace writes. Pass multi-line input via heredoc
+  (`<<'TAG'`) when needed.
 - **read_file** / **write_file** / **edit_file** — text I/O. Prefer these over
   `cat`, `echo`, or `sed` for clarity.
 - **delete_file** / **move_file** — only when the task requires it.

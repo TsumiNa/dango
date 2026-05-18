@@ -54,7 +54,7 @@ func newBashWithConfig(ws workspace, cfg *config) tool {
 	allowlist := cfg.resolveAllowlist()
 	return newFuncTool(
 		"bash",
-		"Run a shell command via /bin/bash -c inside the skill's private temp playground. Use for ad-hoc scripting, invoking helper programs, or generating temporary files. Returns combined stdout+stderr unless output_file is set. Commands are restricted to the configured allowlist (see defaultAllowlist).",
+		"Run a shell command via /bin/bash -c inside the skill's private temp playground. Use for ad-hoc scripting, invoking helper programs, or generating temporary files. Returns combined stdout+stderr unless output_file is set. Commands are restricted to the configured allowlist (see defaultAllowlist). Redirection targets must be static and resolve inside the workspace; argument-level write targets (e.g. tee /etc/foo) are not validated.",
 		map[string]any{
 			"type": "object",
 			"properties": map[string]any{
@@ -101,6 +101,9 @@ func newBashWithConfig(ws workspace, cfg *config) tool {
 					return "", fmt.Errorf("bash: %w", err)
 				}
 			}
+			if err := checkRedirections(args.Command, ws); err != nil {
+				return "", fmt.Errorf("bash: %w", err)
+			}
 
 			// Long-running tasks opt out of the timeout entirely; all other
 			// commands get bashDefaultTimeout unless overridden.
@@ -125,6 +128,52 @@ func newBashWithConfig(ws workspace, cfg *config) tool {
 			return runBashBuffered(cctx, cmd, timeout)
 		},
 	)
+}
+
+// checkRedirections parses command as a bash script and verifies that
+// filesystem redirection targets are static paths contained by the workspace.
+func checkRedirections(command string, ws workspace) error {
+	f, err := syntax.NewParser().Parse(strings.NewReader(command), "")
+	if err != nil {
+		return fmt.Errorf("parse command: %w", err)
+	}
+	var first error
+	syntax.Walk(f, func(node syntax.Node) bool {
+		if first != nil {
+			return false
+		}
+		redir, ok := node.(*syntax.Redirect)
+		if !ok {
+			return true
+		}
+		if isHeredocRedirect(redir.Op) {
+			return true
+		}
+		if redir.Word == nil {
+			first = fmt.Errorf("redirection %s missing target", redir.Op)
+			return false
+		}
+		target, ok := staticWordValue(redir.Word)
+		if !ok {
+			first = fmt.Errorf("redirection target for %s must be static, not dynamic", redir.Op)
+			return false
+		}
+		if _, err := ws.ResolvePath(target); err != nil {
+			first = fmt.Errorf("redirection target %q: %w", target, err)
+			return false
+		}
+		return true
+	})
+	return first
+}
+
+func isHeredocRedirect(op syntax.RedirOperator) bool {
+	switch op {
+	case syntax.Hdoc, syntax.DashHdoc, syntax.WordHdoc:
+		return true
+	default:
+		return false
+	}
 }
 
 // checkAllowlist parses command as a bash script and verifies that every
