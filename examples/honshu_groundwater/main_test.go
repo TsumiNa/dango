@@ -979,8 +979,13 @@ func serveFakeSkill(w http.ResponseWriter, req *responsesRequest, userText strin
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
+		parentHandoff, err := upstreamHandoffFromPrompt(userText)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
 		command, err := skillScriptCommand(skillDir, "scripts/train.py", map[string]string{
-			"parent_handoff": userText,
+			"parent_handoff": parentHandoff,
 			"artifacts_dir":  filepath.Join(artifactsRoot, "train_gp_model"),
 		})
 		if err != nil {
@@ -1077,6 +1082,42 @@ func artifactsRootFromPrompt(prompt string) (string, error) {
 		}
 	}
 	return "", fmt.Errorf("prompt does not include artifacts root or downstream")
+}
+
+func upstreamHandoffFromPrompt(prompt string) (string, error) {
+	for _, line := range strings.Split(prompt, "\n") {
+		if !strings.Contains(line, "handoff.md") {
+			continue
+		}
+		for _, value := range backtickValues(line) {
+			if filepath.Base(value) != "handoff.md" {
+				continue
+			}
+			raw, err := os.ReadFile(value)
+			if err != nil {
+				return "", fmt.Errorf("read upstream handoff %q: %w", value, err)
+			}
+			return string(raw), nil
+		}
+	}
+	return "", fmt.Errorf("prompt does not include an upstream handoff path")
+}
+
+func backtickValues(text string) []string {
+	var values []string
+	for {
+		start := strings.Index(text, "`")
+		if start < 0 {
+			return values
+		}
+		rest := text[start+1:]
+		end := strings.Index(rest, "`")
+		if end < 0 {
+			return values
+		}
+		values = append(values, rest[:end])
+		text = rest[end+1:]
+	}
 }
 
 func skillScriptCommand(skillDir string, script string, payload any) (string, error) {
