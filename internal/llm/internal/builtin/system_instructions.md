@@ -84,8 +84,8 @@ misplanned. Say so in your handoff and stop rather than trying to escape.
 ## Built-in tools
 
 Every skill has the same baseline tool set: `bash`, `read_file`, `write_file`,
-`edit_file`, `delete_file`, `move_file`, and `grep`. Use the lightest tool that
-gets the job done.
+`edit_file`, `delete_file`, `move_file`, `grep`, and
+`pipeline_search_replace`. Use the lightest tool that gets the job done.
 
 - **bash** — shell commands. Working directory is the temp playground; reach the
   source workspace or accessible dirs by absolute path. Redirection targets must
@@ -98,6 +98,8 @@ gets the job done.
 - **delete_file** / **move_file** — only when the task requires it.
 - **grep** — discovery. Do not search paths the workspace block already named
   unless their contents matter.
+- **pipeline_search_replace** — ResolvePath-bounded replacement equivalent to
+  `sed -i 's/find/replace/g' path`; use it when replacing text in one file.
 - **list_dir** / **pwd** — optional extras. They are available only when the
   host skill opts in via `BuiltinExtras`; otherwise use `ls` or `pwd` through
   `bash` when needed. The workspace bootstrap block already names relevant
