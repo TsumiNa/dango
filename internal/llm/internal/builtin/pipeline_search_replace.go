@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"path/filepath"
 	"regexp"
 	"strings"
 )
@@ -78,7 +79,7 @@ func newPipelineSearchReplace(ws workspace) tool {
 				return "", err
 			}
 			if replacements > 0 {
-				if err := os.WriteFile(p, []byte(updated), info.Mode()); err != nil {
+				if err := replaceFileAtomically(p, []byte(updated), info.Mode()); err != nil {
 					return "", fmt.Errorf("pipeline_search_replace: %w", err)
 				}
 			}
@@ -103,12 +104,13 @@ func replacePipelineMatches(content, pattern, replacement string, regex bool, ma
 	if err != nil {
 		return "", 0, fmt.Errorf("pipeline_search_replace: invalid regex: %w", err)
 	}
-	matches := re.FindAllStringSubmatchIndex(content, -1)
+	limit := -1
+	if maxReplacements > 0 {
+		limit = maxReplacements
+	}
+	matches := re.FindAllStringSubmatchIndex(content, limit)
 	if len(matches) == 0 {
 		return content, 0, nil
-	}
-	if maxReplacements > 0 && len(matches) > maxReplacements {
-		matches = matches[:maxReplacements]
 	}
 
 	var out []byte
@@ -120,4 +122,36 @@ func replacePipelineMatches(content, pattern, replacement string, regex bool, ma
 	}
 	out = append(out, content[last:]...)
 	return string(out), len(matches), nil
+}
+
+func replaceFileAtomically(path string, data []byte, mode os.FileMode) error {
+	dir := filepath.Dir(path)
+	tmp, err := os.CreateTemp(dir, ".pipeline-search-replace-*")
+	if err != nil {
+		return err
+	}
+	tmpPath := tmp.Name()
+	cleanup := true
+	defer func() {
+		if cleanup {
+			_ = os.Remove(tmpPath)
+		}
+	}()
+
+	if err := tmp.Chmod(mode); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if _, err := tmp.Write(data); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	if err := os.Rename(tmpPath, path); err != nil {
+		return err
+	}
+	cleanup = false
+	return nil
 }

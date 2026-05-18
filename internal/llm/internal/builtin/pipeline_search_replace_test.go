@@ -3,6 +3,7 @@ package builtin
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -97,6 +98,31 @@ func TestPipelineSearchReplaceRegexReplacesAll(t *testing.T) {
 	}
 }
 
+func TestPipelineSearchReplaceRegexExpandsCaptureGroups(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, "labels.txt")
+	if err := os.WriteFile(path, []byte("alpha-12 beta-34\n"), 0o644); err != nil {
+		t.Fatalf("write fixture: %v", err)
+	}
+
+	_, err := executePipelineSearchReplace(t, root, map[string]any{
+		"path":        "labels.txt",
+		"pattern":     `([a-z]+)-(\d+)`,
+		"replacement": "$2:$1",
+		"regex":       true,
+	})
+	if err != nil {
+		t.Fatalf("pipeline_search_replace: %v", err)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read result: %v", err)
+	}
+	if string(data) != "12:alpha 34:beta\n" {
+		t.Fatalf("content = %q", string(data))
+	}
+}
+
 func TestPipelineSearchReplaceRejectsPathEscapes(t *testing.T) {
 	root := t.TempDir()
 	for _, path := range []string{"../outside.txt", filepath.Join(t.TempDir(), "outside.txt")} {
@@ -123,8 +149,58 @@ func TestPipelineSearchReplaceReportsFileNotFound(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected missing file error")
 	}
-	if !strings.Contains(err.Error(), "no such file") {
-		t.Fatalf("error = %v, want missing file", err)
+	if !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("error = %v, want os.ErrNotExist", err)
+	}
+}
+
+func TestPipelineSearchReplaceRejectsEmptyPattern(t *testing.T) {
+	_, err := executePipelineSearchReplace(t, t.TempDir(), map[string]any{
+		"path":        "notes.txt",
+		"pattern":     "",
+		"replacement": "x",
+	})
+	if err == nil {
+		t.Fatal("expected empty pattern error")
+	}
+	if !strings.Contains(err.Error(), "pattern is required") {
+		t.Fatalf("error = %v, want pattern required", err)
+	}
+}
+
+func TestPipelineSearchReplaceRejectsNegativeMaxReplacements(t *testing.T) {
+	_, err := executePipelineSearchReplace(t, t.TempDir(), map[string]any{
+		"path":             "notes.txt",
+		"pattern":          "x",
+		"replacement":      "y",
+		"max_replacements": -1,
+	})
+	if err == nil {
+		t.Fatal("expected negative max_replacements error")
+	}
+	if !strings.Contains(err.Error(), "max_replacements must be >= 0") {
+		t.Fatalf("error = %v, want max_replacements validation", err)
+	}
+}
+
+func TestPipelineSearchReplaceRejectsInvalidRegex(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, "notes.txt")
+	if err := os.WriteFile(path, []byte("alpha\n"), 0o644); err != nil {
+		t.Fatalf("write fixture: %v", err)
+	}
+
+	_, err := executePipelineSearchReplace(t, root, map[string]any{
+		"path":        "notes.txt",
+		"pattern":     "(",
+		"replacement": "x",
+		"regex":       true,
+	})
+	if err == nil {
+		t.Fatal("expected invalid regex error")
+	}
+	if !strings.Contains(err.Error(), "invalid regex") {
+		t.Fatalf("error = %v, want invalid regex", err)
 	}
 }
 
