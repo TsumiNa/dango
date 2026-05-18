@@ -249,7 +249,7 @@ default set.
 
 **Scope.**
 
-1. Add a short methodology section to this plan file (`pr-c-builtin-tools-restructure-plan.md`)
+1. Add a short methodology section to this plan file (`builtin-tools-restructure-plan.md`)
    under a new heading "PR C-3 results" describing:
    - Which honshu run was used (commit SHA, command, artifact path).
    - How tool calls were extracted. Default approach: parse
@@ -278,6 +278,85 @@ default set.
   numbers and an explicit decision.
 - If wrappers are approved, each one has a stub sub-PR section
   appended below (use the PR C-4 template).
+
+## PR C-3 results
+
+**Run used.**
+
+- Commit analyzed: `b7bc52d1df2a10e434853a9895cf9581de3feac0`.
+- Honshu command represented by the artifact:
+  `GOCACHE=/tmp/dango-gocache GOMODCACHE=/tmp/dango-gomodcache go run ./examples/honshu_groundwater -timeout 10m -log-level debug`.
+- Artifact path:
+  `examples/honshu_groundwater/artifacts/`.
+- Trace timestamp window:
+  `2026-05-10T12:49:04.57187Z` through
+  `2026-05-10T12:53:53.545664Z`.
+- Request ID / runner ID:
+  `FG5Ft2y2DtJf3iwAMYdNhr` /
+  `7QzgG7RFL5oQtyxWZCb7st`.
+
+**Extraction method.**
+
+Tool calls were extracted from
+`examples/honshu_groundwater/artifacts/debug/stream_events.jsonl` by
+expanding `merge.bundle` frames and selecting inner
+`llm.tool_call.started` events. The persisted SQLite event log at
+`examples/honshu_groundwater/artifacts/persistence/dango.db` was used to
+cross-check the same event stream, and exchange documents under
+`examples/honshu_groundwater/artifacts/persistence/workspace/task_7QzgG7RFL5oQtyxWZCb7st/exchange/`
+were used to confirm the run reached the expected execute/report
+outputs. `llm.tool_call.started.delta.arguments` values in this trace
+are capped at roughly 4 KiB, so full heredoc bodies are not available,
+but every first command head and every pipeline command line appeared
+before truncation.
+
+For `bash` command heads, the tally uses the first executable command in
+the retained command prefix. Pure environment assignment lines are
+skipped; a leading assignment with command substitution such as
+`PARENT_FILE=$(mktemp)` is counted as `mktemp` because that is the
+command that the bash allowlist evaluated.
+
+**Tool-call totals.**
+
+| Tool class | Calls |
+| --- | ---: |
+| `bash` | 3 |
+| Go-implemented tools | 0 |
+| Total tool calls | 3 |
+
+**Top bash command heads.**
+
+| Rank | Command head | Calls |
+| ---: | --- | ---: |
+| 1 | `mkdir` | 1 |
+| 2 | `mktemp` | 1 |
+| 3 | `python3` | 1 |
+
+**Top multi-stage pipelines.**
+
+| Rank | Pipeline after whitespace collapse | Calls |
+| ---: | --- | ---: |
+| 1 | `python3 - <<'PY' | uv --directory /Users/liuchang/projects/dango/examples/honshu_groundwater/elevation_lookup run python scripts/enrich.py | tee /Users/liuchang/projects/dango/examples/honshu_groundwater/artifacts/persistence/workspace/task_7QzgG7RFL5oQtyxWZCb7st/skills/normalize_and_enrich_sites/outbox/artifacts/enriched_observations.json` | 1 |
+| 2 | `python3 - <<'PY' | uv --directory /Users/liuchang/projects/dango/examples/honshu_groundwater/train_gp_model run python scripts/train.py` | 1 |
+
+The trace also includes one failed bash attempt in
+`train_honshu_groundwater_model`: `PARENT_FILE=$(mktemp)` was rejected
+because `mktemp` is not in the bash allowlist. That failure is not a
+wrapper-tool signal; it is an allowlist/tool-choice issue and the skill
+completed on the next bash call without a wrapper.
+
+**Decision.**
+
+No wrapper tool is approved for this track. No single multi-stage
+pipeline appeared at least five times in the run, and there were only
+three total bash calls. The wrapper track is closed with the explicit
+conclusion: **no wrapper required at this time**. Future traces can
+reopen the question if a repeated `ResolvePath`-bounded pipeline pattern
+crosses the C-3 threshold.
+
+Approved wrapper follow-up PRs: none. The conditional PR C-4 and PR C-5
+sections below remain only as historical templates for a future trace
+that reopens wrapper work.
 
 ---
 
@@ -363,7 +442,7 @@ listed in PR C-4.
      follow-ups" if PR C-3 deferred them).
    - Replace the "Open questions" block with the resolved answers from
      this file's "Confirmed decisions" section.
-2. Keep this plan file (`pr-c-builtin-tools-restructure-plan.md`) as
+2. Keep this plan file (`builtin-tools-restructure-plan.md`) as
    the historical record; do not delete it.
 
 **Tests.** None — documentation only.
