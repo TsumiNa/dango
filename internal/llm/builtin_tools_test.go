@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
 )
 
@@ -38,6 +39,21 @@ func TestBuiltinToolsRespectsBuiltinExtras(t *testing.T) {
 	want := []string{"bash", "read_file", "write_file", "edit_file", "delete_file", "move_file", "grep", "list_dir", "pwd"}
 	if got := llmToolNames(tools); !slices.Equal(got, want) {
 		t.Fatalf("BuiltinTools names = %v, want %v", got, want)
+	}
+}
+
+func TestBuiltinToolsWrapsUnknownBuiltinExtra(t *testing.T) {
+	skill, err := NewSkill(writeSkillDir(t, "---\nname: x\ndescription: d\n---\nbody\n"), SkillConfig{BuiltinExtras: []string{"nope"}})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	cleanupSkillTemp(t, skill)
+	_, err = skill.BuiltinTools()
+	if err == nil {
+		t.Fatal("expected BuiltinTools error")
+	}
+	if !strings.Contains(err.Error(), "skill: configure built-in tools") || !strings.Contains(err.Error(), "nope") {
+		t.Fatalf("BuiltinTools error = %v, want skill context and extra name", err)
 	}
 }
 

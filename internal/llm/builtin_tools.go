@@ -23,7 +23,7 @@ func (s *Skill) BuiltinTools() ([]Tool, error) {
 	}
 	internalTools, err := builtin.Tools(s.workspace, s.bashAllow, s.bashBlock, s.builtinExtras)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("skill: configure built-in tools: %w", err)
 	}
 	tools := make([]Tool, len(internalTools))
 	for i, tool := range internalTools {

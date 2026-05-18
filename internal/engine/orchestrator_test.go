@@ -434,7 +434,7 @@ func TestAddSkillDirs_LoadsAndEquipsSkill(t *testing.T) {
 	for _, spec := range bound.Conversation().Tools() {
 		tools[spec.Name] = true
 	}
-	for _, name := range []string{"bash", "read_file", "write_file", "grep", "pwd"} {
+	for _, name := range []string{"bash", "read_file", "write_file", "grep"} {
 		if !tools[name] {
 			t.Fatalf("runtime tool %q missing from skill tools: %v", name, tools)
 		}
@@ -497,7 +497,7 @@ func TestAddSkills_EquipsSkillForAutonomousGlueCode(t *testing.T) {
 	for _, spec := range bound.Conversation().Tools() {
 		tools[spec.Name] = true
 	}
-	for _, name := range []string{"bash", "read_file", "write_file", "edit_file", "grep", "pwd"} {
+	for _, name := range []string{"bash", "read_file", "write_file", "edit_file", "grep"} {
 		if !tools[name] {
 			t.Fatalf("runtime tool %q missing from skill tools: %v", name, tools)
 		}
