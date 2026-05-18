@@ -85,7 +85,8 @@ misplanned. Say so in your handoff and stop rather than trying to escape.
 
 Every skill has the same baseline tool set: `bash`, `read_file`, `write_file`,
 `edit_file`, `delete_file`, `move_file`, `grep`, and
-`pipeline_search_replace`. Use the lightest tool that gets the job done.
+`pipeline_search_replace`, and `file_excerpt`. Use the lightest tool that gets
+the job done.
 
 - **bash** — shell commands. Working directory is the temp playground; reach the
   source workspace or accessible dirs by absolute path. Redirection targets must
@@ -100,6 +101,9 @@ Every skill has the same baseline tool set: `bash`, `read_file`, `write_file`,
   unless their contents matter.
 - **pipeline_search_replace** — ResolvePath-bounded replacement equivalent to
   `sed -i 's/find/replace/g' path`; use it when replacing text in one file.
+- **file_excerpt** — ResolvePath-bounded excerpt equivalent to
+  `grep -A N -B M path`; use it to return matching regions without reading a
+  whole file.
 - **list_dir** / **pwd** — optional extras. They are available only when the
   host skill opts in via `BuiltinExtras`; otherwise use `ls` or `pwd` through
   `bash` when needed. The workspace bootstrap block already names relevant

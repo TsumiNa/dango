@@ -14,7 +14,7 @@ func TestToolsReturnsExpectedNames(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Tools: %v", err)
 	}
-	want := []string{"bash", "read_file", "write_file", "edit_file", "delete_file", "move_file", "grep", "pipeline_search_replace"}
+	want := []string{"bash", "read_file", "write_file", "edit_file", "delete_file", "move_file", "grep", "pipeline_search_replace", "file_excerpt"}
 	if got := toolNames(tools); !slices.Equal(got, want) {
 		t.Fatalf("Tools names = %v, want %v", got, want)
 	}
@@ -26,7 +26,7 @@ func TestToolsAppendsExtras(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Tools: %v", err)
 	}
-	want := []string{"bash", "read_file", "write_file", "edit_file", "delete_file", "move_file", "grep", "pipeline_search_replace", "list_dir", "pwd"}
+	want := []string{"bash", "read_file", "write_file", "edit_file", "delete_file", "move_file", "grep", "pipeline_search_replace", "file_excerpt", "list_dir", "pwd"}
 	if got := toolNames(tools); !slices.Equal(got, want) {
 		t.Fatalf("Tools names = %v, want %v", got, want)
 	}
