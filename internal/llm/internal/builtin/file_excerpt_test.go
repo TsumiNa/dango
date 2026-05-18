@@ -54,6 +54,72 @@ func TestFileExcerptRegexWithMaxMatches(t *testing.T) {
 	}
 }
 
+func TestFileExcerptOverlappingWindowsKeepAnchorMarkers(t *testing.T) {
+	root := t.TempDir()
+	body := "intro\nmatch one\nmatch two\noutro\n"
+	if err := os.WriteFile(filepath.Join(root, "manual.txt"), []byte(body), 0o644); err != nil {
+		t.Fatalf("write fixture: %v", err)
+	}
+
+	out, err := executeFileExcerpt(t, root, map[string]any{
+		"path":           "manual.txt",
+		"anchor_pattern": "match",
+		"before":         1,
+		"after":          1,
+	})
+	if err != nil {
+		t.Fatalf("file_excerpt: %v", err)
+	}
+	want := "1- intro\n2: match one\n3: match two\n4- outro"
+	if out != want {
+		t.Fatalf("excerpt = %q, want %q", out, want)
+	}
+}
+
+func TestFileExcerptMaxMatchesDoesNotPrintBeyondLimitAnchor(t *testing.T) {
+	root := t.TempDir()
+	body := "# One\na\n# Two\nb\n# Three\nc\n"
+	if err := os.WriteFile(filepath.Join(root, "manual.md"), []byte(body), 0o644); err != nil {
+		t.Fatalf("write fixture: %v", err)
+	}
+
+	out, err := executeFileExcerpt(t, root, map[string]any{
+		"path":           "manual.md",
+		"anchor_pattern": "# ",
+		"after":          3,
+		"max_matches":    2,
+	})
+	if err != nil {
+		t.Fatalf("file_excerpt: %v", err)
+	}
+	want := "1: # One\n2- a\n3: # Two\n4- b\n... (truncated at 2 matches, 1 more)"
+	if out != want {
+		t.Fatalf("excerpt = %q, want %q", out, want)
+	}
+}
+
+func TestFileExcerptClampsHugeWindowBounds(t *testing.T) {
+	root := t.TempDir()
+	body := "intro\nneedle\noutro\n"
+	if err := os.WriteFile(filepath.Join(root, "manual.txt"), []byte(body), 0o644); err != nil {
+		t.Fatalf("write fixture: %v", err)
+	}
+
+	out, err := executeFileExcerpt(t, root, map[string]any{
+		"path":           "manual.txt",
+		"anchor_pattern": "needle",
+		"before":         int(^uint(0) >> 1),
+		"after":          int(^uint(0) >> 1),
+	})
+	if err != nil {
+		t.Fatalf("file_excerpt: %v", err)
+	}
+	want := "1- intro\n2: needle\n3- outro\n4- "
+	if out != want {
+		t.Fatalf("excerpt = %q, want %q", out, want)
+	}
+}
+
 func TestFileExcerptRejectsPathEscapes(t *testing.T) {
 	root := t.TempDir()
 	for _, path := range []string{"../outside.txt", filepath.Join(t.TempDir(), "outside.txt")} {
@@ -67,6 +133,36 @@ func TestFileExcerptRejectsPathEscapes(t *testing.T) {
 		if !strings.Contains(err.Error(), "escapes workspace root") {
 			t.Fatalf("error for %q = %v, want escape message", path, err)
 		}
+	}
+}
+
+func TestFileExcerptRejectsNegativeWindowControls(t *testing.T) {
+	for name, args := range map[string]map[string]any{
+		"before": {
+			"path":           "manual.txt",
+			"anchor_pattern": "x",
+			"before":         -1,
+		},
+		"after": {
+			"path":           "manual.txt",
+			"anchor_pattern": "x",
+			"after":          -1,
+		},
+		"max_matches": {
+			"path":           "manual.txt",
+			"anchor_pattern": "x",
+			"max_matches":    -1,
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			_, err := executeFileExcerpt(t, t.TempDir(), args)
+			if err == nil {
+				t.Fatal("expected validation error")
+			}
+			if !strings.Contains(err.Error(), name+" must be >= 0") {
+				t.Fatalf("error = %v, want %s validation", err, name)
+			}
+		})
 	}
 }
 

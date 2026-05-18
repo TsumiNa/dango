@@ -97,12 +97,11 @@ func newFileExcerpt(ws workspace) tool {
 
 func renderFileExcerpt(source string, matcher func(string) bool, before, after, maxMatches int) string {
 	lines := strings.Split(source, "\n")
-	var (
-		out        []string
-		matchCount int
-		truncated  bool
-		lastPrint  = -1
-	)
+	anchors := make(map[int]struct{})
+	var windows [][2]int
+	matchCount := 0
+	truncated := false
+	overLimitIndex := len(lines)
 	for i, line := range lines {
 		if !matcher(line) {
 			continue
@@ -110,15 +109,33 @@ func renderFileExcerpt(source string, matcher func(string) bool, before, after, 
 		matchCount++
 		if matchCount > maxMatches {
 			truncated = true
+			overLimitIndex = i
 			break
 		}
-		start := i - before
-		if start < 0 {
-			start = 0
+		anchors[i] = struct{}{}
+		start := 0
+		if before < i {
+			start = i - before
 		}
-		end := i + after
-		if end >= len(lines) {
-			end = len(lines) - 1
+		end := len(lines) - 1
+		if after < len(lines)-1-i {
+			end = i + after
+		}
+		windows = append(windows, [2]int{start, end})
+	}
+	if len(windows) == 0 {
+		return ""
+	}
+
+	var out []string
+	lastPrint := -1
+	for _, window := range windows {
+		start, end := window[0], window[1]
+		if end >= overLimitIndex {
+			end = overLimitIndex - 1
+		}
+		if end < start {
+			continue
 		}
 		if lastPrint >= 0 && start > lastPrint+1 {
 			out = append(out, "--")
@@ -128,15 +145,12 @@ func renderFileExcerpt(source string, matcher func(string) bool, before, after, 
 		}
 		for j := start; j <= end; j++ {
 			sep := "-"
-			if j == i {
+			if _, ok := anchors[j]; ok {
 				sep = ":"
 			}
 			out = append(out, fmt.Sprintf("%d%s %s", j+1, sep, lines[j]))
 		}
 		lastPrint = end
-	}
-	if len(out) == 0 {
-		return ""
 	}
 	result := strings.Join(out, "\n")
 	if truncated {

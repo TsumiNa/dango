@@ -84,9 +84,8 @@ misplanned. Say so in your handoff and stop rather than trying to escape.
 ## Built-in tools
 
 Every skill has the same baseline tool set: `bash`, `read_file`, `write_file`,
-`edit_file`, `delete_file`, `move_file`, `grep`, and
-`pipeline_search_replace`, and `file_excerpt`. Use the lightest tool that gets
-the job done.
+`edit_file`, `delete_file`, `move_file`, `grep`, `pipeline_search_replace`,
+and `file_excerpt`. Use the lightest tool that gets the job done.
 
 - **bash** — shell commands. Working directory is the temp playground; reach the
   source workspace or accessible dirs by absolute path. Redirection targets must
