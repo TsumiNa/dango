@@ -144,6 +144,131 @@ func TestBashOutputFileCapturesLargeOutputWithoutTruncation(t *testing.T) {
 	}
 }
 
+func TestBashRedirectionRejectsAbsoluteEscape(t *testing.T) {
+	tool := newBash(testWorkspace{t.TempDir()})
+	args, _ := json.Marshal(map[string]any{
+		"command": "echo x > /tmp/foo",
+	})
+	_, err := tool.Execute(context.Background(), string(args))
+	if err == nil {
+		t.Fatal("expected absolute redirection escape rejection")
+	}
+	if !strings.Contains(err.Error(), "redirection target") {
+		t.Errorf("expected redirection error, got %v", err)
+	}
+}
+
+func TestBashRedirectionAllowsRelativeInsideWorkspace(t *testing.T) {
+	root := t.TempDir()
+	tool := newBash(testWorkspace{root})
+	args, _ := json.Marshal(map[string]any{
+		"command": "echo x > out.txt",
+	})
+	if _, err := tool.Execute(context.Background(), string(args)); err != nil {
+		t.Fatalf("bash redirection: %v", err)
+	}
+	data, err := os.ReadFile(filepath.Join(root, "out.txt"))
+	if err != nil {
+		t.Fatalf("read redirected output: %v", err)
+	}
+	if string(data) != "x\n" {
+		t.Errorf("redirected output = %q, want %q", string(data), "x\n")
+	}
+}
+
+func TestBashRedirectionAllowsAbsoluteInsideWorkspace(t *testing.T) {
+	root := t.TempDir()
+	tool := newBash(testWorkspace{root})
+	outPath := filepath.Join(root, "out.txt")
+	args, _ := json.Marshal(map[string]any{
+		"command": "echo x > " + outPath,
+	})
+	if _, err := tool.Execute(context.Background(), string(args)); err != nil {
+		t.Fatalf("bash redirection: %v", err)
+	}
+	data, err := os.ReadFile(outPath)
+	if err != nil {
+		t.Fatalf("read redirected output: %v", err)
+	}
+	if string(data) != "x\n" {
+		t.Errorf("redirected output = %q, want %q", string(data), "x\n")
+	}
+}
+
+func TestBashRedirectionRejectsDynamicTarget(t *testing.T) {
+	tool := newBash(testWorkspace{t.TempDir()})
+	args, _ := json.Marshal(map[string]any{
+		"command": "echo x > $OUT",
+	})
+	_, err := tool.Execute(context.Background(), string(args))
+	if err == nil {
+		t.Fatal("expected dynamic redirection target rejection")
+	}
+	if !strings.Contains(err.Error(), "dynamic") {
+		t.Errorf("expected dynamic error, got %v", err)
+	}
+}
+
+func TestBashRedirectionRejectsCommandSubstitutionTarget(t *testing.T) {
+	tool := newBash(testWorkspace{t.TempDir()})
+	args, _ := json.Marshal(map[string]any{
+		"command": "echo x > $(echo path)",
+	})
+	_, err := tool.Execute(context.Background(), string(args))
+	if err == nil {
+		t.Fatal("expected command substitution redirection target rejection")
+	}
+	if !strings.Contains(err.Error(), "dynamic") {
+		t.Errorf("expected dynamic error, got %v", err)
+	}
+}
+
+func TestBashRedirectionAllowsHeredoc(t *testing.T) {
+	tool := newBash(testWorkspace{t.TempDir()})
+	args, _ := json.Marshal(map[string]any{
+		"command": "cat <<'EOF'\nhello\nEOF",
+	})
+	out, err := tool.Execute(context.Background(), string(args))
+	if err != nil {
+		t.Fatalf("bash heredoc: %v", err)
+	}
+	if out != "hello\n" {
+		t.Errorf("heredoc output = %q, want %q", out, "hello\n")
+	}
+}
+
+func TestBashRedirectionAllowsAppend(t *testing.T) {
+	root := t.TempDir()
+	tool := newBash(testWorkspace{root})
+	args, _ := json.Marshal(map[string]any{
+		"command": "echo a >> out.txt",
+	})
+	if _, err := tool.Execute(context.Background(), string(args)); err != nil {
+		t.Fatalf("bash append redirection: %v", err)
+	}
+	data, err := os.ReadFile(filepath.Join(root, "out.txt"))
+	if err != nil {
+		t.Fatalf("read redirected output: %v", err)
+	}
+	if string(data) != "a\n" {
+		t.Errorf("redirected output = %q, want %q", string(data), "a\n")
+	}
+}
+
+func TestBashStderrRedirectionChecked(t *testing.T) {
+	tool := newBash(testWorkspace{t.TempDir()})
+	args, _ := json.Marshal(map[string]any{
+		"command": "echo err 2> /tmp/escape",
+	})
+	_, err := tool.Execute(context.Background(), string(args))
+	if err == nil {
+		t.Fatal("expected stderr redirection escape rejection")
+	}
+	if !strings.Contains(err.Error(), "redirection target") {
+		t.Errorf("expected redirection error, got %v", err)
+	}
+}
+
 func TestBashAllowlistBlocksRm(t *testing.T) {
 	tool := newBash(testWorkspace{t.TempDir()})
 	args, _ := json.Marshal(map[string]any{"command": "rm -rf /"})
