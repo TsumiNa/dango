@@ -19,6 +19,36 @@ it up without rereading this conversation. Nothing here proposes new
 tools to ship today; each candidate is a hook for a separately scoped
 PR.
 
+## 0. Triage decisions (2026-05-19)
+
+After review, the contents below are sorted into three tracks. Read this
+section first; it controls where each later subsection is actionable.
+
+- **Security envelope (§ 2) — deferred to a dedicated post-feature
+  hardening phase.** The risks named there are real, but security
+  hardening should follow once the core feature surface is complete and
+  internal end-to-end testing has stabilized. Until then, use the
+  default-vs-`BuiltinExtras` split as the only routine knob: ship
+  general, low-risk capabilities in the default set, route narrower or
+  higher-risk capabilities through `BuiltinExtras` so the skill author
+  opts in explicitly. Do not attempt egress allowlists, env scrubbing,
+  or resource caps until the dedicated phase begins.
+- **Research / autonomous-experiment capabilities (§ 3.1–§ 3.3) —
+  delivered as external dango-official skills via the upcoming `cmd`
+  selection cycle, not as Go builtins.** Web search, paper fetch, PDF
+  and HTML extraction, dataset acquisition, tabular preview, notebook
+  execution, experiment lifecycle, and cluster submission are all
+  Python-heavy or external-runtime-heavy. They are a poor fit for the
+  Go-resident builtin set and a good fit for skills shipped alongside
+  dango that the user enables at startup. Track these under the `cmd`
+  program plan, not here. They are not addressed by Track D below.
+- **Go-resident builtin work that remains in scope of this memo
+  (§ 3.4–§ 3.5).** Version-control inspection and structured-artifact
+  handling stay in Go because they are OS-resident, workspace-bounded,
+  and free of Python dependencies. They are scheduled under
+  `docs/builtin-tools-vcs-and-artifacts-plan.md` (Track D), with one
+  independently verifiable PR per capability.
+
 ## 1. Inventory snapshot
 
 Default (always on): `bash`, `read_file`, `write_file`, `edit_file`,
@@ -35,6 +65,13 @@ network fetchers `curl` and `wget`. Destructive tools (`rm`, `mv`,
 through the Go tools.
 
 ## 2. Security envelope
+
+**Triage:** Deferred (see § 0). The subsections below are kept as a
+reference inventory of what is enforced versus what is intentionally
+not enforced today. Do not act on the mitigation list in § 2.3 until
+the dedicated security-hardening phase begins. The only security-shaped
+decision routine to keep doing in the meantime is choosing default vs
+`BuiltinExtras` placement based on a capability's generality and risk.
 
 ### 2.1 What is actually enforced
 
@@ -118,7 +155,19 @@ verticals that the current set covers only through ad-hoc bash. The
 gaps below are grouped by workflow stage; each one is a candidate, not a
 commitment.
 
+**Triage by track.** § 3.1–§ 3.3 move to the **external-skill track**
+delivered via the `cmd` program selection cycle, because they depend on
+Python or other external runtimes and are a poor fit for Go-resident
+builtins. § 3.4–§ 3.5 stay in the **Go builtin track** and are
+scheduled under `docs/builtin-tools-vcs-and-artifacts-plan.md`. Each
+subsection below repeats its track tag for clarity.
+
 ### 3.1 Source discovery and literature
+
+**Track:** external skills via `cmd`. All four candidates below are
+Python-heavy and depend on third-party libraries (HTTP clients, PDF
+parsers, HTML normalizers, citation formatters). Defer to the `cmd`
+development cycle; do not add Go builtins for these.
 
 - **Web search.** No structured `web_search` tool. Skills that need to
   locate papers, datasets, or documentation can only `curl` known URLs.
@@ -138,6 +187,9 @@ commitment.
 
 ### 3.2 Dataset and environment management
 
+**Track:** external skills via `cmd`. Pandas / pyarrow / nbconvert
+ecosystems are the natural home. Defer to the `cmd` cycle.
+
 - **Dataset fetch with caching.** `dataset_fetch` (URL or
   Kaggle/HuggingFace dataset id, returns path inside workspace, caches
   across runs in a user-added accessible dir). Replaces ad-hoc
@@ -152,6 +204,13 @@ commitment.
   time.
 
 ### 3.3 Experiment lifecycle
+
+**Track:** external skills via `cmd`, with one caveat. The Python and
+cluster-runtime dependencies (mlflow / wandb / sbatch / kubectl) push
+this to the external-skill track. The one item that may eventually
+re-enter the Go builtin track is generic background-job control if it
+becomes a recurring bash pain point under PR C-3-style trace evidence;
+flag it then, not now.
 
 - **Experiment logger.** `experiment_log` (write a structured row
   describing run config, metrics, artifact paths). Right now the
@@ -172,6 +231,9 @@ commitment.
 
 ### 3.4 Version control and history
 
+**Track:** Go builtin. Scheduled under
+`docs/builtin-tools-vcs-and-artifacts-plan.md`.
+
 - **Git.** Not on the default allowlist. Research skills that ingest
   existing repos (read commit history, diff between revisions, blame a
   line) currently cannot. Adding `git` to the allowlist is the simplest
@@ -179,6 +241,9 @@ commitment.
   if traces justify it under the PR C-3 rule.
 
 ### 3.5 Structured artifact handling
+
+**Track:** Go builtin. Scheduled under
+`docs/builtin-tools-vcs-and-artifacts-plan.md`.
 
 - **Artifact catalog.** A first-class read of the per-task
   `downstream/artifacts/` directory + the handoff front-matter
@@ -191,27 +256,29 @@ commitment.
 
 ## 4. Suggested sequencing
 
-If a future PR proposes adding any of these, the following order keeps
-risk bounded:
+Updated 2026-05-19 to reflect the § 0 triage.
 
-1. **Allowlist additions and config knobs** before new tools. Adding
-   `git`, `kill`, `ps`, `timeout`, `nohup` to the default (or to an
-   opt-in `BuiltinExtras`-style list) is a small, reversible change.
-2. **Egress controls** (`WithBashURLAllowlist(...)`,
-   `WithBashEnv(...)`) before any autonomous-experiment skill is
-   wired up. These should land independently of the tool-coverage work
-   so the security envelope is in place when the new skills arrive.
-3. **High-leverage research wrappers** (`web_search`, `pdf_extract`,
-   `table_preview`, `notebook_run`) ordered by trace evidence per the
-   PR C-3 methodology, with one wrapper per PR.
-4. **Experiment-lifecycle tools** (`experiment_log`, background-job
-   control) last, since they assume the security envelope above and
-   the data-handling wrappers under it.
+1. **Go builtin Track D — VCS and artifact handling.** Land the PRs in
+   `docs/builtin-tools-vcs-and-artifacts-plan.md` first. Each PR is
+   small and self-contained, and the work does not block the security
+   or external-skill tracks.
+2. **External research-skill track via `cmd`.** Design the skill
+   selection and packaging mechanism as part of the upcoming `cmd`
+   program cycle. The § 3.1–§ 3.3 capabilities live there. Plan that
+   track in its own document; do not stage Go builtins for it.
+3. **Security-hardening phase.** Only after the core feature surface
+   is complete and internal end-to-end testing has stabilized: revisit
+   § 2's mitigations (egress allowlist, env scrubbing, argument-level
+   write-target inspection, resource caps). Each mitigation should
+   land in its own PR with explicit threat-model framing.
 
 ## 5. Out of scope of this memo
 
 - No new tool is being added by PR C-6 or by this memo.
 - No allowlist change is being made; the listed candidates are pointers,
-  not decisions.
-- No commitment to a specific research-skill design. That belongs in a
-  separate planning doc when the first research skill is scoped.
+  not decisions. Track D's plan file owns the actual VCS and artifact
+  PR specs.
+- No commitment to a specific research-skill design. That belongs with
+  the `cmd` program cycle when external-skill selection is scoped.
+- No security mitigation is being scheduled yet; that phase begins
+  after feature complete and is tracked separately when it opens.
