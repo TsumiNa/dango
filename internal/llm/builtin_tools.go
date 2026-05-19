@@ -90,7 +90,7 @@ func (s *Skill) SetAccessibleDirsAndBuiltinTools(dirs ...string) (*Skill, error)
 
 func isBuiltinToolName(name string) bool {
 	switch name {
-	case "bash", "read_file", "write_file", "edit_file", "delete_file", "move_file", "list_dir", "grep", "pwd":
+	case "bash", "read_file", "write_file", "edit_file", "delete_file", "move_file", "list_dir", "grep", "pipeline_search_replace", "file_excerpt", "pwd":
 		return true
 	default:
 		return false

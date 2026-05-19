@@ -103,16 +103,9 @@ func newGrep(ws workspace) tool {
 				source = string(data)
 			}
 
-			var matcher func(string) bool
-			if args.Regex {
-				re, err := regexp.Compile(args.Pattern)
-				if err != nil {
-					return "", fmt.Errorf("grep: invalid regex: %w", err)
-				}
-				matcher = re.MatchString
-			} else {
-				needle := args.Pattern
-				matcher = func(line string) bool { return strings.Contains(line, needle) }
+			matcher, err := newLineMatcher(args.Pattern, args.Regex)
+			if err != nil {
+				return "", fmt.Errorf("grep: invalid regex: %w", err)
 			}
 
 			lines := strings.Split(source, "\n")
@@ -173,4 +166,15 @@ func newGrep(ws workspace) tool {
 			return result, nil
 		},
 	)
+}
+
+func newLineMatcher(pattern string, regex bool) (func(string) bool, error) {
+	if regex {
+		re, err := regexp.Compile(pattern)
+		if err != nil {
+			return nil, err
+		}
+		return re.MatchString, nil
+	}
+	return func(line string) bool { return strings.Contains(line, pattern) }, nil
 }
