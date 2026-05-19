@@ -19,35 +19,127 @@ it up without rereading this conversation. Nothing here proposes new
 tools to ship today; each candidate is a hook for a separately scoped
 PR.
 
-## 0. Triage decisions (2026-05-19)
+## 0. Triage decisions (2026-05-19, revised)
 
-After review, the contents below are sorted into three tracks. Read this
-section first; it controls where each later subsection is actionable.
+This section is the controlling triage. Read it before any later
+section; the subsections that follow are inventory and reference, not
+standalone decisions.
 
-- **Security envelope (§ 2) — deferred to a dedicated post-feature
-  hardening phase.** The risks named there are real, but security
-  hardening should follow once the core feature surface is complete and
-  internal end-to-end testing has stabilized. Until then, use the
-  default-vs-`BuiltinExtras` split as the only routine knob: ship
-  general, low-risk capabilities in the default set, route narrower or
-  higher-risk capabilities through `BuiltinExtras` so the skill author
-  opts in explicitly. Do not attempt egress allowlists, env scrubbing,
-  or resource caps until the dedicated phase begins.
+### 0.1 Tool vs skill — the core distinction
+
+The decision criterion for *every* capability in this memo is whether
+it belongs as a tool, as a skill, or outside dango entirely.
+
+- **Tool.** A single-shot function call. No state across invocations.
+  Predictable execution path. Caller bears the cognitive load of when
+  and how to chain it.
+- **Skill.** Instructions + an executor AI that holds context across the
+  lifetime of a node, observes upstream handoffs and the current task,
+  and dynamically adjusts its execution. Skills can route through the
+  orchestrator and consume their own turn.
+
+Either form can wrap the other (a skill can be implemented as a
+glorified tool with one stage; a tool can be re-implemented as a
+single-turn skill at the cost of extra tokens and an extra orchestrator
+hop). Choose based on three signals:
+
+1. **Complexity.** If the work needs case-by-case judgement on input
+   shape, prefer skill. If the work is mechanical and the contract is
+   small, prefer tool.
+2. **Statefulness.** If the work benefits from carrying context across
+   multiple sub-steps, prefer skill. If each call is independent,
+   prefer tool.
+3. **Generality.** If every skill might want it, prefer tool. If only
+   a small set of domain-specific tasks need it, prefer skill.
+
+This same rubric is reused below as the default-vs-`BuiltinExtras` rule
+(§ 0.4) and as the tool-vs-skill assignment for § 3 candidates.
+
+### 0.2 Tool / skill ecosystem architecture
+
+Dango is a Go package. The cmd or app embedding it owns the runtime
+shape. Tools and skills available to a skill's LLM come from four
+distinct sources:
+
+1. **Go builtin tools.** Compiled into the dango package. The default
+   set plus `BuiltinExtras`. PR C established the current shape.
+2. **External builtin tools.** Imported by the app/cmd at build time
+   alongside dango. Same lifecycle as Go builtins but live in the
+   app/cmd codebase, not in dango itself.
+3. **MCP tools.** Loaded by the app/cmd at startup from a config of
+   MCP servers (stdio or HTTP). Cover narrow, well-defined capabilities
+   that the MCP ecosystem already publishes (`web_search`, document
+   loaders, etc.).
+4. **Packaged skills.** Skills the app/cmd ships alongside its own
+   skills, running in an app/cmd-managed venv or node environment.
+   These cover work that needs a Python or node ecosystem
+   (`pdf_extractor`, dataset loaders, notebook execution).
+
+The first three are *common tools* visible to every skill's LLM. The
+fourth is a *skill* the orchestrator can route to, and runs in its
+own runtime that the app/cmd has prepared. End users embedding dango
+focus on writing their own domain skills; the four-class infrastructure
+is provided by the app/cmd.
+
+### 0.3 Triage by section
+
+- **Security envelope (§ 2) — partially deferred.** The structural
+  hardening (env scrubbing UX, egress enforcement defaults, resource
+  caps, write-target inspection) is deferred until the app/cmd
+  **alpha-version trigger** described in § 0.5. Several
+  pre-hooks land now under Track F to avoid retrofitting later; see
+  § 2.4.
 - **Research / autonomous-experiment capabilities (§ 3.1–§ 3.3) —
-  delivered as external dango-official skills via the upcoming `cmd`
-  selection cycle, not as Go builtins.** Web search, paper fetch, PDF
-  and HTML extraction, dataset acquisition, tabular preview, notebook
-  execution, experiment lifecycle, and cluster submission are all
-  Python-heavy or external-runtime-heavy. They are a poor fit for the
-  Go-resident builtin set and a good fit for skills shipped alongside
-  dango that the user enables at startup. Track these under the `cmd`
-  program plan, not here. They are not addressed by Track D below.
-- **Go-resident builtin work that remains in scope of this memo
-  (§ 3.4–§ 3.5).** Version-control inspection and structured-artifact
-  handling stay in Go because they are OS-resident, workspace-bounded,
-  and free of Python dependencies. They are scheduled under
-  `docs/builtin-tools-vcs-and-artifacts-plan.md` (Track D), with one
-  independently verifiable PR per capability.
+  served by the four-class architecture above, not Go builtins.** Most
+  items are already covered by published MCP servers (web search, paper
+  fetch, citation handling) and should not be reimplemented. The
+  ecosystem items that need a Python / node runtime
+  (`pdf_extractor`, `notebook_run`, `table_preview`, dataset fetching)
+  are skills packaged by the app/cmd, not dango Go builtins. Items
+  that would need their own abstract interface without a concrete user
+  (e.g., `experiment_log`) are deferred until a real use case shows up.
+- **Go-resident near-term builtin work — Track D.** § 3.4 and § 3.5
+  remain in Go because they are OS-resident, workspace-bounded, and
+  free of language-runtime dependencies. Scheduled under
+  `docs/builtin-tools-near-term-plan.md`.
+- **MCP support — Track E (new).** First-class MCP client wiring is on
+  the near-term track so the four-class architecture is real, not
+  aspirational. See the near-term plan.
+- **Security pre-hooks + instrumentation — Track F (new).** The
+  near-term-doable mitigations (URL-allowlist opt-in interface,
+  `trusted_input` flag, audit-tagging the existing tool-call stream
+  events, trace-data analysis utility) land now so the post-alpha
+  security phase has hooks and evidence to build on. See the near-term
+  plan.
+
+### 0.4 Default vs `BuiltinExtras` rubric
+
+Apply the tool-vs-skill criteria (§ 0.1) within the tool tier:
+
+- **Default builtin set** when the capability is single-shot,
+  stateless, predictable, and *general* — every skill plausibly
+  benefits.
+- **`BuiltinExtras`** when the capability is narrower (single-domain,
+  niche workflow), or has side effects most skills do not want by
+  default (high-volume output, host-environment probing). The skill
+  author opts in.
+- **Not a builtin** when the capability needs an external runtime or
+  ongoing state — those become external builtins, MCP tools, or
+  packaged skills.
+
+This rubric replaces the older "risk vs generality" shorthand; risk is
+absorbed into structural-hardening work scheduled for after the alpha
+trigger.
+
+### 0.5 Concrete trigger for the structural-hardening phase
+
+The structural security work in § 2.3 opens when **the first
+app/cmd alpha is feature-complete and has been internally exercised
+end-to-end at least once**. "Feature-complete" here means: the app/cmd
+can launch, load builtin / external builtin / MCP / packaged-skill
+tool sources, and run a multi-stage orchestrator-driven task to
+completion against real data. Until that trigger event fires, only the
+Track F pre-hooks in § 2.4 apply; the rest stays deferred.
 
 ## 1. Inventory snapshot
 
@@ -66,12 +158,9 @@ through the Go tools.
 
 ## 2. Security envelope
 
-**Triage:** Deferred (see § 0). The subsections below are kept as a
-reference inventory of what is enforced versus what is intentionally
-not enforced today. Do not act on the mitigation list in § 2.3 until
-the dedicated security-hardening phase begins. The only security-shaped
-decision routine to keep doing in the meantime is choosing default vs
-`BuiltinExtras` placement based on a capability's generality and risk.
+**Triage:** Structural hardening is deferred to the post-alpha trigger
+(§ 0.5). The pre-hooks in § 2.4 land now under Track F; everything else
+in § 2.3 stays deferred. § 2.1 and § 2.2 are reference inventory.
 
 ### 2.1 What is actually enforced
 
@@ -133,19 +222,57 @@ for:
   accumulate state, install dependencies, and contact external services
   without human review of each step.
 
-Mitigations to consider before that adoption (each its own PR):
+Structural mitigations to consider after the alpha trigger (each its
+own PR; do not start before § 0.5 fires):
 
-- An optional egress allowlist on `curl`/`wget` (and the equivalent
-  hooks in pip/npm/cargo wrappers).
-- A `WithBashEnv(...)` filter that scrubs the inherited environment by
-  default and lets skills opt into specific keys.
-- Argument-level write-target inspection for the small set of allowed
+- **Env scrubbing UX.** A `WithBashEnv(...)` filter that scrubs the
+  inherited environment by default and lets skills opt into specific
+  keys. Deferred because a blanket deny on `*_TOKEN` / `*_KEY` /
+  `*_SECRET` breaks legitimate API-calling skills without an
+  interactive opt-in path, and the interactive design is not yet
+  scoped.
+- **Egress enforcement default.** Flip the URL allowlist from
+  opt-in (Track F, see § 2.4) to enforced-by-default for autonomous or
+  untrusted-input runs.
+- **Argument-level write-target inspection.** Extend the AST walker
+  used by `checkRedirections` to also inspect the small set of allowed
   commands that take a write path (`tee`, `cp`, `dd`, redirected
   `awk`/`sed`).
-- A "no network" config preset that drops `curl`/`wget` and package
+- **"No network" config preset.** Drop `curl`/`wget` and package
   installers from the allowlist when the skill does not need them.
-- Resource caps (RLIMIT_AS, RLIMIT_CPU, RLIMIT_NOFILE) on the bash
+- **Resource caps.** RLIMIT_AS, RLIMIT_CPU, RLIMIT_NOFILE on the bash
   child process.
+
+### 2.4 Near-term pre-hooks (Track F)
+
+These mitigations land now under Track F because each one is either a
+zero-cost interface stub or a self-contained instrumentation
+improvement. None of them changes default behavior; they exist so the
+post-alpha structural work has stable hooks and real data to lean on.
+
+- **`WithBashURLAllowlist([]string)` opt-in.** Adds the configuration
+  surface and the curl / wget URL extraction logic. Default empty
+  list means "no restriction" so current runs are not affected;
+  callers that set a non-empty list get enforcement immediately. See
+  Track F PR F-1 in `docs/builtin-tools-near-term-plan.md`.
+- **`TrustedInput bool` flag on `SkillConfig`.** A declarative hint
+  that the skill's input may come from an untrusted source. Carries no
+  behavior gate today, but every later mitigation can consult it
+  without breaking-change risk on the config surface. Track F PR F-2.
+- **Audit-tagging the existing tool-call stream events.** Mark
+  `llm.tool_call.started` (and `.completed`) as the canonical audit
+  source via an explicit `category: "audit"` (or equivalent) tag and
+  document the field set the audit phase will rely on. No new event
+  pipeline. Track F PR F-3.
+- **Trace-data analysis utility.** Promote the PR C-3 manual analysis
+  to a small Go program under `tools/`. Each example run can produce
+  bash command-head distribution, captured inner-command bodies of
+  Turing-complete heads (`python -c`, `bash -c`, `xargs <cmd>`,
+  `make`, `awk` system-calls), and a tally per skill class. The
+  structural-hardening phase consumes this dataset directly. Track F
+  PR F-4.
+
+Anything not listed in § 2.4 stays in § 2.3 and waits for the trigger.
 
 ## 3. Coverage gap for research / autonomous experiment skills
 
@@ -155,19 +282,25 @@ verticals that the current set covers only through ad-hoc bash. The
 gaps below are grouped by workflow stage; each one is a candidate, not a
 commitment.
 
-**Triage by track.** § 3.1–§ 3.3 move to the **external-skill track**
-delivered via the `cmd` program selection cycle, because they depend on
-Python or other external runtimes and are a poor fit for Go-resident
-builtins. § 3.4–§ 3.5 stay in the **Go builtin track** and are
-scheduled under `docs/builtin-tools-vcs-and-artifacts-plan.md`. Each
-subsection below repeats its track tag for clarity.
+**Triage by track.** § 3.4 and § 3.5 stay on the **Go builtin near-term
+track (Track D)** in `docs/builtin-tools-near-term-plan.md`. § 3.1 and
+§ 3.2 are mostly covered by the published MCP ecosystem (`web_search`,
+paper fetch, etc.); the gap is wiring MCP up, which is **Track E** on
+the same near-term plan, and packaging Python skills (PDF, tabular,
+notebook) which is owned by the embedding app/cmd. § 3.3 is partially
+deferred: items without a concrete use case (`experiment_log`) wait
+for a real workload, and cluster / job-control items wait for trace
+evidence. Each subsection below repeats its track tag for clarity.
 
 ### 3.1 Source discovery and literature
 
-**Track:** external skills via `cmd`. All four candidates below are
-Python-heavy and depend on third-party libraries (HTTP clients, PDF
-parsers, HTML normalizers, citation formatters). Defer to the `cmd`
-development cycle; do not add Go builtins for these.
+**Track:** MCP (Track E) for `web_search` and paper fetch; app/cmd
+packaged skill for PDF / HTML extraction; deferred for citation
+formatting until a concrete need surfaces. Rationale: most published
+MCP servers already return AI-friendly curated results rather than raw
+search-engine pages, response parsing is more ergonomic in Python, and
+documented Python SDKs exist for Tavily / arXiv / Semantic Scholar. We
+should consume those ecosystems rather than reimplement them.
 
 - **Web search.** No structured `web_search` tool. Skills that need to
   locate papers, datasets, or documentation can only `curl` known URLs.
@@ -187,8 +320,10 @@ development cycle; do not add Go builtins for these.
 
 ### 3.2 Dataset and environment management
 
-**Track:** external skills via `cmd`. Pandas / pyarrow / nbconvert
-ecosystems are the natural home. Defer to the `cmd` cycle.
+**Track:** app/cmd packaged skills (pandas / pyarrow / nbconvert) plus
+optional MCP servers for dataset fetch where they exist. Dango itself
+should not own these; the app/cmd ships them as packaged skills with
+their own Python environment per § 0.2.
 
 - **Dataset fetch with caching.** `dataset_fetch` (URL or
   Kaggle/HuggingFace dataset id, returns path inside workspace, caches
@@ -205,12 +340,14 @@ ecosystems are the natural home. Defer to the `cmd` cycle.
 
 ### 3.3 Experiment lifecycle
 
-**Track:** external skills via `cmd`, with one caveat. The Python and
-cluster-runtime dependencies (mlflow / wandb / sbatch / kubectl) push
-this to the external-skill track. The one item that may eventually
-re-enter the Go builtin track is generic background-job control if it
-becomes a recurring bash pain point under PR C-3-style trace evidence;
-flag it then, not now.
+**Track:** deferred until concrete usage exists. Designing
+`experiment_log` as an abstract interface without a real first user
+risks shipping an API that does not match the eventual usage; wait
+for a concrete workload to drive the shape. The mlflow / wandb /
+sbatch / kubectl items are app/cmd packaged skills when they arrive.
+Generic background-job control (`kill`, `ps`, `pgrep`, `timeout`)
+re-enters the Go builtin track only if PR C-3-style trace evidence
+shows a recurring bash pain point; flag it then, not now.
 
 - **Experiment logger.** `experiment_log` (write a structured row
   describing run config, metrics, artifact paths). Right now the
@@ -231,8 +368,8 @@ flag it then, not now.
 
 ### 3.4 Version control and history
 
-**Track:** Go builtin. Scheduled under
-`docs/builtin-tools-vcs-and-artifacts-plan.md`.
+**Track:** Go builtin (Track D). Scheduled under
+`docs/builtin-tools-near-term-plan.md`.
 
 - **Git.** Not on the default allowlist. Research skills that ingest
   existing repos (read commit history, diff between revisions, blame a
@@ -242,8 +379,8 @@ flag it then, not now.
 
 ### 3.5 Structured artifact handling
 
-**Track:** Go builtin. Scheduled under
-`docs/builtin-tools-vcs-and-artifacts-plan.md`.
+**Track:** Go builtin (Track D). Scheduled under
+`docs/builtin-tools-near-term-plan.md`.
 
 - **Artifact catalog.** A first-class read of the per-task
   `downstream/artifacts/` directory + the handoff front-matter
@@ -258,27 +395,42 @@ flag it then, not now.
 
 Updated 2026-05-19 to reflect the § 0 triage.
 
-1. **Go builtin Track D — VCS and artifact handling.** Land the PRs in
-   `docs/builtin-tools-vcs-and-artifacts-plan.md` first. Each PR is
-   small and self-contained, and the work does not block the security
-   or external-skill tracks.
-2. **External research-skill track via `cmd`.** Design the skill
-   selection and packaging mechanism as part of the upcoming `cmd`
-   program cycle. The § 3.1–§ 3.3 capabilities live there. Plan that
-   track in its own document; do not stage Go builtins for it.
-3. **Security-hardening phase.** Only after the core feature surface
-   is complete and internal end-to-end testing has stabilized: revisit
-   § 2's mitigations (egress allowlist, env scrubbing, argument-level
-   write-target inspection, resource caps). Each mitigation should
-   land in its own PR with explicit threat-model framing.
+Near-term tracks (all scheduled under
+`docs/builtin-tools-near-term-plan.md`, can run in parallel):
+
+1. **Track D — VCS and artifact handling.** Go builtin work for § 3.4
+   and § 3.5. Small, self-contained PRs.
+2. **Track E — MCP support.** Wire dango as an MCP client so the four-
+   class architecture in § 0.2 becomes real. Unblocks the § 3.1
+   `web_search` / paper-fetch capabilities by consuming published MCP
+   servers.
+3. **Track F — Security pre-hooks and instrumentation.** The four
+   pre-hooks in § 2.4: `WithBashURLAllowlist` opt-in, `TrustedInput`
+   flag, audit tagging on tool-call events, trace-analysis utility.
+
+App/cmd cycle (separate plan, not owned by this memo):
+
+4. **App/cmd alpha.** Designs the packaged-skill loader, the MCP
+   server config surface, and ships the first dango-official packaged
+   skills (PDF / tabular / notebook). The completion of this milestone
+   is the trigger for § 0.5.
+
+Post-alpha:
+
+5. **Structural security hardening.** Open the § 2.3 mitigations one
+   PR at a time, leaning on the audit data and trace dataset that
+   Track F produced.
 
 ## 5. Out of scope of this memo
 
 - No new tool is being added by PR C-6 or by this memo.
 - No allowlist change is being made; the listed candidates are pointers,
-  not decisions. Track D's plan file owns the actual VCS and artifact
-  PR specs.
-- No commitment to a specific research-skill design. That belongs with
-  the `cmd` program cycle when external-skill selection is scoped.
-- No security mitigation is being scheduled yet; that phase begins
-  after feature complete and is tracked separately when it opens.
+  not decisions. The near-term plan owns the actual PR specs for
+  Tracks D, E, and F.
+- No commitment to a specific app/cmd design. That belongs with the
+  app/cmd cycle when packaged-skill selection and MCP server config
+  shape are scoped.
+- No structural security mitigation is being scheduled yet; that phase
+  begins after the § 0.5 alpha trigger and is tracked separately when
+  it opens. The Track F pre-hooks are *not* structural mitigations —
+  they are stable hooks the structural phase will lean on.
