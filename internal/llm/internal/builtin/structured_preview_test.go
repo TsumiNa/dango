@@ -71,7 +71,29 @@ func TestStructuredPreviewJSONLSchemaInference(t *testing.T) {
 	want := strings.TrimSpace(`
 jsonl{rows_scanned:3, keys:[id, name]}
   id: types=[number], null_rate=0.00
-  name: types=[string], null_rate=0.33
+  name: types=[null, string], null_rate=0.33
+`)
+	if out != want {
+		t.Fatalf("structured_preview output = %q, want %q", out, want)
+	}
+}
+
+func TestStructuredPreviewJSONLAllowsLargeRows(t *testing.T) {
+	root := t.TempDir()
+	largeValue := strings.Repeat("x", 2*1024*1024)
+	writeStructuredPreviewFile(t, root, "large.jsonl", `{"payload":"`+largeValue+`"}`+"\n")
+
+	out, err := executeStructuredPreview(t, root, map[string]any{
+		"path":        "large.jsonl",
+		"sample_rows": 1,
+	})
+	if err != nil {
+		t.Fatalf("structured_preview: %v", err)
+	}
+
+	want := strings.TrimSpace(`
+jsonl{rows_scanned:1, keys:[payload]}
+  payload: types=[string], null_rate=0.00
 `)
 	if out != want {
 		t.Fatalf("structured_preview output = %q, want %q", out, want)

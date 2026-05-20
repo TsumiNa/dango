@@ -19,6 +19,7 @@ const (
 	structuredPreviewDefaultMaxKeysPerLevel = 20
 	structuredPreviewDefaultMaxDepth        = 3
 	structuredPreviewDefaultSampleRows      = 5
+	structuredPreviewJSONLMaxRowBytes       = 8 * 1024 * 1024
 )
 
 type structuredPreviewConfig struct {
@@ -296,7 +297,7 @@ func arrayElementSummary(value []any, cfg structuredPreviewConfig, depth int) (s
 
 func renderJSONLPreview(data []byte, cfg structuredPreviewConfig) (string, error) {
 	scanner := bufio.NewScanner(bytes.NewReader(data))
-	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
+	scanner.Buffer(make([]byte, 0, 64*1024), structuredPreviewJSONLMaxRowBytes)
 
 	stats := map[string]*jsonlFieldStats{}
 	rowsScanned := 0
@@ -341,6 +342,7 @@ func renderJSONLPreview(data []byte, cfg structuredPreviewConfig) (string, error
 		for key, fieldStats := range stats {
 			if _, ok := present[key]; !ok {
 				fieldStats.nulls++
+				fieldStats.types["null"] = struct{}{}
 			}
 		}
 		rowsScanned++
