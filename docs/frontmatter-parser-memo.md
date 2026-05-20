@@ -5,19 +5,18 @@ Status: Implemented in `internal/frontmatter`.
 
 ## Purpose
 
-Dango currently uses `github.com/adrg/frontmatter` in several places to
+Dango previously used `github.com/adrg/frontmatter` in several places to
 split markdown front matter from the body and unmarshal the metadata into
-Go structs. That package is small and straightforward, but it keeps
+Go structs. That package is small and straightforward, but it kept
 `gopkg.in/yaml.v2` in the dependency graph.
 
-This memo records a minimal in-repo replacement plan so Dango can own
-this behavior directly and later remove the external front matter
-dependency.
+This memo records the minimal in-repo replacement so Dango owns this
+behavior directly without the external front matter dependency.
 
 ## Current in-repo usage
 
-Today the package is used for repository-owned markdown parsing in these
-paths:
+Today `internal/frontmatter` is used for repository-owned markdown parsing
+in these paths:
 
 - `internal/llm/skill.go`
 - `internal/engine/runner/handoff_doc.go`
