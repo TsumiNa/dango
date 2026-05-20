@@ -33,16 +33,16 @@ func TestStreamMergeFromCombinesMultipleUpstreams(t *testing.T) {
 	defer mergeB.Stop()
 
 	if err := childA.Emit(t.Context(), Event{
-		EventType: EventExecutorExecuteStarted,
-		From:      Source{Layer: "executor", ID: "node_a"},
+		EventType: EventAgentExecuteStarted,
+		From:      Source{Layer: "agent", ID: "node_a"},
 		Status:    StatusRunning,
 		Delta:     json.RawMessage(`{"stage":"execute"}`),
 	}); err != nil {
 		t.Fatalf("Emit childA: %v", err)
 	}
 	if err := childB.Emit(t.Context(), Event{
-		EventType: EventExecutorExecuteCompleted,
-		From:      Source{Layer: "executor", ID: "node_b"},
+		EventType: EventAgentExecuteCompleted,
+		From:      Source{Layer: "agent", ID: "node_b"},
 		Status:    StatusCompleted,
 		Delta:     json.RawMessage(`{"stage":"execute"}`),
 	}); err != nil {
@@ -83,7 +83,7 @@ func TestStreamMergeFromFiltersAndReplaysUpstream(t *testing.T) {
 
 	if err := child.Emit(t.Context(), Event{
 		EventType: EventStatusProgress,
-		From:      Source{Layer: "executor"},
+		From:      Source{Layer: "agent"},
 		Status:    StatusRunning,
 		Delta:     json.RawMessage(`"hidden"`),
 	}); err != nil {
@@ -130,9 +130,9 @@ func TestStreamMergeFromRejectsInvalidSources(t *testing.T) {
 }
 
 func TestUpstreamIdentitySameSourceShareIdentity(t *testing.T) {
-	src1 := Source{Layer: "executor", ID: "node_a"}
-	src2 := Source{Layer: "executor", ID: "node_a"}
-	src3 := Source{Layer: "executor", ID: "node_b"}
+	src1 := Source{Layer: "agent", ID: "node_a"}
+	src2 := Source{Layer: "agent", ID: "node_a"}
+	src3 := Source{Layer: "agent", ID: "node_b"}
 	src4 := Source{Layer: "skill", ID: "node_a"}
 
 	id1 := upstreamIdentityOf(src1)
@@ -154,31 +154,31 @@ func TestUpstreamIdentitySameSourceShareIdentity(t *testing.T) {
 func TestJoinKeySameEventPropertiesShareKey(t *testing.T) {
 	event1 := Event{
 		EventType: EventLLMOutputDelta,
-		From:      Source{Layer: "executor", ID: "node_a"},
+		From:      Source{Layer: "agent", ID: "node_a"},
 		Status:    StatusRunning,
 		Delta:     json.RawMessage(`"hello"`),
 	}
 	event2 := Event{
 		EventType: EventLLMOutputDelta,
-		From:      Source{Layer: "executor", ID: "node_a"},
+		From:      Source{Layer: "agent", ID: "node_a"},
 		Status:    StatusRunning,
 		Delta:     json.RawMessage(`" world"`),
 	}
 	event3 := Event{
 		EventType: EventLLMReasoningDelta,
-		From:      Source{Layer: "executor", ID: "node_a"},
+		From:      Source{Layer: "agent", ID: "node_a"},
 		Status:    StatusRunning,
 		Delta:     json.RawMessage(`"hello"`),
 	}
 	event4 := Event{
 		EventType: EventLLMOutputDelta,
-		From:      Source{Layer: "executor", ID: "node_b"},
+		From:      Source{Layer: "agent", ID: "node_b"},
 		Status:    StatusRunning,
 		Delta:     json.RawMessage(`"hello"`),
 	}
 	event5 := Event{
 		EventType: EventLLMOutputDelta,
-		From:      Source{Layer: "executor", ID: "node_a"},
+		From:      Source{Layer: "agent", ID: "node_a"},
 		Status:    StatusCompleted,
 		Delta:     json.RawMessage(`"hello"`),
 	}
@@ -362,13 +362,13 @@ func TestCanJoinDeltasOnlyJoinsStrings(t *testing.T) {
 }
 
 func TestUpstreamFIFOPreservesOrder(t *testing.T) {
-	identity := upstreamIdentity{layer: "executor", id: "node_a"}
+	identity := upstreamIdentity{layer: "agent", id: "node_a"}
 	fifo := newUpstreamFIFO(identity, 10)
 
 	events := []Event{
-		{EventType: EventLLMOutputDelta, From: Source{Layer: "executor", ID: "node_a"}, Status: StatusRunning, Delta: json.RawMessage(`"first"`)},
-		{EventType: EventLLMOutputDelta, From: Source{Layer: "executor", ID: "node_a"}, Status: StatusRunning, Delta: json.RawMessage(`"second"`)},
-		{EventType: EventLLMOutputDelta, From: Source{Layer: "executor", ID: "node_a"}, Status: StatusRunning, Delta: json.RawMessage(`"third"`)},
+		{EventType: EventLLMOutputDelta, From: Source{Layer: "agent", ID: "node_a"}, Status: StatusRunning, Delta: json.RawMessage(`"first"`)},
+		{EventType: EventLLMOutputDelta, From: Source{Layer: "agent", ID: "node_a"}, Status: StatusRunning, Delta: json.RawMessage(`"second"`)},
+		{EventType: EventLLMOutputDelta, From: Source{Layer: "agent", ID: "node_a"}, Status: StatusRunning, Delta: json.RawMessage(`"third"`)},
 	}
 
 	for _, e := range events {
@@ -398,25 +398,25 @@ func TestUpstreamFIFOPreservesOrder(t *testing.T) {
 }
 
 func TestUpstreamFIFOPopJoinedHeadJoinsStringDeltas(t *testing.T) {
-	identity := upstreamIdentity{layer: "executor", id: "node_a"}
+	identity := upstreamIdentity{layer: "agent", id: "node_a"}
 	fifo := newUpstreamFIFO(identity, 10)
 
 	for _, event := range []Event{
 		{
 			EventType: EventLLMOutputDelta,
-			From:      Source{Layer: "executor", ID: "node_a"},
+			From:      Source{Layer: "agent", ID: "node_a"},
 			Status:    StatusRunning,
 			Delta:     json.RawMessage(`"hello"`),
 		},
 		{
 			EventType: EventLLMOutputDelta,
-			From:      Source{Layer: "executor", ID: "node_a"},
+			From:      Source{Layer: "agent", ID: "node_a"},
 			Status:    StatusRunning,
 			Delta:     json.RawMessage(`" world"`),
 		},
 		{
 			EventType: EventLLMOutputDelta,
-			From:      Source{Layer: "executor", ID: "node_a"},
+			From:      Source{Layer: "agent", ID: "node_a"},
 			Status:    StatusRunning,
 			Delta:     json.RawMessage(`"!"`),
 		},
@@ -442,10 +442,10 @@ func TestUpstreamFIFOPopJoinedHeadJoinsStringDeltas(t *testing.T) {
 }
 
 func TestUpstreamFIFOPopJoinedHeadKeepsNonJoinableQueued(t *testing.T) {
-	identity := upstreamIdentity{layer: "executor", id: "node_a"}
+	identity := upstreamIdentity{layer: "agent", id: "node_a"}
 	headEvent := Event{
 		EventType: EventLLMOutputDelta,
-		From:      Source{Layer: "executor", ID: "node_a"},
+		From:      Source{Layer: "agent", ID: "node_a"},
 		Status:    StatusRunning,
 		Delta:     json.RawMessage(`"hello"`),
 	}
@@ -458,7 +458,7 @@ func TestUpstreamFIFOPopJoinedHeadKeepsNonJoinableQueued(t *testing.T) {
 			name: "non-string delta",
 			next: Event{
 				EventType: EventLLMOutputDelta,
-				From:      Source{Layer: "executor", ID: "node_a"},
+				From:      Source{Layer: "agent", ID: "node_a"},
 				Status:    StatusRunning,
 				Delta:     json.RawMessage(`{"text":"object"}`),
 			},
@@ -467,7 +467,7 @@ func TestUpstreamFIFOPopJoinedHeadKeepsNonJoinableQueued(t *testing.T) {
 			name: "different event type",
 			next: Event{
 				EventType: EventLLMReasoningDelta,
-				From:      Source{Layer: "executor", ID: "node_a"},
+				From:      Source{Layer: "agent", ID: "node_a"},
 				Status:    StatusRunning,
 				Delta:     json.RawMessage(`"world"`),
 			},
@@ -476,7 +476,7 @@ func TestUpstreamFIFOPopJoinedHeadKeepsNonJoinableQueued(t *testing.T) {
 			name: "different status",
 			next: Event{
 				EventType: EventLLMOutputDelta,
-				From:      Source{Layer: "executor", ID: "node_a"},
+				From:      Source{Layer: "agent", ID: "node_a"},
 				Status:    StatusCompleted,
 				Delta:     json.RawMessage(`"world"`),
 			},
@@ -485,7 +485,7 @@ func TestUpstreamFIFOPopJoinedHeadKeepsNonJoinableQueued(t *testing.T) {
 			name: "different upstream",
 			next: Event{
 				EventType: EventLLMOutputDelta,
-				From:      Source{Layer: "executor", ID: "node_b"},
+				From:      Source{Layer: "agent", ID: "node_b"},
 				Status:    StatusRunning,
 				Delta:     json.RawMessage(`"world"`),
 			},
@@ -524,12 +524,12 @@ func TestUpstreamFIFOPopJoinedHeadKeepsNonJoinableQueued(t *testing.T) {
 }
 
 func TestUpstreamFIFORejectsWhenFull(t *testing.T) {
-	identity := upstreamIdentity{layer: "executor", id: "node_a"}
+	identity := upstreamIdentity{layer: "agent", id: "node_a"}
 	fifo := newUpstreamFIFO(identity, 2) // Small buffer for testing
 
-	event1 := Event{EventType: EventStatusProgress, From: Source{Layer: "executor"}, Delta: json.RawMessage(`"1"`)}
-	event2 := Event{EventType: EventStatusProgress, From: Source{Layer: "executor"}, Delta: json.RawMessage(`"2"`)}
-	event3 := Event{EventType: EventStatusProgress, From: Source{Layer: "executor"}, Delta: json.RawMessage(`"3"`)}
+	event1 := Event{EventType: EventStatusProgress, From: Source{Layer: "agent"}, Delta: json.RawMessage(`"1"`)}
+	event2 := Event{EventType: EventStatusProgress, From: Source{Layer: "agent"}, Delta: json.RawMessage(`"2"`)}
+	event3 := Event{EventType: EventStatusProgress, From: Source{Layer: "agent"}, Delta: json.RawMessage(`"3"`)}
 
 	if err := fifo.enqueue(event1); err != nil {
 		t.Fatalf("enqueue 1: %v", err)
@@ -570,8 +570,8 @@ func TestMergeHubTickEmitsBundleWithReadyEvents(t *testing.T) {
 	hub := newMergeHub(t.Context(), downstream, time.Hour, DefaultMergePerUpstreamBufferDepth)
 	defer hub.Stop()
 
-	id1 := upstreamIdentity{layer: "executor", id: "node_1"}
-	id2 := upstreamIdentity{layer: "executor", id: "node_2"}
+	id1 := upstreamIdentity{layer: "agent", id: "node_1"}
+	id2 := upstreamIdentity{layer: "agent", id: "node_2"}
 	hub.beginRegistration()
 	if err := hub.registerPendingUpstream(id1, nil); err != nil {
 		t.Fatalf("registerPendingUpstream node_1: %v", err)
@@ -583,7 +583,7 @@ func TestMergeHubTickEmitsBundleWithReadyEvents(t *testing.T) {
 
 	if err := hub.enqueue(id1, Event{
 		EventType: EventLLMOutputDelta,
-		From:      Source{Layer: "executor", ID: "node_1"},
+		From:      Source{Layer: "agent", ID: "node_1"},
 		Status:    StatusRunning,
 		Delta:     json.RawMessage(`"hello"`),
 	}); err != nil {
@@ -591,7 +591,7 @@ func TestMergeHubTickEmitsBundleWithReadyEvents(t *testing.T) {
 	}
 	if err := hub.enqueue(id2, Event{
 		EventType: EventLLMOutputDelta,
-		From:      Source{Layer: "executor", ID: "node_2"},
+		From:      Source{Layer: "agent", ID: "node_2"},
 		Status:    StatusRunning,
 		Delta:     json.RawMessage(`"world"`),
 	}); err != nil {
@@ -635,7 +635,7 @@ func TestMergeHubJoinsConsecutiveStringDeltas(t *testing.T) {
 	hub := newMergeHub(t.Context(), downstream, time.Hour, DefaultMergePerUpstreamBufferDepth)
 	defer hub.Stop()
 
-	id := upstreamIdentity{layer: "executor", id: "node_a"}
+	id := upstreamIdentity{layer: "agent", id: "node_a"}
 	hub.beginRegistration()
 	if err := hub.registerPendingUpstream(id, nil); err != nil {
 		t.Fatalf("registerPendingUpstream: %v", err)
@@ -643,7 +643,7 @@ func TestMergeHubJoinsConsecutiveStringDeltas(t *testing.T) {
 
 	if err := hub.enqueue(id, Event{
 		EventType:   EventLLMOutputDelta,
-		From:        Source{Layer: "executor", ID: "node_a"},
+		From:        Source{Layer: "agent", ID: "node_a"},
 		LogicalTime: 1,
 		Status:      StatusRunning,
 		Delta:       json.RawMessage(`"hello"`),
@@ -653,7 +653,7 @@ func TestMergeHubJoinsConsecutiveStringDeltas(t *testing.T) {
 
 	if err := hub.enqueue(id, Event{
 		EventType:   EventLLMOutputDelta,
-		From:        Source{Layer: "executor", ID: "node_a"},
+		From:        Source{Layer: "agent", ID: "node_a"},
 		LogicalTime: 2,
 		Status:      StatusRunning,
 		Delta:       json.RawMessage(`" world"`),
@@ -662,7 +662,7 @@ func TestMergeHubJoinsConsecutiveStringDeltas(t *testing.T) {
 	}
 	if err := hub.enqueue(id, Event{
 		EventType:   EventLLMOutputDelta,
-		From:        Source{Layer: "executor", ID: "node_a"},
+		From:        Source{Layer: "agent", ID: "node_a"},
 		LogicalTime: 3,
 		Status:      StatusRunning,
 		Delta:       json.RawMessage(`"!"`),
@@ -708,7 +708,7 @@ func TestMergeHubJoinsOnlyAdjacentSameKeyDeltas(t *testing.T) {
 	hub := newMergeHub(t.Context(), downstream, time.Hour, DefaultMergePerUpstreamBufferDepth)
 	defer hub.Stop()
 
-	identity := upstreamIdentity{layer: "executor", id: "node_a"}
+	identity := upstreamIdentity{layer: "agent", id: "node_a"}
 	hub.beginRegistration()
 	if err := hub.registerPendingUpstream(identity, nil); err != nil {
 		t.Fatalf("registerPendingUpstream: %v", err)
@@ -723,19 +723,19 @@ func TestMergeHubJoinsOnlyAdjacentSameKeyDeltas(t *testing.T) {
 	for _, event := range []Event{
 		{
 			EventType: EventLLMOutputDelta,
-			From:      Source{Layer: "executor", ID: "node_a"},
+			From:      Source{Layer: "agent", ID: "node_a"},
 			Status:    StatusRunning,
 			Delta:     json.RawMessage(`"hello "`),
 		},
 		{
 			EventType: EventLLMReasoningDelta,
-			From:      Source{Layer: "executor", ID: "node_a"},
+			From:      Source{Layer: "agent", ID: "node_a"},
 			Status:    StatusRunning,
 			Delta:     json.RawMessage(`"thinking"`),
 		},
 		{
 			EventType: EventLLMOutputDelta,
-			From:      Source{Layer: "executor", ID: "node_a"},
+			From:      Source{Layer: "agent", ID: "node_a"},
 			Status:    StatusRunning,
 			Delta:     json.RawMessage(`"world"`),
 		},
@@ -780,7 +780,7 @@ func TestMergeHubStopsJoiningAtNonStringDelta(t *testing.T) {
 	hub := newMergeHub(t.Context(), downstream, time.Hour, DefaultMergePerUpstreamBufferDepth)
 	defer hub.Stop()
 
-	identity := upstreamIdentity{layer: "executor", id: "node_a"}
+	identity := upstreamIdentity{layer: "agent", id: "node_a"}
 	hub.beginRegistration()
 	if err := hub.registerPendingUpstream(identity, nil); err != nil {
 		t.Fatalf("registerPendingUpstream: %v", err)
@@ -795,19 +795,19 @@ func TestMergeHubStopsJoiningAtNonStringDelta(t *testing.T) {
 	for _, event := range []Event{
 		{
 			EventType: EventLLMOutputDelta,
-			From:      Source{Layer: "executor", ID: "node_a"},
+			From:      Source{Layer: "agent", ID: "node_a"},
 			Status:    StatusRunning,
 			Delta:     json.RawMessage(`"first"`),
 		},
 		{
 			EventType: EventLLMOutputDelta,
-			From:      Source{Layer: "executor", ID: "node_a"},
+			From:      Source{Layer: "agent", ID: "node_a"},
 			Status:    StatusRunning,
 			Delta:     json.RawMessage(`{"text":"object"}`),
 		},
 		{
 			EventType: EventLLMOutputDelta,
-			From:      Source{Layer: "executor", ID: "node_a"},
+			From:      Source{Layer: "agent", ID: "node_a"},
 			Status:    StatusRunning,
 			Delta:     json.RawMessage(`"third"`),
 		},
@@ -839,7 +839,7 @@ func TestMergeHubKeepsNonJoinableDeltasQueued(t *testing.T) {
 	hub := newMergeHub(t.Context(), downstream, time.Hour, DefaultMergePerUpstreamBufferDepth)
 	defer hub.Stop()
 
-	id := upstreamIdentity{layer: "executor", id: "node_a"}
+	id := upstreamIdentity{layer: "agent", id: "node_a"}
 	hub.beginRegistration()
 	if err := hub.registerPendingUpstream(id, nil); err != nil {
 		t.Fatalf("registerPendingUpstream: %v", err)
@@ -847,7 +847,7 @@ func TestMergeHubKeepsNonJoinableDeltasQueued(t *testing.T) {
 
 	if err := hub.enqueue(id, Event{
 		EventType: EventLLMOutputDelta,
-		From:      Source{Layer: "executor", ID: "node_a"},
+		From:      Source{Layer: "agent", ID: "node_a"},
 		Status:    StatusRunning,
 		Delta:     json.RawMessage(`"output"`),
 	}); err != nil {
@@ -856,7 +856,7 @@ func TestMergeHubKeepsNonJoinableDeltasQueued(t *testing.T) {
 
 	if err := hub.enqueue(id, Event{
 		EventType: EventLLMReasoningDelta,
-		From:      Source{Layer: "executor", ID: "node_a"},
+		From:      Source{Layer: "agent", ID: "node_a"},
 		Status:    StatusRunning,
 		Delta:     json.RawMessage(`"reasoning"`),
 	}); err != nil {
@@ -923,8 +923,8 @@ func TestMergeFromDefaultBehaviorUnchanged(t *testing.T) {
 
 	// Emit a direct event (not bundled).
 	if err := child.Emit(t.Context(), Event{
-		EventType: EventExecutorExecuteStarted,
-		From:      Source{Layer: "executor", ID: "node_1"},
+		EventType: EventAgentExecuteStarted,
+		From:      Source{Layer: "agent", ID: "node_1"},
 		Status:    StatusRunning,
 		Delta:     json.RawMessage(`"hello"`),
 	}); err != nil {
@@ -940,8 +940,8 @@ func TestMergeFromDefaultBehaviorUnchanged(t *testing.T) {
 	}
 
 	// Should be the direct event, not a bundle.
-	if event.EventType != EventExecutorExecuteStarted {
-		t.Fatalf("EventType = %q, want executor.execute.started", event.EventType)
+	if event.EventType != EventAgentExecuteStarted {
+		t.Fatalf("EventType = %q, want agent.execute.started", event.EventType)
 	}
 	if string(event.Delta) != `"hello"` {
 		t.Fatalf("Delta = %s, want \"hello\"", event.Delta)
@@ -974,7 +974,7 @@ func TestMergeFromWithConfigHubModeEmitsBundles(t *testing.T) {
 	// Emit an event.
 	if err := child.Emit(t.Context(), Event{
 		EventType: EventLLMOutputDelta,
-		From:      Source{Layer: "executor", ID: "node_1"},
+		From:      Source{Layer: "agent", ID: "node_1"},
 		Status:    StatusRunning,
 		Delta:     json.RawMessage(`"hello"`),
 	}); err != nil {
@@ -1155,10 +1155,10 @@ func TestMergeFromWithConfigHubRespectsFilters(t *testing.T) {
 	}
 	defer merge.Stop()
 
-	// Emit two events: one LLM (should pass), one executor (should be filtered out).
+	// Emit two events: one LLM (should pass), one agent (should be filtered out).
 	if err := child.Emit(t.Context(), Event{
 		EventType: EventLLMOutputDelta,
-		From:      Source{Layer: "executor", ID: "node_1"},
+		From:      Source{Layer: "agent", ID: "node_1"},
 		Status:    StatusRunning,
 		Delta:     json.RawMessage(`"llm_delta"`),
 	}); err != nil {
@@ -1166,15 +1166,15 @@ func TestMergeFromWithConfigHubRespectsFilters(t *testing.T) {
 	}
 
 	if err := child.Emit(t.Context(), Event{
-		EventType: EventExecutorExecuteStarted,
-		From:      Source{Layer: "executor", ID: "node_1"},
+		EventType: EventAgentExecuteStarted,
+		From:      Source{Layer: "agent", ID: "node_1"},
 		Status:    StatusRunning,
 		Delta:     json.RawMessage(`{}`),
 	}); err != nil {
-		t.Fatalf("Emit executor: %v", err)
+		t.Fatalf("Emit agent: %v", err)
 	}
 
-	// Should receive only the LLM event in a bundle (executor is filtered).
+	// Should receive only the LLM event in a bundle (agent is filtered).
 	event, ok, err := sub.Next(t.Context())
 	if err != nil {
 		t.Fatalf("Next: %v", err)
@@ -1189,7 +1189,7 @@ func TestMergeFromWithConfigHubRespectsFilters(t *testing.T) {
 	}
 
 	if len(bundle.Events) != 1 {
-		t.Fatalf("Events = %d, want 1 (executor filtered out)", len(bundle.Events))
+		t.Fatalf("Events = %d, want 1 (agent filtered out)", len(bundle.Events))
 	}
 	if bundle.Events[0].EventType != EventLLMOutputDelta {
 		t.Fatalf("EventType = %q, want llm.output.delta", bundle.Events[0].EventType)
@@ -1219,7 +1219,7 @@ func TestMergeFromWithConfigHubContextCancellation(t *testing.T) {
 	// Emit an event to ensure hub is running.
 	if err := child.Emit(ctx, Event{
 		EventType: EventLLMOutputDelta,
-		From:      Source{Layer: "executor", ID: "node_1"},
+		From:      Source{Layer: "agent", ID: "node_1"},
 		Status:    StatusRunning,
 		Delta:     json.RawMessage(`"test"`),
 	}); err != nil {
@@ -1333,7 +1333,7 @@ func TestMergeFromWithConfigHubDrainsBufferedEventsOnUpstreamClose(t *testing.T)
 
 	if err := child.Emit(t.Context(), Event{
 		EventType: EventLLMOutputDelta,
-		From:      Source{Layer: "executor", ID: "node_1"},
+		From:      Source{Layer: "agent", ID: "node_1"},
 		Status:    StatusRunning,
 		Delta:     json.RawMessage(`"output"`),
 	}); err != nil {
@@ -1341,7 +1341,7 @@ func TestMergeFromWithConfigHubDrainsBufferedEventsOnUpstreamClose(t *testing.T)
 	}
 	if err := child.Emit(t.Context(), Event{
 		EventType: EventLLMReasoningDelta,
-		From:      Source{Layer: "executor", ID: "node_1"},
+		From:      Source{Layer: "agent", ID: "node_1"},
 		Status:    StatusRunning,
 		Delta:     json.RawMessage(`"reasoning"`),
 	}); err != nil {
@@ -1393,7 +1393,7 @@ func TestMergeFromWithConfigHubEventsUseMergedScopeAndMetadata(t *testing.T) {
 
 	if err := child.Emit(t.Context(), Event{
 		EventType: EventLLMOutputDelta,
-		From:      Source{Layer: "executor", ID: "node_1"},
+		From:      Source{Layer: "agent", ID: "node_1"},
 		Status:    StatusRunning,
 		Delta:     json.RawMessage(`"output"`),
 	}); err != nil {
@@ -1435,7 +1435,7 @@ func TestMergeFromWithConfigHubErrorVisibleThroughMergeErr(t *testing.T) {
 
 	if err := child.Emit(t.Context(), Event{
 		EventType: EventLLMOutputDelta,
-		From:      Source{Layer: "executor", ID: "node_1"},
+		From:      Source{Layer: "agent", ID: "node_1"},
 		Status:    StatusRunning,
 		Delta:     json.RawMessage(`"output"`),
 	}); err != nil {
@@ -1460,7 +1460,7 @@ func emitHubTestEvent(t *testing.T, s *Stream, nodeID string, eventType string, 
 	t.Helper()
 	if err := s.Emit(t.Context(), Event{
 		EventType: eventType,
-		From:      Source{Layer: "executor", ID: nodeID},
+		From:      Source{Layer: "agent", ID: nodeID},
 		Status:    StatusRunning,
 		Delta:     json.RawMessage(delta),
 	}); err != nil {

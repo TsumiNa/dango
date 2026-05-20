@@ -34,7 +34,7 @@ func (r *Runner) Complete(ctx context.Context) error {
 	return r.Wait(ctx)
 }
 
-// StartPolish enters [PhasePolishing] and fans [Executor.Polish] across
+// StartPolish enters [PhasePolishing] and fans [Agent.Polish] across
 // the initial node graph concurrently.
 //
 // StartPolish returns immediately once the polish stage has been launched
@@ -47,7 +47,7 @@ func (r *Runner) Complete(ctx context.Context) error {
 // plan supplied via [Setup.Plan].
 func (r *Runner) StartPolish(ctx context.Context) error {
 	ctx = r.runtimeContext(ctx)
-	if err := r.prepareNodeExecutors(r.initialNodes); err != nil {
+	if err := r.prepareNodeAgents(r.initialNodes); err != nil {
 		return err
 	}
 	r.stateMu.Lock()
@@ -131,7 +131,7 @@ func (r *Runner) ReplanWith(ctx context.Context, plan *CoarsePlan, nodes map[str
 		clonedPlan.RunnerID = r.id
 	}
 	clonedNodes := cloneNodeMap(nodes)
-	if err := r.prepareNodeExecutors(clonedNodes); err != nil {
+	if err := r.prepareNodeAgents(clonedNodes); err != nil {
 		return err
 	}
 
@@ -397,18 +397,18 @@ func (r *Runner) fanOutPolish(ctx context.Context, nodes map[string]*Node) (map[
 		firstErr error
 	)
 	for id, node := range nodes {
-		if node == nil || node.Executor == nil {
+		if node == nil || node.Agent == nil {
 			continue
 		}
 		wg.Add(1)
-		go func(id string, node *Node, executor Executor) {
+		go func(id string, node *Node, agent Agent) {
 			defer wg.Done()
-			r.emitExecutorStreamEvent(ctx, streampkg.EventExecutorPolishStarted, streampkg.StatusRunning, id, node, map[string]any{
+			r.emitAgentStreamEvent(ctx, streampkg.EventAgentPolishStarted, streampkg.StatusRunning, id, node, map[string]any{
 				"stage": "polish",
 			})
-			frag, err := executor.Polish(ctx)
+			frag, err := agent.Polish(ctx)
 			if err != nil {
-				r.emitExecutorStreamEvent(ctx, streampkg.EventExecutorPolishFailed, streampkg.StatusFailed, id, node, map[string]any{
+				r.emitAgentStreamEvent(ctx, streampkg.EventAgentPolishFailed, streampkg.StatusFailed, id, node, map[string]any{
 					"stage": "polish",
 					"error": compactStreamText(err.Error()),
 				})
@@ -428,13 +428,13 @@ func (r *Runner) fanOutPolish(ctx context.Context, nodes map[string]*Node) (map[
 				mu.Unlock()
 				return
 			}
-			r.emitExecutorStreamEvent(ctx, streampkg.EventExecutorPolishCompleted, streampkg.StatusCompleted, id, node, map[string]any{
+			r.emitAgentStreamEvent(ctx, streampkg.EventAgentPolishCompleted, streampkg.StatusCompleted, id, node, map[string]any{
 				"stage": "polish",
 			})
 			mu.Lock()
 			fragments[id] = frag
 			mu.Unlock()
-		}(id, node, node.Executor)
+		}(id, node, node.Agent)
 	}
 	wg.Wait()
 	if firstErr != nil {
@@ -455,21 +455,21 @@ func (r *Runner) fanOutReport(ctx context.Context, nodes map[string]*Node, outpu
 	)
 	for id, output := range outputs {
 		node := nodes[id]
-		if node == nil || node.Executor == nil {
+		if node == nil || node.Agent == nil {
 			if firstErr == nil {
-				firstErr = fmt.Errorf("report %s: missing executor", id)
+				firstErr = fmt.Errorf("report %s: missing agent", id)
 			}
 			continue
 		}
 		wg.Add(1)
-		go func(id string, node *Node, executor Executor, output any) {
+		go func(id string, node *Node, agent Agent, output any) {
 			defer wg.Done()
-			r.emitExecutorStreamEvent(ctx, streampkg.EventExecutorReportStarted, streampkg.StatusRunning, id, node, map[string]any{
+			r.emitAgentStreamEvent(ctx, streampkg.EventAgentReportStarted, streampkg.StatusRunning, id, node, map[string]any{
 				"stage": "report",
 			})
-			summary, err := executor.Report(ctx, output)
+			summary, err := agent.Report(ctx, output)
 			if err != nil {
-				r.emitExecutorStreamEvent(ctx, streampkg.EventExecutorReportFailed, streampkg.StatusFailed, id, node, map[string]any{
+				r.emitAgentStreamEvent(ctx, streampkg.EventAgentReportFailed, streampkg.StatusFailed, id, node, map[string]any{
 					"stage": "report",
 					"error": compactStreamText(err.Error()),
 				})
@@ -489,13 +489,13 @@ func (r *Runner) fanOutReport(ctx context.Context, nodes map[string]*Node, outpu
 				mu.Unlock()
 				return
 			}
-			r.emitExecutorStreamEvent(ctx, streampkg.EventExecutorReportCompleted, streampkg.StatusCompleted, id, node, map[string]any{
+			r.emitAgentStreamEvent(ctx, streampkg.EventAgentReportCompleted, streampkg.StatusCompleted, id, node, map[string]any{
 				"stage": "report",
 			})
 			mu.Lock()
 			summaries[id] = summary
 			mu.Unlock()
-		}(id, node, node.Executor, output)
+		}(id, node, node.Agent, output)
 	}
 	wg.Wait()
 	if firstErr != nil {

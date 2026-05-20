@@ -12,14 +12,14 @@ import (
 	streampkg "github.com/tsumina/dango/internal/engine/stream"
 )
 
-func cloneExecutorRuntimePaths(in runnerpkg.ExecutorRuntimePaths) runnerpkg.ExecutorRuntimePaths {
+func cloneAgentRuntimePaths(in runnerpkg.AgentRuntimePaths) runnerpkg.AgentRuntimePaths {
 	out := in
 	out.AccessibleDirs = append([]string(nil), in.AccessibleDirs...)
 	return out
 }
 
-func (e *Executor) currentRuntimePaths() runnerpkg.ExecutorRuntimePaths {
-	paths := cloneExecutorRuntimePaths(e.runtimePaths)
+func (e *Agent) currentRuntimePaths() runnerpkg.AgentRuntimePaths {
+	paths := cloneAgentRuntimePaths(e.runtimePaths)
 	if paths.RunnerID == "" {
 		paths.RunnerID = "runner"
 	}
@@ -35,7 +35,7 @@ func (e *Executor) currentRuntimePaths() runnerpkg.ExecutorRuntimePaths {
 	return paths
 }
 
-func (e *Executor) snapshotMemos(stage string, paths runnerpkg.ExecutorRuntimePaths) error {
+func (e *Agent) snapshotMemos(stage string, paths runnerpkg.AgentRuntimePaths) error {
 	if paths.MemoDir == "" || paths.ArchiveMemoDir == "" {
 		return nil
 	}

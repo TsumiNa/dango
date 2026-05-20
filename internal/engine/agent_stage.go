@@ -11,10 +11,10 @@ import (
 
 const defaultExecutionEffort llm.ReasoningEffort = llm.ReasoningEffortMedium
 
-// Execute runs the task. When [Executor.RunE] is set it is invoked directly;
+// Execute runs the task. When [Agent.RunE] is set it is invoked directly;
 // otherwise Execute asks the bound runtime skill for handoff content and writes
 // stage artifacts through the runner workspace channels.
-func (e *Executor) Execute(ctx context.Context, parentOutputs map[string]any) (any, []*runnerpkg.Node, error) {
+func (e *Agent) Execute(ctx context.Context, parentOutputs map[string]any) (any, []*runnerpkg.Node, error) {
 	if ctx != nil {
 		if err := ctx.Err(); err != nil {
 			e.Status = StatusFailed
@@ -51,9 +51,9 @@ func (e *Executor) Execute(ctx context.Context, parentOutputs map[string]any) (a
 }
 
 // Polish satisfies the runner's polish contract. The default implementation
-// refreshes the planner via [Executor.PolishPlan] and returns handoff markdown
+// refreshes the planner via [Agent.PolishPlan] and returns handoff markdown
 // for orchestrator review.
-func (e *Executor) Polish(ctx context.Context) (any, error) {
+func (e *Agent) Polish(ctx context.Context) (any, error) {
 	if ctx != nil {
 		if err := ctx.Err(); err != nil {
 			return nil, err
@@ -72,7 +72,7 @@ func (e *Executor) Polish(ctx context.Context) (any, error) {
 
 // Report satisfies the runner's report contract. The default implementation
 // returns handoff markdown summarizing the execution output.
-func (e *Executor) Report(ctx context.Context, output any) (any, error) {
+func (e *Agent) Report(ctx context.Context, output any) (any, error) {
 	if ctx != nil {
 		if err := ctx.Err(); err != nil {
 			return nil, err
@@ -81,7 +81,7 @@ func (e *Executor) Report(ctx context.Context, output any) (any, error) {
 	return e.runReportStage(ctx, output)
 }
 
-func (e *Executor) runPolishStage(ctx context.Context) (string, error) {
+func (e *Agent) runPolishStage(ctx context.Context) (string, error) {
 	var task, reason, solution string
 	var version uint32
 	if e.planner != nil {
@@ -114,7 +114,7 @@ func (e *Executor) runPolishStage(ctx context.Context) (string, error) {
 	return e.renderStageOutputs("polish", "review", []string{"orchestrator"}, body)
 }
 
-func (e *Executor) runExecuteStage(ctx context.Context, parentOutputs map[string]any) (string, error) {
+func (e *Agent) runExecuteStage(ctx context.Context, parentOutputs map[string]any) (string, error) {
 	task := ""
 	if e.planner != nil {
 		task = e.planner.TaskDescription
@@ -138,7 +138,7 @@ func (e *Executor) runExecuteStage(ctx context.Context, parentOutputs map[string
 	return e.renderStageOutputs("execute", "continue", []string{"downstream"}, body)
 }
 
-func (e *Executor) runReportStage(ctx context.Context, output any) (string, error) {
+func (e *Agent) runReportStage(ctx context.Context, output any) (string, error) {
 	defaultBody := strings.TrimSpace(formatAny(output))
 	runtime, ok, err := e.runnableRuntimeSkill()
 	if err != nil {
@@ -158,7 +158,7 @@ func (e *Executor) runReportStage(ctx context.Context, output any) (string, erro
 	return e.renderStageOutputs("report", "summarize", []string{"orchestrator"}, body)
 }
 
-func (e *Executor) runnableRuntimeSkill() (*llm.Skill, bool, error) {
+func (e *Agent) runnableRuntimeSkill() (*llm.Skill, bool, error) {
 	runtime, err := e.runtimeSkill()
 	if err != nil {
 		return nil, false, err

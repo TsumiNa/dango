@@ -51,7 +51,7 @@ type Config struct {
 
 	// Debug surfaces internal identifiers (node, call_id, runner_id) and other
 	// low-level fields that are normally hidden because they don't help end
-	// users. Layer headers like Executor[node-id] still appear without Debug.
+	// users. Layer headers like Agent[node-id] still appear without Debug.
 	Debug bool
 
 	// MaxText caps long delta fields. Zero uses a conservative default
@@ -95,7 +95,7 @@ type Config struct {
 }
 
 // DefaultConfig returns a compact, deterministic renderer configuration that
-// surfaces orchestrator planning, runner phases, executor stages, skill memos,
+// surfaces orchestrator planning, runner phases, agent stages, skill memos,
 // and LLM reasoning/output deltas. Low-level tool noise is suppressed.
 func DefaultConfig() Config {
 	return Config{
@@ -383,9 +383,9 @@ func knownEventType(eventType string) bool {
 		streampkg.EventStatusStarted, streampkg.EventStatusProgress, streampkg.EventStatusCompleted, streampkg.EventStatusFailed,
 		streampkg.EventRunnerPhaseChanged,
 		streampkg.EventRunnerNodeStarted, streampkg.EventRunnerNodeCompleted, streampkg.EventRunnerNodeFailed,
-		streampkg.EventExecutorPolishStarted, streampkg.EventExecutorPolishCompleted, streampkg.EventExecutorPolishFailed,
-		streampkg.EventExecutorExecuteStarted, streampkg.EventExecutorExecuteCompleted, streampkg.EventExecutorExecuteFailed,
-		streampkg.EventExecutorReportStarted, streampkg.EventExecutorReportCompleted, streampkg.EventExecutorReportFailed,
+		streampkg.EventAgentPolishStarted, streampkg.EventAgentPolishCompleted, streampkg.EventAgentPolishFailed,
+		streampkg.EventAgentExecuteStarted, streampkg.EventAgentExecuteCompleted, streampkg.EventAgentExecuteFailed,
+		streampkg.EventAgentReportStarted, streampkg.EventAgentReportCompleted, streampkg.EventAgentReportFailed,
 		streampkg.EventExchangePublished,
 		streampkg.EventSkillMemoDelta,
 		streampkg.EventArtifactCreated,
@@ -442,10 +442,10 @@ func (r *Renderer) formatKnownEvent(event streampkg.Event, values map[string]any
 		return r.formatRunnerPhase(event, values)
 	case streampkg.EventRunnerNodeStarted, streampkg.EventRunnerNodeCompleted, streampkg.EventRunnerNodeFailed:
 		return r.formatNodeEvent(event, values, strings.TrimPrefix(event.EventType, "runner."))
-	case streampkg.EventExecutorPolishStarted, streampkg.EventExecutorPolishCompleted, streampkg.EventExecutorPolishFailed,
-		streampkg.EventExecutorExecuteStarted, streampkg.EventExecutorExecuteCompleted, streampkg.EventExecutorExecuteFailed,
-		streampkg.EventExecutorReportStarted, streampkg.EventExecutorReportCompleted, streampkg.EventExecutorReportFailed:
-		return r.formatNodeEvent(event, values, strings.TrimPrefix(event.EventType, "executor."))
+	case streampkg.EventAgentPolishStarted, streampkg.EventAgentPolishCompleted, streampkg.EventAgentPolishFailed,
+		streampkg.EventAgentExecuteStarted, streampkg.EventAgentExecuteCompleted, streampkg.EventAgentExecuteFailed,
+		streampkg.EventAgentReportStarted, streampkg.EventAgentReportCompleted, streampkg.EventAgentReportFailed:
+		return r.formatNodeEvent(event, values, strings.TrimPrefix(event.EventType, "agent."))
 	case streampkg.EventExchangePublished:
 		return r.formatExchangePublished(values)
 	case streampkg.EventSkillMemoDelta:
@@ -631,7 +631,7 @@ func (r *Renderer) formatNodeEvent(event streampkg.Event, values map[string]any,
 		r.kv("event", eventName),
 		r.kv("status", string(event.Status)),
 	}
-	// node= duplicates Executor[node-id] for executor-layer events, so we keep
+	// node= duplicates Agent[node-id] for agent-layer events, so we keep
 	// it only for runner-layer events (which header by runner ID) or in debug.
 	if node := nodeID(event, values); node != "" && (r.cfg.Debug || event.From.Layer == "runner") {
 		parts = append(parts, r.kv("node", node))
@@ -942,7 +942,7 @@ func layerColor(layer string) int {
 		return 35 // magenta
 	case "runner":
 		return 36 // cyan
-	case "executor":
+	case "agent":
 		return 34 // blue
 	case "skill":
 		return 32 // green
@@ -960,8 +960,8 @@ func layerName(layer string) (string, string) {
 		return layer, "Orchestrator"
 	case "runner":
 		return layer, "Runner"
-	case "executor":
-		return layer, "Executor"
+	case "agent":
+		return layer, "Agent"
 	case "skill":
 		return layer, "Skill"
 	case "":
@@ -980,7 +980,7 @@ func layerIdentifier(event streampkg.Event) string {
 		return event.From.ID
 	case "runner":
 		return shortRunnerID(event.Scope.RunnerID)
-	case "executor":
+	case "agent":
 		return event.From.ID
 	default:
 		return ""

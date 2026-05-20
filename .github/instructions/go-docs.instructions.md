@@ -48,4 +48,4 @@ Write idiomatic Go documentation for `go doc`, `pkg.go.dev`, and local `pkgsite`
 - Long-form tutorials or architecture notes may live in `docs/`, but API reference should still come from source comments.
 - Optimize comments for rendered output in `go doc` and `pkgsite`. When documentation quality matters, verify how it renders locally.
 
-When documenting a type like `Executor`, the type comment should describe what the type is responsible for, whether its zero value is usable, and any relevant expectations around reuse, lifecycle, or concurrency.
+When documenting a type like `Agent`, the type comment should describe what the type is responsible for, whether its zero value is usable, and any relevant expectations around reuse, lifecycle, or concurrency.

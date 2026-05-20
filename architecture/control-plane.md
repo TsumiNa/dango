@@ -86,7 +86,7 @@ sequenceDiagram
 - 为每个 step 构建 `ExecutionPlanner`
 - 解析 skill registration
 - 在需要时把 `ArtifactsDir` 加到 skill 的 accessible dirs
-- 用 `NewExecutor` 生成和 skill 一对一绑定的 executor
+- 用 `NewAgent` 生成和 skill 一对一绑定的 agent
 
 ## 查询与重放
 

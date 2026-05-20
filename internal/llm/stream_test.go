@@ -101,7 +101,7 @@ func TestNewConversationWritesEventsToCallerOwnedStream(t *testing.T) {
 	cfg := DefaultConversationConfig()
 	cfg.StreamEvents = true
 	cfg.EventStream = owned
-	cfg.StreamSource = streampkg.Source{Layer: "executor", ID: "node-1"}
+	cfg.StreamSource = streampkg.Source{Layer: "agent", ID: "node-1"}
 	conv, err := NewConversation(nil, "sys", nil, cfg)
 	if err != nil {
 		t.Fatalf("NewConversation: %v", err)
@@ -120,8 +120,8 @@ func TestNewConversationWritesEventsToCallerOwnedStream(t *testing.T) {
 	if !ok {
 		t.Fatal("stream closed before event")
 	}
-	if event.From.Layer != "executor" || event.From.ID != "node-1" {
-		t.Fatalf("event source = %+v, want executor node source", event.From)
+	if event.From.Layer != "agent" || event.From.ID != "node-1" {
+		t.Fatalf("event source = %+v, want agent node source", event.From)
 	}
 	if event.Scope.NodeID != "node-1" {
 		t.Fatalf("event scope node = %q, want node-1", event.Scope.NodeID)

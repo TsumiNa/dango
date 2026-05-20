@@ -462,36 +462,36 @@ func hasStoredEvent(records []runnerpkg.RunnerRecord, eventType string, nodeID s
 	return false
 }
 
-func mustNodeExecutor(t *testing.T, node *runnerpkg.Node) *Executor {
+func mustNodeAgent(t *testing.T, node *runnerpkg.Node) *Agent {
 	t.Helper()
-	executor, ok := node.Executor.(*Executor)
-	if !ok || executor == nil {
-		t.Fatalf("node %q executor = %T, want *Executor", node.Id, node.Executor)
+	agent, ok := node.Agent.(*Agent)
+	if !ok || agent == nil {
+		t.Fatalf("node %q agent = %T, want *Agent", node.Id, node.Agent)
 	}
-	return executor
+	return agent
 }
 
-type stubRunnerExecutor struct {
+type stubRunnerAgent struct {
 	polish  func(ctx context.Context) (any, error)
 	execute func(ctx context.Context, parentOutputs map[string]any) (any, []*runnerpkg.Node, error)
 	report  func(ctx context.Context, output any) (any, error)
 }
 
-func (e *stubRunnerExecutor) Polish(ctx context.Context) (any, error) {
+func (e *stubRunnerAgent) Polish(ctx context.Context) (any, error) {
 	if e.polish == nil {
 		return nil, nil
 	}
 	return e.polish(ctx)
 }
 
-func (e *stubRunnerExecutor) Execute(ctx context.Context, parentOutputs map[string]any) (any, []*runnerpkg.Node, error) {
+func (e *stubRunnerAgent) Execute(ctx context.Context, parentOutputs map[string]any) (any, []*runnerpkg.Node, error) {
 	if e.execute == nil {
 		return nil, nil, nil
 	}
 	return e.execute(ctx, parentOutputs)
 }
 
-func (e *stubRunnerExecutor) Report(ctx context.Context, output any) (any, error) {
+func (e *stubRunnerAgent) Report(ctx context.Context, output any) (any, error) {
 	if e.report == nil {
 		return output, nil
 	}

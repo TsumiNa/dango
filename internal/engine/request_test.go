@@ -126,36 +126,36 @@ func TestStartRequest_BuildsRunnerFromPlanAndReturnsID(t *testing.T) {
 	if draft == nil || run == nil {
 		t.Fatalf("expected draft and run nodes to exist, got draft=%v run=%v", draft, run)
 	}
-	draftExecutor := mustNodeExecutor(t, draft)
-	if draftExecutor.Skill().Name != "plan" {
-		t.Fatalf("draft executor skill = %v, want plan", draftExecutor)
+	draftAgent := mustNodeAgent(t, draft)
+	if draftAgent.Skill().Name != "plan" {
+		t.Fatalf("draft agent skill = %v, want plan", draftAgent)
 	}
-	if got := draftExecutor.LLMClient(); got != perSkillClient {
-		t.Fatalf("draft executor LLMClient() = %p, want %p", got, perSkillClient)
+	if got := draftAgent.LLMClient(); got != perSkillClient {
+		t.Fatalf("draft agent LLMClient() = %p, want %p", got, perSkillClient)
 	}
-	runExecutor := mustNodeExecutor(t, run)
-	if runExecutor.Skill().Name != "execute" {
-		t.Fatalf("run executor skill = %v, want execute", runExecutor)
+	runAgent := mustNodeAgent(t, run)
+	if runAgent.Skill().Name != "execute" {
+		t.Fatalf("run agent skill = %v, want execute", runAgent)
 	}
-	if got := runExecutor.LLMClient(); got != executeClient {
-		t.Fatalf("run executor LLMClient() = %p, want %p", got, executeClient)
+	if got := runAgent.LLMClient(); got != executeClient {
+		t.Fatalf("run agent LLMClient() = %p, want %p", got, executeClient)
 	}
 	if len(run.Parents) != 1 || run.Parents[0].Id != "draft" {
 		t.Fatalf("run parents = %+v, want [draft]", run.Parents)
 	}
-	if got := runExecutor.Planner().TaskDescription; got != "Execute the approved outline." {
+	if got := runAgent.Planner().TaskDescription; got != "Execute the approved outline." {
 		t.Errorf("run task description = %q, want %q", got, "Execute the approved outline.")
 	}
-	if got := draftExecutor.Planner().SourceInput; got != "build a report" {
+	if got := draftAgent.Planner().SourceInput; got != "build a report" {
 		t.Errorf("draft source input = %q, want original request", got)
 	}
-	if got := runExecutor.Planner().SourceInput; got != "build a report" {
+	if got := runAgent.Planner().SourceInput; got != "build a report" {
 		t.Errorf("run source input = %q, want original request", got)
 	}
-	if got := runExecutor.Planner().ArtifactsDir; got != artifactsDir {
+	if got := runAgent.Planner().ArtifactsDir; got != artifactsDir {
 		t.Errorf("run artifacts dir = %q, want %q", got, artifactsDir)
 	}
-	if got := runExecutor.Skill().AccessibleDirs(); len(got) != 0 {
+	if got := runAgent.Skill().AccessibleDirs(); len(got) != 0 {
 		t.Fatalf("run skill accessible dirs = %v, want empty before workspace binding", got)
 	}
 
@@ -690,18 +690,18 @@ func TestStartRequest_EmitsRequestStreamEvents(t *testing.T) {
 		sawCreated  bool
 		sawSettled  bool
 		sawNodeDone bool
-		sawExecutor bool
+		sawAgent    bool
 	)
 	readCtx, cancelRead := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancelRead()
-	for !(sawPlanText && sawCreated && sawSettled && sawNodeDone && sawExecutor) {
+	for !(sawPlanText && sawCreated && sawSettled && sawNodeDone && sawAgent) {
 		event, ok, err := sub.Next(readCtx)
 		if err != nil {
 			t.Fatalf("request stream event: %v", err)
 		}
 		if !ok {
-			t.Fatalf("request stream closed before expected events: text=%v created=%v settled=%v nodeDone=%v executor=%v",
-				sawPlanText, sawCreated, sawSettled, sawNodeDone, sawExecutor)
+			t.Fatalf("request stream closed before expected events: text=%v created=%v settled=%v nodeDone=%v agent=%v",
+				sawPlanText, sawCreated, sawSettled, sawNodeDone, sawAgent)
 		}
 		if event.Scope.RequestID != resp.RequestID {
 			t.Fatalf("event scope.request_id = %q, want %q", event.Scope.RequestID, resp.RequestID)
@@ -732,9 +732,9 @@ func TestStartRequest_EmitsRequestStreamEvents(t *testing.T) {
 			if event.Scope.RunnerID == runnerID && event.Scope.NodeID == "only" {
 				sawNodeDone = true
 			}
-		case streampkg.EventExecutorExecuteCompleted:
-			if event.Scope.RunnerID == runnerID && event.Scope.NodeID == "only" && event.From.Layer == "executor" {
-				sawExecutor = true
+		case streampkg.EventAgentExecuteCompleted:
+			if event.Scope.RunnerID == runnerID && event.Scope.NodeID == "only" && event.From.Layer == "agent" {
+				sawAgent = true
 			}
 		}
 	}
@@ -747,9 +747,9 @@ func TestStartRequest_EmitsRequestStreamEvents(t *testing.T) {
 	if err := managedRunner.Wait(waitCtx); err != nil {
 		t.Fatalf("runner Wait: %v", err)
 	}
-	if !sawPlanText || !sawCreated || !sawSettled || !sawNodeDone || !sawExecutor {
-		t.Fatalf("missing stream events: text=%v created=%v settled=%v nodeDone=%v executor=%v",
-			sawPlanText, sawCreated, sawSettled, sawNodeDone, sawExecutor)
+	if !sawPlanText || !sawCreated || !sawSettled || !sawNodeDone || !sawAgent {
+		t.Fatalf("missing stream events: text=%v created=%v settled=%v nodeDone=%v agent=%v",
+			sawPlanText, sawCreated, sawSettled, sawNodeDone, sawAgent)
 	}
 }
 

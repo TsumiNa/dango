@@ -235,11 +235,11 @@ func TestRendererLinksArtifactPaths(t *testing.T) {
 	renderer := New(nil, Config{})
 	line := renderer.FormatEvent(streampkg.Event{
 		EventType: streampkg.EventArtifactCreated,
-		From:      streampkg.Source{Layer: "executor", ID: "node"},
+		From:      streampkg.Source{Layer: "agent", ID: "node"},
 		Status:    streampkg.StatusCompleted,
 		Delta:     json.RawMessage(`{"path":` + string(mustJSONString(t, path)) + `,"resource_type":"file","stage":"execute"}`),
 	})
-	for _, want := range []string{"Executor[node]", "artifact=file://", "plot.png", "type=file", "stage=execute"} {
+	for _, want := range []string{"Agent[node]", "artifact=file://", "plot.png", "type=file", "stage=execute"} {
 		if !strings.Contains(line, want) {
 			t.Fatalf("line missing %q:\n%s", want, line)
 		}

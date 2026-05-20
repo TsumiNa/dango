@@ -40,7 +40,7 @@ func TestReplayDescribeViewBuildsGraphAndArtifacts(t *testing.T) {
 					"task_description": "Write the report",
 					"depends_on":       []string{"plan"},
 				}),
-				logicalEvent(streampkg.EventArtifactCreated, streampkg.Source{Layer: "executor", ID: "report", ParentID: runnerID}, streampkg.StatusCompleted, streampkg.Scope{RunnerID: runnerID, NodeID: "report"}, map[string]any{
+				logicalEvent(streampkg.EventArtifactCreated, streampkg.Source{Layer: "agent", ID: "report", ParentID: runnerID}, streampkg.StatusCompleted, streampkg.Scope{RunnerID: runnerID, NodeID: "report"}, map[string]any{
 					"path":          "/tmp/report.md",
 					"resource_type": "file",
 					"description":   "final report",
@@ -132,7 +132,7 @@ func TestReplayDescribeViewResumesFromCursorWithoutDuplicates(t *testing.T) {
 		requestID: {
 			firstLog.events[requestID][0],
 			rawBundleEvent(requestID, 2,
-				logicalEvent(streampkg.EventArtifactCreated, streampkg.Source{Layer: "executor", ID: "report", ParentID: runnerID}, streampkg.StatusCompleted, streampkg.Scope{RunnerID: runnerID, NodeID: "report"}, map[string]any{
+				logicalEvent(streampkg.EventArtifactCreated, streampkg.Source{Layer: "agent", ID: "report", ParentID: runnerID}, streampkg.StatusCompleted, streampkg.Scope{RunnerID: runnerID, NodeID: "report"}, map[string]any{
 					"path":          "/tmp/resume.md",
 					"resource_type": "file",
 					"description":   "resumed artifact",

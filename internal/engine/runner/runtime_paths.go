@@ -5,9 +5,9 @@ import (
 	"path/filepath"
 )
 
-// ExecutorRuntimePaths is the runner-owned workspace context passed into an
-// executor binding for one node runtime.
-type ExecutorRuntimePaths struct {
+// AgentRuntimePaths is the runner-owned workspace context passed into an
+// agent binding for one node runtime.
+type AgentRuntimePaths struct {
 	RunnerID       string
 	NodeID         string
 	SkillName      string
@@ -20,20 +20,20 @@ type ExecutorRuntimePaths struct {
 	AccessibleDirs []string
 }
 
-// ExecutorRuntimePaths returns the typed runner workspace context for one node.
-func (w *Workspace) ExecutorRuntimePaths(nodeID string, skillName string, accessibleDirs []string) (ExecutorRuntimePaths, error) {
+// AgentRuntimePaths returns the typed runner workspace context for one node.
+func (w *Workspace) AgentRuntimePaths(nodeID string, skillName string, accessibleDirs []string) (AgentRuntimePaths, error) {
 	if w == nil {
-		return ExecutorRuntimePaths{}, fmt.Errorf("runner: workspace is required")
+		return AgentRuntimePaths{}, fmt.Errorf("runner: workspace is required")
 	}
 	sk, ok := w.Skill(nodeID)
 	if !ok {
-		return ExecutorRuntimePaths{}, fmt.Errorf("runner: unknown workspace skill %q", nodeID)
+		return AgentRuntimePaths{}, fmt.Errorf("runner: unknown workspace skill %q", nodeID)
 	}
 	dirs := accessibleDirs
 	if len(dirs) == 0 {
 		dirs = sk.accessibleDirs
 	}
-	return ExecutorRuntimePaths{
+	return AgentRuntimePaths{
 		RunnerID:       w.runnerID,
 		NodeID:         nodeID,
 		SkillName:      skillName,

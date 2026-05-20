@@ -19,7 +19,7 @@ func TestRunnerPersistsEventsAndCancellation(t *testing.T) {
 
 	node := &Node{
 		Id: "persisted",
-		Executor: &testExecutor{
+		Agent: &testAgent{
 			run: func(ctx context.Context, parentOutputs map[string]any) (any, []*Node, error) {
 				return 10, nil, nil
 			},
@@ -78,7 +78,7 @@ func TestRunnerPersistsFailure(t *testing.T) {
 
 	node := &Node{
 		Id: "boom",
-		Executor: &testExecutor{
+		Agent: &testAgent{
 			run: func(ctx context.Context, parentOutputs map[string]any) (any, []*Node, error) {
 				return nil, nil, errors.New("simulated failure")
 			},

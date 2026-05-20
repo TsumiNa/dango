@@ -51,7 +51,7 @@ func TestFilterMatch(t *testing.T) {
 		},
 		{
 			name:   "wrong source",
-			filter: Filter{Sources: []SourceSelector{{Layer: "executor"}}},
+			filter: Filter{Sources: []SourceSelector{{Layer: "agent"}}},
 			want:   false,
 		},
 		{

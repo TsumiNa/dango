@@ -23,8 +23,8 @@ type orchestratorRegistry interface {
 //
 // Only the public surface (skill name + description) is exposed. The
 // orchestrator deliberately cannot read another skill's SKILL.md body or
-// internal tool set; that protects executor privacy and is the architectural
-// reason the polish stage exists — each executor skill elaborates its own
+// internal tool set; that protects agent privacy and is the architectural
+// reason the polish stage exists — each agent skill elaborates its own
 // capability against a concrete assigned task. A future negotiated
 // "detailed_describe" tool can be added if/when the orchestrator needs to
 // solicit elaboration from a specific skill before plan time.

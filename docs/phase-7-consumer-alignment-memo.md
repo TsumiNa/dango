@@ -71,7 +71,7 @@ The renderer is already shaped correctly for the Phase 7 stream model.
 - Its tests cover expanded `merge.bundle` delivery, so bundled runner lifecycle
   events are rendered as logical runner updates instead of raw merge traffic.
 - It already hides low-level tool noise and token usage while surfacing
-  orchestrator planning, reasoning/output, runner phases, executor lifecycle,
+  orchestrator planning, reasoning/output, runner phases, agent lifecycle,
   artifacts, and exchange markdown references.
 
 The renderer should not learn how to open stores, replay persisted logs, show

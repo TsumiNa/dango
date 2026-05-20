@@ -4,13 +4,13 @@ This document is for contributors and maintainers. It covers the current archite
 
 ## Architecture Overview
 
-dango is organized around a request-level orchestrator, runner-owned execution lifecycle, executor-to-skill bindings, stream-based observation, and durable persistence.
+dango is organized around a request-level orchestrator, runner-owned execution lifecycle, agent-to-skill bindings, stream-based observation, and durable persistence.
 
 - The `Orchestrator` receives external requests, keeps the skill registry, runs planning through the built-in orchestrator skill, materializes accepted plans into runners, and exposes live query/subscription APIs.
 - A `Runner` owns one planned task graph. In managed mode it drives plan polish, review, replan, execute, report, and settle phases.
-- An `Executor` is a one-to-one proxy for a single skill runtime inside a runner node. It binds node context, runs polish/execute/report stages, and normalizes stage output into exchange markdown.
+- An `Agent` is a one-to-one proxy for a single skill runtime inside a runner node. It binds node context, runs polish/execute/report stages, and normalizes stage output into exchange markdown.
 - A `Skill` owns its prompt, tool environment, scratch workspace, accessible directories, and LLM conversation.
-- Streams are the runtime communication substrate. Request streams aggregate planning and runner events; runner streams aggregate runner, executor, and skill events.
+- Streams are the runtime communication substrate. Request streams aggregate planning and runner events; runner streams aggregate runner, agent, and skill events.
 - Persistence stores request event logs, runner records, snapshot cursors, and workspace paths so live state can be replayed or audited later.
 
 The detailed architecture notes under `architecture/` are the best starting point for understanding the current engine shape:
@@ -19,14 +19,14 @@ The detailed architecture notes under `architecture/` are the best starting poin
 - `architecture/control-plane.md` describes request intake, planning, runner creation, and describe replay.
 - `architecture/runner-lifecycle.md` describes managed runner phases and state transitions.
 - `architecture/data-plane.md` describes exchange markdown, stream merge, event logs, and runner records.
-- `architecture/orchestrator-executor_interative.md` gives a compact orchestrator/executor interaction view.
+- `architecture/orchestrator-agent_interative.md` gives a compact orchestrator/agent interaction view.
 
 ## Repository Structure
 
 ```text
 main.go                         CLI entrypoint
 cmd/                            Cobra commands; serve is the current API server command
-internal/engine/                request orchestration, planning, executors, queues, describe replay
+internal/engine/                request orchestration, planning, agents, queues, describe replay
 internal/engine/builtin/        embedded orchestrator skill and planning instructions
 internal/engine/runner/         runner lifecycle, task graph execution, exchange documents
 internal/engine/runner/persistence/

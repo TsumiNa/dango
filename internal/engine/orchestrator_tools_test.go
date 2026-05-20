@@ -57,7 +57,7 @@ func TestOrchestratorRegistryToolsExposeOnlyPublicSurface(t *testing.T) {
 		case "list_skills":
 			// allowed
 		default:
-			t.Fatalf("orchestrator must not expose detailed introspection tool %q (privacy boundary protects executor SKILL.md bodies)", tool.Name())
+			t.Fatalf("orchestrator must not expose detailed introspection tool %q (privacy boundary protects agent SKILL.md bodies)", tool.Name())
 		}
 	}
 	out, err := tools[0].Execute(context.Background(), "{}")
@@ -91,7 +91,7 @@ func TestEmbeddedOrchestratorSkillCarriesRegistryAndWorkspaceTools(t *testing.T)
 		}
 	}
 	if names["describe_skill"] {
-		t.Fatal("orchestrator must not expose describe_skill — executor SKILL.md is private to the executor")
+		t.Fatal("orchestrator must not expose describe_skill — agent SKILL.md is private to the agent")
 	}
 }
 

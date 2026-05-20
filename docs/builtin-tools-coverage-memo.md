@@ -33,7 +33,7 @@ it belongs as a tool, as a skill, or outside dango entirely.
 - **Tool.** A single-shot function call. No state across invocations.
   Predictable execution path. Caller bears the cognitive load of when
   and how to chain it.
-- **Skill.** Instructions + an executor AI that holds context across the
+- **Skill.** Instructions + an agent AI that holds context across the
   lifetime of a node, observes upstream handoffs and the current task,
   and dynamically adjusts its execution. Skills can route through the
   orchestrator and consume their own turn.

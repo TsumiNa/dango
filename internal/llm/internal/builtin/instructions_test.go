@@ -8,7 +8,7 @@ import (
 func TestSystemInstructionsTeachAgenticRuntimeWorkflow(t *testing.T) {
 	for _, want := range []string{
 		"Conversation bootstrap order",
-		"Executor lifecycle: polish → execute → report",
+		"Agent lifecycle: polish → execute → report",
 		"workspace channel contract",
 		"`memo/` is private durable scratch",
 		"`upstream/<node>/handoff.md` contains directed upstream input",

@@ -26,7 +26,7 @@ func TestRunner_StaticGraphExecution(t *testing.T) {
 
 	nodeA := &Node{
 		Id: "A",
-		Executor: &testExecutor{
+		Agent: &testAgent{
 			run: func(ctx context.Context, parentOutputs map[string]any) (any, []*Node, error) {
 				return 10, nil, nil
 			},
@@ -36,7 +36,7 @@ func TestRunner_StaticGraphExecution(t *testing.T) {
 	nodeB := &Node{
 		Id:      "B",
 		Parents: []*Node{nodeA},
-		Executor: &testExecutor{
+		Agent: &testAgent{
 			run: func(ctx context.Context, parentOutputs map[string]any) (any, []*Node, error) {
 				val := parentOutputs["A"].(int)
 				return val * 2, nil, nil
@@ -76,11 +76,11 @@ func TestRunner_DynamicNodeAppend(t *testing.T) {
 	var nodeD *Node
 	nodeC := &Node{
 		Id: "C",
-		Executor: &testExecutor{
+		Agent: &testAgent{
 			run: func(ctx context.Context, parentOutputs map[string]any) (any, []*Node, error) {
 				nodeD = &Node{
 					Id: "D",
-					Executor: &testExecutor{
+					Agent: &testAgent{
 						run: func(ctx context.Context, pOuts map[string]any) (any, []*Node, error) {
 							return "dynamic-result", nil, nil
 						},
@@ -120,7 +120,7 @@ func TestRunner_ErrorTermination(t *testing.T) {
 
 	nodeErr := &Node{
 		Id: "Err",
-		Executor: &testExecutor{
+		Agent: &testAgent{
 			run: func(ctx context.Context, parentOutputs map[string]any) (any, []*Node, error) {
 				return nil, nil, fmt.Errorf("simulated failure")
 			},
@@ -130,7 +130,7 @@ func TestRunner_ErrorTermination(t *testing.T) {
 	nodeNever := &Node{
 		Id:      "Never",
 		Parents: []*Node{nodeErr},
-		Executor: &testExecutor{
+		Agent: &testAgent{
 			run: func(ctx context.Context, parentOutputs map[string]any) (any, []*Node, error) {
 				return "should-not-run", nil, nil
 			},
@@ -164,7 +164,7 @@ func TestRunner_StreamAndExternalAppend(t *testing.T) {
 
 	nodeFirst := &Node{
 		Id: "First",
-		Executor: &testExecutor{
+		Agent: &testAgent{
 			run: func(ctx context.Context, pOuts map[string]any) (any, []*Node, error) {
 				return 1, nil, nil
 			},
@@ -178,7 +178,7 @@ func TestRunner_StreamAndExternalAppend(t *testing.T) {
 	nodeExtDynamic := &Node{
 		Id:      "ExtDynamic",
 		Parents: []*Node{nodeFirst},
-		Executor: &testExecutor{
+		Agent: &testAgent{
 			run: func(ctx context.Context, pOuts map[string]any) (any, []*Node, error) {
 				val, _ := pOuts["First"].(int)
 				return val * 10, nil, nil
@@ -201,7 +201,7 @@ func TestRunner_StreamAndExternalAppend(t *testing.T) {
 func TestRunnerSetupPlanSeedsInitialNodes(t *testing.T) {
 	nodeA := &Node{
 		Id: "A",
-		Executor: &testExecutor{
+		Agent: &testAgent{
 			run: func(ctx context.Context, parentOutputs map[string]any) (any, []*Node, error) {
 				return "from-A", nil, nil
 			},

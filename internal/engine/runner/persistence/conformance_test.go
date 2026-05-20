@@ -220,7 +220,7 @@ func newConformanceFixture(t *testing.T) conformanceFixture {
 		},
 		{
 			EventType:      streampkg.EventArtifactCreated,
-			From:           streampkg.Source{Layer: "executor", ID: "ex_node_producer"},
+			From:           streampkg.Source{Layer: "agent", ID: "ex_node_producer"},
 			Status:         streampkg.StatusCompleted,
 			SequenceNumber: 3,
 			LogicalTime:    3,
@@ -240,7 +240,7 @@ func newConformanceFixture(t *testing.T) conformanceFixture {
 		},
 		{
 			EventType:      streampkg.EventMemoSnapshot,
-			From:           streampkg.Source{Layer: "executor", ID: "ex_node_producer"},
+			From:           streampkg.Source{Layer: "agent", ID: "ex_node_producer"},
 			Status:         streampkg.StatusCompleted,
 			SequenceNumber: 4,
 			LogicalTime:    4,

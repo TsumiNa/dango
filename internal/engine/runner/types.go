@@ -6,7 +6,7 @@ import (
 	"time"
 )
 
-// Executor is the execution contract a Node needs across the runner's
+// Agent is the execution contract a Node needs across the runner's
 // phased lifecycle.
 //
 // Execute runs the node's main unit of work. Polish is invoked once during
@@ -17,7 +17,7 @@ import (
 //
 // Implementations should treat ctx cancellation in each method as the
 // signal to abort promptly and return ctx.Err.
-type Executor interface {
+type Agent interface {
 	Execute(ctx context.Context, parentOutputs map[string]any) (output any, newNodes []*Node, err error)
 	Polish(ctx context.Context) (fragment any, err error)
 	Report(ctx context.Context, output any) (summary any, err error)
@@ -122,7 +122,7 @@ type RunnerPhase string
 const (
 	// PhaseCreated is the initial phase of a newly constructed runner.
 	PhaseCreated RunnerPhase = "created"
-	// PhasePolishing is entered while executors concurrently produce their
+	// PhasePolishing is entered while agents concurrently produce their
 	// polish fragments. Not yet used by the engine.
 	PhasePolishing RunnerPhase = "polishing"
 	// PhaseAwaitingReview is entered after polish fragments are collected
@@ -135,7 +135,7 @@ const (
 	// through its event loop.
 	PhaseExecuting RunnerPhase = "executing"
 	// PhaseReport is entered after the DAG settles successfully. The
-	// runner fans [Executor.Report] across every completed node to
+	// runner fans [Agent.Report] across every completed node to
 	// collect per-node summaries before transitioning to [PhaseSettled].
 	PhaseReport RunnerPhase = "report"
 	// PhaseSettled is the terminal phase. A runner reaches PhaseSettled
@@ -151,8 +151,8 @@ type Node struct {
 	SkillName       string  `json:"skill_name,omitempty" yaml:"skill_name,omitempty"`
 	TaskDescription string  `json:"task_description,omitempty" yaml:"task_description,omitempty"`
 	Parents         []*Node `json:"parents,omitempty" yaml:"parents,omitempty"`
-	// Executor contains the execution logic of the node.
-	Executor Executor `json:"-" yaml:"-"`
+	// Agent contains the execution logic of the node.
+	Agent Agent `json:"-" yaml:"-"`
 
 	CreatedAt  time.Time `json:"created_at" yaml:"created_at"`
 	UpdatedAt  time.Time `json:"updated_at" yaml:"updated_at"`

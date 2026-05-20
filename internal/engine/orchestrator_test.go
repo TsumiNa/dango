@@ -630,7 +630,7 @@ func TestStartRunner_ForwardsStreamAndQueryState(t *testing.T) {
 	nodes := map[string]*runnerpkg.Node{
 		"only": {
 			Id: "only",
-			Executor: &stubRunnerExecutor{
+			Agent: &stubRunnerAgent{
 				polish: func(ctx context.Context) (any, error) { return "stream polish", nil },
 				execute: func(ctx context.Context, parentOutputs map[string]any) (any, []*runnerpkg.Node, error) {
 					close(started)

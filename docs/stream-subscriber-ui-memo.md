@@ -12,7 +12,7 @@ The first reusable terminal renderer lives in `internal/streamrender`.
 
 It provides:
 
-- compact one-line rendering for orchestrator, runner, executor, skill, tool,
+- compact one-line rendering for orchestrator, runner, agent, skill, tool,
   artifact, and LLM status events;
 - configurable stream filtering and hidden event types;
 - optional ANSI color;

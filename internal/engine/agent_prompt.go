@@ -11,7 +11,7 @@ import (
 	runnerpkg "github.com/tsumina/dango/internal/engine/runner"
 )
 
-func (e *Executor) executionPrompt(parentOutputs map[string]any) string {
+func (e *Agent) executionPrompt(parentOutputs map[string]any) string {
 	task := ""
 	sourceInput := ""
 	if e.planner != nil {
@@ -26,7 +26,7 @@ func (e *Executor) executionPrompt(parentOutputs map[string]any) string {
 	return prompt
 }
 
-func (e *Executor) polishPrompt() string {
+func (e *Agent) polishPrompt() string {
 	var task, reason, solution string
 	var version uint32
 	if e.planner != nil {
@@ -52,19 +52,19 @@ func (e *Executor) polishPrompt() string {
 	return prompt
 }
 
-func (e *Executor) reportPrompt(output any) string {
-	return appendMarkdownSection(e.stagePrompt("report", "Summarize this executor output."), "Executor output", formatAny(output))
+func (e *Agent) reportPrompt(output any) string {
+	return appendMarkdownSection(e.stagePrompt("report", "Summarize this agent output."), "Agent output", formatAny(output))
 }
 
-func (e *Executor) stagePrompt(stage string, task string) string {
+func (e *Agent) stagePrompt(stage string, task string) string {
 	return e.stagePromptWithUpstreamReferences(stage, task, e.upstreamHandoffReferences())
 }
 
-func (e *Executor) stagePromptWithUpstreamReferences(stage string, task string, upstreamRefs []string) string {
+func (e *Agent) stagePromptWithUpstreamReferences(stage string, task string, upstreamRefs []string) string {
 	note, err := builtininstructions.StageNote(stage)
 	if err != nil {
 		if e.logger != nil {
-			e.logger.Warn("failed to load executor stage note", "stage", stage, "error", err)
+			e.logger.Warn("failed to load agent stage note", "stage", stage, "error", err)
 		}
 		note = "# " + stage + " stage"
 	}
@@ -84,7 +84,7 @@ func (e *Executor) stagePromptWithUpstreamReferences(stage string, task string, 
 	return strings.TrimSpace(b.String())
 }
 
-func (e *Executor) runtimeContextMarkdown(stage string) string {
+func (e *Agent) runtimeContextMarkdown(stage string) string {
 	paths := e.currentRuntimePaths()
 	var b strings.Builder
 	b.WriteString("## Runtime context\n\n")
@@ -120,7 +120,7 @@ func (e *Executor) runtimeContextMarkdown(stage string) string {
 	return strings.TrimSpace(b.String())
 }
 
-func (e *Executor) exchangeReferencesMarkdown(stage string) string {
+func (e *Agent) exchangeReferencesMarkdown(stage string) string {
 	paths := e.currentRuntimePaths()
 	intro := exchangeReferenceInstruction(stage)
 	if paths.ExchangeDir == "" {
@@ -176,7 +176,7 @@ func (e *Executor) exchangeReferencesMarkdown(stage string) string {
 	return strings.TrimSpace(b.String())
 }
 
-func (e *Executor) upstreamHandoffReferencesMarkdown(stage string, refs []string) string {
+func (e *Agent) upstreamHandoffReferencesMarkdown(stage string, refs []string) string {
 	paths := e.currentRuntimePaths()
 	intro := upstreamHandoffReferenceInstruction(stage)
 	if paths.UpstreamDir == "" {
@@ -211,7 +211,7 @@ func upstreamHandoffReferenceInstruction(stage string) string {
 	return "This stage does not allow tool use, so do not inspect directed upstream handoffs during this stage."
 }
 
-func (e *Executor) upstreamHandoffReferences() []string {
+func (e *Agent) upstreamHandoffReferences() []string {
 	paths := e.currentRuntimePaths()
 	if paths.UpstreamDir == "" {
 		return nil
@@ -269,7 +269,7 @@ func appendMarkdownSection(base string, heading string, body string) string {
 	return strings.TrimSpace(b.String())
 }
 
-func (e *Executor) formatParentHandoffs(parentOutputs map[string]any) string {
+func (e *Agent) formatParentHandoffs(parentOutputs map[string]any) string {
 	paths := e.currentRuntimePaths()
 	if paths.UpstreamDir != "" {
 		raw, err := readParentHandoffsFromUpstream(paths.UpstreamDir)

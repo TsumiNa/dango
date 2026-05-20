@@ -481,7 +481,7 @@ func mustWatchRunner(o *orchestrate.Orchestrator, label, id string) func() {
 			streampkg.EventStatusProgress,
 			streampkg.EventStatusFailed,
 		},
-		Prefixes: []string{"runner.", "executor.", "tool."},
+		Prefixes: []string{"runner.", "agent.", "tool."},
 	}
 	sub, err := o.SubscribeRunnerStream(id, filter, streampkg.WithReplayLast(64), streampkg.WithSubscriberBuffer(64))
 	if err != nil {
@@ -533,10 +533,10 @@ func formatDemoStreamEvent(event streampkg.Event) string {
 			dim("event="), colorEvent(eventName),
 			dim("node="), bold(streamNodeID(event, values)),
 			dim("skill="), streamSkillName(event))
-	case streampkg.EventExecutorPolishStarted, streampkg.EventExecutorPolishCompleted, streampkg.EventExecutorPolishFailed,
-		streampkg.EventExecutorExecuteStarted, streampkg.EventExecutorExecuteCompleted, streampkg.EventExecutorExecuteFailed,
-		streampkg.EventExecutorReportStarted, streampkg.EventExecutorReportCompleted, streampkg.EventExecutorReportFailed:
-		eventName := strings.TrimPrefix(event.EventType, "executor.")
+	case streampkg.EventAgentPolishStarted, streampkg.EventAgentPolishCompleted, streampkg.EventAgentPolishFailed,
+		streampkg.EventAgentExecuteStarted, streampkg.EventAgentExecuteCompleted, streampkg.EventAgentExecuteFailed,
+		streampkg.EventAgentReportStarted, streampkg.EventAgentReportCompleted, streampkg.EventAgentReportFailed:
+		eventName := strings.TrimPrefix(event.EventType, "agent.")
 		return fmt.Sprintf("%s%s  %s%s  %s%s  %s%s",
 			dim("status="), colorStreamStatus(event.Status),
 			dim("event="), colorEvent(eventName),

@@ -8,7 +8,7 @@ import runnerpkg "github.com/tsumina/dango/internal/engine/runner"
 // runner package directly.
 type CoarsePlan = runnerpkg.CoarsePlan
 
-// CoarsePlanNode describes one executor-sized unit in a [CoarsePlan].
+// CoarsePlanNode describes one agent-sized unit in a [CoarsePlan].
 type CoarsePlanNode = runnerpkg.CoarsePlanNode
 
 // PlanReview is the planner-owned review decision for a polished plan.

@@ -3,7 +3,7 @@
 Last updated: 2026-05-09
 
 This memo records the current design, completed milestones, and deferred
-follow-ups for the stream refactor across orchestrator, runner, executor,
+follow-ups for the stream refactor across orchestrator, runner, agent,
 skill, and conversation code. It is kept as a coordination note for this branch
 rather than a full changelog.
 
@@ -64,9 +64,9 @@ Important event families today:
   completion, usage snapshots, and terminal LLM errors.
 - `tool.execution.*` for local tool execution lifecycle.
 - `runner.phase.changed` and `runner.node.*` for runner progress.
-- `executor.polish.*`, `executor.execute.*`, and `executor.report.*` for
-  executor phase progress.
-- `artifact.created` for executor-declared resources.
+- `agent.polish.*`, `agent.execute.*`, and `agent.report.*` for
+  agent phase progress.
+- `artifact.created` for agent-declared resources.
 - `exchange.published`, `handoff.emitted`, `handoff.delivered`, and
   `memo.snapshot` for channel-specific routing updates.
 - `skill.memo.delta` for memo sections emitted from skill exchange/report flows.
@@ -97,15 +97,15 @@ planning callback path.
 
 Runner update snapshots are no longer broadcast through `RunnerUpdate` or
 `SubscribeUpdates`. Runners emit compact stream events for phase changes, node
-lifecycle, executor phases, and settle state.
+lifecycle, agent phases, and settle state.
 
 `Runner.Done()` and `Runner.Wait()` are derived from a single internal
 settle-observer subscription to `runner.phase.changed`. Snapshot/query APIs such
 as `Runner.View` and `Runner.GetSnapshot` remain separate by design.
 
-### Executor And Skill
+### Agent And Skill
 
-Executor phases emit stream events for polish, execute, and report lifecycle.
+Agent phases emit stream events for polish, execute, and report lifecycle.
 Runner-created skill conversations receive stream configuration with node and
 skill scope, so model output, tool calls, tool execution, and tool results from
 skill-owned LLM loops flow into the same request stream.
@@ -136,7 +136,7 @@ observability.
 - Runner snapshot broadcast APIs were removed in favor of compact stream events.
 - Runner phase waiting, managed completion, and done/wait signaling now derive
   from replayable stream events.
-- Executor phase events and skill conversation stream configuration were wired
+- Agent phase events and skill conversation stream configuration were wired
   into the request stream.
 - Runner node completion now emits `artifact.created` for resources declared in
   normalized exchange outputs.
@@ -196,7 +196,7 @@ Track richer subscriber and debug UI decisions in
 
 - Update this memo only when a design invariant, major milestone, or deferred
   follow-up changes.
-- Keep `internal/engine/stream` independent of orchestrator, runner, executor,
+- Keep `internal/engine/stream` independent of orchestrator, runner, agent,
   skill, and LLM packages.
 - Do not add terminal formatting logic to the stream core.
 - Do not add new cross-component callback fields, `chan struct{}` signals, or

@@ -16,11 +16,11 @@ Use short kind names unless there is a concrete collision risk. Prefer `exchange
 
 ## Current Problems
 
-### 1. Executor output packaging has unclear ownership
+### 1. Agent output packaging has unclear ownership
 
-`internal/engine/executor_channels.go` currently mixes unrelated responsibilities:
+`internal/engine/agent_channels.go` currently mixes unrelated responsibilities:
 
-- executor stage entrypoints (`polishExchange`, `executeExchange`, `reportExchange`);
+- agent stage entrypoints (`polishExchange`, `executeExchange`, `reportExchange`);
 - built-in prompt rendering and prompt construction;
 - conversion of stage output into `HandoffDoc` and `ExchangeDoc` markdown;
 - filesystem writes to `outbox/handoff.md` and `exchange/*.md`;
@@ -36,11 +36,11 @@ The current PR workaround strips nested `HandoffDoc` front matter inside `exchan
 
 That is the wrong boundary. If an exchange document body is a full handoff document, the upstream caller passed the wrong value. The fix should be at the stage output routing boundary, not by making exchange know about handoff.
 
-### 3. Workspace paths are derived in the executor
+### 3. Workspace paths are derived in the agent
 
-The runner already provisions `Workspace` and `SkillWorkspace` values and can compute each skill's `memo`, `inbox`, `outbox`, `workspace`, and shared `exchange` directories. The executor should not infer these paths by inspecting `accessibleDirs` and walking parent directories.
+The runner already provisions `Workspace` and `SkillWorkspace` values and can compute each skill's `memo`, `inbox`, `outbox`, `workspace`, and shared `exchange` directories. The agent should not infer these paths by inspecting `accessibleDirs` and walking parent directories.
 
-This is brittle because `accessibleDirs` is an access-control/resource list, not a typed runtime context. It also forces executor code to know runner layout details.
+This is brittle because `accessibleDirs` is an access-control/resource list, not a typed runtime context. It also forces agent code to know runner layout details.
 
 The per-skill `workspace/` directory is currently the skill's general working directory: a scratch/project area for temporary files, generated glue code, downloads, and intermediate files that are neither private memo notes nor downstream artifacts. That purpose is valid, but the name is confusing because it nests `workspace/` under an already named runner workspace. Rename it to `scratch/`.
 
@@ -52,11 +52,11 @@ The `inbox/` and `outbox/` names are also generic mailbox terms. They do not des
 
 ### 4. Template-based prompt construction is too late and too entangled
 
-Prompt rendering currently happens in executor stage methods. The prompt data includes workspace/accessibility details that should be part of a runner-provided runtime context at bind time or stage invocation time.
+Prompt rendering currently happens in agent stage methods. The prompt data includes workspace/accessibility details that should be part of a runner-provided runtime context at bind time or stage invocation time.
 
-The bigger issue is that the executor currently assembles a mostly complete LLM request from stage-specific templates and injected handoff/exchange content. That keeps the request shape explicit and may reduce turns, but it also hard-codes one interpretation path for upstream inputs. When parent handoffs vary in structure or when a task needs a longer tool-driven investigation, the fixed template becomes a constraint instead of a runtime aid.
+The bigger issue is that the agent currently assembles a mostly complete LLM request from stage-specific templates and injected handoff/exchange content. That keeps the request shape explicit and may reduce turns, but it also hard-codes one interpretation path for upstream inputs. When parent handoffs vary in structure or when a task needs a longer tool-driven investigation, the fixed template becomes a constraint instead of a runtime aid.
 
-Prompt construction should be separated from message routing. Short term, prompt code should live in a focused executor prompt file. Longer term, the runtime should stop treating built-in prompts as filled request templates and instead provide agentic built-in instructions that teach the skill how Dango works, which tools and workspace channels exist, and how to inspect upstream exchange/handoff context for itself.
+Prompt construction should be separated from message routing. Short term, prompt code should live in a focused agent prompt file. Longer term, the runtime should stop treating built-in prompts as filled request templates and instead provide agentic built-in instructions that teach the skill how Dango works, which tools and workspace channels exist, and how to inspect upstream exchange/handoff context for itself.
 
 ### 4A. Header fields and kind definitions are scattered
 
@@ -86,7 +86,7 @@ This is a real bug, but `streamrender` is slated for a larger independent refact
 
 ### 7. Handoff bodies duplicate large artifact data
 
-The shared executor instructions currently encourage execute-stage handoff bodies to contain structured downstream output and explicitly suggest a fenced JSON block. In the observed Honshu run, the skill had already written `enriched_observations.json` as a handoff artifact and referenced it in front matter, but it also copied the full JSON payload into the handoff body. Because executor stage packaging writes the same stage body into the exchange entry, the canonical exchange file also received a huge duplicated data block.
+The shared agent instructions currently encourage execute-stage handoff bodies to contain structured downstream output and explicitly suggest a fenced JSON block. In the observed Honshu run, the skill had already written `enriched_observations.json` as a handoff artifact and referenced it in front matter, but it also copied the full JSON payload into the handoff body. Because agent stage packaging writes the same stage body into the exchange entry, the canonical exchange file also received a huge duplicated data block.
 
 This violates the channel contract: durable data belongs in `downstream/artifacts`, and handoff bodies should carry concise recipient-facing guidance, schema notes, counts, quality notes, and artifact references. They should not inline large data blocks, long examples, or generated code when those bytes are already stored as artifacts.
 
@@ -99,18 +99,18 @@ The immediate fix should update the shared runtime prompt/instructions to prohib
 The runner should own runtime layout and message routing:
 
 1. Provision one typed workspace context per node.
-2. Bind each executor/skill with that context before execution.
+2. Bind each agent/skill with that context before execution.
 3. Parse upstream documents by front matter `kind`.
 4. Route documents by type:
   - `handoff` -> emit handoff events, resolve artifacts, deliver to successor upstream directories;
   - `exchange` -> publish exchange events and persist/read shared exchange entries;
   - `memo` -> parse archived memo snapshots only, not as downstream handoff input.
 5. Snapshot skill-owned `memo/` files after stage/node boundaries and emit memo snapshot events when snapshots exist.
-6. Own the workspace directory vocabulary and expose typed runtime paths to executors/skills instead of asking them to infer layout.
+6. Own the workspace directory vocabulary and expose typed runtime paths to agents/skills instead of asking them to infer layout.
 
-### Executor responsibilities
+### Agent responsibilities
 
-The executor should be a proxy/sandbox for one skill:
+The agent should be a proxy/sandbox for one skill:
 
 1. Hold a typed runtime context assigned by the runner.
 2. Invoke the bound skill for polish/execute/report stages.
@@ -138,7 +138,7 @@ Define stream/document kinds in one package-level location and use them everywhe
 - `exchange`
 - `handoff`
 - `memo`
-- status/progress event kinds such as runner, executor, tool, and LLM events
+- status/progress event kinds such as runner, agent, tool, and LLM events
 
 Introduce a base message header used by both stream events and markdown channel documents. Field names should stay stable across JSON and YAML where possible. The proposed shape is:
 
@@ -153,9 +153,9 @@ Required on every message:
 
 `source` fields:
 
-- `layer`: one of `orchestrator`, `runner`, `executor`, `skill`, `llm`, or `tool`.
+- `layer`: one of `orchestrator`, `runner`, `agent`, `skill`, `llm`, or `tool`.
 - `id`: stable producer ID within the layer, such as runner ID, node ID, skill name, session ID, model name, or tool name.
-- `parent_id`: optional immediate owner ID, such as a skill's node ID or an executor's runner ID.
+- `parent_id`: optional immediate owner ID, such as a skill's node ID or an agent's runner ID.
 
 `scope` fields:
 
@@ -183,7 +183,7 @@ Specific message types then embed or contain this base header and add only their
 - exchange: title plus markdown body/public document reference.
 - handoff: `to_nodes`, artifact/resource references, body.
 - memo: memo path, snapshot path, body.
-- runner/executor status: phase, node ID, error summary.
+- runner/agent status: phase, node ID, error summary.
 - LLM/tool stream messages: delta payload, tool call IDs, result chunks.
 
 Long content should not be duplicated across metadata and body. Metadata stays compact and indexable; exchange, handoff, memo, reasoning, and tool outputs carry long content in their own message bodies or delta payloads.
@@ -199,7 +199,7 @@ Long content should not be duplicated across metadata and body. Metadata stays c
   - `exchange/*.md` contains exactly one `exchange` envelope;
   - exchange generation does not know about or unwrap handoff documents.
 
-### Phase 2: Introduce typed executor runtime paths
+### Phase 2: Introduce typed agent runtime paths
 
 Add a small typed context owned by the runner, for example:
 
@@ -214,7 +214,7 @@ Add a small typed context owned by the runner, for example:
 - `ArchiveMemoDir`
 - `AccessibleDirs`
 
-Populate it from `runner.Workspace` when binding or before invoking an executor. Stop deriving `runnerID` and archive paths from `accessibleDirs`.
+Populate it from `runner.Workspace` when binding or before invoking an agent. Stop deriving `runnerID` and archive paths from `accessibleDirs`.
 
 Rename directory fields as part of this context migration:
 
@@ -222,7 +222,7 @@ Rename directory fields as part of this context migration:
 - `OutboxDir` -> `DownstreamDir`
 - `WorkingDir` -> `ScratchDir`
 
-For in-progress branch code, update call sites directly instead of adding compatibility wrappers. If preserving old on-disk artifacts matters for existing persisted runs, add an explicit migration/read fallback at the runner persistence boundary rather than leaking old names through the executor API.
+For in-progress branch code, update call sites directly instead of adding compatibility wrappers. If preserving old on-disk artifacts matters for existing persisted runs, add an explicit migration/read fallback at the runner persistence boundary rather than leaking old names through the agent API.
 
 ### Phase 2A: Centralize message kinds and headers
 
@@ -235,20 +235,20 @@ For in-progress branch code, update call sites directly instead of adding compat
 - Keep a deliberate compatibility decision: either reject old kind names after this in-branch refactor, or accept old names only in parsers for reading already persisted artifacts. Do not emit old names.
 - Update tests to assert all emitted markdown documents use the centralized kind constants.
 
-### Phase 3: Split `executor_channels.go`
+### Phase 3: Split `agent_channels.go`
 
 Replace the current catch-all file with focused files:
 
-- `executor_stage.go`: `Polish`, `Execute`, `Report` stage orchestration and calls into runtime skill.
-- `executor_stage_output.go`: stage output normalization and channel document construction.
-- `executor_prompt.go`: prompt renderer setup and `polishPrompt`, `executionPrompt`, `reportPrompt`.
-- `executor_workspace.go`: typed runtime workspace context and memo snapshot helpers, until memo snapshot ownership moves fully to runner.
+- `agent_stage.go`: `Polish`, `Execute`, `Report` stage orchestration and calls into runtime skill.
+- `agent_stage_output.go`: stage output normalization and channel document construction.
+- `agent_prompt.go`: prompt renderer setup and `polishPrompt`, `executionPrompt`, `reportPrompt`.
+- `agent_workspace.go`: typed runtime workspace context and memo snapshot helpers, until memo snapshot ownership moves fully to runner.
 
 Do not add adapter layers for old private function names; update call sites directly.
 
 ### Phase 3A: Replace template-built prompts with agentic built-in instructions
 
-After the executor code is structurally split, refactor the built-in prompt system away from stage-specific template filling and toward markdown instructions that teach runtime behavior.
+After the agent code is structurally split, refactor the built-in prompt system away from stage-specific template filling and toward markdown instructions that teach runtime behavior.
 
 - Stop treating `polish.tmpl`, `execute.tmpl`, and `report.tmpl` as the long-term execution contract. They may remain temporarily during migration, but the target is to remove template-filled stage prompts as the primary way skills receive work.
 - Replace the renderer/template package with versioned markdown built-in instructions and small stage notes that explain:
@@ -258,7 +258,7 @@ After the executor code is structurally split, refactor the built-in prompt syst
   - the workspace channel contract for `memo/`, `upstream/`, `downstream/`, `downstream/artifacts/`, `scratch/`, and `exchange/`;
   - when to inspect upstream handoff/exchange content directly with tools rather than relying on pre-injected summaries;
   - when to create memo files for long call chains, planning, failed attempts, data-quality concerns, and decisions that should survive context loss.
-- Change executor stage invocation so it passes only the minimal stage objective plus stable runtime context. Do not pre-compose a fully interpreted request by copying upstream handoff/exchange content into a fixed template whenever the skill can read the source material itself.
+- Change agent stage invocation so it passes only the minimal stage objective plus stable runtime context. Do not pre-compose a fully interpreted request by copying upstream handoff/exchange content into a fixed template whenever the skill can read the source material itself.
 - Keep the built-in instructions markdown-first and readable as runtime policy docs. Avoid introducing a new structured prompt DSL or another layer of stage-specific Go template data structs as the replacement.
 - Ensure the migration preserves the current tool-access boundary: the skill should inspect only the files and directories that the runner intentionally exposes through runtime context and accessible dirs.
 - Define an explicit conversation bootstrap order for every new skill conversation:
@@ -364,11 +364,11 @@ The example docs and skill prompts still use older wording such as "exchange mar
 - No generated handoff file contains nested exchange front matter.
 - New generated markdown kinds are `exchange`, `handoff`, and `memo` from centralized constants.
 - Runner routing decisions are based on document `kind`.
-- Executor code no longer derives workspace structure from `accessibleDirs`.
+- Agent code no longer derives workspace structure from `accessibleDirs`.
 - Per-skill runtime directories use directional names (`upstream`, `downstream`) and `scratch` instead of nested `workspace`.
 - Stream events and markdown channel documents share a central base header model rather than duplicating ad-hoc header fields.
 - Prompt code, workspace code, stage entrypoints, and document packaging are in separate focused files.
-- Built-in executor instructions are markdown workflow guidance rather than filled prompt templates that pre-interpret upstream handoff/exchange content.
+- Built-in agent instructions are markdown workflow guidance rather than filled prompt templates that pre-interpret upstream handoff/exchange content.
 - Memo snapshots are produced only when skills actually write memo files, and tests cover both memo-present and memo-absent cases.
 - Honshu example artifacts/tests use handoff/exchange/memo terminology consistently.
 - The Honshu example does not create a second outer `artifacts/exchanges` directory for renderer-captured channel markdown.

@@ -66,14 +66,14 @@ func TestProvisionWorkspaceCreatesLayoutAndAccessibleDirs(t *testing.T) {
 	}
 }
 
-func TestWorkspaceExecutorRuntimePathsIncludesTypedDirs(t *testing.T) {
+func TestWorkspaceAgentRuntimePathsIncludesTypedDirs(t *testing.T) {
 	workspace, err := ProvisionWorkspace(t.TempDir(), "runner-1", []string{"alpha"}, defaultWorkspacePathRule)
 	if err != nil {
 		t.Fatalf("ProvisionWorkspace: %v", err)
 	}
-	paths, err := workspace.ExecutorRuntimePaths("alpha", "skill-alpha", nil)
+	paths, err := workspace.AgentRuntimePaths("alpha", "skill-alpha", nil)
 	if err != nil {
-		t.Fatalf("ExecutorRuntimePaths: %v", err)
+		t.Fatalf("AgentRuntimePaths: %v", err)
 	}
 	alpha, ok := workspace.Skill("alpha")
 	if !ok {
