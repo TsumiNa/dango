@@ -83,12 +83,20 @@ is provided by the app/cmd.
 
 ### 0.3 Triage by section
 
-- **Security envelope (§ 2) — partially deferred.** The structural
-  hardening (env scrubbing UX, egress enforcement defaults, resource
-  caps, write-target inspection) is deferred until the app/cmd
-  **alpha-version trigger** described in § 0.5. Several
-  pre-hooks land now under Track F to avoid retrofitting later; see
-  § 2.4.
+The near-term work is scheduled in the `docs/near_term_plan/` folder
+(one file per subtask, numeric filename prefix = execution order). The
+"Track D/E/F" grouping used in earlier drafts is superseded by that
+numbered ordering; the mapping is noted per item below.
+
+- **Security envelope (§ 2) — unified model now, structural hardening
+  later.** A unified tool/MCP/skill security model (availability
+  allow/deny plus `passby` / `need_approve` / `off` execution policy)
+  lands now as the foundation subtasks `docs/near_term_plan/10`–`12`.
+  The opt-in egress allowlist (`30`) and audit/trace instrumentation
+  (`60`) land alongside it. The remaining structural hardening (env
+  scrubbing UX, egress enforcement defaults, resource caps,
+  write-target inspection) is deferred until the app/cmd
+  **alpha-version trigger** in § 0.5. See § 2.4.
 - **Research / autonomous-experiment capabilities (§ 3.1–§ 3.3) —
   served by the four-class architecture above, not Go builtins.** Most
   items are already covered by published MCP servers (web search, paper
@@ -98,19 +106,16 @@ is provided by the app/cmd.
   are skills packaged by the app/cmd, not dango Go builtins. Items
   that would need their own abstract interface without a concrete user
   (e.g., `experiment_log`) are deferred until a real use case shows up.
-- **Go-resident near-term builtin work — Track D.** § 3.4 and § 3.5
-  remain in Go because they are OS-resident, workspace-bounded, and
-  free of language-runtime dependencies. Scheduled under
-  `docs/builtin-tools-near-term-plan.md`.
-- **MCP support — Track E (new).** First-class MCP client wiring is on
-  the near-term track so the four-class architecture is real, not
-  aspirational. See the near-term plan.
-- **Security pre-hooks + instrumentation — Track F (new).** The
-  near-term-doable mitigations (URL-allowlist opt-in interface,
-  `trusted_input` flag, audit-tagging the existing tool-call stream
-  events, trace-data analysis utility) land now so the post-alpha
-  security phase has hooks and evidence to build on. See the near-term
-  plan.
+- **Go-resident near-term builtin work.** § 3.4 and § 3.5 remain in Go
+  because they are OS-resident, workspace-bounded, and free of
+  language-runtime dependencies. Scheduled as
+  `docs/near_term_plan/20`–`22`.
+- **MCP support.** First-class MCP client wiring makes the four-class
+  architecture real. Design-first in `docs/near_term_plan/50`;
+  implementation files are appended once the design lands.
+- **Skill alias and conflict handling.** User-imported skills win on an
+  unaliased name collision, with a warning recommending an alias.
+  Scheduled as `docs/near_term_plan/40`.
 
 ### 0.4 Default vs `BuiltinExtras` rubric
 
@@ -139,7 +144,7 @@ end-to-end at least once**. "Feature-complete" here means: the app/cmd
 can launch, load builtin / external builtin / MCP / packaged-skill
 tool sources, and run a multi-stage orchestrator-driven task to
 completion against real data. Until that trigger event fires, only the
-Track F pre-hooks in § 2.4 apply; the rest stays deferred.
+near-term security work in § 2.4 applies; the rest stays deferred.
 
 ## 1. Inventory snapshot
 
@@ -158,9 +163,10 @@ through the Go tools.
 
 ## 2. Security envelope
 
-**Triage:** Structural hardening is deferred to the post-alpha trigger
-(§ 0.5). The pre-hooks in § 2.4 land now under Track F; everything else
-in § 2.3 stays deferred. § 2.1 and § 2.2 are reference inventory.
+**Triage:** The unified security model and near-term hooks in § 2.4
+land now (`docs/near_term_plan/10`–`12`, `30`, `60`). The remaining
+structural hardening in § 2.3 is deferred to the post-alpha trigger
+(§ 0.5). § 2.1 and § 2.2 are reference inventory.
 
 ### 2.1 What is actually enforced
 
@@ -232,8 +238,8 @@ own PR; do not start before § 0.5 fires):
   interactive opt-in path, and the interactive design is not yet
   scoped.
 - **Egress enforcement default.** Flip the URL allowlist from
-  opt-in (Track F, see § 2.4) to enforced-by-default for autonomous or
-  untrusted-input runs.
+  opt-in (`docs/near_term_plan/30`, see § 2.4) to enforced-by-default
+  for autonomous or untrusted-input runs.
 - **Argument-level write-target inspection.** Extend the AST walker
   used by `checkRedirections` to also inspect the small set of allowed
   commands that take a write path (`tee`, `cp`, `dd`, redirected
@@ -243,34 +249,37 @@ own PR; do not start before § 0.5 fires):
 - **Resource caps.** RLIMIT_AS, RLIMIT_CPU, RLIMIT_NOFILE on the bash
   child process.
 
-### 2.4 Near-term pre-hooks (Track F)
+### 2.4 Near-term security work
 
-These mitigations land now under Track F because each one is either a
-zero-cost interface stub or a self-contained instrumentation
-improvement. None of them changes default behavior; they exist so the
-post-alpha structural work has stable hooks and real data to lean on.
+This work lands now (not deferred) because it is either the foundation
+the whole runtime needs or a self-contained instrumentation
+improvement. The unified model changes how every capability is gated;
+the rest are opt-in or observability-only and do not change default
+behavior.
 
-- **`WithBashURLAllowlist([]string)` opt-in.** Adds the configuration
-  surface and the curl / wget URL extraction logic. Default empty
-  list means "no restriction" so current runs are not affected;
-  callers that set a non-empty list get enforcement immediately. See
-  Track F PR F-1 in `docs/builtin-tools-near-term-plan.md`.
-- **`TrustedInput bool` flag on `SkillConfig`.** A declarative hint
-  that the skill's input may come from an untrusted source. Carries no
-  behavior gate today, but every later mitigation can consult it
-  without breaking-change risk on the config surface. Track F PR F-2.
-- **Audit-tagging the existing tool-call stream events.** Mark
-  `llm.tool_call.started` (and `.completed`) as the canonical audit
-  source via an explicit `category: "audit"` (or equivalent) tag and
-  document the field set the audit phase will rely on. No new event
-  pipeline. Track F PR F-3.
-- **Trace-data analysis utility.** Promote the PR C-3 manual analysis
-  to a small Go program under `tools/`. Each example run can produce
-  bash command-head distribution, captured inner-command bodies of
-  Turing-complete heads (`python -c`, `bash -c`, `xargs <cmd>`,
-  `make`, `awk` system-calls), and a tally per skill class. The
-  structural-hardening phase consumes this dataset directly. Track F
-  PR F-4.
+- **Unified tool/MCP/skill security model** (`docs/near_term_plan/10`–
+  `12`). One abstraction with two axes: availability (allow/deny;
+  builtins always on, extras/MCP/skills opt-controllable) and execution
+  policy (`passby` default / `need_approve` / `off`). Destructive bash
+  command patterns (e.g. `git push`, `git reset --hard`) are seeded as
+  `need_approve` instead of a hard block. The runner snapshots the
+  preset at init and accepts dynamic adjustment during the run.
+  Replaces the earlier `TrustedInput` flag idea: a mounted skill is
+  trusted by default (philosophy: do not push security work onto the
+  user), and skills are governed by the same on/off availability list.
+- **`WithBashURLAllowlist([]string)` opt-in** (`docs/near_term_plan/30`).
+  Adds the config surface and curl/wget URL extraction. Default empty
+  = no restriction; non-empty enforces fail-closed. Decision recorded
+  there: keep `curl` in bash rather than building a constrained Go
+  wrapper.
+- **Audit-tagging the tool-call stream events** (`docs/near_term_plan/60`).
+  Mark `llm.tool_call.started` / `.completed` as the canonical audit
+  source via a stable `category` tag and document the field set in
+  `docs/tool-call-audit-schema.md`.
+- **Trace-analysis utility** (`docs/near_term_plan/60`). Promote the
+  PR C-3 manual analysis to a Go program that reports bash command-head
+  distribution, Turing-complete head inner bodies, per-skill tallies,
+  and curl/wget URL frequencies.
 
 Anything not listed in § 2.4 stays in § 2.3 and waits for the trigger.
 
@@ -282,21 +291,22 @@ verticals that the current set covers only through ad-hoc bash. The
 gaps below are grouped by workflow stage; each one is a candidate, not a
 commitment.
 
-**Triage by track.** § 3.4 and § 3.5 stay on the **Go builtin near-term
-track (Track D)** in `docs/builtin-tools-near-term-plan.md`. § 3.1 and
-§ 3.2 are mostly covered by the published MCP ecosystem (`web_search`,
-paper fetch, etc.); the gap is wiring MCP up, which is **Track E** on
-the same near-term plan, and packaging Python skills (PDF, tabular,
-notebook) which is owned by the embedding app/cmd. § 3.3 is partially
-deferred: items without a concrete use case (`experiment_log`) wait
-for a real workload, and cluster / job-control items wait for trace
-evidence. Each subsection below repeats its track tag for clarity.
+**Triage by destination.** § 3.4 and § 3.5 are Go builtins
+(`docs/near_term_plan/20`–`22`). § 3.1 and § 3.2 are mostly covered by
+the published MCP ecosystem (`web_search`, paper fetch, etc.); the gap
+is wiring MCP up (`docs/near_term_plan/50`) plus packaging Python
+skills (PDF, tabular, notebook) owned by the embedding app/cmd. § 3.3
+is partially deferred: items without a concrete use case
+(`experiment_log`) wait for a real workload, and cluster / job-control
+items wait for trace evidence. Each subsection below repeats its
+destination tag for clarity.
 
 ### 3.1 Source discovery and literature
 
-**Track:** MCP (Track E) for `web_search` and paper fetch; app/cmd
-packaged skill for PDF / HTML extraction; deferred for citation
-formatting until a concrete need surfaces. Rationale: most published
+**Destination:** MCP (`docs/near_term_plan/50`) for `web_search` and
+paper fetch; app/cmd packaged skill for PDF / HTML extraction; deferred
+for citation formatting until a concrete need surfaces. Rationale: most
+published
 MCP servers already return AI-friendly curated results rather than raw
 search-engine pages, response parsing is more ergonomic in Python, and
 documented Python SDKs exist for Tavily / arXiv / Semantic Scholar. We
@@ -368,8 +378,7 @@ shows a recurring bash pain point; flag it then, not now.
 
 ### 3.4 Version control and history
 
-**Track:** Go builtin (Track D). Scheduled under
-`docs/builtin-tools-near-term-plan.md`.
+**Destination:** Go builtin. Scheduled as `docs/near_term_plan/20`.
 
 - **Git.** Not on the default allowlist. Research skills that ingest
   existing repos (read commit history, diff between revisions, blame a
@@ -379,8 +388,9 @@ shows a recurring bash pain point; flag it then, not now.
 
 ### 3.5 Structured artifact handling
 
-**Track:** Go builtin (Track D). Scheduled under
-`docs/builtin-tools-near-term-plan.md`.
+**Destination:** Go builtin. Scheduled as `docs/near_term_plan/21`
+(`artifact_catalog`) and `docs/near_term_plan/22`
+(`structured_preview`).
 
 - **Artifact catalog.** A first-class read of the per-task
   `downstream/artifacts/` directory + the handoff front-matter
@@ -393,44 +403,46 @@ shows a recurring bash pain point; flag it then, not now.
 
 ## 4. Suggested sequencing
 
-Updated 2026-05-19 to reflect the § 0 triage.
+The detailed, ordered breakdown lives in `docs/near_term_plan/`
+(numeric filename prefix = execution order). At a glance:
 
-Near-term tracks (all scheduled under
-`docs/builtin-tools-near-term-plan.md`, can run in parallel):
+Near-term (now):
 
-1. **Track D — VCS and artifact handling.** Go builtin work for § 3.4
-   and § 3.5. Small, self-contained PRs.
-2. **Track E — MCP support.** Wire dango as an MCP client so the four-
-   class architecture in § 0.2 becomes real. Unblocks the § 3.1
-   `web_search` / paper-fetch capabilities by consuming published MCP
-   servers.
-3. **Track F — Security pre-hooks and instrumentation.** The four
-   pre-hooks in § 2.4: `WithBashURLAllowlist` opt-in, `TrustedInput`
-   flag, audit tagging on tool-call events, trace-analysis utility.
+1. **Security model foundation** — `docs/near_term_plan/10`–`12`.
+   Lands first because it reshapes the tool-config surface every later
+   subtask registers into.
+2. **Go builtins** — `20` (`git`), `21` (`artifact_catalog`), `22`
+   (`structured_preview`).
+3. **Bash egress opt-in** — `30` (curl/wget URL allowlist).
+4. **Skill alias / conflict** — `40`.
+5. **MCP support** — `50` design, implementation files appended after.
+6. **Instrumentation** — `60` (audit tag + trace analyzer).
 
 App/cmd cycle (separate plan, not owned by this memo):
 
-4. **App/cmd alpha.** Designs the packaged-skill loader, the MCP
+7. **App/cmd alpha.** Designs the packaged-skill loader, wires the MCP
    server config surface, and ships the first dango-official packaged
-   skills (PDF / tabular / notebook). The completion of this milestone
-   is the trigger for § 0.5.
+   skills (PDF / tabular / notebook). Completing this milestone is the
+   § 0.5 trigger.
 
 Post-alpha:
 
-5. **Structural security hardening.** Open the § 2.3 mitigations one
-   PR at a time, leaning on the audit data and trace dataset that
-   Track F produced.
+8. **Structural security hardening.** Open the § 2.3 mitigations one
+   PR at a time, leaning on the audit data and trace dataset that the
+   `60` instrumentation produced.
 
 ## 5. Out of scope of this memo
 
 - No new tool is being added by PR C-6 or by this memo.
 - No allowlist change is being made; the listed candidates are pointers,
-  not decisions. The near-term plan owns the actual PR specs for
-  Tracks D, E, and F.
+  not decisions. The `docs/near_term_plan/` folder owns the actual
+  subtask specs.
 - No commitment to a specific app/cmd design. That belongs with the
   app/cmd cycle when packaged-skill selection and MCP server config
   shape are scoped.
-- No structural security mitigation is being scheduled yet; that phase
-  begins after the § 0.5 alpha trigger and is tracked separately when
-  it opens. The Track F pre-hooks are *not* structural mitigations —
-  they are stable hooks the structural phase will lean on.
+- No structural security mitigation in § 2.3 is being scheduled yet;
+  that phase begins after the § 0.5 alpha trigger. The near-term
+  security work in § 2.4 (the unified model, the opt-in URL allowlist,
+  instrumentation) is *not* structural hardening — it is the
+  foundation and the stable hooks that the structural phase will lean
+  on.
