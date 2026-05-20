@@ -1,8 +1,8 @@
-# 11 — Builtin Extras Enum + Tool Config Contract (code)
+# 11 — Builtin Extras Enum + Tool Config Reshape (code)
 
 Kind: code. Foundation. Implements the availability axis from `10`,
-defines the tool-config contract every other subtask registers
-through, and reshapes the tool-assembly surface.
+reshapes the tool-config surface other subtasks register through, and
+sketches (not freezes) that surface's shape.
 
 **Prerequisite.** `10` design accepted.
 
@@ -20,12 +20,15 @@ re-register `21`/`22`'s tools and `20`'s git allowlist entry through the
 new config in the same PR, so there is exactly one reshape, not a
 trickle of churn.
 
-## Config-struct contract sketch
+## Config-struct sketch (direction, not a frozen contract)
 
-This is the contract the whole near-term plan depends on, so pin its
-shape here (names are provisional; finalize in code review). It must
-hold availability now and have a clean slot for `12a`'s policy without
-another call-site churn.
+This is a *direction*, not a contract to nail before coding. Solo
+development with no reference system means the real shape emerges from
+wave-1 code; expect this to change. The only durable goal: when `12a`
+adds policy fields, it should be an additive change to one struct, not
+a new parameter on `Tools(...)`. The exact field names and types are
+settled in code, after `20`–`22`/`30` reveal what the registration
+surface actually needs.
 
 ```go
 // ToolSetConfig is the single input that determines which capabilities
@@ -47,8 +50,8 @@ type ToolSetConfig struct {
 }
 ```
 
-The key requirement: adding the `12a` policy fields must be an additive
-change to this struct, not a new parameter on `Tools(...)`.
+Treat the block above as illustrative. The durable intent is the
+additive-extension property; the literal fields are provisional.
 
 ## Scope
 

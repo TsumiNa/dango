@@ -156,15 +156,17 @@ merges clean. None depends on the security model.
 **Wave 2 — security foundation (in parallel).**
 
 5. **`10`** (design) → **`11`** (extras enum + tool-config reshape;
-   includes the config-struct contract sketch) → **`12a`** (policy
+   includes a provisional config-struct sketch) → **`12a`** (policy
    data model + `passby`/`off` enforcement + command-pattern
    classification + runner snapshot/adjust). When `11`/`12a` land, a
    small retrofit re-registers wave-1 tools through the new config and
-   upgrades `git` destructive subcommands and the URL allowlist to the
-   policy layer.
-6. **`12b`** — approval round-trip (`need_approve` suspend/event/wait).
+   *records* the `git` destructive patterns as `need_approve` (inert
+   until `12b`).
+6. **`12b`** — approval round-trip (`need_approve` suspend/event/wait),
+   the only thing that turns `need_approve` into real protection.
    **Deferred** until an interactive approver exists (app/cmd cycle);
-   there is no consumer for it before then.
+   there is no consumer for it before then. Decision (b): until `12b`,
+   destructive commands have no runtime gate, only prompt guidance.
 
 **Independent (any time).**
 
@@ -197,6 +199,29 @@ merges clean. None depends on the security model.
 | `90-closeout.md` | Memo closeout | docs | all |
 
 Retrofit (after `11`/`12a`): re-register `20`–`22` through the new
-config; gate `git push` / `reset --hard` / `clean` / `rebase` as
-`need_approve` command patterns; route unlisted URLs in `30` through
-the policy layer.
+config; *record* `git push` / `reset --hard` / `clean` / `rebase` as
+`need_approve` command patterns (inert until `12b`). The `30` URL
+allowlist keeps rejecting unlisted URLs; the softer `need_approve` path
+waits for `12b`.
+
+## Where to start (开工顺序)
+
+Solo development with no reference system: do not try to nail every
+core API and struct up front. Let the first real PR teach the
+interfaces.
+
+1. **Start with `20`** (add `git` to the allowlist). It is roughly a
+   half-day, zero-dependency change and the cheapest real signal that
+   the plan holds. Ship it, get Go tests green.
+2. **Draft `10` in parallel** as a design, but do **not** let the `10`
+   design review block `20` or the rest of wave 1.
+3. **Let wave-1 learnings settle `11`'s config struct.** The struct
+   sketch in `11` is a direction, not a contract; finalize it in code
+   once `20`–`22`/`30` have shown what the registration surface
+   actually needs. Expect it to change.
+4. **Then `11` → `12a`**, doing the wave-1 retrofit in `11`.
+5. `40`, `60` whenever convenient; `50` design when ready; `12b` and
+   the structural security phase only when their consumers exist.
+
+This order is value-first and learning-first: real code before frozen
+abstractions.

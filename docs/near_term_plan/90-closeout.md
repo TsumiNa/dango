@@ -37,10 +37,10 @@ allowlist enforced. This is pass/fail.
 with the new capabilities active — `git` available, an MCP server
 mounted, the security policy in effect — and observe whether the
 composite behavior matches user intuition: is MCP activity surfaced at
-the right level, does the `12a` `need_approve` interim signal read as
-useful or noisy, do the new tool outputs help. Record adjustment
-opinions and feed them back into the relevant subtask files. Honshu
-does not pass or fail this closeout; it tunes it.
+the right level, do the new tool outputs help, is anything that should
+be visible hidden (or vice versa). Record adjustment opinions and feed
+them back into the relevant subtask files. Honshu does not pass or fail
+this closeout; it tunes it.
 
 ## Verifiable acceptance
 

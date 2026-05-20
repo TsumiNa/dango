@@ -76,8 +76,10 @@ Examples seeded by later subtasks:
 - `git rebase` → `need_approve`
 
 The bash tool consults this list after the existing allowlist and
-redirection checks. A match of `need_approve` triggers the same
-approval flow as a tool-level `need_approve`. No match → `passby`.
+redirection checks. In the full model a match of `need_approve`
+triggers the approval flow; **in the near term (`12a`, decision (b)) a
+`need_approve` match is recorded but runs through unchanged** — there
+is no gate until `12b`. No match → `passby`.
 
 ## Runner snapshot and dynamic adjustment
 
@@ -115,11 +117,12 @@ headless run:
 - A denied call returns a typed error the model can react to.
 
 This round-trip has no consumer until an interactive approver exists,
-so it is deferred to `12b`. Until then, `12a` only *classifies*
-`need_approve` and applies a documented interim behavior. Honshu
-observation from `12a` is the primary input for the eventual approval
-UX (which operations truly warrant a pause, how the prompt should
-read).
+so it is deferred to `12b`. Until then (decision (b)), `12a` only
+*records* the `need_approve` classification and lets the call run —
+there is no protection in the interim, and the plan does not pretend
+otherwise. Honshu observation at `12b` is the primary input for the
+approval UX (which operations truly warrant a pause, how the prompt
+should read).
 
 ## Open questions (resolve during `11`/`12a`, not now)
 
@@ -127,8 +130,8 @@ read).
   config-struct sketch lands in `11`).
 - Whether per-MCP-tool availability is needed in v1 or per-server is
   enough.
-- The `12a` interim behavior for `need_approve` (run-and-note vs hold)
-  and, later in `12b`, the headless default and timeout.
+- The `12b` headless default and timeout for `need_approve`. (The
+  `12a` interim is settled: it runs through, no gate — decision (b).)
 - Whether skill on/off lives in app/cmd config, `SkillConfig`, or both.
 
 ## Verifiable acceptance

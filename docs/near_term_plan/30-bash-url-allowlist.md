@@ -12,9 +12,10 @@ We do **not** replace them with a narrow Go-implemented fetch tool.
 
 Rationale:
 
-- Egress risk is already controllable through the `12a` policy layer
-  (set `curl` to `need_approve` in untrusted contexts) plus this opt-in
-  URL allowlist. We do not need to cripple the tool to manage risk.
+- Egress risk is controllable without crippling the tool: the opt-in
+  URL allowlist (this subtask) plus the `off` policy now, and the
+  `need_approve` gate once `12b` lands. A Go wrapper would manage risk
+  by amputation instead.
 - A Go wrapper permanently lags curl's real surface (auth, headers,
   retries, multipart, resume) and discards the model's existing
   fluency with curl, which contradicts the dango philosophy of
@@ -55,12 +56,14 @@ behavior unchanged.
 - `TestBashURLAllowlistRejectsConfigFileForm` (`curl -K cfg`).
 - `TestBashURLAllowlistAppliesToWget`.
 
-## Retrofit (after `12a`)
+## Retrofit (after `12b`, not `12a`)
 
-Once the policy layer exists, an unlisted URL can resolve to the policy
-layer (e.g. `need_approve`) instead of an outright reject, so the user
-can wave through a one-off URL rather than editing config. Wave 1 only
-rejects; this retrofit wires the softer path.
+A softer path — an unlisted URL resolving to `need_approve` so the user
+can wave through a one-off rather than editing config — requires a real
+approval gate, which only exists once `12b` ships. Until then the
+wave-1 behavior stands: a non-empty allowlist rejects unlisted URLs
+outright. Do not wire a `need_approve` URL path against `12a`, because
+`12a` does not gate (decision (b)) and it would silently pass.
 
 ## Out of scope
 
@@ -71,9 +74,8 @@ rejects; this retrofit wires the softer path.
 
 The allowlist only changes user-facing behavior when set non-empty
 (default is unchanged). When exercised, observe via honshu whether a
-blocked URL produces an error the model can recover from gracefully, or
-a dead end — this informs the `12a` retrofit (reject vs `need_approve`).
-Record adjustments. UX signal, not a gate.
+blocked URL produces an error the model can recover from gracefully or
+a dead end. Record adjustments. UX signal, not a gate.
 
 ## Verifiable acceptance
 

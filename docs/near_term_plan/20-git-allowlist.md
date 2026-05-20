@@ -32,30 +32,42 @@ them is a retrofit once `12a` lands.
 - `TestBashRejectsGitOutsideWorkspaceTarget` — `git log > /tmp/escape`
   still rejected by the PR C-1 redirection check.
 
-## Retrofit (after `12a`)
+## No runtime protection for destructive git (decision (b))
+
+In the near term there is **no runtime gate** on destructive git
+subcommands. `git push`, `git reset --hard`, `git clean`, `git rebase`,
+`git gc` run if the model invokes them. The only deterrent is
+prompt-level guidance in `system_instructions.md`. This is acceptable
+for the pre-alpha, trusted-developer setting; the plan does not pretend
+otherwise (see `12a` "Honesty about the interim").
+
+Real gating arrives only with `12b`'s approval round-trip, which is
+deferred until an approver exists. If a destructive subcommand must be
+hard-blocked before then, set it to `off` via the `12a` policy layer —
+do not rely on `need_approve`, which does not gate until `12b`.
+
+## Retrofit (after `12a`, groundwork only)
 
 Seed the bash command-pattern policy list with `need_approve` for
 `git push`, `git reset --hard`, `git clean`, `git rebase`, `git gc`.
-Add `TestBashGitPushClassifiedNeedApprove`. Update
-`system_instructions.md` to state these pause/are-marked per the `12a`
-interim behavior.
+This is inert classification that `12b` will later consume; it does not
+protect anything on its own. Add `TestBashGitPushClassifiedNeedApprove`
+asserting the pattern is recorded (and still runs, per `12a`). Do
+**not** add wording that implies these pause or are blocked.
 
 ## Out of scope
 
 - No `git_*` wrapper tool.
 - No subcommand allowlist beyond the eventual `need_approve` patterns.
 
-## Honshu observation (at retrofit)
+## Honshu observation
 
-When the `need_approve` classification lands, honshu is the signal for
-whether the destructive-git pattern set is the right one — too broad
-(annoying), too narrow (surprising). Record adjustments. The wave-1
-allowlist-only step has no user-facing behavior change and needs no
-honshu observation.
+The wave-1 allowlist-only step has no user-facing behavior change and
+needs no honshu observation. (Destructive-git UX is a `12b` concern.)
 
 ## Verifiable acceptance
 
 - Wave 1: new and existing tests pass; `go test ./...` green; non-git
   skills see no change.
-- Retrofit: the git destructive patterns are classified by the `12a`
-  policy layer and covered by a test.
+- Retrofit: the git destructive patterns are recorded by the `12a`
+  policy layer (and still execute) and covered by a test.
