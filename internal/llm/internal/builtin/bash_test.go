@@ -350,3 +350,70 @@ func TestBashAllowlistAllowsEnvPrefix(t *testing.T) {
 		t.Errorf("env-prefixed echo output = %q", out)
 	}
 }
+
+// TestBashAllowsGitVersion confirms that "git" is on the allowlist and that
+// `git --version` runs successfully through the bash tool.
+func TestBashAllowsGitVersion(t *testing.T) {
+	tool := newBash(testWorkspace{t.TempDir()})
+	args, _ := json.Marshal(map[string]any{"command": "git --version"})
+	out, err := tool.Execute(context.Background(), string(args))
+	if err != nil {
+		t.Fatalf("git --version: %v", err)
+	}
+	if !strings.Contains(out, "git") {
+		t.Errorf("unexpected output from git --version: %q", out)
+	}
+}
+
+// TestBashAllowsGitLogInsideWorkspace initialises a bare git repo in the
+// workspace, commits a file, and verifies that
+// `git -C <root> log -1 --format=%s` returns the commit subject.
+func TestBashAllowsGitLogInsideWorkspace(t *testing.T) {
+	root := t.TempDir()
+	ws := testWorkspace{root}
+
+	// Set up a minimal git repo inside the workspace.
+	setup := []string{
+		"git init " + root,
+		"git -C " + root + " config user.email test@example.com",
+		"git -C " + root + " config user.name Test",
+		"touch " + filepath.Join(root, "file.txt"),
+		"git -C " + root + " add file.txt",
+		"git -C " + root + " commit -m 'initial commit'",
+	}
+	for _, cmd := range setup {
+		tool := newBash(ws, withoutAllowlist())
+		if _, err := tool.Execute(context.Background(), `{"command": "`+cmd+`"}`); err != nil {
+			t.Fatalf("setup %q: %v", cmd, err)
+		}
+	}
+
+	// Now use the default allowlist tool to run git log.
+	tool := newBash(ws)
+	args, _ := json.Marshal(map[string]any{
+		"command": "git -C " + root + " log -1 --format=%s",
+	})
+	out, err := tool.Execute(context.Background(), string(args))
+	if err != nil {
+		t.Fatalf("git log: %v", err)
+	}
+	if !strings.Contains(out, "initial commit") {
+		t.Errorf("git log output = %q, want it to contain %q", out, "initial commit")
+	}
+}
+
+// TestBashRejectsGitOutsideWorkspaceTarget confirms that the PR C-1 redirection
+// check still blocks git output redirected to a path outside the workspace.
+func TestBashRejectsGitOutsideWorkspaceTarget(t *testing.T) {
+	tool := newBash(testWorkspace{t.TempDir()})
+	args, _ := json.Marshal(map[string]any{
+		"command": "git log > /tmp/escape",
+	})
+	_, err := tool.Execute(context.Background(), string(args))
+	if err == nil {
+		t.Fatal("expected redirection escape rejection for git log > /tmp/escape")
+	}
+	if !strings.Contains(err.Error(), "redirection target") {
+		t.Errorf("expected redirection error, got %v", err)
+	}
+}
