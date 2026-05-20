@@ -33,4 +33,6 @@ var defaultAllowlist = []string{
 	"jupyter",
 	// Shell recursion is allowed so scripts and one-liners work.
 	"bash", "sh",
+	// Version control.
+	"git",
 }

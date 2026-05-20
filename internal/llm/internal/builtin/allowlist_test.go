@@ -24,6 +24,17 @@ func TestDefaultAllowlistExcludesDestructive(t *testing.T) {
 	}
 }
 
+// TestDefaultAllowlistIncludesGit confirms that "git" is present in
+// defaultAllowlist so that skills can run read-oriented git inspection.
+func TestDefaultAllowlistIncludesGit(t *testing.T) {
+	for _, n := range defaultAllowlist {
+		if n == "git" {
+			return
+		}
+	}
+	t.Error("defaultAllowlist does not contain \"git\"")
+}
+
 // TestDefaultAllowlistHasNoDuplicates ensures the list stays a clean set;
 // duplicates usually signal a merge mistake.
 func TestDefaultAllowlistHasNoDuplicates(t *testing.T) {

@@ -92,7 +92,11 @@ and `file_excerpt`. Use the lightest tool that gets the job done.
   be static and resolve inside the workspace; argument-level write targets (for
   example `tee /etc/foo`) are not validated. Prefer `write_file` / `edit_file`
   for non-trivial inside-workspace writes. Pass multi-line input via heredoc
-  (`<<'TAG'`) when needed.
+  (`<<'TAG'`) when needed. `git` is allowed; use read-oriented subcommands
+  (`log`, `diff`, `show`, `blame`, `status`, `rev-parse`) for inspection tasks.
+  Destructive subcommands (`git push`, `git reset --hard`, `git clean`,
+  `git rebase`, `git gc`) are reachable but should be avoided unless the task
+  explicitly calls for them.
 - **read_file** / **write_file** / **edit_file** — text I/O. Prefer these over
   `cat`, `echo`, or `sed` for clarity.
 - **delete_file** / **move_file** — only when the task requires it.
