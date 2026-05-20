@@ -10,7 +10,7 @@ import (
 	"sort"
 	"strings"
 
-	"gopkg.in/yaml.v3"
+	"github.com/adrg/frontmatter"
 )
 
 const (
@@ -171,21 +171,17 @@ func buildArtifactCatalogRows(artifactDir string, basePath string, handoffPath s
 }
 
 func loadHandoffArtifacts(handoffPath string) (map[string]handoffArtifact, error) {
-	data, err := os.ReadFile(handoffPath)
+	file, err := os.Open(handoffPath)
 	if err != nil {
 		if os.IsNotExist(err) {
 			return map[string]handoffArtifact{}, nil
 		}
 		return nil, err
 	}
-
-	frontMatter, ok := extractFrontMatter(string(data))
-	if !ok {
-		return map[string]handoffArtifact{}, nil
-	}
+	defer file.Close()
 
 	var meta handoffFrontMatter
-	if err := yaml.Unmarshal([]byte(frontMatter), &meta); err != nil {
+	if _, err := frontmatter.Parse(file, &meta); err != nil {
 		return nil, fmt.Errorf("parse %q front matter: %w", handoffPath, err)
 	}
 
@@ -199,21 +195,6 @@ func loadHandoffArtifacts(handoffPath string) (map[string]handoffArtifact, error
 		manifest[normalized] = artifact
 	}
 	return manifest, nil
-}
-
-func extractFrontMatter(raw string) (string, bool) {
-	if strings.HasPrefix(raw, "---\r\n") {
-		raw = strings.Replace(raw, "\r\n", "\n", -1)
-	}
-	if !strings.HasPrefix(raw, "---\n") {
-		return "", false
-	}
-	rest := raw[len("---\n"):]
-	idx := strings.Index(rest, "\n---\n")
-	if idx < 0 {
-		return "", false
-	}
-	return rest[:idx], true
 }
 
 func renderArtifactCatalog(rows []artifactCatalogRow, maxEntries int) string {

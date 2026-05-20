@@ -99,6 +99,26 @@ func TestArtifactCatalogMissingHandoffIsSilent(t *testing.T) {
 	}
 }
 
+func TestArtifactCatalogParsesHandoffFrontMatterAtEOF(t *testing.T) {
+	root := t.TempDir()
+	writeArtifactCatalogFile(t, filepath.Join(root, "downstream", "artifacts", "report.txt"), "hello")
+	writeArtifactCatalogHandoff(t, root, `---
+artifacts:
+  - path: downstream/artifacts/report.txt
+    type: markdown
+    description: Summary report
+---`)
+
+	tool := newArtifactCatalog(testWorkspace{root})
+	out, err := tool.Execute(context.Background(), `{}`)
+	if err != nil {
+		t.Fatalf("artifact_catalog: %v", err)
+	}
+	if !strings.Contains(out, "| downstream/artifacts/report.txt | file | 5 | markdown | Summary report | listed |") {
+		t.Fatalf("artifact_catalog output = %q, want listed row parsed from EOF front matter", out)
+	}
+}
+
 func TestArtifactCatalogMissingDirectoryReturnsError(t *testing.T) {
 	root := t.TempDir()
 	tool := newArtifactCatalog(testWorkspace{root})
