@@ -85,7 +85,8 @@ misplanned. Say so in your handoff and stop rather than trying to escape.
 
 Every skill has the same baseline tool set: `bash`, `read_file`, `write_file`,
 `edit_file`, `delete_file`, `move_file`, `grep`, `pipeline_search_replace`,
-and `file_excerpt`. Use the lightest tool that gets the job done.
+`file_excerpt`, and `artifact_catalog`. Use the lightest tool that gets the
+job done.
 
 - **bash** — shell commands. Working directory is the temp playground; reach the
   source workspace or accessible dirs by absolute path. Redirection targets must
@@ -107,6 +108,10 @@ and `file_excerpt`. Use the lightest tool that gets the job done.
 - **file_excerpt** — ResolvePath-bounded excerpt equivalent to
   `grep -A N -B M path`; use it to return matching regions without reading a
   whole file.
+- **artifact_catalog** — Summarize `downstream/artifacts/` in one call by
+  merging on-disk entries with `downstream/handoff.md` front matter so you can
+  inspect artifact paths, kinds, descriptions, and missing/unlisted status
+  without chaining directory listing and YAML parsing.
 - **list_dir** / **pwd** — optional extras. They are available only when the
   host skill opts in via `BuiltinExtras`; otherwise use `ls` or `pwd` through
   `bash` when needed. The workspace bootstrap block already names relevant
