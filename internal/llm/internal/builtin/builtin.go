@@ -88,8 +88,8 @@ func withoutAllowlist() option {
 
 // Tools returns the default set of filesystem and shell tools scoped to ws,
 // in the order an agent sees them: bash first, then read/write/edit helpers,
-// delete/move, grep, pipeline_search_replace, file_excerpt, and
-// artifact_catalog. Tool names in extras append opt-in built-ins such as
+// delete/move, grep, pipeline_search_replace, file_excerpt, artifact_catalog,
+// and structured_preview. Tool names in extras append opt-in built-ins such as
 // list_dir and pwd in caller order.
 //
 // bashAllow is added to the default bash allowlist, and bashBlock is removed
@@ -124,6 +124,7 @@ func coreTools(ws workspace, cfg *config) []tool {
 		newPipelineSearchReplace(ws),
 		newFileExcerpt(ws),
 		newArtifactCatalog(ws),
+		newStructuredPreview(ws),
 	}
 }
 
