@@ -60,6 +60,14 @@ produces the dataset the post-alpha hardening phase needs.
 
 - No separate audit storage, no dashboards, no automatic gating.
 
+## Honshu observation
+
+The audit tag itself is internal (no user-facing change → no honshu
+needed). But the *result-summary truncation cap* on the audit event is
+a what-to-surface choice: too short loses signal, too long bloats the
+stream. If a cap is added or changed, observe via honshu whether the
+surfaced summaries read usefully. UX signal, not a gate.
+
 ## Verifiable acceptance
 
 - Tests pass; `go test ./...` green.

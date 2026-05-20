@@ -1,10 +1,11 @@
-# 21 — `artifact_catalog` Builtin Tool (code)
+# 21 — `artifact_catalog` Builtin Tool (code, wave 1)
 
-Kind: code. Coverage memo § 3.5.
+Kind: code. Coverage memo § 3.5. Wave 1 — ships against the current
+`coreTools` / `Tools()` surface; no security-model dependency.
 
-**Prerequisite.** `11` merged (registers into the post-reshape config).
-Independent of `20` and `22`, but lands in number order to keep
-tool-registry merges clean.
+**Prerequisite.** None. Lands after `20` and before `22` in number
+order to keep `coreTools` merges clean. `11` later re-registers this
+tool through the new config as part of its retrofit step.
 
 ## Goal
 
@@ -35,7 +36,8 @@ merging on-disk directory metadata with the handoff front-matter
      status`, with a `(N more, truncated)` footer when capped.
 4. Front-matter parsing is a local helper using `gopkg.in/yaml.v3`; do
    **not** import `internal/engine/runner` (layering boundary).
-5. Register into the core tool set per the post-`11` config shape.
+5. Register into the current core tool set. (`11`'s retrofit moves this
+   registration to the new config; nothing to do here for that.)
 
 ## Tests (`artifact_catalog_test.go`)
 
@@ -52,8 +54,16 @@ merging on-disk directory metadata with the handoff front-matter
 - No write semantics, no recursion beyond depth 1, no non-handoff
   manifests.
 
+## Honshu observation
+
+The tool adds a new user-facing output (the artifact table). After
+tests pass, observe via honshu whether the table surfaces the right
+columns at the right verbosity for a real downstream-handoff summary —
+too sparse, too noisy, or right. Record adjustments. UX signal, not a
+gate.
+
 ## Verifiable acceptance
 
 - New and existing tests pass; `go test ./...` green.
-- Honshu example completes; if invoked, the tool returns a table with
-  the documented columns.
+- The tool returns a table with the documented columns on the test
+  fixtures.

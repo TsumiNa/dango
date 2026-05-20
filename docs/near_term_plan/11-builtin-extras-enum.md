@@ -1,7 +1,8 @@
-# 11 — Builtin Extras Enum + Tool Config Reshape (code)
+# 11 — Builtin Extras Enum + Tool Config Contract (code)
 
-Kind: code. Foundation. Implements the availability axis from `10` and
-reshapes the tool-assembly surface so later subtasks register into it.
+Kind: code. Foundation. Implements the availability axis from `10`,
+defines the tool-config contract every other subtask registers
+through, and reshapes the tool-assembly surface.
 
 **Prerequisite.** `10` design accepted.
 
@@ -9,8 +10,45 @@ reshapes the tool-assembly surface so later subtasks register into it.
 
 Move builtin extras from stringly-typed `[]string` to a typed enum, and
 reshape the `Tools(...)` construction path so availability (allow/deny)
-is expressed once, in a typed config, that `12` extends with execution
-policy and that `20`/`21`/`22`/MCP register into.
+is expressed once, in a typed config, that `12a` extends with execution
+policy and that the wave-1 tools (`20`/`21`/`22`/`30`) and MCP register
+into.
+
+Wave-1 tools ship *before* this subtask against the current `Tools()`
+signature. This subtask therefore includes a **retrofit step**:
+re-register `21`/`22`'s tools and `20`'s git allowlist entry through the
+new config in the same PR, so there is exactly one reshape, not a
+trickle of churn.
+
+## Config-struct contract sketch
+
+This is the contract the whole near-term plan depends on, so pin its
+shape here (names are provisional; finalize in code review). It must
+hold availability now and have a clean slot for `12a`'s policy without
+another call-site churn.
+
+```go
+// ToolSetConfig is the single input that determines which capabilities
+// a skill's LLM sees and (after 12a) how each runs.
+type ToolSetConfig struct {
+    // Builtin core is always present and not represented here.
+
+    // Extras: typed, opt-in. Replaces the old []string.
+    Extras []ExtraTool
+
+    // Bash knobs carried through unchanged from today.
+    BashAllow []string
+    BashBlock []string
+
+    // 12a hangs execution policy off the same struct, e.g.:
+    //   Policies map[CapabilityRef]ExecPolicy  // passby (default) / need_approve / off
+    //   BashCommandPolicies []CommandPattern   // git push -> need_approve, etc.
+    // 11 leaves these absent; 12a adds them without reshaping callers.
+}
+```
+
+The key requirement: adding the `12a` policy fields must be an additive
+change to this struct, not a new parameter on `Tools(...)`.
 
 ## Scope
 
@@ -30,9 +68,13 @@ policy and that `20`/`21`/`22`/MCP register into.
      names.
 3. Update existing callers (`demo/skill/main.go`,
    `examples/...`) that set extras to the new enum form.
+4. **Retrofit wave-1 tools.** Re-register `21` (`artifact_catalog`),
+   `22` (`structured_preview`), and `20`'s `git` allowlist entry
+   through the new `ToolSetConfig`. This consolidates the reshape into
+   one PR instead of leaving wave-1 tools on the old surface.
 
-This subtask does **not** add execution policy yet (that is `12`). It
-only reshapes availability into the typed config so `12` can hang the
+This subtask does **not** add execution policy yet (that is `12a`). It
+only reshapes availability into the typed config so `12a` can hang the
 policy fields off the same struct without a second churn of every call
 site.
 

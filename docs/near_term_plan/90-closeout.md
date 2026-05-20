@@ -12,7 +12,7 @@ regressions.
 ## Scope
 
 1. Update `docs/builtin-tools-coverage-memo.md`:
-   - § 2.4 → record the delivered security model (`10`–`12`), URL
+   - § 2.4 → record the delivered security model (`10`–`12a`), URL
      allowlist (`30`), and instrumentation (`60`) PR numbers.
    - § 3.1 → record MCP availability once `50`'s implementation lands.
    - § 3.4 / § 3.5 → record `20` / `21` / `22` PR numbers.
@@ -24,19 +24,26 @@ regressions.
 
 ## Cross-subtask integration check
 
-Run the honshu example end-to-end with, in one configuration:
+Two separable checks, kept distinct on purpose.
 
-- `git` allowlisted and a `git push` confirmed to pause for approval;
-- one MCP server mounted (global) with its call event visible on the
-  stream and its result absent from the stream;
-- a non-empty bash URL allowlist;
-- the audit category present on every tool-call event.
+**Engineering (a real gate).** A Go-level integration test (or a
+scripted run asserting on exit status and emitted events) confirms the
+delivered subtasks compose without conflict: no `coreTools` ordering
+breakage, no tool-name collision between an MCP tool and a Go builtin,
+the audit category present on tool-call events, a non-empty URL
+allowlist enforced. This is pass/fail.
 
-This single run proves the security model, Go builtins, MCP, and
-instrumentation do not conflict (e.g. no `coreTools` ordering breakage,
-no tool-name collision between an MCP tool and a Go builtin).
+**Honshu observation (UX signal, not a gate).** Run the honshu example
+with the new capabilities active — `git` available, an MCP server
+mounted, the security policy in effect — and observe whether the
+composite behavior matches user intuition: is MCP activity surfaced at
+the right level, does the `12a` `need_approve` interim signal read as
+useful or noisy, do the new tool outputs help. Record adjustment
+opinions and feed them back into the relevant subtask files. Honshu
+does not pass or fail this closeout; it tunes it.
 
 ## Verifiable acceptance
 
-The coverage memo and tracker reflect the delivered work, and the
-integration run passes with no regressions.
+The coverage memo and tracker reflect the delivered work, the
+engineering integration check passes, and the honshu observation has
+been run with its adjustment opinions recorded (whatever they are).

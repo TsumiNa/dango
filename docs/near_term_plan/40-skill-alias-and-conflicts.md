@@ -48,6 +48,14 @@ the collision so they can alias if they want both.
 - No alias for tools or MCP (those use the `10` availability lists).
 - No runtime re-aliasing after mount.
 
+## Honshu observation
+
+The conflict warning and the "user skill wins" resolution are
+user-facing. Honshu is the signal for whether the warning is surfaced
+clearly enough (does the user understand which skill ran and why) and
+whether silent precedence would feel surprising. Record adjustments.
+UX signal, not a gate.
+
 ## Verifiable acceptance
 
 - New and existing tests pass; `go test ./...` green.

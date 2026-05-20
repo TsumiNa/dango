@@ -33,30 +33,67 @@ plan:
 
 ## Concerns in scope right now
 
-1. **Unified tool/MCP/skill security model.** A single abstraction for
-   what is available (allow/deny) and how it runs (`passby` /
-   `need_approve` / `off`), applied uniformly to builtin tools, builtin
-   extras, MCP tools, and skills. Foundation for everything else. See
-   `10`, `11`, `12`.
-2. **Go builtin gaps.** `git` inspection, `artifact_catalog`,
-   `structured_preview`. See `20`, `21`, `22`.
-3. **Bash egress opt-in.** Opt-in URL allowlist for `curl` / `wget`.
-   See `30`.
+1. **Go builtin gaps (first wave, ship immediately).** `git` inspection,
+   `artifact_catalog`, `structured_preview`. These are small,
+   independent, and have real value now; they build against the
+   *current* tool-config surface and are not blocked on the security
+   model. See `20`, `21`, `22`.
+2. **Bash egress opt-in (first wave).** Opt-in URL allowlist for
+   `curl` / `wget`, against the current bash option shape. See `30`.
+3. **Unified tool/MCP/skill security model (foundation, in parallel).**
+   A single abstraction for what is available (allow/deny) and how it
+   runs (`passby` / `need_approve` / `off`), applied uniformly to
+   builtin tools, builtin extras, MCP tools, and skills. Split so the
+   parts with a real consumer land now and the approval round-trip
+   waits for an approver. See `10`, `11`, `12a`, `12b`.
 4. **Skill alias and conflict handling.** See `40`.
-5. **MCP support.** Design-first; implementation files added after the
-   design lands. See `50`.
+5. **MCP support.** Its own cycle-magnitude effort; design-first, then
+   schedule separately. See `50`.
 6. **Instrumentation.** Audit-tagging tool-call events and a trace
    analyzer for future security-design data. See `60`.
 
+### Why this ordering (value-first, not foundation-first)
+
+An earlier draft gated the three small Go-builtin wins behind the
+security-model foundation "to avoid re-churning the registration code."
+That traded real, immediate value for a minor saving. Corrected: the
+first-wave subtasks (`20`–`22`, `30`) ship against the current
+`Tools()` / bash-option surfaces. When the foundation (`11`, `12a`)
+lands, a small, explicit retrofit re-registers them through the new
+config and upgrades `git` destructive subcommands and the URL allowlist
+to the policy layer. The retrofit is cheap; the early value is not.
+
 ## Goals
 
+- Ship the small Go-builtin wins immediately, decoupled from the
+  security foundation.
 - Establish one security abstraction that tools, MCP, and skills all
-  flow through, with permissive defaults.
-- Land the Go builtin gaps named in coverage memo § 3.4 and § 3.5.
-- Stand up MCP client support so the app/cmd cycle can ship MCP
-  configs out of the box.
+  flow through, with permissive defaults, building only the parts that
+  have a real consumer today.
 - Keep every code subtask independently verifiable with colocated
   tests.
+
+## How honshu is used (not an engineering gate)
+
+The honshu example (`examples/honshu_groundwater`) is an *observational
+UX test*: it shows whether dango's behavior matches user intuition —
+what should be surfaced to the user, what the user should be able to
+intervene on, and what should stay hidden. The direction is one-way:
+dango changes are observed through honshu, and honshu feeds back UX
+adjustment opinions. Honshu does not drive dango, and "honshu still
+completes" is **not** a regression gate.
+
+Consequences for every subtask below:
+
+- Engineering correctness is proven by Go tests, never by honshu.
+- When a subtask changes *user-facing behavior* (a `need_approve`
+  pause, an MCP call event, destructive-command gating, a new tool's
+  output), it carries a **Honshu observation** note: after the tests
+  pass, run honshu to judge whether the right amount is surfaced /
+  gated / hidden, and record adjustment opinions. This is a UX signal,
+  not a pass/fail check.
+- Pure internal refactors with no user-facing change need no honshu
+  observation.
 
 ## Non-goals
 
@@ -98,45 +135,68 @@ plan:
 
 ## Execution order and collision avoidance
 
-The single biggest merge hazard is that several subtasks touch the same
-tool-assembly code (`builtin.go` `coreTools` / `Tools(...)`,
-`builtin_tools.go`, `skill.go`). To avoid repeated conflicts, the
-security-model foundation lands first and changes those signatures
-once; everything else registers into the post-refactor shape.
+Two waves run concurrently. The merge hazard (several subtasks touch
+`builtin.go` `coreTools` / `Tools(...)`, `builtin_tools.go`,
+`skill.go`) is handled not by serializing everything behind the
+foundation, but by keeping the first wave small and landing the
+foundation's reshape (`11`) as one deliberate retrofit point.
 
-Order:
+**Wave 1 — immediate value (against current surfaces).**
 
-1. **`10` → `11` → `12`** (foundation). `10` is design only. `11`
-   migrates builtin-extras to an enum and reshapes `Tools(...)` into
-   the availability+policy config. `12` implements the
-   `passby`/`need_approve`/`off` runtime, the bash command-pattern
-   approval list, and the runner snapshot + dynamic-adjust interface.
-   No later code subtask may start until `11` has reshaped the tool
-   config, because they all register into it.
-2. **`20` → `21` → `22`** (Go builtins). Each adds to the post-`11`
-   registry. They still touch the registry, so they land in number
-   order to keep merges clean rather than truly in parallel.
-3. **`30`** (bash URL allowlist). Independent of `20`–`22`; depends on
-   `12` for the policy hook it plugs into.
-4. **`40`** (skill alias/conflict). Independent; touches skill import,
-   not the tool registry.
-5. **`50`** (MCP design) then its implementation files (added later).
-   MCP tools register through the same `11`/`12` surfaces.
-6. **`60`** (instrumentation). Independent; touches event emission.
-7. **`90`** (closeout). Last.
+1. **`20`** — add `git` to the allowlist (read-oriented; no policy
+   gating yet).
+2. **`21`** — `artifact_catalog`.
+3. **`22`** — `structured_preview`.
+4. **`30`** — opt-in curl/wget URL allowlist (extract + reject; no
+   policy hook yet).
+
+`20`–`22` each touch `coreTools`, so they land in number order to keep
+merges clean. None depends on the security model.
+
+**Wave 2 — security foundation (in parallel).**
+
+5. **`10`** (design) → **`11`** (extras enum + tool-config reshape;
+   includes the config-struct contract sketch) → **`12a`** (policy
+   data model + `passby`/`off` enforcement + command-pattern
+   classification + runner snapshot/adjust). When `11`/`12a` land, a
+   small retrofit re-registers wave-1 tools through the new config and
+   upgrades `git` destructive subcommands and the URL allowlist to the
+   policy layer.
+6. **`12b`** — approval round-trip (`need_approve` suspend/event/wait).
+   **Deferred** until an interactive approver exists (app/cmd cycle);
+   there is no consumer for it before then.
+
+**Independent (any time).**
+
+7. **`40`** — skill alias/conflict; touches skill import, not the tool
+   registry.
+8. **`60`** — instrumentation; touches event emission.
+
+**Own cycle.**
+
+9. **`50`** — MCP design; implementation is cycle-magnitude and
+   scheduled separately after its design lands.
+
+10. **`90`** — closeout. Last.
 
 ## File index
 
 | File | Subtask | Kind | Depends on |
 | --- | --- | --- | --- |
+| `20-git-allowlist.md` | `git` inspection (allowlist only) | code | — |
+| `21-artifact-catalog.md` | `artifact_catalog` tool | code | — |
+| `22-structured-preview.md` | `structured_preview` tool | code | — |
+| `30-bash-url-allowlist.md` | curl/wget egress opt-in | code | — |
 | `10-tool-security-model.md` | Unified security model | design | — |
-| `11-builtin-extras-enum.md` | Extras enum + tool config reshape | code | 10 |
-| `12-execution-policy.md` | passby/need_approve/off runtime | code | 11 |
-| `20-git-allowlist.md` | `git` inspection | code | 12 |
-| `21-artifact-catalog.md` | `artifact_catalog` tool | code | 11 |
-| `22-structured-preview.md` | `structured_preview` tool | code | 11 |
-| `30-bash-url-allowlist.md` | curl/wget egress opt-in | code | 12 |
+| `11-builtin-extras-enum.md` | Extras enum + config contract | code | 10 |
+| `12a-policy-enforcement.md` | Policy model + passby/off | code | 11 |
+| `12b-approval-flow.md` | `need_approve` round-trip | code | 12a (deferred) |
 | `40-skill-alias-and-conflicts.md` | Skill alias + conflict | code | — |
 | `50-mcp-design.md` | MCP support design | design | 10 |
 | `60-instrumentation.md` | Audit tag + trace analyzer | code | — |
 | `90-closeout.md` | Memo closeout | docs | all |
+
+Retrofit (after `11`/`12a`): re-register `20`–`22` through the new
+config; gate `git push` / `reset --hard` / `clean` / `rebase` as
+`need_approve` command patterns; route unlisted URLs in `30` through
+the policy layer.

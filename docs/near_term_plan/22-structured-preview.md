@@ -1,9 +1,11 @@
-# 22 — `structured_preview` Builtin Tool (code)
+# 22 — `structured_preview` Builtin Tool (code, wave 1)
 
-Kind: code. Coverage memo § 3.5.
+Kind: code. Coverage memo § 3.5. Wave 1 — ships against the current
+`coreTools` / `Tools()` surface; no security-model dependency.
 
-**Prerequisite.** `11` merged. Lands after `21` in number order to keep
-tool-registry merges clean.
+**Prerequisite.** None. Lands after `21` in number order to keep
+`coreTools` merges clean. `11`'s retrofit re-registers this tool
+through the new config.
 
 ## Goal
 
@@ -32,7 +34,8 @@ files so the model can decide whether to read a file in full, without
    - YAML: parse with `gopkg.in/yaml.v3` into `interface{}`, reuse the
      JSON walker. Promote `yaml.v3` to a direct dependency in `go.mod`.
    - All caps emit `(truncated)` markers.
-4. Register into the core tool set per the post-`11` config shape.
+4. Register into the current core tool set. (`11`'s retrofit moves this
+   registration to the new config.)
 
 ## Tests (`structured_preview_test.go`)
 
@@ -48,6 +51,13 @@ files so the model can decide whether to read a file in full, without
 ## Out of scope
 
 - No transformation/projection/filtering (those stay with `jq`/`yq`).
+
+## Honshu observation
+
+The preview output is user-facing. After tests pass, observe via honshu
+whether the shape sketch gives the model/user enough to decide "read in
+full or not" without being noisy. Record adjustments. UX signal, not a
+gate.
 
 ## Verifiable acceptance
 

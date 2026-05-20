@@ -4,8 +4,15 @@ Kind: design doc. Produces `docs/mcp-support-plan.md` and adds the MCP
 implementation files to this folder once the design lands. No
 implementation ships in this subtask.
 
+**Scale note.** MCP is a cycle-magnitude effort — a full external
+integration surface (transport, lifecycle, adapter, config,
+visibility, stream events), likely larger than every other near-term
+subtask combined. It is design-first here; whether its implementation
+joins the current batch or becomes its own cycle is decided *after*
+this design lands, not assumed now.
+
 **Prerequisite.** `10` accepted (MCP availability and execution policy
-reuse that model). Implementation also assumes `11`/`12` are merged so
+reuse that model). Implementation also assumes `11`/`12a` are merged so
 MCP tools register through the same config surface.
 
 ## Goal
@@ -61,6 +68,16 @@ These are settled; the design doc must honor them.
 7. **Implementation split.** Propose the MCP implementation files to
    add to this folder (e.g. `51-mcp-client.md`, `52-mcp-adapter.md`,
    `53-mcp-config-visibility.md`), each independently verifiable.
+
+## Honshu observation (at implementation, not at design)
+
+The "results in exchange/memo/handoff, calls on the stream" split is
+exactly a what-to-surface / what-to-hide question that honshu exists to
+answer. When the implementation lands, observe via honshu whether the
+top-level caller sees MCP activity at the right granularity — enough to
+know a call happened and to whom, without the result body flooding the
+stream. Record adjustments to the call-event payload. UX signal, not a
+gate.
 
 ## Verifiable acceptance
 

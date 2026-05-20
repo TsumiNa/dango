@@ -1,7 +1,16 @@
 # 10 — Unified Tool / MCP / Skill Security Model (design)
 
 Kind: design doc. No code ships in this subtask; it defines the model
-that `11`, `12`, `20`, `30`, and the MCP implementation all build on.
+that `11`, `12a`, `12b`, the wave-1 retrofit, and the MCP
+implementation all build on.
+
+**Implementation split.** The model is realized in stages so we build
+only what has a consumer: `11` carries the availability axis and the
+config-struct contract; `12a` adds the policy data model plus
+`passby`/`off` enforcement and command-pattern classification; `12b`
+adds the `need_approve` approval round-trip and is **deferred** until an
+interactive approver exists. This document is the whole design; the
+files stage it.
 
 ## Goal
 
@@ -39,7 +48,7 @@ Every *available* capability carries an execution policy:
 - **`passby`** — runs automatically when the model calls it. Default
   for all builtins, builtin extras, MCP tools, and skills.
 - **`need_approve`** — the call is held; an approval request is
-  published to the stream (see `12`) and the call proceeds only after
+  published to the stream (see `12b`) and the call proceeds only after
   the top-level caller approves. Used for destructive or
   irreversible operations.
 - **`off`** — the capability is mounted/visible but calls are rejected.
@@ -80,7 +89,7 @@ approval flow as a tool-level `need_approve`. No match → `passby`.
   the rest of the session, etc.). Adjustments affect only the running
   copy, never the app/cmd preset.
 - The adjustment surface is an explicit API on the runner; it is not a
-  config mutation. Design the API shape here; `12` implements it.
+  config mutation. Design the API shape here; `12a` implements it.
 
 ## MCP-specific posture
 
@@ -93,9 +102,10 @@ approval flow as a tool-level `need_approve`. No match → `passby`.
   `passby`. Users who want a gate set the server (or specific tools) to
   `need_approve` or `off`.
 
-## Approval flow (design only; `12` implements)
+## Approval flow (design only; `12b` implements, deferred)
 
-`need_approve` must work for an autonomous, possibly headless run:
+`need_approve` must eventually work for an autonomous, possibly
+headless run:
 
 - The call is suspended and an approval-request event is published on
   the relevant stream with enough context (capability name, argument
@@ -103,20 +113,27 @@ approval flow as a tool-level `need_approve`. No match → `passby`.
 - The caller responds (approve / deny, optionally "approve for the rest
   of the session" which downgrades the policy to `passby`).
 - A denied call returns a typed error the model can react to.
-- Timeout behavior and headless defaults (deny vs hold) are an open
-  question for `12`; this design only fixes the event contract.
 
-## Open questions (resolve during `11`/`12`, not now)
+This round-trip has no consumer until an interactive approver exists,
+so it is deferred to `12b`. Until then, `12a` only *classifies*
+`need_approve` and applies a documented interim behavior. Honshu
+observation from `12a` is the primary input for the eventual approval
+UX (which operations truly warrant a pause, how the prompt should
+read).
 
-- Exact enum names and Go types for availability and policy.
+## Open questions (resolve during `11`/`12a`, not now)
+
+- Exact enum names and Go types for availability and policy (the
+  config-struct sketch lands in `11`).
 - Whether per-MCP-tool availability is needed in v1 or per-server is
   enough.
-- Headless `need_approve` default (hold vs auto-deny) and timeout.
+- The `12a` interim behavior for `need_approve` (run-and-note vs hold)
+  and, later in `12b`, the headless default and timeout.
 - Whether skill on/off lives in app/cmd config, `SkillConfig`, or both.
 
 ## Verifiable acceptance
 
 This file exists and pins: the two axes, the default policies, the
 bash command-pattern mechanism, the runner snapshot + dynamic-adjust
-contract, the MCP posture, and the approval event contract. Subtasks
-`11` and `12` cite this file.
+contract, the MCP posture, and the (deferred) approval event contract.
+Subtasks `11` and `12a` cite this file.
