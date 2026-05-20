@@ -1,6 +1,6 @@
 # Deferred Refactor Tracker Memo
 
-Last updated: 2026-05-11
+Last updated: 2026-05-19
 
 This memo records deferred refactor topics discussed before PR B.
 PR B is handled separately and should proceed now.
@@ -23,29 +23,53 @@ Open questions to resolve later:
 - Interaction between existing `WithOrchestratorLogger(...)` and new `WithLoggerCfg(...)`.
 - Backward compatibility policy for examples/tests using direct logger injection.
 
-## PR C - Builtin Tools Restructure (Deferred)
+## PR C - Builtin Tools Restructure (Completed)
 
-Status: Deferred to independent refactor.
+Status: Completed. See `docs/builtin-tools-restructure-plan.md` for the
+full historical plan and sub-PR breakdown.
 
-Current intent:
+Delivered sub-PRs:
 
-- Simplify llm runtime toolset around `bash` plus common utilities.
-- Favor common shell tools used in real workflows (`awk`, `curl`, `grep`, `sed`, `xargs`, etc.).
-- For repeated command patterns, consider higher-level wrapped tools to improve:
-  - model accuracy
-  - token efficiency
-  - task success rate
+- PR C-1 (#81) — bash redirection static safety check; rejects dynamic
+  targets and absolute escapes while still accepting heredocs and
+  workspace-bounded static targets.
+- PR C-2 (#82) — default tool set restructure; the seven Go-implemented
+  core tools plus `bash` and `grep` ship by default, and `list_dir` /
+  `pwd` move behind an opt-in `BuiltinExtras` config field.
+- PR C-3 (#83) — wrapper-tool trace investigation; the recorded run had
+  three bash calls and no pipeline crossing the ≥5-occurrence threshold,
+  so no wrappers were approved on trace evidence.
+- PR C-4 / PR C-5 (#84) — bundled `pipeline_search_replace` and
+  `file_excerpt` wrappers shipped together as Go-implemented
+  workspace-bounded equivalents of `sed -i` and `grep -A N -B M`.
+  PR C-3 closed the *trace-driven* wrapper track; these two wrappers
+  were added as predeclared, narrowly scoped helpers rather than as
+  outputs of that investigation.
 
-Potential wrapper candidates:
+Resolved decisions (originally tracked as open questions):
 
-- search/replace style wrappers for common pipelines such as `cat + grep + sed`.
-- Focused read/filter/transform helpers where shell composition is noisy for the model.
+- **Minimal default builtin set vs optional extended set** — default set
+  is `bash`, `read_file`, `write_file`, `edit_file`, `delete_file`,
+  `move_file`, `grep`, `pipeline_search_replace`, `file_excerpt`.
+  `list_dir` and `pwd` are reached through `BuiltinExtras`; skills that
+  do not opt in fall back to `ls` / `pwd` via bash.
+- **Safety boundaries and allowlist policy after introducing wrappers** —
+  every Go-implemented tool routes paths through `workspace.ResolvePath`,
+  and bash redirections are statically validated. Argument-level write
+  targets (for example `tee /etc/foo`) remain explicitly out of scope and
+  are documented as such in the bash tool description and
+  `system_instructions.md`.
+- **How to measure token/correctness gains before landing broad changes** —
+  the PR C-3 methodology stands: extract `llm.tool_call.started` events
+  from `artifacts/debug/stream_events.jsonl`, tally bash command heads
+  and multi-stage pipelines, and require a single pattern to cross the
+  ≥5-occurrence threshold in one honshu run before a wrapper PR is
+  scheduled. Future wrapper proposals must rerun that analysis.
 
-Open questions to resolve later:
-
-- Minimal default builtin set vs optional extended set.
-- Safety boundaries and allowlist policy after introducing wrappers.
-- How to measure token/correctness gains before landing broad changes.
+Follow-up: see `docs/builtin-tools-coverage-memo.md` for an out-of-scope
+security and research/autonomous-experiment coverage review. That memo
+records gaps to consider before adopting research-oriented skills; it is
+not a commitment to implement anything in this track.
 
 ## PR D - API Cleanup and Compatibility Review (Deferred)
 
