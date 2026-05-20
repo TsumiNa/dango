@@ -163,11 +163,11 @@ func main() {
 
 	bashAllow := []string(nil)
 	bashBlock := []string{"curl", "wget"}
-	builtinExtras := []string{"list_dir", "pwd"}
+	builtinExtras := []llm.ExtraTool{llm.ExtraListDir, llm.ExtraPwd}
 	banner(3, "Tools", "built-in workspace tools plus one custom greet tool")
 	field("bash allow additions", formatSlice(bashAllow))
 	field("bash block removals", formatSlice(bashBlock))
-	field("builtin extras", formatSlice(builtinExtras))
+	field("builtin extras", formatExtraTools(builtinExtras))
 
 	baseSkill, err := llm.NewSkill(dir, llm.SkillConfig{BashAllow: bashAllow, BashBlock: bashBlock, BuiltinExtras: builtinExtras})
 	if err != nil {
@@ -495,6 +495,17 @@ func formatSlice(values []string) string {
 		return dim("none")
 	}
 	return strings.Join(values, ", ")
+}
+
+func formatExtraTools(values []llm.ExtraTool) string {
+	if len(values) == 0 {
+		return dim("none")
+	}
+	names := make([]string, len(values))
+	for i, value := range values {
+		names[i] = value.String()
+	}
+	return strings.Join(names, ", ")
 }
 
 func frontmatterBody(doc string) string {

@@ -92,13 +92,14 @@ func withoutAllowlist() option {
 // and structured_preview. Tool names in extras append opt-in built-ins such as
 // list_dir and pwd in caller order.
 //
-// bashAllow is added to the default bash allowlist, and bashBlock is removed
-// afterwards. Entries in bashBlock win when a name appears in both slices.
-func Tools(ws workspace, bashAllow []string, bashBlock []string, extras []string) ([]tool, error) {
-	cfg := newConfig([]option{withAllowlistAdjust(bashAllow, bashBlock)})
-	tools := coreTools(ws, cfg)
-	seenExtras := make(map[string]struct{}, len(extras))
-	for _, name := range extras {
+// cfg.BashAllow is added to the default bash allowlist, and cfg.BashBlock is
+// removed afterwards. Entries in cfg.BashBlock win when a name appears in both
+// slices.
+func Tools(ws workspace, cfg ToolSetConfig) ([]tool, error) {
+	toolCfg := newConfig([]option{withAllowlistAdjust(cfg.BashAllow, cfg.BashBlock)})
+	tools := coreTools(ws, toolCfg)
+	seenExtras := make(map[ExtraTool]struct{}, len(cfg.Extras))
+	for _, name := range cfg.Extras {
 		extra, ok := extraTool(ws, name)
 		if !ok {
 			return nil, fmt.Errorf("builtin: unknown extra tool %q", name)
@@ -128,11 +129,11 @@ func coreTools(ws workspace, cfg *config) []tool {
 	}
 }
 
-func extraTool(ws workspace, name string) (tool, bool) {
+func extraTool(ws workspace, name ExtraTool) (tool, bool) {
 	switch name {
-	case "list_dir":
+	case ExtraListDir:
 		return newListDir(ws), true
-	case "pwd":
+	case ExtraPwd:
 		return newPwd(ws), true
 	default:
 		return nil, false

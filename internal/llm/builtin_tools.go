@@ -21,7 +21,11 @@ func (s *Skill) BuiltinTools() ([]Tool, error) {
 	if s.workspace == nil || s.workspace.TempRoot() == "" {
 		return nil, fmt.Errorf("skill: built-in tools require a temp workspace")
 	}
-	internalTools, err := builtin.Tools(s.workspace, s.bashAllow, s.bashBlock, s.builtinExtras)
+	internalTools, err := builtin.Tools(s.workspace, builtin.ToolSetConfig{
+		BashAllow: s.bashAllow,
+		BashBlock: s.bashBlock,
+		Extras:    s.builtinExtras,
+	})
 	if err != nil {
 		return nil, fmt.Errorf("skill: configure built-in tools: %w", err)
 	}
@@ -90,9 +94,13 @@ func (s *Skill) SetAccessibleDirsAndBuiltinTools(dirs ...string) (*Skill, error)
 
 func isBuiltinToolName(name string) bool {
 	switch name {
-	case "bash", "read_file", "write_file", "edit_file", "delete_file", "move_file", "list_dir", "grep", "pipeline_search_replace", "file_excerpt", "artifact_catalog", "structured_preview", "pwd":
+	case "bash", "read_file", "write_file", "edit_file", "delete_file", "move_file", "grep", "pipeline_search_replace", "file_excerpt", "artifact_catalog", "structured_preview":
 		return true
-	default:
-		return false
 	}
+	for _, extra := range []ExtraTool{ExtraListDir, ExtraPwd} {
+		if name == extra.String() {
+			return true
+		}
+	}
+	return false
 }

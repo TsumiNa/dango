@@ -27,7 +27,7 @@ func TestBuiltinToolsReturnsDefaultToolSet(t *testing.T) {
 }
 
 func TestBuiltinToolsRespectsBuiltinExtras(t *testing.T) {
-	skill, err := NewSkill(writeSkillDir(t, "---\nname: x\ndescription: d\n---\nbody\n"), SkillConfig{BuiltinExtras: []string{"list_dir", "pwd"}})
+	skill, err := NewSkill(writeSkillDir(t, "---\nname: x\ndescription: d\n---\nbody\n"), SkillConfig{BuiltinExtras: []ExtraTool{ExtraListDir, ExtraPwd}})
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -43,7 +43,7 @@ func TestBuiltinToolsRespectsBuiltinExtras(t *testing.T) {
 }
 
 func TestBuiltinToolsWrapsUnknownBuiltinExtra(t *testing.T) {
-	skill, err := NewSkill(writeSkillDir(t, "---\nname: x\ndescription: d\n---\nbody\n"), SkillConfig{BuiltinExtras: []string{"nope"}})
+	skill, err := NewSkill(writeSkillDir(t, "---\nname: x\ndescription: d\n---\nbody\n"), SkillConfig{BuiltinExtras: []ExtraTool{ExtraTool("nope")}})
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
