@@ -1,23 +1,22 @@
 # Front Matter Parser Memo
 
 Last updated: 2026-05-20.
-Status: Design memo only. No implementation is committed by this document.
+Status: Implemented in `internal/frontmatter`.
 
 ## Purpose
 
-Dango currently uses `github.com/adrg/frontmatter` in several places to
+Dango previously used `github.com/adrg/frontmatter` in several places to
 split markdown front matter from the body and unmarshal the metadata into
-Go structs. That package is small and straightforward, but it keeps
+Go structs. That package is small and straightforward, but it kept
 `gopkg.in/yaml.v2` in the dependency graph.
 
-This memo records a minimal in-repo replacement plan so Dango can own
-this behavior directly and later remove the external front matter
-dependency.
+This memo records the minimal in-repo replacement so Dango owns this
+behavior directly without the external front matter dependency.
 
 ## Current in-repo usage
 
-Today the package is used for repository-owned markdown parsing in these
-paths:
+Today `internal/frontmatter` is used for repository-owned markdown parsing
+in these paths:
 
 - `internal/llm/skill.go`
 - `internal/engine/runner/handoff_doc.go`
@@ -41,12 +40,14 @@ front matter library.
 Implement a small Dango-owned parser with the repository's actual needs
 as the contract:
 
-- Support YAML front matter only.
-- Support the canonical `---` opening and closing delimiters.
+- Support YAML and TOML front matter.
+- Support canonical YAML `---` and TOML `+++` opening and closing
+  delimiters, plus explicit `---yaml` and `---toml` opening delimiters.
 - Parse only a leading front matter block at the top of the document.
 - Return the remaining body bytes exactly once the front matter block is
   removed.
-- Unmarshal metadata with `gopkg.in/yaml.v3`.
+- Unmarshal YAML metadata with `gopkg.in/yaml.v3`; decode TOML metadata and
+  apply it through the same YAML-tagged structs used by existing call sites.
 
 Do not carry over unused general-purpose features from the external
 package unless a concrete Dango call site needs them.
@@ -64,16 +65,16 @@ Suggested surface:
 
 Suggested behavior:
 
-- If the document does not start with `---` on the first line, treat it
-  as having no front matter and return the original body unchanged.
-- If the document starts with `---`, scan until the matching closing
-  delimiter line `---`.
+- If the document does not start with a supported delimiter, treat it as
+  having no front matter and return the original body unchanged.
+- If the document starts with `---`, `---yaml`, `+++`, or `---toml`, scan
+  until the matching closing delimiter line.
 - Unmarshal the bytes between delimiters into `v`.
 - Return the remaining body after the closing delimiter, preserving the
   same body shape current call sites expect after trimming in their own
   logic.
 - Return a clear error when a front matter block is started but not
-  closed, or when YAML decoding fails.
+  closed, or when YAML/TOML decoding fails.
 
 ## Scope boundaries
 
@@ -81,7 +82,7 @@ The initial implementation should stay intentionally small.
 
 In scope:
 
-- YAML only
+- YAML and TOML only
 - top-of-file parsing only
 - `io.Reader` input
 - decode into structs/maps supplied by the caller
@@ -89,11 +90,10 @@ In scope:
 
 Out of scope for the first implementation:
 
-- TOML front matter
 - JSON front matter
-- custom delimiters such as `---yaml`
+- custom delimiters beyond `---`, `---yaml`, `+++`, and `---toml`
 - serializer helpers
-- format auto-detection beyond the single YAML shape Dango uses today
+- format auto-detection beyond the YAML and TOML shapes Dango supports
 - attempting to be a drop-in clone of the external library API
 
 ## Behavioral notes to preserve
@@ -118,6 +118,7 @@ Add focused tests beside the new parser implementation that cover:
 
 - no front matter
 - valid YAML front matter with markdown body
+- valid TOML front matter with markdown body
 - valid YAML front matter ending at EOF
 - empty body after front matter
 - unclosed front matter block
@@ -150,6 +151,6 @@ before the broader YAML dependency cleanup.
 - Whether the parser should preserve body bytes exactly, or normalize the
   first newline after the closing delimiter. Current users often apply
   their own `strings.TrimSpace`, so exact preservation may be simplest.
-- Whether any future app/cmd embedding Dango will need TOML/JSON front
-  matter support. Unless a real use case appears, keep that out of the
-  first implementation.
+- Whether any future app/cmd embedding Dango will need JSON front matter
+  support. Unless a real use case appears, keep that out of the
+  implementation.
