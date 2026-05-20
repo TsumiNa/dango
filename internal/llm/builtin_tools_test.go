@@ -20,7 +20,7 @@ func TestBuiltinToolsReturnsDefaultToolSet(t *testing.T) {
 	if err != nil {
 		t.Fatalf("BuiltinTools: %v", err)
 	}
-	want := []string{"bash", "read_file", "write_file", "edit_file", "delete_file", "move_file", "grep", "pipeline_search_replace", "file_excerpt", "artifact_catalog"}
+	want := []string{"bash", "read_file", "write_file", "edit_file", "delete_file", "move_file", "grep", "pipeline_search_replace", "file_excerpt", "artifact_catalog", "structured_preview"}
 	if got := llmToolNames(tools); !slices.Equal(got, want) {
 		t.Fatalf("BuiltinTools names = %v, want %v", got, want)
 	}
@@ -36,7 +36,7 @@ func TestBuiltinToolsRespectsBuiltinExtras(t *testing.T) {
 	if err != nil {
 		t.Fatalf("BuiltinTools: %v", err)
 	}
-	want := []string{"bash", "read_file", "write_file", "edit_file", "delete_file", "move_file", "grep", "pipeline_search_replace", "file_excerpt", "artifact_catalog", "list_dir", "pwd"}
+	want := []string{"bash", "read_file", "write_file", "edit_file", "delete_file", "move_file", "grep", "pipeline_search_replace", "file_excerpt", "artifact_catalog", "structured_preview", "list_dir", "pwd"}
 	if got := llmToolNames(tools); !slices.Equal(got, want) {
 		t.Fatalf("BuiltinTools names = %v, want %v", got, want)
 	}
