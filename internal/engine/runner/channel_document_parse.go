@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/adrg/frontmatter"
 	streampkg "github.com/tsumina/dango/internal/engine/stream"
+	"github.com/tsumina/dango/internal/frontmatter"
 )
 
 type parsedChannelDocument struct {

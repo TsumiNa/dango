@@ -5,9 +5,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/adrg/frontmatter"
 	streampkg "github.com/tsumina/dango/internal/engine/stream"
-	"gopkg.in/yaml.v2"
+	"github.com/tsumina/dango/internal/frontmatter"
+	"gopkg.in/yaml.v3"
 )
 
 // MemoDocumentVersion is the schema version for [MemoDocument] markdown.

@@ -10,7 +10,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/adrg/frontmatter"
+	"github.com/tsumina/dango/internal/frontmatter"
 )
 
 const (

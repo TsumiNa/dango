@@ -11,9 +11,9 @@ import (
 	"reflect"
 	"strings"
 
-	"github.com/adrg/frontmatter"
 	"github.com/lithammer/shortuuid/v4"
 	streampkg "github.com/tsumina/dango/internal/engine/stream"
+	"github.com/tsumina/dango/internal/frontmatter"
 	"github.com/tsumina/dango/internal/llm/internal/builtin"
 )
 
