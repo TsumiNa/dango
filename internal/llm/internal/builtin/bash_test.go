@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -354,6 +355,9 @@ func TestBashAllowlistAllowsEnvPrefix(t *testing.T) {
 // TestBashAllowsGitVersion confirms that "git" is on the allowlist and that
 // `git --version` runs successfully through the bash tool.
 func TestBashAllowsGitVersion(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not found in PATH; skipping allowlist integration test")
+	}
 	tool := newBash(testWorkspace{t.TempDir()})
 	args, _ := json.Marshal(map[string]any{"command": "git --version"})
 	out, err := tool.Execute(context.Background(), string(args))
@@ -365,10 +369,13 @@ func TestBashAllowsGitVersion(t *testing.T) {
 	}
 }
 
-// TestBashAllowsGitLogInsideWorkspace initialises a bare git repo in the
-// workspace, commits a file, and verifies that
-// `git -C <root> log -1 --format=%s` returns the commit subject.
+// TestBashAllowsGitLogInsideWorkspace initialises a git repo in the workspace,
+// commits a file, and verifies that `git -C <root> log -1 --format=%s`
+// returns the commit subject.
 func TestBashAllowsGitLogInsideWorkspace(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not found in PATH; skipping allowlist integration test")
+	}
 	root := t.TempDir()
 	ws := testWorkspace{root}
 
@@ -383,7 +390,8 @@ func TestBashAllowsGitLogInsideWorkspace(t *testing.T) {
 	}
 	for _, cmd := range setup {
 		tool := newBash(ws, withoutAllowlist())
-		if _, err := tool.Execute(context.Background(), `{"command": "`+cmd+`"}`); err != nil {
+		setupArgs, _ := json.Marshal(map[string]any{"command": cmd})
+		if _, err := tool.Execute(context.Background(), string(setupArgs)); err != nil {
 			t.Fatalf("setup %q: %v", cmd, err)
 		}
 	}
@@ -405,6 +413,9 @@ func TestBashAllowsGitLogInsideWorkspace(t *testing.T) {
 // TestBashRejectsGitOutsideWorkspaceTarget confirms that the PR C-1 redirection
 // check still blocks git output redirected to a path outside the workspace.
 func TestBashRejectsGitOutsideWorkspaceTarget(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not found in PATH; skipping allowlist integration test")
+	}
 	tool := newBash(testWorkspace{t.TempDir()})
 	args, _ := json.Marshal(map[string]any{
 		"command": "git log > /tmp/escape",
