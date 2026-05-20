@@ -18,9 +18,12 @@ Use short kind names unless there is a concrete collision risk. Prefer `exchange
 
 ### 1. Agent output packaging has unclear ownership
 
-`internal/engine/agent_channels.go` currently mixes unrelated responsibilities:
+The old combined agent channel implementation, now split across
+`internal/engine/agent_stage.go`, `internal/engine/agent_stage_output.go`,
+`internal/engine/agent_prompt.go`, and `internal/engine/agent_workspace.go`,
+mixed unrelated responsibilities:
 
-- agent stage entrypoints (`polishExchange`, `executeExchange`, `reportExchange`);
+- agent stage entrypoints (`Polish`, `Execute`, `Report`);
 - built-in prompt rendering and prompt construction;
 - conversion of stage output into `HandoffDoc` and `ExchangeDoc` markdown;
 - filesystem writes to `outbox/handoff.md` and `exchange/*.md`;
@@ -28,7 +31,9 @@ Use short kind names unless there is a concrete collision risk. Prefer `exchange
 - reverse-engineering runner workspace paths from `accessibleDirs`;
 - formatting parent handoffs for prompts.
 
-This makes the file name and function names misleading. In particular, `polishExchange`, `executeExchange`, and `reportExchange` return handoff markdown while also writing exchange files as side effects.
+That old shape made the file name and function names misleading. In
+particular, the stage entrypoints returned handoff markdown while also writing
+exchange files as side effects.
 
 ### 2. Exchange/handoff boundaries are blurred
 
@@ -235,7 +240,7 @@ For in-progress branch code, update call sites directly instead of adding compat
 - Keep a deliberate compatibility decision: either reject old kind names after this in-branch refactor, or accept old names only in parsers for reading already persisted artifacts. Do not emit old names.
 - Update tests to assert all emitted markdown documents use the centralized kind constants.
 
-### Phase 3: Split `agent_channels.go`
+### Phase 3: Split the old combined agent channel implementation
 
 Replace the current catch-all file with focused files:
 

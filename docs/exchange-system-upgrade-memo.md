@@ -34,8 +34,9 @@ Collapsing them has produced a few visible problems:
 - Built-in prompts are split between an embedded skill markdown
   (`internal/engine/builtin/SKILL.md`) and inline string builders for agent
   stages (`polishPrompt`, `executionPrompt`, `reportPrompt` in
-  `agent_exchange.go`). There is no single place to read or edit the full
-  agent contract.
+  `internal/engine/agent_prompt.go`, with stage orchestration in
+  `internal/engine/agent_stage.go`). There is no single place to read or edit
+  the full agent contract.
 
 The rewrite separates the three flows, gives each its own routing and
 persistence rules, and consolidates built-in prompt material into a
@@ -407,9 +408,9 @@ After the refactor lands, the following symbols and files are gone:
 - `internal/engine/runner/exchange_output.go`,
   `internal/engine/runner/exchange_resources.go` — folded into the new
   handoff routing code.
-- `internal/engine/agent_exchange.go` — replaced by separate
-  polish/execute/report functions that emit handoffs (and optionally
-  exchange entries) instead of one combined document.
+- `internal/engine/agent_prompt.go`, `internal/engine/agent_stage.go`, and
+  `internal/engine/agent_stage_output.go` — together replace the old combined
+  agent exchange flow with separate prompt, stage, and document-routing code.
 - `internal/engine/orchestrator.go::WithRunnerStore`,
   `WithEventLogStore`, `WithSnapshotCursorStore` — replaced by a single
   `WithPersistence` option.
@@ -540,7 +541,7 @@ the prompt-extraction PR can land in parallel with the type work.
   - Read parent handoffs from `inbox/` instead of receiving inline maps.
   - Emit a handoff (and optionally an exchange entry) per stage.
   - Snapshot memos through the workspace.
-- Delete `internal/engine/agent_exchange.go` and the legacy
+- Delete the old combined agent exchange implementation and the legacy
   `ExchangeDocument` symbols.
 - Update orchestrator review / replan paths to read handoffs (not the old
   combined exchange document).

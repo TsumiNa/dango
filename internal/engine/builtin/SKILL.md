@@ -187,8 +187,8 @@ Reject only when:
   PDF").
 - The plan misuses a skill (wrong skill picked for the node's job).
 
-If the issue is "this minor detail could be tighter", approve and let the
-agent decide at execute time. Replanning is expensive — every reject
+If the issue is "this minor detail could be tighter", approve and let the agent
+decide at execute time. Replanning is expensive — every reject
 costs another full LLM round.
 
 ## Mode: replan

@@ -50,7 +50,7 @@ flowchart TB
 | ------------------------ | ------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------- |
 | request 控制面           | `internal/engine/request.go`, `internal/engine/orchestrator.go`, `internal/engine/describe.go`                      | 创建 request stream、planning、runner registry、查询接口、describe replay |
 | runner 生命周期          | `internal/engine/runner/runner.go`, `internal/engine/runner/runner_lifecycle.go`, `internal/engine/runner/types.go` | phase machine、engine loop、managed lifecycle、snapshot                   |
-| agent / skill binding | `internal/engine/agent.go`, `internal/engine/agent_exchange.go`, `internal/engine/runner/skill_binding.go`    | 绑定 skill runtime、session reuse、exchange 输出、skill stream merge      |
+| agent / skill binding | `internal/engine/agent.go`, `internal/engine/agent_prompt.go`, `internal/engine/agent_stage_output.go`, `internal/engine/runner/skill_binding.go` | 绑定 skill runtime、session reuse、stage prompt / exchange 输出、skill stream merge |
 | stream 基础设施          | `internal/engine/stream/`                                                                                           | replay、filter、merge、hub-mode bundle、scope / metadata                  |
 | exchange 与持久化        | `internal/engine/runner/exchange.go`, `internal/engine/runner/record.go`, `internal/engine/runner/store.go`         | markdown envelope、runner record 编码、append-only store                  |
 
