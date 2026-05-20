@@ -23,7 +23,7 @@ metadata. In practice this conflates three distinct flows:
 
 Collapsing them has produced a few visible problems:
 
-- Executors emit one bloated document per stage, even when peers do not need
+- Agents emit one bloated document per stage, even when peers do not need
   the inner reasoning trace; downstream context windows pay for it anyway.
 - Orchestrator review and downstream consumption read from the same envelope
   with only the `to`/`intent` front matter to discriminate.
@@ -32,10 +32,11 @@ Collapsing them has produced a few visible problems:
   `summarizeDescribeView`, `summarizeRunnerRecords`, `summarizeSnapshotCursor`,
   etc.). Each consumer reinvents its own snapshot scheme on top of the runner.
 - Built-in prompts are split between an embedded skill markdown
-  (`internal/engine/builtin/SKILL.md`) and inline string builders for executor
+  (`internal/engine/builtin/SKILL.md`) and inline string builders for agent
   stages (`polishPrompt`, `executionPrompt`, `reportPrompt` in
-  `executor_exchange.go`). There is no single place to read or edit the full
-  agent contract.
+  `internal/engine/agent_prompt.go`, with stage orchestration in
+  `internal/engine/agent_stage.go`). There is no single place to read or edit
+  the full agent contract.
 
 The rewrite separates the three flows, gives each its own routing and
 persistence rules, and consolidates built-in prompt material into a
@@ -64,7 +65,7 @@ constrains downstream choices.
 - **Audience:** all skills in the runner, plus subscribers.
 - **Producer:** any skill or the orchestrator.
 - **Routing:** broadcast. Runner aggregates exchange entries into a single
-  public folder readable by every executor's runtime skill.
+  public folder readable by every agent's runtime skill.
 - **Form:** front-mattered markdown, streamed as JSON.
 - **Lifetime:** lives for the runner's lifetime (or longer if persisted).
 
@@ -328,14 +329,14 @@ Constraints validated by the runner before creating any directory:
 ### Request.ArtifactsDir
 
 `Request.ArtifactsDir` today plays two roles: a user-supplied output
-directory *and* the path that gets fed into executor `accessibleDirs`. After
+directory *and* the path that gets fed into agent `accessibleDirs`. After
 the refactor, the workspace is fully runner-managed, so:
 
 - `Request.ArtifactsDir` keeps its meaning as the **user-facing** output
   directory: a place the caller wants final deliverables copied to. The
   orchestrator instructs the runner to mirror specified handoff artifacts
   into this directory at terminal phases. It no longer participates in
-  executor sandbox setup.
+  agent sandbox setup.
 - All internal artifacts (memos, exchange entries, handoffs, archive)
   live under the persistence-controlled workspace root, never under
   `Request.ArtifactsDir`.
@@ -356,7 +357,7 @@ keep a clear seam for future user override.
       planning.md
       review.md
       replan.md
-    executor/
+    agent/
       polish.md
       execute.md
       report.md
@@ -407,15 +408,15 @@ After the refactor lands, the following symbols and files are gone:
 - `internal/engine/runner/exchange_output.go`,
   `internal/engine/runner/exchange_resources.go` — folded into the new
   handoff routing code.
-- `internal/engine/executor_exchange.go` — replaced by separate
-  polish/execute/report functions that emit handoffs (and optionally
-  exchange entries) instead of one combined document.
+- `internal/engine/agent_prompt.go`, `internal/engine/agent_stage.go`, and
+  `internal/engine/agent_stage_output.go` — together replace the old combined
+  agent exchange flow with separate prompt, stage, and document-routing code.
 - `internal/engine/orchestrator.go::WithRunnerStore`,
   `WithEventLogStore`, `WithSnapshotCursorStore` — replaced by a single
   `WithPersistence` option.
 - `examples/honshu_groundwater/main.go::writePersistenceDebugArtifacts` and
   the related summary structs — replaced by the unified persistence backend.
-- Inline prompt builders in the executor — replaced by template files.
+- Inline prompt builders in the agent — replaced by template files.
 
 ## Orchestrator-Side Minimal Adjustments
 
@@ -484,7 +485,7 @@ the prompt-extraction PR can land in parallel with the type work.
   under the global root, unique per runner ID).
 - Tests using `t.TempDir()` verify path layout, isolation invariants,
   inbox routing copies, and rule-validation rejection paths.
-- No skills consume the workspace yet; the executor still uses its current
+- No skills consume the workspace yet; the agent still uses its current
   exchange flow.
 - **Test signal:** workspace tests pass; permission tests prove a skill
   cannot resolve a path outside its sandbox; bad-rule tests cover empty,
@@ -534,13 +535,13 @@ the prompt-extraction PR can land in parallel with the type work.
   the on-disk layout; orchestrator tests use the new option and confirm
   per-runner workspace allocation under the configured root.
 
-### PR 5 — Executor migration to the new channels
+### PR 5 — Agent migration to the new channels
 
 - Rewrite `polish` / `execute` / `report` to:
   - Read parent handoffs from `inbox/` instead of receiving inline maps.
   - Emit a handoff (and optionally an exchange entry) per stage.
   - Snapshot memos through the workspace.
-- Delete `internal/engine/executor_exchange.go` and the legacy
+- Delete the old combined agent exchange implementation and the legacy
   `ExchangeDocument` symbols.
 - Update orchestrator review / replan paths to read handoffs (not the old
   combined exchange document).
@@ -556,7 +557,7 @@ the prompt-extraction PR can land in parallel with the type work.
 - Tests render each template and assert key invariants (e.g. memo discipline
   text appears, task description is interpolated).
 - This PR can land in parallel with PR 5; if PR 5 lands first, PR 6 only
-  swaps the prompt source. If PR 6 lands first, the executor consumes
+  swaps the prompt source. If PR 6 lands first, the agent consumes
   templates immediately.
 - **Test signal:** template tests pass; no string literal prompt over ~10
   lines remains in `internal/engine/*.go`.
@@ -606,8 +607,8 @@ Resolved in the follow-up PR:
 
 1. **Legacy `ExchangeDocument` compatibility was removed.**
    - Legacy exchange symbols, parsers, draft helpers, resource metadata, and
-     executor legacy return paths were deleted.
-   - Executor stage paths now return `handoff` markdown.
+     agent legacy return paths were deleted.
+   - Agent stage paths now return `handoff` markdown.
 2. **`Request.ArtifactsDir` no longer participates in runner trusted roots.**
    - `newRunnerFromPlan` no longer forwards request artifacts through
      `runnerpkg.WithTrustedResourceRoots`.

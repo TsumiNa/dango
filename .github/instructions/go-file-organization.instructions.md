@@ -16,4 +16,4 @@ Organize Go code by package responsibility and reader navigation. Apply these pr
 - Avoid splitting one concern into several similarly named files such as `xxx_yyy_zzz.go`, `xxx_yyy_ddd.go`, and `xxx_yyy_aaa.go`; similar filenames increase navigation cost and usually signal fragmentation around implementation details.
 - Before creating a new production file, first ask whether the code belongs in an existing cohesive file. Create the file only when it makes the package easier to scan after considering both file size and file count.
 
-For example, in a package like `executor`, keep `Executor` and its methods in `executor.go`, and move package-level helpers such as runtime context loading or handoff utilities into focused companion files when the file grows large enough that the split improves readability.
+For example, in a package like `agent`, keep `Agent` and its methods in `agent.go`, and move package-level helpers such as runtime context loading or handoff utilities into focused companion files when the file grows large enough that the split improves readability.

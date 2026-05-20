@@ -93,7 +93,7 @@ type requestStartup struct {
 // lifecycle updates are communicated through the stream. The stream is
 // replayable, so callers may subscribe after StartRequest returns and still
 // inspect events emitted during request startup. StartRequest must not become a
-// synchronization point for planner, runner, executor, or skill work; callers
+// synchronization point for planner, runner, agent, or skill work; callers
 // that need to wait for progress should subscribe to the returned stream or use
 // explicit query APIs.
 func (o *Orchestrator) StartRequest(ctx context.Context, req Request) (*Response, error) {
@@ -516,16 +516,16 @@ func buildPlanNodes(logger *slog.Logger, req Request, plan *CoarsePlan, skills m
 		}
 		skill := skillCfg.Skill
 		convCfg := conversationConfigForNode(skillCfg.Config, step.ID, step.SkillName)
-		executor, err := NewExecutor(skill, planner, convCfg, WithExecutorLogger(logger), WithExecutorClient(skillCfg.Client))
+		agent, err := NewAgent(skill, planner, convCfg, WithAgentLogger(logger), WithAgentClient(skillCfg.Client))
 		if err != nil {
-			return nil, fmt.Errorf("orchestrate: build executor for node %q: %w", step.ID, err)
+			return nil, fmt.Errorf("orchestrate: build agent for node %q: %w", step.ID, err)
 		}
 
 		nodes[step.ID] = &runnerpkg.Node{
 			Id:              step.ID,
 			SkillName:       step.SkillName,
 			TaskDescription: planner.TaskDescription,
-			Executor:        executor,
+			Agent:           agent,
 		}
 	}
 

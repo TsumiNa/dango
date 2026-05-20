@@ -6,6 +6,6 @@
 // scoped metadata, filtering, replay, fan-out, merge, optional persistence, and
 // structured JSON-safe event payloads. Orchestrator, runner, and bound skill
 // runtimes use streams as their communication surface instead of blocking on
-// each other through call stacks; executors and nodes add scheduling context to
+// each other through call stacks; agents and nodes add scheduling context to
 // skill streams before merging them upward.
 package stream

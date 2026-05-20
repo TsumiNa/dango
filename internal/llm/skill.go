@@ -343,7 +343,7 @@ func (s *Skill) runtimeInstruction() string {
 }
 
 // prependSystemInstruction wraps the skill's own SKILL.md body with the
-// platform-level conventions every skill needs (executor lifecycle, exchange
+// platform-level conventions every skill needs (agent lifecycle, exchange
 // markdown contract, built-in tool budget rules, etc.). The shared block
 // always comes first so an external skill written without Dango knowledge
 // inherits the cooperation rules; the skill-specific body, which describes

@@ -9,7 +9,7 @@ import (
 //go:embed *.md
 var instructionFS embed.FS
 
-// StageNote returns the markdown note for an executor stage.
+// StageNote returns the markdown note for an agent stage.
 func StageNote(stage string) (string, error) {
 	name := strings.TrimSpace(stage)
 	if name == "" {

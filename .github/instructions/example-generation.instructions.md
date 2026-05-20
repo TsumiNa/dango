@@ -1,12 +1,12 @@
 ---
-description: "Use when creating or modifying runnable examples under examples/. Examples must be purpose-driven integration exercises for orchestrator, runner, executor, and skill behavior rather than isolated demos."
+description: "Use when creating or modifying runnable examples under examples/. Examples must be purpose-driven integration exercises for orchestrator, runner, agent, and skill behavior rather than isolated demos."
 applyTo: "examples/**"
 ---
 
 # Example Generation
 
 Examples under `examples/` are real-world integration exercises for improving
-orchestrator, runner, executor, and skill APIs. Design them from an intended
+orchestrator, runner, agent, and skill APIs. Design them from an intended
 user task first, then add only the runtime hooks needed for that task to work
 end to end.
 
@@ -30,8 +30,8 @@ Keep `main.go` close to a real client of the system:
 - Load shared configuration, including LLM service settings, through the same
   `.env` path used by the rest of the repo.
 - Configure the orchestrator and register the example's skills.
-- Register skills as skill directories and let the orchestrator/runner/executor
-  bind them into runnable executors with standard skill tools. Do not create
+- Register skills as skill directories and let the orchestrator/runner/agent
+  bind them into runnable agents with standard skill tools. Do not create
   example-specific Go function tools in `main.go` for domain work that belongs
   inside a skill.
 - Submit the user's task through the orchestrator request API.
@@ -102,7 +102,7 @@ short `SKILL.md` description.
   test should verify they are not selected unless the user asks for them.
 
 When a user task requires a capability that the current orchestrator, runner,
-executor, or skill APIs cannot express, extend the relevant API directly enough
+agent, or skill APIs cannot express, extend the relevant API directly enough
 to support the example. Do not hide missing system behavior inside example-only
 simulation.
 

@@ -237,7 +237,7 @@ func TestFilterBundleEventSelectsEvents(t *testing.T) {
 	}
 	hidden := Event{
 		EventType: EventStatusProgress,
-		From:      Source{Layer: "executor", ID: "node_1"},
+		From:      Source{Layer: "agent", ID: "node_1"},
 		Status:    StatusRunning,
 		Delta:     json.RawMessage(`{"progress":50}`),
 	}

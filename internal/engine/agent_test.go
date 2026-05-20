@@ -36,13 +36,13 @@ func loadLightweightTestSkill(t *testing.T) *llm.Skill {
 	return sk
 }
 
-func TestNewExecutor_BindsSkillAndPlanner(t *testing.T) {
+func TestNewAgent_BindsSkillAndPlanner(t *testing.T) {
 	sk := loadLightweightTestSkill(t)
 	client := &llm.Client{}
 	planner := &ExecutionPlanner{}
-	exec, err := NewExecutor(sk, planner, llm.DefaultConversationConfig(), WithExecutorClient(client))
+	exec, err := NewAgent(sk, planner, llm.DefaultConversationConfig(), WithAgentClient(client))
 	if err != nil {
-		t.Fatalf("NewExecutor: %v", err)
+		t.Fatalf("NewAgent: %v", err)
 	}
 	if exec.Skill() != sk {
 		t.Errorf("Skill() = %p, want %p", exec.Skill(), sk)
@@ -55,17 +55,17 @@ func TestNewExecutor_BindsSkillAndPlanner(t *testing.T) {
 	}
 }
 
-func TestExecutorExposesBoundSkillRuntimeEventStream(t *testing.T) {
+func TestAgentExposesBoundSkillRuntimeEventStream(t *testing.T) {
 	cfg := llm.DefaultConversationConfig()
 	cfg.StreamEvents = true
-	exec, err := NewExecutor(loadLightweightTestSkill(t), &ExecutionPlanner{id: "node-1"}, cfg, WithExecutorClient(&llm.Client{}))
+	exec, err := NewAgent(loadLightweightTestSkill(t), &ExecutionPlanner{id: "node-1"}, cfg, WithAgentClient(&llm.Client{}))
 	if err != nil {
-		t.Fatalf("NewExecutor: %v", err)
+		t.Fatalf("NewAgent: %v", err)
 	}
 	if exec.EventStream() != nil {
 		t.Fatal("EventStream() before binding is non-nil")
 	}
-	if _, err := exec.BindForRunner(nil, runnerpkg.ExecutorRuntimePaths{}); err != nil {
+	if _, err := exec.BindForRunner(nil, runnerpkg.AgentRuntimePaths{}); err != nil {
 		t.Fatalf("BindForRunner: %v", err)
 	}
 	stream := exec.EventStream()
@@ -73,21 +73,21 @@ func TestExecutorExposesBoundSkillRuntimeEventStream(t *testing.T) {
 		t.Fatal("EventStream() after binding is nil")
 	}
 	if got := exec.runtime.EventStream(); got != stream {
-		t.Fatalf("runtime skill stream = %p, want executor-exposed stream %p", got, stream)
+		t.Fatalf("runtime skill stream = %p, want agent-exposed stream %p", got, stream)
 	}
 	if got := exec.runtime.Conversation().EventStream(); got != stream {
 		t.Fatalf("runtime conversation stream = %p, want skill stream %p", got, stream)
 	}
 }
 
-func TestNewExecutor_RejectsNilSkill(t *testing.T) {
-	if _, err := NewExecutor(nil, &ExecutionPlanner{}, llm.DefaultConversationConfig()); err == nil {
+func TestNewAgent_RejectsNilSkill(t *testing.T) {
+	if _, err := NewAgent(nil, &ExecutionPlanner{}, llm.DefaultConversationConfig()); err == nil {
 		t.Fatal("expected error for nil skill")
 	}
 }
 
-func TestNewExecutor_RejectsNilPlanner(t *testing.T) {
-	if _, err := NewExecutor(loadLightweightTestSkill(t), nil, llm.DefaultConversationConfig()); err == nil {
+func TestNewAgent_RejectsNilPlanner(t *testing.T) {
+	if _, err := NewAgent(loadLightweightTestSkill(t), nil, llm.DefaultConversationConfig()); err == nil {
 		t.Fatal("expected error for nil planner")
 	}
 }
@@ -107,9 +107,9 @@ func TestExchangeDocMarkdownTreatsBodyAsOpaqueMarkdown(t *testing.T) {
 		t.Fatalf("Handoff Markdown: %v", err)
 	}
 
-	exec, err := NewExecutor(loadLightweightTestSkill(t), &ExecutionPlanner{id: "node-1"}, llm.DefaultConversationConfig(), WithExecutorClient(&llm.Client{}))
+	exec, err := NewAgent(loadLightweightTestSkill(t), &ExecutionPlanner{id: "node-1"}, llm.DefaultConversationConfig(), WithAgentClient(&llm.Client{}))
 	if err != nil {
-		t.Fatalf("NewExecutor: %v", err)
+		t.Fatalf("NewAgent: %v", err)
 	}
 	raw, err := exec.exchangeDocMarkdown("runner-1", "node-1", "skill-1", "execute", handoff)
 	if err != nil {
@@ -140,16 +140,16 @@ func TestRenderStageOutputsRecreatesMissingExchangeDir(t *testing.T) {
 	if err != nil {
 		t.Fatalf("AccessibleDirs: %v", err)
 	}
-	exec, err := NewExecutor(loadLightweightTestSkill(t), &ExecutionPlanner{
+	exec, err := NewAgent(loadLightweightTestSkill(t), &ExecutionPlanner{
 		id:              "node-1",
 		TaskDescription: "Render stage outputs.",
-	}, llm.DefaultConversationConfig(), WithExecutorClient(&llm.Client{}))
+	}, llm.DefaultConversationConfig(), WithAgentClient(&llm.Client{}))
 	if err != nil {
-		t.Fatalf("NewExecutor: %v", err)
+		t.Fatalf("NewAgent: %v", err)
 	}
-	runtimePaths, err := workspace.ExecutorRuntimePaths("node-1", exec.Skill().Name, accessible)
+	runtimePaths, err := workspace.AgentRuntimePaths("node-1", exec.Skill().Name, accessible)
 	if err != nil {
-		t.Fatalf("ExecutorRuntimePaths: %v", err)
+		t.Fatalf("AgentRuntimePaths: %v", err)
 	}
 	if _, err := exec.BindForRunner(nil, runtimePaths); err != nil {
 		t.Fatalf("BindForRunner: %v", err)
@@ -191,14 +191,14 @@ func TestFormatParentHandoffsWithPlainMarkdown(t *testing.T) {
 	if err != nil {
 		t.Fatalf("AccessibleDirs: %v", err)
 	}
-	runtimePaths, err := workspace.ExecutorRuntimePaths("node-1", "skill-1", accessible)
+	runtimePaths, err := workspace.AgentRuntimePaths("node-1", "skill-1", accessible)
 	if err != nil {
-		t.Fatalf("ExecutorRuntimePaths: %v", err)
+		t.Fatalf("AgentRuntimePaths: %v", err)
 	}
 
-	exec, err := NewExecutor(loadLightweightTestSkill(t), &ExecutionPlanner{id: "node-1"}, llm.DefaultConversationConfig(), WithExecutorClient(&llm.Client{}))
+	exec, err := NewAgent(loadLightweightTestSkill(t), &ExecutionPlanner{id: "node-1"}, llm.DefaultConversationConfig(), WithAgentClient(&llm.Client{}))
 	if err != nil {
-		t.Fatalf("NewExecutor: %v", err)
+		t.Fatalf("NewAgent: %v", err)
 	}
 	if _, err := exec.BindForRunner(nil, runtimePaths); err != nil {
 		t.Fatalf("BindForRunner: %v", err)
@@ -212,9 +212,9 @@ func TestFormatParentHandoffsWithPlainMarkdown(t *testing.T) {
 
 func TestPolishPlan_BumpsVersionAndFillsPlan(t *testing.T) {
 	planner := &ExecutionPlanner{Version: 1}
-	exec, err := NewExecutor(loadLightweightTestSkill(t), planner, llm.DefaultConversationConfig(), WithExecutorClient(&llm.Client{}))
+	exec, err := NewAgent(loadLightweightTestSkill(t), planner, llm.DefaultConversationConfig(), WithAgentClient(&llm.Client{}))
 	if err != nil {
-		t.Fatalf("NewExecutor: %v", err)
+		t.Fatalf("NewAgent: %v", err)
 	}
 	if err := exec.PolishPlan(); err != nil {
 		t.Fatalf("PolishPlan: %v", err)
@@ -228,9 +228,9 @@ func TestPolishPlan_BumpsVersionAndFillsPlan(t *testing.T) {
 }
 
 func TestExecute_UsesRunEWhenSet(t *testing.T) {
-	exec, err := NewExecutor(loadLightweightTestSkill(t), &ExecutionPlanner{}, llm.DefaultConversationConfig(), WithExecutorClient(&llm.Client{}))
+	exec, err := NewAgent(loadLightweightTestSkill(t), &ExecutionPlanner{}, llm.DefaultConversationConfig(), WithAgentClient(&llm.Client{}))
 	if err != nil {
-		t.Fatalf("NewExecutor: %v", err)
+		t.Fatalf("NewAgent: %v", err)
 	}
 	called := false
 	exec.RunE = func(ctx context.Context, parentOutputs map[string]any) (any, []*runnerpkg.Node, error) {
@@ -250,11 +250,11 @@ func TestExecute_UsesRunEWhenSet(t *testing.T) {
 }
 
 func TestExecute_NoRunEReturnsMarkdownFallback(t *testing.T) {
-	exec, err := NewExecutor(loadLightweightTestSkill(t), &ExecutionPlanner{}, llm.DefaultConversationConfig(), WithExecutorLogger(slog.New(slog.NewTextHandler(os.Stderr, nil))), WithExecutorClient(&llm.Client{}))
+	exec, err := NewAgent(loadLightweightTestSkill(t), &ExecutionPlanner{}, llm.DefaultConversationConfig(), WithAgentLogger(slog.New(slog.NewTextHandler(os.Stderr, nil))), WithAgentClient(&llm.Client{}))
 	if err != nil {
-		t.Fatalf("NewExecutor: %v", err)
+		t.Fatalf("NewAgent: %v", err)
 	}
-	if _, err := exec.BindForRunner(nil, runnerpkg.ExecutorRuntimePaths{}); err != nil {
+	if _, err := exec.BindForRunner(nil, runnerpkg.AgentRuntimePaths{}); err != nil {
 		t.Fatalf("BindForRunner: %v", err)
 	}
 	out, nodes, err := exec.Execute(context.Background(), nil)
@@ -281,9 +281,9 @@ func TestExecute_NoRunEReturnsMarkdownFallback(t *testing.T) {
 }
 
 func TestExecute_NoRunERequiresRunnerBinding(t *testing.T) {
-	exec, err := NewExecutor(loadLightweightTestSkill(t), &ExecutionPlanner{}, llm.DefaultConversationConfig(), WithExecutorClient(&llm.Client{}))
+	exec, err := NewAgent(loadLightweightTestSkill(t), &ExecutionPlanner{}, llm.DefaultConversationConfig(), WithAgentClient(&llm.Client{}))
 	if err != nil {
-		t.Fatalf("NewExecutor: %v", err)
+		t.Fatalf("NewAgent: %v", err)
 	}
 	if _, _, err := exec.Execute(context.Background(), nil); err == nil || !strings.Contains(err.Error(), "has not been bound") {
 		t.Fatalf("Execute error = %v, want unbound runtime skill error", err)
@@ -292,12 +292,12 @@ func TestExecute_NoRunERequiresRunnerBinding(t *testing.T) {
 
 func TestExecutionPromptDoesNotExposeArtifactsRoot(t *testing.T) {
 	artifactsDir := t.TempDir()
-	exec, err := NewExecutor(loadLightweightTestSkill(t), &ExecutionPlanner{
+	exec, err := NewAgent(loadLightweightTestSkill(t), &ExecutionPlanner{
 		TaskDescription: "Write durable outputs.",
 		ArtifactsDir:    artifactsDir,
-	}, llm.DefaultConversationConfig(), WithExecutorClient(&llm.Client{}))
+	}, llm.DefaultConversationConfig(), WithAgentClient(&llm.Client{}))
 	if err != nil {
-		t.Fatalf("NewExecutor: %v", err)
+		t.Fatalf("NewAgent: %v", err)
 	}
 	prompt := exec.executionPrompt(nil)
 	if strings.Contains(prompt, artifactsDir) || strings.Contains(prompt, "Artifacts root:") {
@@ -306,12 +306,12 @@ func TestExecutionPromptDoesNotExposeArtifactsRoot(t *testing.T) {
 }
 
 func TestExecutionPromptIncludesSourceInputForRootTask(t *testing.T) {
-	exec, err := NewExecutor(loadLightweightTestSkill(t), &ExecutionPlanner{
+	exec, err := NewAgent(loadLightweightTestSkill(t), &ExecutionPlanner{
 		TaskDescription: "Normalize groundwater records.",
 		SourceInput:     `{"records":[{"site":"Aomori-plain-01"}]}`,
-	}, llm.DefaultConversationConfig(), WithExecutorClient(&llm.Client{}))
+	}, llm.DefaultConversationConfig(), WithAgentClient(&llm.Client{}))
 	if err != nil {
-		t.Fatalf("NewExecutor: %v", err)
+		t.Fatalf("NewAgent: %v", err)
 	}
 	prompt := exec.executionPrompt(nil)
 	if !strings.Contains(prompt, "Original root request input") || !strings.Contains(prompt, "Aomori-plain-01") {
@@ -379,16 +379,16 @@ func TestExecutionPromptListsRuntimeReferencesWithoutInliningBodies(t *testing.T
 	if err != nil {
 		t.Fatalf("AccessibleDirs: %v", err)
 	}
-	runtimePaths, err := workspace.ExecutorRuntimePaths("node-1", "skill-1", accessible)
+	runtimePaths, err := workspace.AgentRuntimePaths("node-1", "skill-1", accessible)
 	if err != nil {
-		t.Fatalf("ExecutorRuntimePaths: %v", err)
+		t.Fatalf("AgentRuntimePaths: %v", err)
 	}
-	exec, err := NewExecutor(loadLightweightTestSkill(t), &ExecutionPlanner{
+	exec, err := NewAgent(loadLightweightTestSkill(t), &ExecutionPlanner{
 		id:              "node-1",
 		TaskDescription: "Use upstream references.",
-	}, llm.DefaultConversationConfig(), WithExecutorClient(&llm.Client{}))
+	}, llm.DefaultConversationConfig(), WithAgentClient(&llm.Client{}))
 	if err != nil {
-		t.Fatalf("NewExecutor: %v", err)
+		t.Fatalf("NewAgent: %v", err)
 	}
 	exec.runtimePaths = runtimePaths
 
@@ -417,11 +417,11 @@ func TestExecutionPromptListsRuntimeReferencesWithoutInliningBodies(t *testing.T
 }
 
 func TestNoToolStagePromptsDoNotAskToInspectReferencesWithTools(t *testing.T) {
-	exec, err := NewExecutor(loadLightweightTestSkill(t), &ExecutionPlanner{
+	exec, err := NewAgent(loadLightweightTestSkill(t), &ExecutionPlanner{
 		TaskDescription: "Summarize the current plan.",
-	}, llm.DefaultConversationConfig(), WithExecutorClient(&llm.Client{}))
+	}, llm.DefaultConversationConfig(), WithAgentClient(&llm.Client{}))
 	if err != nil {
-		t.Fatalf("NewExecutor: %v", err)
+		t.Fatalf("NewAgent: %v", err)
 	}
 
 	for stage, prompt := range map[string]string{
@@ -450,9 +450,9 @@ func TestNoToolStagePromptsDoNotAskToInspectReferencesWithTools(t *testing.T) {
 func TestExecute_RespectsCanceledContext(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	exec, err := NewExecutor(loadLightweightTestSkill(t), &ExecutionPlanner{}, llm.DefaultConversationConfig(), WithExecutorClient(&llm.Client{}))
+	exec, err := NewAgent(loadLightweightTestSkill(t), &ExecutionPlanner{}, llm.DefaultConversationConfig(), WithAgentClient(&llm.Client{}))
 	if err != nil {
-		t.Fatalf("NewExecutor: %v", err)
+		t.Fatalf("NewAgent: %v", err)
 	}
 	if _, _, err := exec.Execute(ctx, nil); err == nil {
 		t.Fatal("expected Execute to return ctx.Err for canceled context")
@@ -464,9 +464,9 @@ func TestExecute_RespectsCanceledContext(t *testing.T) {
 
 func TestLLMClient_ReturnsConfiguredClientBeforeRunnerBind(t *testing.T) {
 	client := &llm.Client{}
-	exec, err := NewExecutor(loadLightweightTestSkill(t), &ExecutionPlanner{}, llm.DefaultConversationConfig(), WithExecutorClient(client))
+	exec, err := NewAgent(loadLightweightTestSkill(t), &ExecutionPlanner{}, llm.DefaultConversationConfig(), WithAgentClient(client))
 	if err != nil {
-		t.Fatalf("NewExecutor: %v", err)
+		t.Fatalf("NewAgent: %v", err)
 	}
 	if got := exec.LLMClient(); got != client {
 		t.Fatalf("LLMClient() = %p, want %p", got, client)
@@ -475,9 +475,9 @@ func TestLLMClient_ReturnsConfiguredClientBeforeRunnerBind(t *testing.T) {
 
 func TestRuntimeSkill_RequiresRunnerBinding(t *testing.T) {
 	lightweight := loadLightweightTestSkill(t)
-	exec, err := NewExecutor(lightweight, &ExecutionPlanner{}, llm.DefaultConversationConfig(), WithExecutorClient(&llm.Client{}))
+	exec, err := NewAgent(lightweight, &ExecutionPlanner{}, llm.DefaultConversationConfig(), WithAgentClient(&llm.Client{}))
 	if err != nil {
-		t.Fatalf("NewExecutor: %v", err)
+		t.Fatalf("NewAgent: %v", err)
 	}
 	if _, err := exec.runtimeSkill(); err == nil {
 		t.Fatal("expected runtimeSkill to fail before runner binding")
@@ -491,11 +491,11 @@ func TestBindForRunner_BindsLightweightSkillAndAllocatesSession(t *testing.T) {
 		t.Fatalf("NewJSONStore: %v", err)
 	}
 	lightweight := loadLightweightTestSkill(t)
-	exec, err := NewExecutor(lightweight, &ExecutionPlanner{}, llm.DefaultConversationConfig(), WithExecutorClient(client))
+	exec, err := NewAgent(lightweight, &ExecutionPlanner{}, llm.DefaultConversationConfig(), WithAgentClient(client))
 	if err != nil {
-		t.Fatalf("NewExecutor: %v", err)
+		t.Fatalf("NewAgent: %v", err)
 	}
-	sessionID, err := exec.BindForRunner(nil, runnerpkg.ExecutorRuntimePaths{}, store)
+	sessionID, err := exec.BindForRunner(nil, runnerpkg.AgentRuntimePaths{}, store)
 	if err != nil {
 		t.Fatalf("BindForRunner: %v", err)
 	}
@@ -523,15 +523,15 @@ func TestBindForRunner_ReusesExistingSession(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewJSONStore: %v", err)
 	}
-	exec, err := NewExecutor(loadLightweightTestSkill(t), &ExecutionPlanner{}, llm.DefaultConversationConfig(), WithExecutorClient(client))
+	exec, err := NewAgent(loadLightweightTestSkill(t), &ExecutionPlanner{}, llm.DefaultConversationConfig(), WithAgentClient(client))
 	if err != nil {
-		t.Fatalf("NewExecutor: %v", err)
+		t.Fatalf("NewAgent: %v", err)
 	}
-	firstSessionID, err := exec.BindForRunner(nil, runnerpkg.ExecutorRuntimePaths{}, store)
+	firstSessionID, err := exec.BindForRunner(nil, runnerpkg.AgentRuntimePaths{}, store)
 	if err != nil {
 		t.Fatalf("BindForRunner(first): %v", err)
 	}
-	secondSessionID, err := exec.BindForRunner(&firstSessionID, runnerpkg.ExecutorRuntimePaths{}, store)
+	secondSessionID, err := exec.BindForRunner(&firstSessionID, runnerpkg.AgentRuntimePaths{}, store)
 	if err != nil {
 		t.Fatalf("BindForRunner(second): %v", err)
 	}
@@ -542,11 +542,11 @@ func TestBindForRunner_ReusesExistingSession(t *testing.T) {
 
 func TestBindForRunnerStoresRuntimePathsAndConfiguresAccessibleDirs(t *testing.T) {
 	resourceDir := t.TempDir()
-	exec, err := NewExecutor(loadLightweightTestSkill(t), &ExecutionPlanner{}, llm.DefaultConversationConfig(), WithExecutorClient(&llm.Client{}))
+	exec, err := NewAgent(loadLightweightTestSkill(t), &ExecutionPlanner{}, llm.DefaultConversationConfig(), WithAgentClient(&llm.Client{}))
 	if err != nil {
-		t.Fatalf("NewExecutor: %v", err)
+		t.Fatalf("NewAgent: %v", err)
 	}
-	runtimePaths := runnerpkg.ExecutorRuntimePaths{
+	runtimePaths := runnerpkg.AgentRuntimePaths{
 		RunnerID:       "runner-1",
 		NodeID:         "node-1",
 		SkillName:      exec.Skill().Name,
@@ -559,10 +559,10 @@ func TestBindForRunnerStoresRuntimePathsAndConfiguresAccessibleDirs(t *testing.T
 		t.Fatal("runtime skill is nil")
 	}
 	if got := exec.runtimePaths; got.RunnerID != "runner-1" || got.NodeID != "node-1" || got.SkillName != exec.Skill().Name {
-		t.Fatalf("executor runtime paths = %+v", got)
+		t.Fatalf("agent runtime paths = %+v", got)
 	}
 	if got := exec.runtimePaths.AccessibleDirs; len(got) != 1 || got[0] != resourceDir {
-		t.Fatalf("executor runtime AccessibleDirs = %v, want [%s]", got, resourceDir)
+		t.Fatalf("agent runtime AccessibleDirs = %v, want [%s]", got, resourceDir)
 	}
 	if got := exec.runtime.AccessibleDirs(); len(got) != 1 {
 		t.Fatalf("runtime AccessibleDirs() = %v, want one dir", got)
@@ -573,14 +573,14 @@ func TestBindForRunnerStoresRuntimePathsAndConfiguresAccessibleDirs(t *testing.T
 }
 
 func TestPolish_ReturnsHandoffMarkdown(t *testing.T) {
-	exec, err := NewExecutor(loadLightweightTestSkill(t), &ExecutionPlanner{
+	exec, err := NewAgent(loadLightweightTestSkill(t), &ExecutionPlanner{
 		id:              "node-1",
 		TaskDescription: "Plan the work.",
-	}, llm.DefaultConversationConfig(), WithExecutorClient(&llm.Client{}))
+	}, llm.DefaultConversationConfig(), WithAgentClient(&llm.Client{}))
 	if err != nil {
-		t.Fatalf("NewExecutor: %v", err)
+		t.Fatalf("NewAgent: %v", err)
 	}
-	if _, err := exec.BindForRunner(nil, runnerpkg.ExecutorRuntimePaths{}); err != nil {
+	if _, err := exec.BindForRunner(nil, runnerpkg.AgentRuntimePaths{}); err != nil {
 		t.Fatalf("BindForRunner: %v", err)
 	}
 
@@ -643,14 +643,14 @@ func TestPolish_UsesRuntimeSkillWhenBound(t *testing.T) {
 		t.Fatalf("NewClient: %v", err)
 	}
 
-	exec, err := NewExecutor(loadLightweightTestSkill(t), &ExecutionPlanner{
+	exec, err := NewAgent(loadLightweightTestSkill(t), &ExecutionPlanner{
 		id:              "node-1",
 		TaskDescription: "Train a GP-style groundwater model.",
-	}, llm.DefaultConversationConfig(), WithExecutorClient(client))
+	}, llm.DefaultConversationConfig(), WithAgentClient(client))
 	if err != nil {
-		t.Fatalf("NewExecutor: %v", err)
+		t.Fatalf("NewAgent: %v", err)
 	}
-	if _, err := exec.BindForRunner(nil, runnerpkg.ExecutorRuntimePaths{}); err != nil {
+	if _, err := exec.BindForRunner(nil, runnerpkg.AgentRuntimePaths{}); err != nil {
 		t.Fatalf("BindForRunner: %v", err)
 	}
 
@@ -671,14 +671,14 @@ func TestPolish_UsesRuntimeSkillWhenBound(t *testing.T) {
 }
 
 func TestReport_ReturnsHandoffMarkdownFallback(t *testing.T) {
-	exec, err := NewExecutor(loadLightweightTestSkill(t), &ExecutionPlanner{
+	exec, err := NewAgent(loadLightweightTestSkill(t), &ExecutionPlanner{
 		id:              "node-1",
 		TaskDescription: "Report the work.",
-	}, llm.DefaultConversationConfig(), WithExecutorClient(&llm.Client{}))
+	}, llm.DefaultConversationConfig(), WithAgentClient(&llm.Client{}))
 	if err != nil {
-		t.Fatalf("NewExecutor: %v", err)
+		t.Fatalf("NewAgent: %v", err)
 	}
-	if _, err := exec.BindForRunner(nil, runnerpkg.ExecutorRuntimePaths{}); err != nil {
+	if _, err := exec.BindForRunner(nil, runnerpkg.AgentRuntimePaths{}); err != nil {
 		t.Fatalf("BindForRunner: %v", err)
 	}
 
@@ -725,16 +725,16 @@ func TestRenderStageOutputsWritesSingleHandoffExchangeEnvelopeAndMemoSnapshot(t 
 	if err != nil {
 		t.Fatalf("AccessibleDirs: %v", err)
 	}
-	exec, err := NewExecutor(loadLightweightTestSkill(t), &ExecutionPlanner{
+	exec, err := NewAgent(loadLightweightTestSkill(t), &ExecutionPlanner{
 		id:              "node-1",
 		TaskDescription: "Plan and execute.",
-	}, llm.DefaultConversationConfig(), WithExecutorClient(&llm.Client{}))
+	}, llm.DefaultConversationConfig(), WithAgentClient(&llm.Client{}))
 	if err != nil {
-		t.Fatalf("NewExecutor: %v", err)
+		t.Fatalf("NewAgent: %v", err)
 	}
-	runtimePaths, err := workspace.ExecutorRuntimePaths("node-1", exec.Skill().Name, accessible)
+	runtimePaths, err := workspace.AgentRuntimePaths("node-1", exec.Skill().Name, accessible)
 	if err != nil {
-		t.Fatalf("ExecutorRuntimePaths: %v", err)
+		t.Fatalf("AgentRuntimePaths: %v", err)
 	}
 	if _, err := exec.BindForRunner(nil, runtimePaths); err != nil {
 		t.Fatalf("BindForRunner: %v", err)
@@ -806,17 +806,17 @@ func TestRenderStageOutputsWritesSingleHandoffExchangeEnvelopeAndMemoSnapshot(t 
 }
 
 func TestRunnerEmitsMemoSnapshotEventForExecutionMemoSnapshots(t *testing.T) {
-	exec, err := NewExecutor(loadLightweightTestSkill(t), &ExecutionPlanner{
+	exec, err := NewAgent(loadLightweightTestSkill(t), &ExecutionPlanner{
 		id:              "node-1",
 		TaskDescription: "Write memo-backed execution output.",
-	}, llm.DefaultConversationConfig(), WithExecutorClient(&llm.Client{}))
+	}, llm.DefaultConversationConfig(), WithAgentClient(&llm.Client{}))
 	if err != nil {
-		t.Fatalf("NewExecutor: %v", err)
+		t.Fatalf("NewAgent: %v", err)
 	}
 	node := &runnerpkg.Node{
 		Id:        "node-1",
 		SkillName: "memo-writer",
-		Executor:  &memoFixtureExecutor{exec: exec, writeMemo: true},
+		Agent:     &memoFixtureAgent{exec: exec, writeMemo: true},
 	}
 	workspaceRoot := t.TempDir()
 	r := runnerpkg.New(
@@ -878,17 +878,17 @@ func TestRunnerEmitsMemoSnapshotEventForExecutionMemoSnapshots(t *testing.T) {
 }
 
 func TestRunnerSkipsMemoSnapshotEventWhenExecutionProducesNoMemoFiles(t *testing.T) {
-	exec, err := NewExecutor(loadLightweightTestSkill(t), &ExecutionPlanner{
+	exec, err := NewAgent(loadLightweightTestSkill(t), &ExecutionPlanner{
 		id:              "node-1",
 		TaskDescription: "Return execution output without memo files.",
-	}, llm.DefaultConversationConfig(), WithExecutorClient(&llm.Client{}))
+	}, llm.DefaultConversationConfig(), WithAgentClient(&llm.Client{}))
 	if err != nil {
-		t.Fatalf("NewExecutor: %v", err)
+		t.Fatalf("NewAgent: %v", err)
 	}
 	node := &runnerpkg.Node{
 		Id:        "node-1",
 		SkillName: "memo-writer",
-		Executor:  &memoFixtureExecutor{exec: exec},
+		Agent:     &memoFixtureAgent{exec: exec},
 	}
 	r := runnerpkg.New(
 		runnerpkg.WithPersistenceHandle(staticWorkspaceHandle{root: t.TempDir()}),
@@ -928,31 +928,31 @@ func (h staticWorkspaceHandle) RunnerStore() runnerpkg.RunnerStore { return nil 
 
 func (h staticWorkspaceHandle) WorkspaceRoot() string { return h.root }
 
-type memoFixtureExecutor struct {
-	exec      *Executor
+type memoFixtureAgent struct {
+	exec      *Agent
 	writeMemo bool
 }
 
-func (e *memoFixtureExecutor) BindForRunner(sessID *string, runtimePaths runnerpkg.ExecutorRuntimePaths, sessStores ...llm.SessionStore) (string, error) {
+func (e *memoFixtureAgent) BindForRunner(sessID *string, runtimePaths runnerpkg.AgentRuntimePaths, sessStores ...llm.SessionStore) (string, error) {
 	return e.exec.BindForRunner(sessID, runtimePaths, sessStores...)
 }
 
-func (e *memoFixtureExecutor) Execute(ctx context.Context, parentOutputs map[string]any) (any, []*runnerpkg.Node, error) {
+func (e *memoFixtureAgent) Execute(ctx context.Context, parentOutputs map[string]any) (any, []*runnerpkg.Node, error) {
 	if e.writeMemo {
 		if err := os.WriteFile(filepath.Join(e.exec.currentRuntimePaths().MemoDir, "plan.md"), []byte("memo body"), 0o644); err != nil {
 			return nil, nil, err
 		}
 	}
-	output, err := e.exec.renderStageOutputs("execute", "continue", []string{"downstream"}, "executor output")
+	output, err := e.exec.renderStageOutputs("execute", "continue", []string{"downstream"}, "agent output")
 	if err != nil {
 		return nil, nil, err
 	}
 	return output, nil, nil
 }
 
-func (e *memoFixtureExecutor) Polish(ctx context.Context) (any, error) { return nil, nil }
+func (e *memoFixtureAgent) Polish(ctx context.Context) (any, error) { return nil, nil }
 
-func (e *memoFixtureExecutor) Report(ctx context.Context, output any) (any, error) {
+func (e *memoFixtureAgent) Report(ctx context.Context, output any) (any, error) {
 	return nil, nil
 }
 

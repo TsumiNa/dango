@@ -6,6 +6,6 @@
 - [Request 控制面](architecture/control-plane.md)
 - [Runner 生命周期](architecture/runner-lifecycle.md)
 - [Exchange 数据面与可观察性](architecture/data-plane.md)
-- [Orchestrator / Executors exchange 编排图](architecture/orchestrator-executor_interative.md)
+- [Orchestrator / Agents exchange 编排图](architecture/orchestrator-agent_interative.md)
 
 如果只看一页，请先读 [architecture/README.md](architecture/README.md)。

@@ -29,16 +29,16 @@ of them. Detect your role from the first user message:
   `{"mode": "...", "task": "...", "contract": "...", "data": {...}}`.
   Reply with one strict JSON object matching the contract for `mode`. No fences,
   no commentary.
-- **Executor** — input is markdown headed by a Dango executor stage note for
+- **Agent** — input is markdown headed by a Dango agent stage note for
   `polish`, `execute`, or `report`. Reply with one Dango handoff markdown
   document.
 
 If the prompt does not match either shape, treat it as a direct chat turn and
 follow the skill-specific instructions verbatim.
 
-## Executor lifecycle: polish → execute → report
+## Agent lifecycle: polish → execute → report
 
-The runner drives every executor node through three stages. Detect the stage
+The runner drives every agent node through three stages. Detect the stage
 from the stage note in the user message and behave accordingly.
 
 | Stage | Purpose | Tools allowed | Output |
@@ -49,7 +49,7 @@ from the stage note in the user message and behave accordingly.
 
 The orchestrator first builds a coarse plan of node IDs, skill names, and task
 descriptions. Each node is polished by its assigned skill. Once every polish
-passes review, executors run in dependency order; each executor's handoff is
+passes review, agents run in dependency order; each agent's handoff is
 made available to downstream nodes. Reports flow back to the orchestrator for
 the final response. You only see one stage of one node per conversation.
 
@@ -146,9 +146,9 @@ Keep handoff bodies focused on recipient-readable results. If a memo exists,
 the handoff may briefly mention it for auditability, but downstream correctness
 must not depend on reading memo files.
 
-## Handoff markdown (executor output)
+## Handoff markdown (agent output)
 
-Every executor reply is one document with YAML front matter and a markdown body.
+Every agent reply is one document with YAML front matter and a markdown body.
 The platform parses the front matter; humans and downstream skills read the
 body.
 
@@ -193,7 +193,7 @@ Rules:
 ## Output discipline
 
 - Orchestrator turns: one strict JSON object, top-level only, no fences.
-- Executor turns: one handoff markdown document with front matter, no outer
+- Agent turns: one handoff markdown document with front matter, no outer
   fence.
 - Either way: no preamble, no trailing prose, no explanation outside the
   envelope.

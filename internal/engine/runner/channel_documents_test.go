@@ -232,9 +232,9 @@ func TestRunnerSkipsExternalArtifactsWithoutTrustedRoots(t *testing.T) {
 		t.Fatalf("Markdown unexpectedly accepted absolute artifact path: %s", parentOutput)
 	}
 
-	child := &resourceRecorderExecutor{}
-	parent := &Node{Id: "parent", Executor: &staticExecutor{output: "parent output"}}
-	childNode := &Node{Id: "child", Parents: []*Node{parent}, Executor: child}
+	child := &resourceRecorderAgent{}
+	parent := &Node{Id: "parent", Agent: &staticAgent{output: "parent output"}}
+	childNode := &Node{Id: "child", Parents: []*Node{parent}, Agent: child}
 	r := newTestRunner()
 	if err := r.Start(context.Background()); err != nil {
 		t.Fatalf("Start: %v", err)
@@ -296,33 +296,33 @@ func TestRunnerPassesRelativeHandoffArtifactDirsToChildBinder(t *testing.T) {
 	}
 }
 
-type staticExecutor struct {
+type staticAgent struct {
 	output any
 }
 
-func (e *staticExecutor) Execute(ctx context.Context, parentOutputs map[string]any) (any, []*Node, error) {
+func (e *staticAgent) Execute(ctx context.Context, parentOutputs map[string]any) (any, []*Node, error) {
 	return e.output, nil, nil
 }
 
-func (e *staticExecutor) Polish(ctx context.Context) (any, error) { return nil, nil }
+func (e *staticAgent) Polish(ctx context.Context) (any, error) { return nil, nil }
 
-func (e *staticExecutor) Report(ctx context.Context, output any) (any, error) { return nil, nil }
+func (e *staticAgent) Report(ctx context.Context, output any) (any, error) { return nil, nil }
 
-type resourceRecorderExecutor struct {
+type resourceRecorderAgent struct {
 	accessibleDirs []string
 }
 
-func (e *resourceRecorderExecutor) BindForRunner(sessID *string, runtimePaths ExecutorRuntimePaths, sessStores ...llm.SessionStore) (string, error) {
+func (e *resourceRecorderAgent) BindForRunner(sessID *string, runtimePaths AgentRuntimePaths, sessStores ...llm.SessionStore) (string, error) {
 	e.accessibleDirs = append([]string(nil), runtimePaths.AccessibleDirs...)
 	return "", nil
 }
 
-func (e *resourceRecorderExecutor) Execute(ctx context.Context, parentOutputs map[string]any) (any, []*Node, error) {
+func (e *resourceRecorderAgent) Execute(ctx context.Context, parentOutputs map[string]any) (any, []*Node, error) {
 	return "child output", nil, nil
 }
 
-func (e *resourceRecorderExecutor) Polish(ctx context.Context) (any, error) { return nil, nil }
+func (e *resourceRecorderAgent) Polish(ctx context.Context) (any, error) { return nil, nil }
 
-func (e *resourceRecorderExecutor) Report(ctx context.Context, output any) (any, error) {
+func (e *resourceRecorderAgent) Report(ctx context.Context, output any) (any, error) {
 	return nil, nil
 }

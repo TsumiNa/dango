@@ -416,7 +416,7 @@ func TestRuntimeInstructionPrependsPlatformSystemPrompt(t *testing.T) {
 	for _, want := range []string{
 		"Dango platform conventions",
 		"Two skill roles",
-		"Executor lifecycle: polish → execute → report",
+		"Agent lifecycle: polish → execute → report",
 		"Handoff markdown",
 		"DO_THE_TASK",
 		"Workspace access:",

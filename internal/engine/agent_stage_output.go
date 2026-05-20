@@ -13,7 +13,7 @@ import (
 	streampkg "github.com/tsumina/dango/internal/engine/stream"
 )
 
-func (e *Executor) renderStageOutputs(stage string, intent string, toNodes []string, body string) (string, error) {
+func (e *Agent) renderStageOutputs(stage string, intent string, toNodes []string, body string) (string, error) {
 	paths := e.currentRuntimePaths()
 	runnerID := paths.RunnerID
 	nodeID := paths.NodeID
@@ -59,7 +59,7 @@ func (e *Executor) renderStageOutputs(stage string, intent string, toNodes []str
 	return handoffMarkdown, nil
 }
 
-func (e *Executor) exchangeDocMarkdown(runnerID string, nodeID string, skillName string, stage string, body string) (string, error) {
+func (e *Agent) exchangeDocMarkdown(runnerID string, nodeID string, skillName string, stage string, body string) (string, error) {
 	exchange := runnerpkg.ExchangeDoc{
 		ChannelHeader: streampkg.ChannelHeader{
 			RunnerID:  runnerID,

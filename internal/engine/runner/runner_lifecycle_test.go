@@ -15,7 +15,7 @@ import (
 func newPolishNode(id string, polishFrag any) *Node {
 	return &Node{
 		Id: id,
-		Executor: &testExecutor{
+		Agent: &testAgent{
 			polish: func(ctx context.Context) (any, error) {
 				return polishFrag, nil
 			},
@@ -38,7 +38,7 @@ func TestRunner_StartManagedReviewsExecutesReportsAndSettles(t *testing.T) {
 	nodes := map[string]*Node{
 		"A": {
 			Id: "A",
-			Executor: &testExecutor{
+			Agent: &testAgent{
 				polish: func(ctx context.Context) (any, error) { return "frag-A", nil },
 				run: func(ctx context.Context, parentOutputs map[string]any) (any, []*Node, error) {
 					return "exec-A", nil, nil
@@ -108,7 +108,7 @@ func TestRunner_StartPolishFailureAborts(t *testing.T) {
 	nodes := map[string]*Node{
 		"A": {
 			Id: "A",
-			Executor: &testExecutor{
+			Agent: &testAgent{
 				polish: func(ctx context.Context) (any, error) {
 					return nil, polishErr
 				},
@@ -141,7 +141,7 @@ func TestRunnerFanOutPolishSkipsCompletedEventWhenMemoSnapshotFails(t *testing.T
 	r.workspace = workspace
 	makeUnreadableMemoSnapshotDir(t, workspace, "A", "polish")
 	sub, err := r.SubscribeStream(streampkg.Filter{
-		EventTypes: []string{streampkg.EventExecutorPolishCompleted},
+		EventTypes: []string{streampkg.EventAgentPolishCompleted},
 		Scope:      streampkg.Scope{RunnerID: r.ID(), NodeID: "A"},
 	}, streampkg.WithSubscriberBuffer(4))
 	if err != nil {
@@ -164,7 +164,7 @@ func TestRunnerFanOutReportSkipsCompletedEventWhenMemoSnapshotFails(t *testing.T
 	r.workspace = workspace
 	makeUnreadableMemoSnapshotDir(t, workspace, "A", "report")
 	sub, err := r.SubscribeStream(streampkg.Filter{
-		EventTypes: []string{streampkg.EventExecutorReportCompleted},
+		EventTypes: []string{streampkg.EventAgentReportCompleted},
 		Scope:      streampkg.Scope{RunnerID: r.ID(), NodeID: "A"},
 	}, streampkg.WithSubscriberBuffer(4))
 	if err != nil {
@@ -175,7 +175,7 @@ func TestRunnerFanOutReportSkipsCompletedEventWhenMemoSnapshotFails(t *testing.T
 	nodes := map[string]*Node{
 		"A": {
 			Id: "A",
-			Executor: &testExecutor{
+			Agent: &testAgent{
 				report: func(ctx context.Context, output any) (any, error) {
 					return "sum-" + output.(string), nil
 				},
@@ -194,7 +194,7 @@ func TestRunner_AcceptPolishedPlanRunsEngineAndReports(t *testing.T) {
 	nodes := map[string]*Node{
 		"A": {
 			Id: "A",
-			Executor: &testExecutor{
+			Agent: &testAgent{
 				run: func(ctx context.Context, parentOutputs map[string]any) (any, []*Node, error) {
 					return "exec-A", nil, nil
 				},
@@ -360,7 +360,7 @@ func TestRunner_AcceptRejectConcurrentSingleWinner(t *testing.T) {
 	nodes := map[string]*Node{
 		"A": {
 			Id: "A",
-			Executor: &testExecutor{
+			Agent: &testAgent{
 				run: func(ctx context.Context, parentOutputs map[string]any) (any, []*Node, error) {
 					<-release
 					return "exec-A", nil, nil
@@ -424,7 +424,7 @@ func TestRunner_ReportIncludesDynamicNodes(t *testing.T) {
 	plan := &CoarsePlan{Request: "demo"}
 	dynamic := &Node{
 		Id: "B",
-		Executor: &testExecutor{
+		Agent: &testAgent{
 			run: func(ctx context.Context, parentOutputs map[string]any) (any, []*Node, error) {
 				return "exec-B", nil, nil
 			},
@@ -437,7 +437,7 @@ func TestRunner_ReportIncludesDynamicNodes(t *testing.T) {
 	nodes := map[string]*Node{
 		"A": {
 			Id: "A",
-			Executor: &testExecutor{
+			Agent: &testAgent{
 				run: func(ctx context.Context, parentOutputs map[string]any) (any, []*Node, error) {
 					return "exec-A", []*Node{dynamic}, nil
 				},

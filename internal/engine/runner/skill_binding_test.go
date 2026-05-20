@@ -11,13 +11,13 @@ import (
 	"github.com/tsumina/dango/internal/llm"
 )
 
-type bindRecorderExecutor struct {
+type bindRecorderAgent struct {
 	calls       int
 	seenSession []string
-	seenPaths   []ExecutorRuntimePaths
+	seenPaths   []AgentRuntimePaths
 }
 
-func (e *bindRecorderExecutor) BindForRunner(sessID *string, runtimePaths ExecutorRuntimePaths, sessStores ...llm.SessionStore) (string, error) {
+func (e *bindRecorderAgent) BindForRunner(sessID *string, runtimePaths AgentRuntimePaths, sessStores ...llm.SessionStore) (string, error) {
 	e.calls++
 	runtimePaths.AccessibleDirs = append([]string(nil), runtimePaths.AccessibleDirs...)
 	e.seenPaths = append(e.seenPaths, runtimePaths)
@@ -32,22 +32,22 @@ func (e *bindRecorderExecutor) BindForRunner(sessID *string, runtimePaths Execut
 	return "session-1", nil
 }
 
-func (e *bindRecorderExecutor) Execute(ctx context.Context, parentOutputs map[string]any) (any, []*Node, error) {
+func (e *bindRecorderAgent) Execute(ctx context.Context, parentOutputs map[string]any) (any, []*Node, error) {
 	return nil, nil, nil
 }
 
-func (e *bindRecorderExecutor) Polish(ctx context.Context) (any, error) { return nil, nil }
+func (e *bindRecorderAgent) Polish(ctx context.Context) (any, error) { return nil, nil }
 
-func (e *bindRecorderExecutor) Report(ctx context.Context, output any) (any, error) {
+func (e *bindRecorderAgent) Report(ctx context.Context, output any) (any, error) {
 	return output, nil
 }
 
-func TestRunner_PrepareNodeExecutors_ReusesStoredSessionID(t *testing.T) {
-	exec := &bindRecorderExecutor{}
+func TestRunner_PrepareNodeAgents_ReusesStoredSessionID(t *testing.T) {
+	exec := &bindRecorderAgent{}
 	r := New(
 		WithLogger(testLogger),
 		WithInitialPlan(&CoarsePlan{Request: "demo"}, map[string]*Node{
-			"only": {Id: "only", Executor: exec},
+			"only": {Id: "only", Agent: exec},
 		}),
 	)
 
@@ -80,8 +80,8 @@ func TestRunner_PrepareNodeExecutors_ReusesStoredSessionID(t *testing.T) {
 	}
 }
 
-func TestRunner_PrepareNodeExecutor_ForwardsTypedRuntimePaths(t *testing.T) {
-	exec := &bindRecorderExecutor{}
+func TestRunner_PrepareNodeAgent_ForwardsTypedRuntimePaths(t *testing.T) {
+	exec := &bindRecorderAgent{}
 	r := newTestRunner()
 	workspace, err := ProvisionWorkspace(t.TempDir(), r.ID(), []string{"only"}, nil)
 	if err != nil {
@@ -93,8 +93,8 @@ func TestRunner_PrepareNodeExecutor_ForwardsTypedRuntimePaths(t *testing.T) {
 		t.Fatalf("nodeRuntimePaths: %v", err)
 	}
 
-	if err := r.prepareNodeExecutor("only", exec, runtimePaths); err != nil {
-		t.Fatalf("prepareNodeExecutor: %v", err)
+	if err := r.prepareNodeAgent("only", exec, runtimePaths); err != nil {
+		t.Fatalf("prepareNodeAgent: %v", err)
 	}
 	if len(exec.seenPaths) != 1 {
 		t.Fatalf("seen runtime path count = %d, want 1", len(exec.seenPaths))
@@ -124,29 +124,29 @@ func TestRunner_PrepareNodeExecutor_ForwardsTypedRuntimePaths(t *testing.T) {
 	}
 }
 
-type streamingBindExecutor struct {
+type streamingBindAgent struct {
 	eventStream *streampkg.Stream
 }
 
-func (e *streamingBindExecutor) BindForRunner(sessID *string, runtimePaths ExecutorRuntimePaths, sessStores ...llm.SessionStore) (string, error) {
+func (e *streamingBindAgent) BindForRunner(sessID *string, runtimePaths AgentRuntimePaths, sessStores ...llm.SessionStore) (string, error) {
 	e.eventStream = streampkg.New(streampkg.Scope{NodeID: "owned-node"}, streampkg.DefaultConfig())
 	return "session-owned-stream", nil
 }
 
-func (e *streamingBindExecutor) EventStream() *streampkg.Stream { return e.eventStream }
+func (e *streamingBindAgent) EventStream() *streampkg.Stream { return e.eventStream }
 
-func (e *streamingBindExecutor) Execute(ctx context.Context, parentOutputs map[string]any) (any, []*Node, error) {
+func (e *streamingBindAgent) Execute(ctx context.Context, parentOutputs map[string]any) (any, []*Node, error) {
 	return nil, nil, nil
 }
 
-func (e *streamingBindExecutor) Polish(ctx context.Context) (any, error) { return nil, nil }
+func (e *streamingBindAgent) Polish(ctx context.Context) (any, error) { return nil, nil }
 
-func (e *streamingBindExecutor) Report(ctx context.Context, output any) (any, error) {
+func (e *streamingBindAgent) Report(ctx context.Context, output any) (any, error) {
 	return output, nil
 }
 
-func TestRunner_PrepareNodeExecutor_MergesExecutorOwnedStream(t *testing.T) {
-	exec := &streamingBindExecutor{}
+func TestRunner_PrepareNodeAgent_MergesAgentOwnedStream(t *testing.T) {
+	exec := &streamingBindAgent{}
 	r := newTestRunner()
 	sub, err := r.SubscribeStream(streampkg.Filter{EventTypes: []string{streampkg.EventMergeBundle}}, streampkg.WithSubscriberBuffer(4), streampkg.WithRawStream())
 	if err != nil {
@@ -154,11 +154,11 @@ func TestRunner_PrepareNodeExecutor_MergesExecutorOwnedStream(t *testing.T) {
 	}
 	defer sub.Cancel()
 
-	if err := r.prepareNodeExecutor("owned-node", exec, ExecutorRuntimePaths{}); err != nil {
-		t.Fatalf("prepareNodeExecutor: %v", err)
+	if err := r.prepareNodeAgent("owned-node", exec, AgentRuntimePaths{}); err != nil {
+		t.Fatalf("prepareNodeAgent: %v", err)
 	}
 	if exec.eventStream == nil {
-		t.Fatal("executor did not create an event stream during bind")
+		t.Fatal("agent did not create an event stream during bind")
 	}
 	if err := exec.eventStream.Emit(context.Background(), streampkg.Event{
 		EventType: streampkg.EventLLMOutputDelta,

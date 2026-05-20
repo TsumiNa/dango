@@ -23,6 +23,6 @@ dango is designed for scientific and engineering research tasks that need multip
 
 ## Current Status
 
-This repository is actively evolving around the orchestrator, runner, executor, skill runtime, stream, and persistence layers. The current implementation includes request-level orchestration, runner lifecycle management, skill binding, exchange markdown, event-stream observation, and local persistence.
+This repository is actively evolving around the orchestrator, runner, agent, skill runtime, stream, and persistence layers. The current implementation includes request-level orchestration, runner lifecycle management, skill binding, exchange markdown, event-stream observation, and local persistence.
 
 This README intentionally does not include concrete usage instructions yet. More detailed development and architecture notes are available in `CONTRIBUTING.md` and `architecture/`.

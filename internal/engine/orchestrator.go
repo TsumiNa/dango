@@ -19,7 +19,7 @@ import (
 //
 // It keeps a registry of lightweight skills loaded through llm.New,
 // initializes its orchestrator-owned skill during startup, and materializes a
-// fresh runner plus its Executor graph for each accepted plan.
+// fresh runner plus its Agent graph for each accepted plan.
 type Orchestrator struct {
 	ctx               context.Context
 	logger            *slog.Logger

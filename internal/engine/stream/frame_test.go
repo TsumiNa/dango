@@ -98,7 +98,7 @@ func TestNormalizeDirectFramePreservesExistingMetadata(t *testing.T) {
 }
 
 func TestNormalizeTickFrameSingleUpstream(t *testing.T) {
-	event := makeTestEvent(EventStatusProgress, "executor", "ex_1", 2, StatusRunning)
+	event := makeTestEvent(EventStatusProgress, "agent", "ex_1", 2, StatusRunning)
 	items := []Event{event}
 
 	frame := normalizeTickFrame(items, 5)
@@ -117,7 +117,7 @@ func TestNormalizeTickFrameSingleUpstream(t *testing.T) {
 func TestNormalizeTickFrameMultipleUpstreams(t *testing.T) {
 	items := []Event{
 		makeTestEvent(EventLLMOutputDelta, "skill", "sk_a", 1, StatusRunning),
-		makeTestEvent(EventStatusProgress, "executor", "ex_b", 2, StatusRunning),
+		makeTestEvent(EventStatusProgress, "agent", "ex_b", 2, StatusRunning),
 	}
 
 	frame := normalizeTickFrame(items, 12)
@@ -132,7 +132,7 @@ func TestNormalizeTickFrameMultipleUpstreams(t *testing.T) {
 
 func TestNormalizeTickFramePreservesEventOrder(t *testing.T) {
 	a := makeTestEvent(EventLLMOutputDelta, "skill", "sk_a", 1, StatusRunning)
-	b := makeTestEvent(EventStatusProgress, "executor", "ex_b", 2, StatusRunning)
+	b := makeTestEvent(EventStatusProgress, "agent", "ex_b", 2, StatusRunning)
 	c := makeTestEvent(EventStatusCompleted, "orchestrator", "", 3, StatusCompleted)
 
 	frame := normalizeTickFrame([]Event{a, b, c}, 1)
@@ -186,7 +186,7 @@ func TestEmitFrameHubPathEmitsBundleEvent(t *testing.T) {
 
 	items := []Event{
 		makeTestEvent(EventLLMOutputDelta, "skill", "sk_a", 1, StatusRunning),
-		makeTestEvent(EventStatusProgress, "executor", "ex_b", 2, StatusRunning),
+		makeTestEvent(EventStatusProgress, "agent", "ex_b", 2, StatusRunning),
 	}
 	frame := normalizeTickFrame(items, 1)
 
@@ -228,7 +228,7 @@ func TestEmitFrameSingleEventHubTickEmitsBundleNotPlain(t *testing.T) {
 		t.Fatalf("Subscribe: %v", err)
 	}
 
-	items := []Event{makeTestEvent(EventStatusProgress, "executor", "ex_1", 1, StatusRunning)}
+	items := []Event{makeTestEvent(EventStatusProgress, "agent", "ex_1", 1, StatusRunning)}
 	frame := normalizeTickFrame(items, 3)
 
 	if err := emitFrame(t.Context(), downstream, frame); err != nil {
@@ -339,7 +339,7 @@ func TestFlushTickUsesFrameNormalization(t *testing.T) {
 
 	if err := child.Emit(t.Context(), Event{
 		EventType: EventStatusProgress,
-		From:      Source{Layer: "executor", ID: "ex_hub"},
+		From:      Source{Layer: "agent", ID: "ex_hub"},
 		Status:    StatusRunning,
 		Delta:     json.RawMessage(`{"stage":"run"}`),
 	}); err != nil {

@@ -37,26 +37,26 @@ handoff 的 `intent` 用于说明下一跳语义，当前常见值有：
 - `continue`
 - `summarize`
 
-`artifacts` 用于声明 handoff 携带的文件或目录。runner 会解析这些 artifacts，把 producer node 的 `downstream/artifacts/` 下的内容通过 successor 的 `upstream/<producer-node-id>/artifacts/` 交给 downstream executor；如果 artifacts 目录不存在则跳过 symlink，producer node 失败时不会进入 successor handoff 传递。
+`artifacts` 用于声明 handoff 携带的文件或目录。runner 会解析这些 artifacts，把 producer node 的 `downstream/artifacts/` 下的内容通过 successor 的 `upstream/<producer-node-id>/artifacts/` 交给 downstream agent；如果 artifacts 目录不存在则跳过 symlink，producer node 失败时不会进入 successor handoff 传递。
 
 ## 谁负责生成和补齐 channel document
 
-### Executor
+### Agent
 
-`internal/engine/executor_stage_output.go` 负责默认 stage 输出：
+`internal/engine/agent_stage_output.go` 负责默认 stage 输出：
 
 - 用 stage body 组装 `HandoffDoc`，写入当前 node 的 `downstream/handoff.md`
 - 用同一份 stage body 组装 `ExchangeDoc`，写入 runner 共享的 `exchange/`
 - 调用 `snapshotMemos`，把当前 skill `memo/` 下的文件包装成 `MemoDocument` 并写入 `archive/memo/<node>/<stage>/`
 
-因此 skill 的一次 stage 输出会同时投影成三种数据面：共享 exchange、定向 handoff、私有 memo 快照。executor 返回给 runner 的普通 stage 结果是 handoff markdown；exchange 和 memo 通过 workspace 文件被后续 prompt、审计和可观察性读取。
+因此 skill 的一次 stage 输出会同时投影成三种数据面：共享 exchange、定向 handoff、私有 memo 快照。agent 返回给 runner 的普通 stage 结果是 handoff markdown；exchange 和 memo 通过 workspace 文件被后续 prompt、审计和可观察性读取。
 
 ### Runner
 
 runner 不解释业务语义，但会做四件基础工作：
 
 1. 为每个 task 创建 `exchange/`、`skills/<node>/{memo,upstream,downstream,scratch}`、`archive/` 等 workspace。
-2. 解析 executor 返回的 handoff markdown，并发出 `handoff.emitted` / artifact 相关 stream event。
+2. 解析 agent 返回的 handoff markdown，并发出 `handoff.emitted` / artifact 相关 stream event。
 3. 在 node 完成后检查 memo archive，并发出 `memo.snapshot` stream event。
 4. 将 producer node 的 `downstream/handoff.md` 和 `downstream/artifacts/` symlink 到 successor 的 `upstream/<producer-node-id>/`。
 
@@ -70,15 +70,15 @@ runner 不解释业务语义，但会做四件基础工作：
 sequenceDiagram
 autonumber
 participant Ru as Runner
-participant Ex as Executor
+participant Ex as Agent
 participant Sk as Skill runtime
 participant WS as Workspace
 participant RS as Runner stream
-participant Nx as Downstream executor
+participant Nx as Downstream agent
 
 Ru->>WS: ProvisionWorkspace(runner_id, node_ids)
 WS-->>Ru: exchange/, skills/{node-id}/{memo,upstream,downstream,scratch}, archive/
-Ru->>Ex: prepareNodeExecutor(runtime paths)
+Ru->>Ex: prepareNodeAgent(runtime paths)
 Ru->>Ex: Execute(parent outputs)
 Ex->>Ex: currentRuntimePaths() and executionPrompt(parent outputs)
 Ex->>WS: exchangeReferencesMarkdown execute reads exchange docs front matter
@@ -101,16 +101,16 @@ WS-->>Nx: upstream/{node-id}/handoff.md and artifacts/ symlinks
 
 ### execute 周期中的主要函数读写
 
-- `Runner.prepareNodeExecutor(...)` 把 `ExecutorRuntimePaths` 注入 executor。这里的路径包括 `ExchangeDir`、`UpstreamDir`、`DownstreamDir`、`MemoDir`、`ArchiveMemoDir` 和 `AccessibleDirs`，后续 Ex/WS 交互都通过这些路径发生。
-- `Executor.executionPrompt(parentOutputs)` 会组装 skill prompt：
+- `Runner.prepareNodeAgent(...)` 把 `AgentRuntimePaths` 注入 agent。这里的路径包括 `ExchangeDir`、`UpstreamDir`、`DownstreamDir`、`MemoDir`、`ArchiveMemoDir` 和 `AccessibleDirs`，后续 Ex/WS 交互都通过这些路径发生。
+- `Agent.executionPrompt(parentOutputs)` 会组装 skill prompt：
   - `exchangeReferencesMarkdown("execute")` 扫描 `ExchangeDir` 下的 `*.md`，只读取 exchange front matter，输出给 skill 的引用行包含文件路径、`node_id`、`skill_name`、`title`、`created_at`。这一步只告诉 skill 有哪些共享 exchange 可查，不把正文直接塞进 prompt。
   - `upstreamHandoffReferences()` 扫描 `UpstreamDir/<parent-node-id>/handoff.md`，读取 handoff front matter，输出给 skill 的引用行包含来源 node、handoff 路径、`intent`、`to_nodes`、`created_at` 和 `artifacts` 列表。
   - `readParentHandoffsFromUpstream()` 读取同一批 upstream handoff 文件的正文；如果文件是 canonical handoff markdown，会先 `ParseHandoffMarkdown` 再取 `Body`，最后按 parent node 分组写入 prompt 的 parent handoff 区块。
-- `Executor.renderStageOutputs(...)` 使用 skill 返回的 stage body 同时生成三类投影：
-  - `HandoffDoc{FromNode, ToNodes, Intent, Body}` → `DownstreamDir/handoff.md`，并把同一份 handoff markdown 作为 executor 返回值交给 runner。
+- `Agent.renderStageOutputs(...)` 使用 skill 返回的 stage body 同时生成三类投影：
+  - `HandoffDoc{FromNode, ToNodes, Intent, Body}` → `DownstreamDir/handoff.md`，并把同一份 handoff markdown 作为 agent 返回值交给 runner。
   - `ExchangeDoc{NodeID, SkillName, Title: stage, Body}` → `ExchangeDir/<stage>-<node-id>-<timestamp>.md`，作为共享 exchange。
   - `snapshotMemos(stage, paths)` 遍历 `MemoDir` 的普通文件，跳过目录和 symlink，把每个 memo 文件包装成 `MemoDocument{NodeID, SkillName, Path, Body}` 后写到 `ArchiveMemoDir/<stage>/<relative-path>.memo.md`。
-- `Runner.emitChannelDocumentEvents(...)` 只解析 executor 返回值。普通 stage 返回的是 handoff markdown，所以 runner 会发出 `handoff.emitted` 和 artifact event；exchange markdown 已经在 workspace 中作为共享文件存在，不依赖这个返回值。
+- `Runner.emitChannelDocumentEvents(...)` 只解析 agent 返回值。普通 stage 返回的是 handoff markdown，所以 runner 会发出 `handoff.emitted` 和 artifact event；exchange markdown 已经在 workspace 中作为共享文件存在，不依赖这个返回值。
 - `Runner.emitMemoSnapshotEvent(...)` 检查 `archive/memo/<node-id>/<stage>/` 是否有 snapshot 文件；有文件时发出 `memo.snapshot`，没有 memo 文件时不发事件。
 - `Runner.deliverHandoffToSuccessor(...)` 调用 `Workspace.Handoff(producer, successor)`，把 producer 的 `downstream/handoff.md` 和可选 `downstream/artifacts/` symlink 到 successor 的 `upstream/<producer-node-id>/`。如果 artifacts 目录不存在会跳过；如果 producer node 执行失败，runner 不会进入 successor handoff 传递。
 
@@ -124,10 +124,10 @@ flowchart TB
 	PlanS[(planning skill stream)]
 	ReviewS[(review/replan skill stream)]
 	RunS[(runner stream)]
-	SkillS[(executor-bound skill streams)]
+	SkillS[(agent-bound skill streams)]
 	ChDoc[(channel markdown)]
 	Runner[runner lifecycle]
-	Events[runner / executor / skill events]
+	Events[runner / agent / skill events]
 	RStore[(runner store)]
 	ELog[(request event log)]
 	Describe[DescribeRequest]
@@ -148,9 +148,9 @@ flowchart TB
 - request stream：最外层观察面，由 `StartRequest` 创建
 - planning / planner skill stream：由 orchestrator 绑定 skill runtime 后创建，并 merge 到 request stream
 - runner stream：由 `runner.New()` 创建，并 merge 到 request stream
-- executor 绑定后的 skill runtime stream：在 runner 执行节点时 merge 到 runner stream
+- agent 绑定后的 skill runtime stream：在 runner 执行节点时 merge 到 runner stream
 
-因此外部订阅 `Response.Stream` 时，看到的是 request 级聚合视图；订阅单个 runner stream 时，看到的是更聚焦的 runner / executor / skill 事件。
+因此外部订阅 `Response.Stream` 时，看到的是 request 级聚合视图；订阅单个 runner stream 时，看到的是更聚焦的 runner / agent / skill 事件。
 
 ## 持久化层各存什么
 

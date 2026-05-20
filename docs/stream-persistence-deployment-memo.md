@@ -19,7 +19,7 @@ The stream system is now the outward runtime observation bus:
 - `Stream.Subscribe` and `Stream.Replay` expand merge bundles into logical
   events by default. `WithRawStream` exposes raw transport frames, including
   `merge.bundle`, for event-log inspection and replay debugging.
-- `MergeWithConfig` lets request streams collect child runner, executor, and
+- `MergeWithConfig` lets request streams collect child runner, agent, and
   skill streams through a downstream-owned merge hub. The top-level stream can
   therefore observe the full request without enabling persistence on every child
   stream.
@@ -69,7 +69,7 @@ This branch does not yet provide a JSON event-log implementation.
 ### Skill Conversation Session Persistence
 
 Skill-owned conversation session persistence stores AI interaction history for
-one runnable skill conversation. Its purpose is continuity: when an executor or
+one runnable skill conversation. Its purpose is continuity: when an agent or
 long-running skill process restarts, the skill can recover the prepared model
 conversation and continue from the latest saved session state.
 
@@ -96,7 +96,7 @@ the same storage package or database file.
 ### Event Log Persistence
 
 Event log persistence covers only information that orchestrator, runner,
-executor, and skill modules actively publish outward through stream events after
+agent, and skill modules actively publish outward through stream events after
 `StartRequest`. Its purpose is observability for outer callers: during a
 long-running request, API clients, terminal renderers, debug tools, and tests
 should be able to subscribe late, inspect current progress, and trace what has
@@ -288,13 +288,13 @@ Change surface:
   They are not emitted as stream events and do not close subscriber streams.
 - Do not add persistence configuration to `Request`; callers should not choose
   event-log policy per request unless a later product requirement needs it.
-- Do not configure runner, executor, or skill child streams with their own
+- Do not configure runner, agent, or skill child streams with their own
   stores as part of this phase.
 
 Test targets:
 
 - With a configured event-log store, `StartRequest` appends planning,
-  runner-created, runner, executor, skill, artifact, and terminal events through
+  runner-created, runner, agent, skill, artifact, and terminal events through
   the top-level event log without delaying normal stream subscribers.
 - Without configured persistence, `StartRequest` appends event rows to a
   temporary JSON store for the process lifetime and cleanup removes the temp

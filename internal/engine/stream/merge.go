@@ -31,7 +31,7 @@ type Merge struct {
 // canceled, s closes, or the returned Merge is stopped.
 //
 // filter and opts are applied while subscribing to upstream, so a runner can
-// merge only the executor/skill chunks it wants to expose without forcing all
+// merge only the agent/skill chunks it wants to expose without forcing all
 // child-stream traffic into its own stream.
 //
 // MergeFrom uses direct forwarding (TickDuration = 0). Use MergeFromWithConfig

@@ -2,7 +2,7 @@
 // commands and services.
 //
 // The package exists so that the CLI, orchestrator, runner, runtime, and
-// executor layers all speak the same slog dialect. [Config] describes the
+// agent layers all speak the same slog dialect. [Config] describes the
 // externally visible logging knobs, [DefaultConfig] reads their defaults from
 // the environment, [Config.BindFlags] exposes them on command-line flag sets,
 // and [New] turns the resolved configuration into a logger plus an optional log

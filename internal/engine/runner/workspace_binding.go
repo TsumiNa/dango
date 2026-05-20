@@ -43,8 +43,8 @@ func (r *Runner) nodeAccessibleDirs(nodeID string, inputs map[string]any) []stri
 	return dirs
 }
 
-func (r *Runner) nodeRuntimePaths(nodeID string, skillName string, inputs map[string]any) (ExecutorRuntimePaths, error) {
-	paths := ExecutorRuntimePaths{
+func (r *Runner) nodeRuntimePaths(nodeID string, skillName string, inputs map[string]any) (AgentRuntimePaths, error) {
+	paths := AgentRuntimePaths{
 		RunnerID:       r.id,
 		NodeID:         nodeID,
 		SkillName:      skillName,
@@ -53,9 +53,9 @@ func (r *Runner) nodeRuntimePaths(nodeID string, skillName string, inputs map[st
 	if r.workspace == nil || nodeID == "" {
 		return paths, nil
 	}
-	workspacePaths, err := r.workspace.ExecutorRuntimePaths(nodeID, skillName, paths.AccessibleDirs)
+	workspacePaths, err := r.workspace.AgentRuntimePaths(nodeID, skillName, paths.AccessibleDirs)
 	if err != nil {
-		return ExecutorRuntimePaths{}, fmt.Errorf("runner: resolve runtime paths for node %q: %w", nodeID, err)
+		return AgentRuntimePaths{}, fmt.Errorf("runner: resolve runtime paths for node %q: %w", nodeID, err)
 	}
 	return workspacePaths, nil
 }

@@ -73,7 +73,7 @@ func (r *Runner) emitHandoffEvents(ctx context.Context, node *Node, doc *Handoff
 		if doc.Intent != "" {
 			delta["intent"] = doc.Intent
 		}
-		r.emitExecutorStreamEvent(ctx, streampkg.EventArtifactCreated, streampkg.StatusCompleted, node.Id, node, delta)
+		r.emitAgentStreamEvent(ctx, streampkg.EventArtifactCreated, streampkg.StatusCompleted, node.Id, node, delta)
 	}
 }
 
@@ -120,7 +120,7 @@ func (r *Runner) emitMemoSnapshotEvent(ctx context.Context, node *Node, stage st
 		metadata["skill_name"] = node.SkillName
 	}
 	r.emitStreamEventFrom(ctx,
-		streampkg.Source{Layer: "executor", ID: node.Id, ParentID: r.id},
+		streampkg.Source{Layer: "agent", ID: node.Id, ParentID: r.id},
 		streampkg.EventMemoSnapshot,
 		streampkg.StatusCompleted,
 		payload,

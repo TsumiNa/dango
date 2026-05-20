@@ -32,9 +32,9 @@ func TestStreamStoreLoadEventsFiltersAndIsolatesRequests(t *testing.T) {
 	eventLog := NewStreamStore(dbStore)
 
 	appendEvent(t, eventLog, preparedStreamEvent("req_1", 1, streampkg.EventStatusProgress, streampkg.Source{Layer: "orchestrator", ID: "or_1"}, streampkg.StatusRunning, streampkg.Scope{}, json.RawMessage(`"planning"`)))
-	appendEvent(t, eventLog, preparedStreamEvent("req_1", 2, streampkg.EventLLMReasoningDelta, streampkg.Source{Layer: "skill", ID: "skill_1", ParentID: "executor_1"}, streampkg.StatusRunning, streampkg.Scope{RunnerID: "run_1", NodeID: "node_1"}, json.RawMessage(`"think"`)))
-	appendEvent(t, eventLog, preparedStreamEvent("req_1", 3, streampkg.EventLLMOutputDelta, streampkg.Source{Layer: "skill", ID: "skill_1", ParentID: "executor_1"}, streampkg.StatusCompleted, streampkg.Scope{RunnerID: "run_1", NodeID: "node_1"}, json.RawMessage(`"answer"`)))
-	appendEvent(t, eventLog, preparedStreamEvent("req_2", 1, streampkg.EventLLMOutputDelta, streampkg.Source{Layer: "skill", ID: "skill_2", ParentID: "executor_2"}, streampkg.StatusCompleted, streampkg.Scope{RunnerID: "run_2", NodeID: "node_2"}, json.RawMessage(`"other request"`)))
+	appendEvent(t, eventLog, preparedStreamEvent("req_1", 2, streampkg.EventLLMReasoningDelta, streampkg.Source{Layer: "skill", ID: "skill_1", ParentID: "agent_1"}, streampkg.StatusRunning, streampkg.Scope{RunnerID: "run_1", NodeID: "node_1"}, json.RawMessage(`"think"`)))
+	appendEvent(t, eventLog, preparedStreamEvent("req_1", 3, streampkg.EventLLMOutputDelta, streampkg.Source{Layer: "skill", ID: "skill_1", ParentID: "agent_1"}, streampkg.StatusCompleted, streampkg.Scope{RunnerID: "run_1", NodeID: "node_1"}, json.RawMessage(`"answer"`)))
+	appendEvent(t, eventLog, preparedStreamEvent("req_2", 1, streampkg.EventLLMOutputDelta, streampkg.Source{Layer: "skill", ID: "skill_2", ParentID: "agent_2"}, streampkg.StatusCompleted, streampkg.Scope{RunnerID: "run_2", NodeID: "node_2"}, json.RawMessage(`"other request"`)))
 
 	if err := dbStore.Close(); err != nil {
 		t.Fatalf("Close before reopen: %v", err)
@@ -56,7 +56,7 @@ func TestStreamStoreLoadEventsFiltersAndIsolatesRequests(t *testing.T) {
 		Sources: []streampkg.SourceSelector{{
 			Layer:    "skill",
 			ID:       "skill_1",
-			ParentID: "executor_1",
+			ParentID: "agent_1",
 		}},
 		Scope: streampkg.Scope{RunnerID: "run_1", NodeID: "node_1"},
 	})

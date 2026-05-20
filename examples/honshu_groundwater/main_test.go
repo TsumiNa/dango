@@ -948,7 +948,7 @@ func serveFakeSkill(w http.ResponseWriter, req *responsesRequest, userText strin
 		respondMaybeText(w, req, doc)
 		return
 	}
-	if strings.HasPrefix(userText, "Summarize this executor output") || strings.HasPrefix(userText, "# Report stage note") {
+	if strings.HasPrefix(userText, "Summarize this agent output") || strings.HasPrefix(userText, "# Report stage note") {
 		doc, err := reportHandoffMarkdown(userText)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)

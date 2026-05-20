@@ -282,7 +282,7 @@ func (r *Runner) Start(ctx context.Context) error {
 }
 
 func (r *Runner) prepareEngineLaunch(from RunnerPhase, mutate func()) ([]*Node, error) {
-	if err := r.prepareNodeExecutors(r.initialNodes); err != nil {
+	if err := r.prepareNodeAgents(r.initialNodes); err != nil {
 		return nil, err
 	}
 	r.stateMu.Lock()
@@ -552,7 +552,7 @@ func (r *Runner) runEngine(ctx context.Context) error {
 		if err != nil {
 			return err
 		}
-		if err := r.prepareNodeExecutor(n.Id, n.Executor, runtimePaths); err != nil {
+		if err := r.prepareNodeAgent(n.Id, n.Agent, runtimePaths); err != nil {
 			return err
 		}
 
@@ -568,17 +568,17 @@ func (r *Runner) runEngine(ctx context.Context) error {
 		}
 
 		go func() {
-			r.emitExecutorStreamEvent(ctx, streampkg.EventExecutorExecuteStarted, streampkg.StatusRunning, n.Id, n, map[string]any{
+			r.emitAgentStreamEvent(ctx, streampkg.EventAgentExecuteStarted, streampkg.StatusRunning, n.Id, n, map[string]any{
 				"stage": "execute",
 			})
-			out, dynNodes, err := n.Executor.Execute(ctx, inputs)
+			out, dynNodes, err := n.Agent.Execute(ctx, inputs)
 			if err != nil {
-				r.emitExecutorStreamEvent(ctx, streampkg.EventExecutorExecuteFailed, streampkg.StatusFailed, n.Id, n, map[string]any{
+				r.emitAgentStreamEvent(ctx, streampkg.EventAgentExecuteFailed, streampkg.StatusFailed, n.Id, n, map[string]any{
 					"stage": "execute",
 					"error": compactStreamText(err.Error()),
 				})
 			} else {
-				r.emitExecutorStreamEvent(ctx, streampkg.EventExecutorExecuteCompleted, streampkg.StatusCompleted, n.Id, n, map[string]any{
+				r.emitAgentStreamEvent(ctx, streampkg.EventAgentExecuteCompleted, streampkg.StatusCompleted, n.Id, n, map[string]any{
 					"stage": "execute",
 				})
 			}

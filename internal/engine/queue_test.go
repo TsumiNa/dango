@@ -131,7 +131,7 @@ func newManagedQueueTestRunner(t *testing.T, request string, run func(context.Co
 	nodes := map[string]*runnerpkg.Node{
 		"only": {
 			Id: "only",
-			Executor: &stubRunnerExecutor{
+			Agent: &stubRunnerAgent{
 				polish:  func(ctx context.Context) (any, error) { return request + " polish", nil },
 				execute: run,
 				report:  func(ctx context.Context, output any) (any, error) { return output, nil },

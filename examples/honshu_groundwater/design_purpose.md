@@ -1,7 +1,7 @@
 # Honshu Groundwater Model Example
 
 This example is a purpose-driven integration test for the orchestrator, runner,
-executor, and skill runtime.
+agent, and skill runtime.
 
 The user supplies messy JSON describing groundwater measurements collected at
 several locations on Honshu. The expected behavior is:

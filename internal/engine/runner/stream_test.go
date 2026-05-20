@@ -98,7 +98,7 @@ func TestRunnerEmitsCompactStreamEvents(t *testing.T) {
 
 	node := &Node{
 		Id: "compact",
-		Executor: &testExecutor{
+		Agent: &testAgent{
 			run: func(context.Context, map[string]any) (any, []*Node, error) {
 				return strings.Repeat("x", 1024), nil, nil
 			},
@@ -149,7 +149,7 @@ func TestRunnerNodeAddedEventIncludesDescribeFields(t *testing.T) {
 		Id:              "plan",
 		SkillName:       "planner",
 		TaskDescription: "Draft a plan",
-		Executor: &testExecutor{
+		Agent: &testAgent{
 			run: func(context.Context, map[string]any) (any, []*Node, error) {
 				return "planned", nil, nil
 			},
@@ -160,7 +160,7 @@ func TestRunnerNodeAddedEventIncludesDescribeFields(t *testing.T) {
 		SkillName:       "reporter",
 		TaskDescription: "Write the report",
 		Parents:         []*Node{parent},
-		Executor: &testExecutor{
+		Agent: &testAgent{
 			run: func(context.Context, map[string]any) (any, []*Node, error) {
 				return "reported", nil, nil
 			},
@@ -220,7 +220,7 @@ func TestRunnerEngineStoppedAfterIdleIsCompletedStreamStatus(t *testing.T) {
 	}
 	node := &Node{
 		Id: "idle-node",
-		Executor: &testExecutor{
+		Agent: &testAgent{
 			run: func(context.Context, map[string]any) (any, []*Node, error) {
 				return "done", nil, nil
 			},
@@ -283,7 +283,7 @@ func TestRunnerEmitsArtifactCreatedEventsFromHandoffOutput(t *testing.T) {
 
 	node := &Node{
 		Id: "artifact-node",
-		Executor: &testExecutor{
+		Agent: &testAgent{
 			run: func(context.Context, map[string]any) (any, []*Node, error) {
 				return raw, nil, nil
 			},
@@ -302,8 +302,8 @@ func TestRunnerEmitsArtifactCreatedEventsFromHandoffOutput(t *testing.T) {
 	if !ok {
 		t.Fatal("stream closed before artifact event")
 	}
-	if event.From.Layer != "executor" {
-		t.Fatalf("event source layer = %q, want executor", event.From.Layer)
+	if event.From.Layer != "agent" {
+		t.Fatalf("event source layer = %q, want agent", event.From.Layer)
 	}
 	if event.Scope.RunnerID != r.ID() || event.Scope.NodeID != node.Id {
 		t.Fatalf("event scope = %+v, want runner/node ids", event.Scope)
@@ -352,7 +352,7 @@ func TestRunnerEmitsHandoffEventsFromHandoffOutput(t *testing.T) {
 	node := &Node{
 		Id:        "handoff-node",
 		SkillName: "handoff-skill",
-		Executor: &testExecutor{
+		Agent: &testAgent{
 			run: func(context.Context, map[string]any) (any, []*Node, error) {
 				return raw, nil, nil
 			},
@@ -416,7 +416,7 @@ func TestRunnerDoesNotEmitSkillMemoWithoutMemo(t *testing.T) {
 
 	node := &Node{
 		Id: "no-memo",
-		Executor: &testExecutor{
+		Agent: &testAgent{
 			run: func(context.Context, map[string]any) (any, []*Node, error) {
 				return raw, nil, nil
 			},
@@ -458,7 +458,7 @@ func TestRunnerDoesNotEmitArtifactCreatedWithoutResources(t *testing.T) {
 
 	node := &Node{
 		Id: "no-artifact",
-		Executor: &testExecutor{
+		Agent: &testAgent{
 			run: func(context.Context, map[string]any) (any, []*Node, error) {
 				return raw, nil, nil
 			},

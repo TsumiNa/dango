@@ -142,7 +142,7 @@ func (r *Runner) emitStreamEvent(ctx context.Context, eventType string, status s
 	)
 }
 
-func (r *Runner) emitExecutorStreamEvent(ctx context.Context, eventType string, status string, nodeID string, node *Node, delta map[string]any) {
+func (r *Runner) emitAgentStreamEvent(ctx context.Context, eventType string, status string, nodeID string, node *Node, delta map[string]any) {
 	if r.eventStream == nil {
 		return
 	}
@@ -158,7 +158,7 @@ func (r *Runner) emitExecutorStreamEvent(ctx context.Context, eventType string, 
 		metadata["skill_name"] = node.SkillName
 	}
 	r.emitStreamEventFrom(ctx,
-		streampkg.Source{Layer: "executor", ID: nodeID, ParentID: r.id},
+		streampkg.Source{Layer: "agent", ID: nodeID, ParentID: r.id},
 		eventType,
 		status,
 		delta,

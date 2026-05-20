@@ -16,7 +16,7 @@ import (
 // CLI code typically starts from [DefaultConfig], optionally exposes these
 // fields through [Config.BindFlags], and then passes the resolved value to
 // [New]. The same Config is intended to drive both control-plane and
-// executor-side logging so all components share one service-level logging
+// agent-side logging so all components share one service-level logging
 // policy.
 type Config struct {
 	// Level selects the minimum severity emitted by the logger.

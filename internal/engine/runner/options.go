@@ -77,7 +77,7 @@ func WithPersistenceHandle(handle PersistenceHandle) Option {
 // live handles; callers may manage the source roots independently, but changing
 // filesystem contents after construction can change what tools can read/write.
 // These roots are combined with the workspace root from [PersistenceHandle]
-// when determining executor-accessible directories.
+// when determining agent-accessible directories.
 func WithTrustedResourceRoots(roots ...string) Option {
 	return func(r *Runner) {
 		canonicalRoots := make([]string, 0, len(roots))

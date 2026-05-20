@@ -12,7 +12,7 @@ type CoarsePlan struct {
 	Nodes    []CoarsePlanNode `json:"nodes" yaml:"nodes"`
 }
 
-// CoarsePlanNode describes one executor-sized unit in a [CoarsePlan].
+// CoarsePlanNode describes one agent-sized unit in a [CoarsePlan].
 type CoarsePlanNode struct {
 	ID              string   `json:"id" yaml:"id"`
 	SkillName       string   `json:"skill_name" yaml:"skill_name"`

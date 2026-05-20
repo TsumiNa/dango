@@ -1,6 +1,6 @@
 # Runner 生命周期
 
-当前代码里，`internal/engine/runner.Runner` 同时承担 DAG 执行器和 managed lifecycle 宿主两种角色。旧文档里把 `ru` 和 managed wrapper 分开讲，已经不适合现在的实现。
+当前代码里，`internal/engine/runner.Runner` 同时承担 DAG agent runtime 和 managed lifecycle 宿主两种角色。旧文档里把 `ru` 和 managed wrapper 分开讲，已经不适合现在的实现。
 
 ## 两条入口
 
@@ -76,18 +76,18 @@ stateDiagram-v2
 
 ## polish、execute、report 分别是谁驱动的
 
-- `StartPolish` 会并发调用每个 node 的 `Executor.Polish`，收集 `PolishFragments()`。
-- engine loop 在 `executing` 阶段调度依赖已满足的 node，调用 `Executor.Execute`。
-- `Complete` 会进入 `report` phase，并发调用每个已完成 node 的 `Executor.Report`，收集 `ReportSummaries()`。
+- `StartPolish` 会并发调用每个 node 的 `Agent.Polish`，收集 `PolishFragments()`。
+- engine loop 在 `executing` 阶段调度依赖已满足的 node，调用 `Agent.Execute`。
+- `Complete` 会进入 `report` phase，并发调用每个已完成 node 的 `Agent.Report`，收集 `ReportSummaries()`。
 
 每个阶段的默认返回值都已经被约束为 markdown exchange document，而不是任意 Go 值。
 
-## executor 和 session binding
+## agent 和 session binding
 
 runner 现在自己管理 skill session 复用：
 
-1. `prepareNodeExecutors` 先为每个 executor 绑定持久 session id。
-2. 真正执行前，`prepareNodeExecutor` 会带着最新的 accessible dirs 再绑定一次 runtime。
+1. `prepareNodeAgents` 先为每个 agent 绑定持久 session id。
+2. 真正执行前，`prepareNodeAgent` 会带着最新的 accessible dirs 再绑定一次 runtime。
 3. runtime skill 的 event stream 会在这个时点 merge 进 runner event stream。
 
 之所以把 stream merge 推迟到真正执行前，是为了避免先 merge 一个临时 runtime stream，再被后续 re-bind 替换，导致订阅泄漏。
@@ -97,7 +97,7 @@ runner 现在自己管理 skill session 复用：
 runner-owned stream 现在承担三类事件：
 
 - runner 级 phase / node lifecycle 事件
-- executor 级 stage 事件，例如 polish started / report completed
+- agent 级 stage 事件，例如 polish started / report completed
 - skill 级衍生事件，例如 memo delta 和 artifact created
 
 这条 stream 既能给 orchestrator merge 到 request stream，也能被 `SubscribeRunnerStream` 直接订阅。
