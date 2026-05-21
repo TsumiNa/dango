@@ -227,7 +227,7 @@ func (e *Agent) RuntimeToolSetConfig() llm.ToolSetConfig {
 	if e == nil {
 		return llm.ToolSetConfig{}
 	}
-	return e.runtimeCfg
+	return cloneAgentToolSetConfig(e.runtimeCfg)
 }
 
 // SetRuntimeToolSetConfig replaces the per-agent tool policy snapshot used for
@@ -236,7 +236,25 @@ func (e *Agent) SetRuntimeToolSetConfig(cfg llm.ToolSetConfig) {
 	if e == nil {
 		return
 	}
-	e.runtimeCfg = cfg
+	e.runtimeCfg = cloneAgentToolSetConfig(cfg)
+}
+
+func cloneAgentToolSetConfig(cfg llm.ToolSetConfig) llm.ToolSetConfig {
+	cfg.BashAllow = append([]string(nil), cfg.BashAllow...)
+	cfg.BashBlock = append([]string(nil), cfg.BashBlock...)
+	cfg.Extras = append([]llm.ExtraTool(nil), cfg.Extras...)
+	if cfg.Policies != nil {
+		cloned := make(map[llm.CapabilityRef]llm.ExecPolicy, len(cfg.Policies))
+		for k, v := range cfg.Policies {
+			cloned[k] = v
+		}
+		cfg.Policies = cloned
+	}
+	cfg.BashCommandPolicies = append([]llm.BashCommandPolicy(nil), cfg.BashCommandPolicies...)
+	for i := range cfg.BashCommandPolicies {
+		cfg.BashCommandPolicies[i].ArgsPrefix = append([]string(nil), cfg.BashCommandPolicies[i].ArgsPrefix...)
+	}
+	return cfg
 }
 
 func (e *Agent) runtimeConversationConfig() llm.ConversationConfig {

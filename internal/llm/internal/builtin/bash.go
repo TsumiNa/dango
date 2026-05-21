@@ -7,7 +7,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"slices"
 	"strings"
 	"time"
 
@@ -280,7 +279,7 @@ func classifyBashCommandPolicy(command string, policies []BashCommandPolicy) (to
 			if filepath.Base(head) != filepath.Base(policy.Command) {
 				continue
 			}
-			if len(policy.ArgsPrefix) > 0 && !slices.Equal(normalized[:min(len(normalized), len(policy.ArgsPrefix))], policy.ArgsPrefix) {
+			if len(policy.ArgsPrefix) > 0 && !equalArgsPrefix(normalized, policy.ArgsPrefix) {
 				continue
 			}
 			if len(policy.ArgsPrefix) > len(normalized) {
@@ -328,7 +327,14 @@ func trimLeadingGitOptions(args []string) []string {
 		switch token := out[0]; {
 		case token == "--":
 			return out[1:]
-		case slices.Contains([]string{"-c", "-C", "--exec-path", "--git-dir", "--work-tree", "--namespace", "--config-env", "--super-prefix"}, token):
+		case token == "-c",
+			token == "-C",
+			token == "--exec-path",
+			token == "--git-dir",
+			token == "--work-tree",
+			token == "--namespace",
+			token == "--config-env",
+			token == "--super-prefix":
 			if len(out) == 1 {
 				return nil
 			}
@@ -349,11 +355,16 @@ func trimLeadingGitOptions(args []string) []string {
 	return out
 }
 
-func min(a, b int) int {
-	if a < b {
-		return a
+func equalArgsPrefix(args []string, prefix []string) bool {
+	if len(prefix) > len(args) {
+		return false
 	}
-	return b
+	for i := range prefix {
+		if args[i] != prefix[i] {
+			return false
+		}
+	}
+	return true
 }
 
 // runBashBuffered executes cmd, returning the captured combined output

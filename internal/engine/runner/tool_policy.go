@@ -105,7 +105,7 @@ func cloneToolSetConfig(cfg llm.ToolSetConfig) llm.ToolSetConfig {
 	cfg.BashAllow = append([]string(nil), cfg.BashAllow...)
 	cfg.BashBlock = append([]string(nil), cfg.BashBlock...)
 	cfg.Extras = append([]llm.ExtraTool(nil), cfg.Extras...)
-	if len(cfg.Policies) > 0 {
+	if cfg.Policies != nil {
 		cloned := make(map[llm.CapabilityRef]llm.ExecPolicy, len(cfg.Policies))
 		for k, v := range cfg.Policies {
 			cloned[k] = v
