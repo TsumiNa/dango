@@ -365,7 +365,7 @@ func TestBashCommandPatternMatchSemantics(t *testing.T) {
 		{command: "git -c user.name=test push origin main", match: true},
 		{command: "git push-mirror origin main", match: false},
 	} {
-		decision, matched, err := classifyBashCommandPolicy(tc.command, policies)
+		decision, matched, _, err := classifyBashCommandPolicy(tc.command, policies)
 		if err != nil {
 			t.Fatalf("classifyBashCommandPolicy(%q): %v", tc.command, err)
 		}
@@ -387,6 +387,48 @@ func TestBashCommandPatternOffRejects(t *testing.T) {
 	var disabled *toolpolicy.DisabledError
 	if !errors.As(err, &disabled) {
 		t.Fatalf("expected DisabledError, got %v", err)
+	}
+}
+
+func TestBashCommandPatternNeedApproveDeniesWithoutApprover(t *testing.T) {
+	cfg := newConfig(nil)
+	cfg.BashCommandPolicies = []BashCommandPolicy{{Command: "echo", ArgsPrefix: []string{"hello"}, Policy: ExecPolicyNeedApprove}}
+	tool := newBashWithConfig(testWorkspace{t.TempDir()}, cfg)
+	args, _ := json.Marshal(map[string]any{"command": "echo hello world"})
+	_, err := tool.Execute(context.Background(), string(args))
+	if err == nil {
+		t.Fatal("expected approval denial")
+	}
+	var denied *toolpolicy.ApprovalDeniedError
+	if !errors.As(err, &denied) {
+		t.Fatalf("expected ApprovalDeniedError, got %v", err)
+	}
+}
+
+func TestBashCommandPatternApproveForSessionDowngradesRuntimePolicy(t *testing.T) {
+	cfg := newConfig(nil)
+	cfg.BashCommandPolicies = []BashCommandPolicy{{Command: "echo", ArgsPrefix: []string{"hello"}, Policy: ExecPolicyNeedApprove}}
+	tool := newBashWithConfig(testWorkspace{t.TempDir()}, cfg)
+	args, _ := json.Marshal(map[string]any{"command": "echo hello world"})
+
+	var approvals int
+	ctx := toolpolicy.WithApprover(context.Background(), func(context.Context, toolpolicy.ApprovalRequest) (toolpolicy.ApprovalResponse, error) {
+		approvals++
+		return toolpolicy.ApprovalResponse{Outcome: toolpolicy.ApprovalOutcomeApproveForSession, Reason: "session ok"}, nil
+	})
+
+	if out, err := tool.Execute(ctx, string(args)); err != nil {
+		t.Fatalf("first Execute: %v", err)
+	} else if !strings.Contains(out, "hello world") {
+		t.Fatalf("first output = %q, want hello world", out)
+	}
+	if out, err := tool.Execute(ctx, string(args)); err != nil {
+		t.Fatalf("second Execute: %v", err)
+	} else if !strings.Contains(out, "hello world") {
+		t.Fatalf("second output = %q, want hello world", out)
+	}
+	if approvals != 1 {
+		t.Fatalf("approvals = %d, want 1", approvals)
 	}
 }
 

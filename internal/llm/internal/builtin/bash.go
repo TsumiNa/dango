@@ -105,15 +105,33 @@ func newBashWithConfig(ws workspace, cfg *config) tool {
 			if err := checkRedirections(args.Command, ws); err != nil {
 				return "", fmt.Errorf("bash: %w", err)
 			}
-			if decision, matched, err := classifyBashCommandPolicy(args.Command, cfg.BashCommandPolicies); err != nil {
+			if decision, matched, matchIndex, err := classifyBashCommandPolicy(args.Command, cfg.BashCommandPolicies); err != nil {
 				return "", fmt.Errorf("bash: %w", err)
 			} else if matched {
-				toolpolicy.Record(ctx, decision)
 				if decision.Policy == ExecPolicyOff {
+					toolpolicy.Record(ctx, decision)
 					return "", &toolpolicy.DisabledError{
 						Capability: decision.Capability,
 						Reason:     decision.Reason,
 					}
+				}
+				if decision.Policy == ExecPolicyNeedApprove {
+					resp, err := toolpolicy.RequestApproval(ctx, toolpolicy.ApprovalRequest{
+						Capability: decision.Capability,
+						Policy:     decision.Policy,
+						Reason:     decision.Reason,
+					})
+					decision.ApprovalOutcome = resp.Outcome
+					decision.ApprovalReason = resp.Reason
+					toolpolicy.Record(ctx, decision)
+					if err != nil {
+						return "", err
+					}
+					if resp.Outcome == toolpolicy.ApprovalOutcomeApproveForSession && matchIndex >= 0 {
+						cfg.BashCommandPolicies[matchIndex].Policy = ExecPolicyPassby
+					}
+				} else {
+					toolpolicy.Record(ctx, decision)
 				}
 			}
 
@@ -252,16 +270,17 @@ func staticWordValue(w *syntax.Word) (string, bool) {
 	return b.String(), true
 }
 
-func classifyBashCommandPolicy(command string, policies []BashCommandPolicy) (toolpolicy.Decision, bool, error) {
+func classifyBashCommandPolicy(command string, policies []BashCommandPolicy) (toolpolicy.Decision, bool, int, error) {
 	if len(policies) == 0 {
-		return toolpolicy.Decision{}, false, nil
+		return toolpolicy.Decision{}, false, -1, nil
 	}
 	f, err := syntax.NewParser().Parse(strings.NewReader(command), "")
 	if err != nil {
-		return toolpolicy.Decision{}, false, fmt.Errorf("parse command: %w", err)
+		return toolpolicy.Decision{}, false, -1, fmt.Errorf("parse command: %w", err)
 	}
 	var matched toolpolicy.Decision
 	var ok bool
+	matchIndex := -1
 	syntax.Walk(f, func(node syntax.Node) bool {
 		if ok {
 			return false
@@ -275,7 +294,7 @@ func classifyBashCommandPolicy(command string, policies []BashCommandPolicy) (to
 			return true
 		}
 		normalized := normalizeCommandArgs(head, args)
-		for _, policy := range policies {
+		for i, policy := range policies {
 			if filepath.Base(head) != filepath.Base(policy.Command) {
 				continue
 			}
@@ -291,11 +310,12 @@ func classifyBashCommandPolicy(command string, policies []BashCommandPolicy) (to
 				Reason:     fmt.Sprintf("matched bash command policy %q", strings.TrimSpace(strings.Join(append([]string{policy.Command}, policy.ArgsPrefix...), " "))),
 			}
 			ok = true
+			matchIndex = i
 			return false
 		}
 		return true
 	})
-	return matched, ok, nil
+	return matched, ok, matchIndex, nil
 }
 
 func staticCall(call *syntax.CallExpr) (string, []string, bool) {

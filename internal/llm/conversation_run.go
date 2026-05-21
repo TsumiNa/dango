@@ -2,7 +2,10 @@ package llm
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"strings"
+	"time"
 
 	"github.com/tsumina/dango/internal/llm/internal/toolpolicy"
 )
@@ -97,9 +100,65 @@ func (c *Conversation) dispatch(ctx context.Context, call ToolCall) (string, err
 		return msg, fmt.Errorf("llm: unknown tool %q", call.Name), Decision{}
 	}
 	decision := toolpolicy.Decision{}
-	out, err := tool.Execute(toolpolicy.WithRecorder(ctx, &decision), call.Arguments)
+	argsSummary, _ := compactJSONText(call.Arguments)
+	execCtx := toolpolicy.WithRecorder(ctx, &decision)
+	execCtx = toolpolicy.WithCallMetadata(execCtx, call.CallID, call.Name, argsSummary)
+	execCtx = toolpolicy.WithApprover(execCtx, c.requestApproval)
+	out, err := tool.Execute(execCtx, call.Arguments)
 	if err != nil {
 		return fmt.Sprintf("error: %s\n%s", err.Error(), out), err, decision
 	}
 	return out, nil, decision
+}
+
+func (c *Conversation) requestApproval(ctx context.Context, req toolpolicy.ApprovalRequest) (toolpolicy.ApprovalResponse, error) {
+	c.emitToolApprovalRequested(ctx, req)
+	if c.approver == nil {
+		resp := toolpolicy.ApprovalResponse{
+			Outcome: toolpolicy.ApprovalOutcomeDeny,
+			Reason:  "no approver configured",
+		}
+		err := &toolpolicy.ApprovalDeniedError{Capability: req.Capability, Reason: resp.Reason}
+		c.emitToolApprovalResolved(ctx, req, resp, err)
+		return resp, err
+	}
+
+	approvalCtx := ctx
+	cancel := func() {}
+	if c.approvalTimeout > 0 {
+		approvalCtx, cancel = context.WithTimeout(ctx, c.approvalTimeout)
+	}
+	defer cancel()
+
+	resp, err := c.approver.Approve(approvalCtx, ApprovalRequest(req))
+	if err != nil {
+		if errors.Is(err, context.DeadlineExceeded) || strings.Contains(err.Error(), context.DeadlineExceeded.Error()) {
+			resp = toolpolicy.ApprovalResponse{
+				Outcome: toolpolicy.ApprovalOutcomeDeny,
+				Reason:  fmt.Sprintf("approval timed out after %s", c.approvalTimeout.Round(time.Millisecond)),
+			}
+			err = &toolpolicy.ApprovalDeniedError{Capability: req.Capability, Reason: resp.Reason}
+		}
+		c.emitToolApprovalResolved(ctx, req, resp, err)
+		return resp, err
+	}
+	switch resp.Outcome {
+	case toolpolicy.ApprovalOutcomeApprove, toolpolicy.ApprovalOutcomeApproveForSession:
+		c.emitToolApprovalResolved(ctx, req, resp, nil)
+		return resp, nil
+	case "", toolpolicy.ApprovalOutcomeDeny:
+		if resp.Outcome == "" {
+			resp.Outcome = toolpolicy.ApprovalOutcomeDeny
+		}
+		if resp.Reason == "" {
+			resp.Reason = "approval denied"
+		}
+		err = &toolpolicy.ApprovalDeniedError{Capability: req.Capability, Reason: resp.Reason}
+		c.emitToolApprovalResolved(ctx, req, resp, err)
+		return resp, err
+	default:
+		err = fmt.Errorf("llm: invalid approval outcome %q", resp.Outcome)
+		c.emitToolApprovalResolved(ctx, req, resp, err)
+		return resp, err
+	}
 }

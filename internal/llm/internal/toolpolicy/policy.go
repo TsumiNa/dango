@@ -5,8 +5,8 @@ import (
 	"fmt"
 )
 
-// ExecPolicy controls whether a capability runs immediately, is recorded for a
-// future approval flow, or is disabled.
+// ExecPolicy controls whether a capability runs immediately, waits for
+// approval, or is disabled.
 type ExecPolicy string
 
 const (
@@ -43,13 +43,47 @@ type BashCommandPolicy struct {
 // Decision records the effective execution-policy classification used for one
 // tool call.
 type Decision struct {
-	Capability CapabilityRef
-	Policy     ExecPolicy
-	Reason     string
+	Capability      CapabilityRef
+	Policy          ExecPolicy
+	Reason          string
+	ApprovalOutcome ApprovalOutcome
+	ApprovalReason  string
 }
 
 // DisabledError reports that a capability or bash command pattern is disabled.
 type DisabledError struct {
+	Capability CapabilityRef
+	Reason     string
+}
+
+// ApprovalOutcome reports the result of one approval round-trip.
+type ApprovalOutcome string
+
+const (
+	ApprovalOutcomeApprove           ApprovalOutcome = "approve"
+	ApprovalOutcomeDeny              ApprovalOutcome = "deny"
+	ApprovalOutcomeApproveForSession ApprovalOutcome = "approve_for_session"
+)
+
+// ApprovalRequest is the summarized payload an approver sees for one gated tool
+// call.
+type ApprovalRequest struct {
+	CallID           string
+	ToolName         string
+	ArgumentsSummary string
+	Capability       CapabilityRef
+	Policy           ExecPolicy
+	Reason           string
+}
+
+// ApprovalResponse reports the approver's decision for one request.
+type ApprovalResponse struct {
+	Outcome ApprovalOutcome
+	Reason  string
+}
+
+// ApprovalDeniedError reports that a need_approve tool call was denied.
+type ApprovalDeniedError struct {
 	Capability CapabilityRef
 	Reason     string
 }
@@ -68,6 +102,22 @@ func (e *DisabledError) Error() string {
 		return fmt.Sprintf("llm: capability %q is disabled", e.Capability.Name)
 	}
 	return fmt.Sprintf("llm: capability %q is disabled: %s", e.Capability.Name, e.Reason)
+}
+
+func (e *ApprovalDeniedError) Error() string {
+	if e == nil {
+		return "llm: approval denied"
+	}
+	if e.Capability.Name == "" {
+		if e.Reason == "" {
+			return "llm: approval denied"
+		}
+		return "llm: approval denied: " + e.Reason
+	}
+	if e.Reason == "" {
+		return fmt.Sprintf("llm: capability %q was denied approval", e.Capability.Name)
+	}
+	return fmt.Sprintf("llm: capability %q was denied approval: %s", e.Capability.Name, e.Reason)
 }
 
 // Default returns p when it is non-empty, otherwise passby.
@@ -124,6 +174,16 @@ func CloneBashCommandPolicies(policies []BashCommandPolicy) []BashCommandPolicy 
 }
 
 type recorderKey struct{}
+type approvalHandlerKey struct{}
+type callMetadataKey struct{}
+
+type approvalHandler func(context.Context, ApprovalRequest) (ApprovalResponse, error)
+
+type callMetadata struct {
+	CallID           string
+	ToolName         string
+	ArgumentsSummary string
+}
 
 // WithRecorder attaches decision as the mutable recorder for downstream tool
 // execution.
@@ -144,4 +204,69 @@ func Record(ctx context.Context, decision Decision) {
 		return
 	}
 	*target = decision
+}
+
+// WithApprover attaches handler as the approval callback for downstream gated
+// tool execution.
+func WithApprover(ctx context.Context, handler func(context.Context, ApprovalRequest) (ApprovalResponse, error)) context.Context {
+	if handler == nil {
+		return ctx
+	}
+	return context.WithValue(ctx, approvalHandlerKey{}, approvalHandler(handler))
+}
+
+// WithCallMetadata attaches call metadata used to enrich approval requests.
+func WithCallMetadata(ctx context.Context, callID string, toolName string, argumentsSummary string) context.Context {
+	if callID == "" && toolName == "" && argumentsSummary == "" {
+		return ctx
+	}
+	return context.WithValue(ctx, callMetadataKey{}, callMetadata{
+		CallID:           callID,
+		ToolName:         toolName,
+		ArgumentsSummary: argumentsSummary,
+	})
+}
+
+// RequestApproval routes req through ctx's configured approval callback.
+func RequestApproval(ctx context.Context, req ApprovalRequest) (ApprovalResponse, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if meta, _ := ctx.Value(callMetadataKey{}).(callMetadata); req.CallID == "" || req.ToolName == "" || req.ArgumentsSummary == "" {
+		if req.CallID == "" {
+			req.CallID = meta.CallID
+		}
+		if req.ToolName == "" {
+			req.ToolName = meta.ToolName
+		}
+		if req.ArgumentsSummary == "" {
+			req.ArgumentsSummary = meta.ArgumentsSummary
+		}
+	}
+	handler, _ := ctx.Value(approvalHandlerKey{}).(approvalHandler)
+	if handler == nil {
+		resp := ApprovalResponse{
+			Outcome: ApprovalOutcomeDeny,
+			Reason:  "no approver configured",
+		}
+		return resp, &ApprovalDeniedError{Capability: req.Capability, Reason: resp.Reason}
+	}
+	resp, err := handler(ctx, req)
+	if err != nil {
+		return resp, err
+	}
+	switch resp.Outcome {
+	case ApprovalOutcomeApprove, ApprovalOutcomeApproveForSession:
+		return resp, nil
+	case "", ApprovalOutcomeDeny:
+		if resp.Reason == "" {
+			resp.Reason = "approval denied"
+		}
+		if resp.Outcome == "" {
+			resp.Outcome = ApprovalOutcomeDeny
+		}
+		return resp, &ApprovalDeniedError{Capability: req.Capability, Reason: resp.Reason}
+	default:
+		return resp, fmt.Errorf("llm: invalid approval outcome %q", resp.Outcome)
+	}
 }

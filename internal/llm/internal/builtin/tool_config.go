@@ -31,8 +31,8 @@ func ParseExtraTool(name string) (ExtraTool, error) {
 	}
 }
 
-// ExecPolicy controls whether a capability runs automatically, is recorded for
-// later approval, or stays disabled.
+// ExecPolicy controls whether a capability runs automatically, waits for
+// approval, or stays disabled.
 type ExecPolicy = toolpolicy.ExecPolicy
 
 const (

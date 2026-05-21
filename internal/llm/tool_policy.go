@@ -48,18 +48,37 @@ func (t *policyTool) Parameters() map[string]any { return t.base.Parameters() }
 
 func (t *policyTool) Execute(ctx context.Context, arguments string) (string, error) {
 	policy := t.resolvePolicy()
-	if policy != ExecPolicyPassby {
-		toolpolicy.Record(ctx, toolpolicy.Decision{
-			Capability: t.ref,
-			Policy:     policy,
-			Reason:     "capability policy",
-		})
+	decision := toolpolicy.Decision{
+		Capability: t.ref,
+		Policy:     policy,
+		Reason:     "capability policy",
 	}
 	if policy == ExecPolicyOff {
+		toolpolicy.Record(ctx, decision)
 		return "", &toolpolicy.DisabledError{
 			Capability: t.ref,
 			Reason:     "capability policy is off",
 		}
+	}
+	if policy == ExecPolicyNeedApprove {
+		resp, err := toolpolicy.RequestApproval(ctx, toolpolicy.ApprovalRequest{
+			Capability: t.ref,
+			Policy:     policy,
+			Reason:     decision.Reason,
+		})
+		decision.ApprovalOutcome = resp.Outcome
+		decision.ApprovalReason = resp.Reason
+		toolpolicy.Record(ctx, decision)
+		if err != nil {
+			return "", err
+		}
+		if resp.Outcome == toolpolicy.ApprovalOutcomeApproveForSession {
+			t.policies[t.ref] = ExecPolicyPassby
+		}
+		return t.base.Execute(ctx, arguments)
+	}
+	if policy != ExecPolicyPassby {
+		toolpolicy.Record(ctx, decision)
 	}
 	return t.base.Execute(ctx, arguments)
 }

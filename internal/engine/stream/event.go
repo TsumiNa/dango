@@ -32,6 +32,8 @@ const (
 	EventToolExecutionStarted   = "tool.execution.started"
 	EventToolExecutionCompleted = "tool.execution.completed"
 	EventToolExecutionFailed    = "tool.execution.failed"
+	EventToolApprovalRequested  = "tool.approval.requested"
+	EventToolApprovalResolved   = "tool.approval.resolved"
 
 	EventRunnerPhaseChanged  = "runner.phase.changed"
 	EventRunnerNodeAdded     = "runner.node.added"

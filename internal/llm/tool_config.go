@@ -23,8 +23,8 @@ func ParseExtraTool(name string) (ExtraTool, error) { return builtin.ParseExtraT
 // are enabled for a skill.
 type ToolSetConfig = builtin.ToolSetConfig
 
-// ExecPolicy controls whether a capability runs automatically, is recorded for
-// later approval, or stays disabled.
+// ExecPolicy controls whether a capability runs automatically, waits for
+// approval, or stays disabled.
 type ExecPolicy = builtin.ExecPolicy
 
 const (
@@ -56,6 +56,25 @@ type Decision = builtin.Decision
 
 // DisabledError reports that a capability or bash command pattern is disabled.
 type DisabledError = builtin.DisabledError
+
+// ApprovalOutcome reports the result of one approval round-trip.
+type ApprovalOutcome = toolpolicy.ApprovalOutcome
+
+const (
+	ApprovalOutcomeApprove           = toolpolicy.ApprovalOutcomeApprove
+	ApprovalOutcomeDeny              = toolpolicy.ApprovalOutcomeDeny
+	ApprovalOutcomeApproveForSession = toolpolicy.ApprovalOutcomeApproveForSession
+)
+
+// ApprovalRequest is the summarized payload an approver sees for one gated tool
+// call.
+type ApprovalRequest = toolpolicy.ApprovalRequest
+
+// ApprovalResponse reports the approver's decision for one request.
+type ApprovalResponse = toolpolicy.ApprovalResponse
+
+// ApprovalDeniedError reports that a need_approve tool call was denied.
+type ApprovalDeniedError = toolpolicy.ApprovalDeniedError
 
 // BuiltinCapability returns the policy key for a core builtin tool.
 func BuiltinCapability(name string) CapabilityRef { return toolpolicy.BuiltinCapability(name) }
