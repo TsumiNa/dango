@@ -26,8 +26,8 @@ func TestBuiltinToolsReturnsDefaultToolSet(t *testing.T) {
 	}
 }
 
-func TestBuiltinToolsRespectsBuiltinExtras(t *testing.T) {
-	skill, err := NewSkill(writeSkillDir(t, "---\nname: x\ndescription: d\n---\nbody\n"), SkillConfig{BuiltinExtras: []ExtraTool{ExtraListDir, ExtraPwd}})
+func TestBuiltinToolsRespectsExtrasEnum(t *testing.T) {
+	skill, err := NewSkill(writeSkillDir(t, "---\nname: x\ndescription: d\n---\nbody\n"), SkillConfig{ToolSet: ToolSetConfig{Extras: []ExtraTool{ExtraListDir, ExtraPwd}}})
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -43,7 +43,7 @@ func TestBuiltinToolsRespectsBuiltinExtras(t *testing.T) {
 }
 
 func TestBuiltinToolsWrapsUnknownBuiltinExtra(t *testing.T) {
-	skill, err := NewSkill(writeSkillDir(t, "---\nname: x\ndescription: d\n---\nbody\n"), SkillConfig{BuiltinExtras: []ExtraTool{ExtraTool("nope")}})
+	skill, err := NewSkill(writeSkillDir(t, "---\nname: x\ndescription: d\n---\nbody\n"), SkillConfig{ToolSet: ToolSetConfig{Extras: []ExtraTool{ExtraTool("nope")}}})
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -58,7 +58,7 @@ func TestBuiltinToolsWrapsUnknownBuiltinExtra(t *testing.T) {
 }
 
 func TestBuiltinToolsAppliesBashAllowAndBlock(t *testing.T) {
-	skill, err := NewSkill(writeSkillDir(t, "---\nname: x\ndescription: d\n---\nbody\n"), SkillConfig{BashAllow: []string{"helper-bin"}, BashBlock: []string{"curl"}})
+	skill, err := NewSkill(writeSkillDir(t, "---\nname: x\ndescription: d\n---\nbody\n"), SkillConfig{ToolSet: ToolSetConfig{BashAllow: []string{"helper-bin"}, BashBlock: []string{"curl"}}})
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}

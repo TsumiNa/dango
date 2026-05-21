@@ -42,7 +42,7 @@ func loadOrchestratorSkill(extraTools ...llm.Tool) (*llm.Skill, error) {
 		opts = append(opts, llm.WithTools(extraTools...))
 	}
 	cfg := llm.DefaultSkillConfig()
-	cfg.BuiltinExtras = []llm.ExtraTool{llm.ExtraListDir, llm.ExtraPwd}
+	cfg.ToolSet.Extras = []llm.ExtraTool{llm.ExtraListDir, llm.ExtraPwd}
 	sk, err := llm.NewSkill(sub, cfg, opts...)
 	if err != nil {
 		return nil, fmt.Errorf("load embedded orchestrator skill: %w", err)
