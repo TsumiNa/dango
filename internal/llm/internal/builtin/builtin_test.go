@@ -10,7 +10,7 @@ import (
 
 func TestToolsReturnsExpectedNames(t *testing.T) {
 	root := t.TempDir()
-	tools, err := Tools(testWorkspace{root}, nil, nil, nil)
+	tools, err := Tools(testWorkspace{root}, ToolSetConfig{})
 	if err != nil {
 		t.Fatalf("Tools: %v", err)
 	}
@@ -22,7 +22,7 @@ func TestToolsReturnsExpectedNames(t *testing.T) {
 
 func TestToolsAppendsExtras(t *testing.T) {
 	root := t.TempDir()
-	tools, err := Tools(testWorkspace{root}, nil, nil, []string{"list_dir", "pwd"})
+	tools, err := Tools(testWorkspace{root}, ToolSetConfig{Extras: []ExtraTool{ExtraListDir, ExtraPwd}})
 	if err != nil {
 		t.Fatalf("Tools: %v", err)
 	}
@@ -34,7 +34,7 @@ func TestToolsAppendsExtras(t *testing.T) {
 
 func TestToolsRejectsUnknownExtra(t *testing.T) {
 	root := t.TempDir()
-	_, err := Tools(testWorkspace{root}, nil, nil, []string{"nope"})
+	_, err := Tools(testWorkspace{root}, ToolSetConfig{Extras: []ExtraTool{ExtraTool("nope")}})
 	if err == nil {
 		t.Fatal("expected unknown extra error")
 	}
@@ -56,7 +56,7 @@ func TestBashForwardsAllowlistOption(t *testing.T) {
 func TestWithAllowlistAdjust(t *testing.T) {
 	root := t.TempDir()
 	// Block curl (default-allowed) and allow a bespoke command.
-	tools, err := Tools(testWorkspace{root}, []string{"helper-bin"}, []string{"curl"}, nil)
+	tools, err := Tools(testWorkspace{root}, ToolSetConfig{BashAllow: []string{"helper-bin"}, BashBlock: []string{"curl"}})
 	if err != nil {
 		t.Fatalf("Tools: %v", err)
 	}

@@ -160,16 +160,16 @@ func TestNew_WithDir_CarriesBashAllowAndBlock(t *testing.T) {
 
 func TestNewSkill_CarriesBuiltinExtras(t *testing.T) {
 	dir := writeSkillDir(t, "---\nname: x\ndescription: d\n---\n")
-	extras := []string{"list_dir", "pwd"}
+	extras := []ExtraTool{ExtraListDir, ExtraPwd}
 	sk, err := NewSkill(dir, SkillConfig{BuiltinExtras: extras})
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
-	if got := sk.BuiltinExtras(); !equalStrings(got, extras) {
+	if got := sk.BuiltinExtras(); !equalExtraTools(got, extras) {
 		t.Errorf("BuiltinExtras() = %v, want %v", got, extras)
 	}
 	sk.BuiltinExtras()[0] = "mutated"
-	if sk.BuiltinExtras()[0] != "list_dir" {
+	if sk.BuiltinExtras()[0] != ExtraListDir {
 		t.Errorf("BuiltinExtras() returned a shared slice")
 	}
 
@@ -177,7 +177,7 @@ func TestNewSkill_CarriesBuiltinExtras(t *testing.T) {
 	if err != nil {
 		t.Fatalf("AddTools: %v", err)
 	}
-	if got := copySkill.BuiltinExtras(); !equalStrings(got, extras) {
+	if got := copySkill.BuiltinExtras(); !equalExtraTools(got, extras) {
 		t.Errorf("copy BuiltinExtras() = %v, want %v", got, extras)
 	}
 }
@@ -434,7 +434,7 @@ func TestRuntimeInstructionPrependsPlatformSystemPrompt(t *testing.T) {
 }
 
 func TestSetAccessibleDirsAndBuiltinToolsPreservesCustomTools(t *testing.T) {
-	loaded, err := NewSkill(writeSkillDir(t, "---\nname: x\ndescription: d\n---\nbody\n"), SkillConfig{BuiltinExtras: []string{"pwd"}})
+	loaded, err := NewSkill(writeSkillDir(t, "---\nname: x\ndescription: d\n---\nbody\n"), SkillConfig{BuiltinExtras: []ExtraTool{ExtraPwd}})
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -624,6 +624,18 @@ func unsetEnvForTest(t *testing.T, names ...string) {
 }
 
 func equalStrings(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}
+
+func equalExtraTools(a, b []ExtraTool) bool {
 	if len(a) != len(b) {
 		return false
 	}
