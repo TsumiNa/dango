@@ -3,11 +3,14 @@ package builtin
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/tsumina/dango/internal/llm/internal/toolpolicy"
 )
 
 func TestBashRunsInRoot(t *testing.T) {
@@ -349,6 +352,41 @@ func TestBashAllowlistAllowsEnvPrefix(t *testing.T) {
 	}
 	if !strings.Contains(out, "ok") {
 		t.Errorf("env-prefixed echo output = %q", out)
+	}
+}
+
+func TestBashCommandPatternMatchSemantics(t *testing.T) {
+	policies := []BashCommandPolicy{{Command: "git", ArgsPrefix: []string{"push"}, Policy: ExecPolicyNeedApprove}}
+	for _, tc := range []struct {
+		command string
+		match   bool
+	}{
+		{command: "git push origin main", match: true},
+		{command: "git -c user.name=test push origin main", match: true},
+		{command: "git push-mirror origin main", match: false},
+	} {
+		decision, matched, err := classifyBashCommandPolicy(tc.command, policies)
+		if err != nil {
+			t.Fatalf("classifyBashCommandPolicy(%q): %v", tc.command, err)
+		}
+		if matched != tc.match {
+			t.Fatalf("classifyBashCommandPolicy(%q) matched = %v, want %v (decision=%+v)", tc.command, matched, tc.match, decision)
+		}
+	}
+}
+
+func TestBashCommandPatternOffRejects(t *testing.T) {
+	cfg := newConfig(nil)
+	cfg.BashCommandPolicies = []BashCommandPolicy{{Command: "git", ArgsPrefix: []string{"push"}, Policy: ExecPolicyOff}}
+	tool := newBashWithConfig(testWorkspace{t.TempDir()}, cfg)
+	args, _ := json.Marshal(map[string]any{"command": "git push origin main"})
+	_, err := tool.Execute(context.Background(), string(args))
+	if err == nil {
+		t.Fatal("expected off-pattern rejection")
+	}
+	var disabled *toolpolicy.DisabledError
+	if !errors.As(err, &disabled) {
+		t.Fatalf("expected DisabledError, got %v", err)
 	}
 }
 

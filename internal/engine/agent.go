@@ -62,6 +62,7 @@ type Agent struct {
 	planner    *ExecutionPlanner
 	bindClient *llm.Client
 	bindConfig llm.ConversationConfig
+	runtimeCfg llm.ToolSetConfig
 	runtime    *llm.Skill
 	// runtimePaths is the runner-owned workspace context most recently passed by
 	// the runner for this agent's runtime skill.
@@ -119,6 +120,7 @@ func NewAgent(sk *llm.Skill, planner *ExecutionPlanner, cfg llm.ConversationConf
 		skill:      sk,
 		planner:    planner,
 		bindConfig: cloneConversationConfig(cfg),
+		runtimeCfg: sk.ToolSetConfig(),
 	}
 	for _, opt := range opts {
 		if opt != nil {
@@ -189,11 +191,13 @@ func (e *Agent) BindForRunner(sessID *string, runtimePaths runnerpkg.AgentRuntim
 	if e.skill == nil {
 		return "", fmt.Errorf("orchestrate: agent requires a non-nil skill")
 	}
-	sk := e.skill
+	sk, err := e.skill.WithToolSetConfig(e.runtimeCfg)
+	if err != nil {
+		return "", err
+	}
 	if len(runtimePaths.AccessibleDirs) > 0 {
 		dirs := append(e.skill.AccessibleDirs(), runtimePaths.AccessibleDirs...)
-		var err error
-		sk, err = e.skill.SetAccessibleDirsAndBuiltinTools(dirs...)
+		sk, err = sk.SetAccessibleDirsAndBuiltinTools(dirs...)
 		if err != nil {
 			return "", err
 		}
@@ -215,6 +219,24 @@ func (e *Agent) BindForRunner(sessID *string, runtimePaths runnerpkg.AgentRuntim
 		return conv.SessionID(), nil
 	}
 	return "", nil
+}
+
+// RuntimeToolSetConfig returns the per-agent tool policy snapshot used for
+// later runner-owned binds.
+func (e *Agent) RuntimeToolSetConfig() llm.ToolSetConfig {
+	if e == nil {
+		return llm.ToolSetConfig{}
+	}
+	return e.runtimeCfg
+}
+
+// SetRuntimeToolSetConfig replaces the per-agent tool policy snapshot used for
+// later runner-owned binds.
+func (e *Agent) SetRuntimeToolSetConfig(cfg llm.ToolSetConfig) {
+	if e == nil {
+		return
+	}
+	e.runtimeCfg = cfg
 }
 
 func (e *Agent) runtimeConversationConfig() llm.ConversationConfig {

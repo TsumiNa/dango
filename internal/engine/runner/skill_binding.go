@@ -128,6 +128,7 @@ func (r *Runner) prepareNodeAgents(nodes map[string]*Node) error {
 		if err != nil {
 			return err
 		}
+		r.applySkillToolSet(node.SkillName, node.Agent)
 		// Only bind the session here; do NOT merge the agent stream yet.
 		// runNode calls prepareNodeAgent with the full runtime paths just
 		// before execution, which re-binds and creates a fresh EventStream.
@@ -170,6 +171,7 @@ func (r *Runner) prepareNodeAgent(id string, agent Agent, runtimePaths AgentRunt
 	if agent == nil || r.skillSessionStore == nil {
 		return nil
 	}
+	r.applySkillToolSet(runtimePaths.SkillName, agent)
 	r.skillSessionMu.Lock()
 	defer r.skillSessionMu.Unlock()
 

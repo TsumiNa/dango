@@ -3,6 +3,8 @@ package llm
 import (
 	"context"
 	"fmt"
+
+	"github.com/tsumina/dango/internal/llm/internal/toolpolicy"
 )
 
 // MaxSteps returns the iteration bound used by [Conversation.Run].
@@ -65,8 +67,8 @@ func (c *Conversation) Run(ctx context.Context, userInput string, effort Reasoni
 		}
 		for _, call := range resp.ToolCalls {
 			c.emitToolExecutionStarted(ctx, call)
-			output, execErr := c.dispatch(ctx, call)
-			c.emitToolExecutionFinished(ctx, call, execErr)
+			output, execErr, decision := c.dispatch(ctx, call)
+			c.emitToolExecutionFinished(ctx, call, execErr, decision)
 			c.AppendToolOutput(call.CallID, output, execErr)
 			// execErr is surfaced to the model via output so the loop
 			// can recover on the next turn.
@@ -88,15 +90,16 @@ func (c *Conversation) runStep(ctx context.Context, effort ReasoningEffort) (*Re
 // tools. On error the error text is returned as output so the model
 // sees it; the caller (Run) appends the returned string as the
 // function_call_output regardless of error.
-func (c *Conversation) dispatch(ctx context.Context, call ToolCall) (string, error) {
+func (c *Conversation) dispatch(ctx context.Context, call ToolCall) (string, error, Decision) {
 	tool, ok := c.toolByName[call.Name]
 	if !ok {
 		msg := fmt.Sprintf("error: unknown tool %q", call.Name)
-		return msg, fmt.Errorf("llm: unknown tool %q", call.Name)
+		return msg, fmt.Errorf("llm: unknown tool %q", call.Name), Decision{}
 	}
-	out, err := tool.Execute(ctx, call.Arguments)
+	decision := toolpolicy.Decision{}
+	out, err := tool.Execute(toolpolicy.WithRecorder(ctx, &decision), call.Arguments)
 	if err != nil {
-		return fmt.Sprintf("error: %s\n%s", err.Error(), out), err
+		return fmt.Sprintf("error: %s\n%s", err.Error(), out), err, decision
 	}
-	return out, nil
+	return out, nil, decision
 }

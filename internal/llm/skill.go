@@ -15,6 +15,7 @@ import (
 	streampkg "github.com/tsumina/dango/internal/engine/stream"
 	"github.com/tsumina/dango/internal/frontmatter"
 	"github.com/tsumina/dango/internal/llm/internal/builtin"
+	"github.com/tsumina/dango/internal/llm/internal/toolpolicy"
 )
 
 // SkillFile is the required filename inside a skill directory that carries
@@ -262,7 +263,7 @@ func (s *Skill) Bind(client *Client, cfg ConversationConfig, opts ...BindOption)
 		}
 		bound.eventStream = runtimeCfg.EventStream
 	}
-	conv, err := NewConversation(client, s.runtimeInstruction(), bound.tools, runtimeCfg)
+	conv, err := NewConversation(client, s.runtimeInstruction(), wrapToolsWithPolicySet(bound.tools, bound.toolSet), runtimeCfg)
 	if err != nil {
 		return nil, err
 	}
@@ -472,10 +473,39 @@ func (s *Skill) BashBlock() []string { return append([]string(nil), s.toolSet.Ba
 // [ExtraTool.String].
 func (s *Skill) BuiltinExtras() []ExtraTool { return append([]ExtraTool(nil), s.toolSet.Extras...) }
 
+// ToolSetConfig returns the current tool-set configuration of s.
+func (s *Skill) ToolSetConfig() ToolSetConfig {
+	if s == nil {
+		return ToolSetConfig{}
+	}
+	return copyToolSetConfig(s.toolSet)
+}
+
+// WithToolSetConfig returns a fresh lightweight copy of s with cfg installed as
+// its tool-set configuration.
+func (s *Skill) WithToolSetConfig(cfg ToolSetConfig) (*Skill, error) {
+	if s == nil {
+		return nil, fmt.Errorf("skill: WithToolSetConfig requires a non-nil skill")
+	}
+	if s.conv != nil {
+		return nil, fmt.Errorf("skill: WithToolSetConfig requires an unbound skill")
+	}
+	copySkill := s.copy()
+	copySkill.toolSet = copyToolSetConfig(cfg)
+	for _, tool := range copySkill.tools {
+		if tool != nil && isBuiltinToolName(tool.Name()) {
+			return copySkill.SetAccessibleDirsAndBuiltinTools(copySkill.AccessibleDirs()...)
+		}
+	}
+	return copySkill, nil
+}
+
 func copyToolSetConfig(cfg ToolSetConfig) ToolSetConfig {
 	cfg.BashAllow = append([]string(nil), cfg.BashAllow...)
 	cfg.BashBlock = append([]string(nil), cfg.BashBlock...)
 	cfg.Extras = append([]ExtraTool(nil), cfg.Extras...)
+	cfg.Policies = toolpolicy.ClonePolicyMap(cfg.Policies)
+	cfg.BashCommandPolicies = toolpolicy.CloneBashCommandPolicies(cfg.BashCommandPolicies)
 	return cfg
 }
 

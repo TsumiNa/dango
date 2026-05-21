@@ -113,15 +113,15 @@ func (c *Conversation) emitToolCallCompleted(ctx context.Context, call ToolCall)
 }
 
 func (c *Conversation) emitToolExecutionStarted(ctx context.Context, call ToolCall) {
-	c.emitStreamEvent(ctx, streampkg.EventToolExecutionStarted, streampkg.StatusRunning, toolExecutionDelta(call, nil), nil)
+	c.emitStreamEvent(ctx, streampkg.EventToolExecutionStarted, streampkg.StatusRunning, toolExecutionDelta(call, nil, Decision{}), nil)
 }
 
-func (c *Conversation) emitToolExecutionFinished(ctx context.Context, call ToolCall, execErr error) {
+func (c *Conversation) emitToolExecutionFinished(ctx context.Context, call ToolCall, execErr error, decision Decision) {
 	eventType := streampkg.EventToolExecutionCompleted
 	if execErr != nil {
 		eventType = streampkg.EventToolExecutionFailed
 	}
-	c.emitStreamEvent(ctx, eventType, streamStatusForError(execErr), toolExecutionDelta(call, execErr), nil)
+	c.emitStreamEvent(ctx, eventType, streamStatusForError(execErr), toolExecutionDelta(call, execErr, decision), nil)
 }
 
 func (c *Conversation) emitToolResult(ctx context.Context, callID string, output string, execErr error) {
@@ -155,13 +155,25 @@ func toolCallDelta(call ToolCall) map[string]any {
 	return delta
 }
 
-func toolExecutionDelta(call ToolCall, execErr error) map[string]any {
+func toolExecutionDelta(call ToolCall, execErr error, decision Decision) map[string]any {
 	delta := map[string]any{
 		"call_id": call.CallID,
 		"name":    call.Name,
 	}
 	if execErr != nil {
 		delta["error"] = compactErrorText(execErr.Error())
+	}
+	if decision.Policy != "" {
+		delta["policy"] = string(decision.Policy)
+	}
+	if decision.Capability.Kind != "" {
+		delta["capability_kind"] = string(decision.Capability.Kind)
+	}
+	if decision.Capability.Name != "" {
+		delta["capability_name"] = decision.Capability.Name
+	}
+	if decision.Reason != "" {
+		delta["policy_reason"] = decision.Reason
 	}
 	return delta
 }

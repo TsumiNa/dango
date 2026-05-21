@@ -352,6 +352,149 @@ func TestConversationRun_UnknownToolRecovers(t *testing.T) {
 	}
 }
 
+func TestPolicyPassbyRunsImmediately(t *testing.T) {
+	var responded int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if responded == 0 {
+			responded++
+			_, _ = w.Write([]byte(`{
+				"id":"r1","object":"response","created_at":0,"model":"m","status":"completed",
+				"output":[{"id":"fc","type":"function_call","status":"completed","call_id":"c","name":"echo","arguments":"{}"}],
+				"parallel_tool_calls":false,"tool_choice":"auto","tools":[]
+			}`))
+			return
+		}
+		_, _ = w.Write([]byte(`{
+			"id":"r2","object":"response","created_at":0,"model":"m","status":"completed",
+			"output":[{"id":"m","type":"message","role":"assistant","status":"completed",
+			 "content":[{"type":"output_text","text":"ok","annotations":[]}]}],
+			"parallel_tool_calls":false,"tool_choice":"auto","tools":[]
+		}`))
+	}))
+	t.Cleanup(srv.Close)
+
+	var executed bool
+	echo := NewFuncTool("echo", "echo", map[string]any{"type": "object"}, func(_ context.Context, _ string) (string, error) {
+		executed = true
+		return "done", nil
+	})
+	tools := wrapToolsWithPolicySet([]Tool{echo}, ToolSetConfig{
+		Policies: map[CapabilityRef]ExecPolicy{
+			ToolCapability("echo"): ExecPolicyPassby,
+		},
+	})
+	conv := mustNewConversation(t, testClient(srv.URL), "sys", tools)
+	if out, err := conv.Run(t.Context(), "go", ""); err != nil {
+		t.Fatalf("Run: %v", err)
+	} else if out != "ok" {
+		t.Fatalf("Run output = %q, want ok", out)
+	}
+	if !executed {
+		t.Fatal("passby tool did not execute")
+	}
+}
+
+func TestPolicyOffRejects(t *testing.T) {
+	var responded int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if responded == 0 {
+			responded++
+			_, _ = w.Write([]byte(`{
+				"id":"r1","object":"response","created_at":0,"model":"m","status":"completed",
+				"output":[{"id":"fc","type":"function_call","status":"completed","call_id":"c","name":"echo","arguments":"{}"}],
+				"parallel_tool_calls":false,"tool_choice":"auto","tools":[]
+			}`))
+			return
+		}
+		_, _ = w.Write([]byte(`{
+			"id":"r2","object":"response","created_at":0,"model":"m","status":"completed",
+			"output":[{"id":"m","type":"message","role":"assistant","status":"completed",
+			 "content":[{"type":"output_text","text":"recovered","annotations":[]}]}],
+			"parallel_tool_calls":false,"tool_choice":"auto","tools":[]
+		}`))
+	}))
+	t.Cleanup(srv.Close)
+
+	var executed bool
+	echo := NewFuncTool("echo", "echo", map[string]any{"type": "object"}, func(_ context.Context, _ string) (string, error) {
+		executed = true
+		return "done", nil
+	})
+	tools := wrapToolsWithPolicySet([]Tool{echo}, ToolSetConfig{
+		Policies: map[CapabilityRef]ExecPolicy{
+			ToolCapability("echo"): ExecPolicyOff,
+		},
+	})
+	conv := mustNewConversation(t, testClient(srv.URL), "sys", tools)
+	if out, err := conv.Run(t.Context(), "go", ""); err != nil {
+		t.Fatalf("Run: %v", err)
+	} else if out != "recovered" {
+		t.Fatalf("Run output = %q, want recovered", out)
+	}
+	if executed {
+		t.Fatal("off policy still executed tool")
+	}
+	var sawDisabled bool
+	for _, turn := range conv.Turns() {
+		if turn.Role == RoleToolOutput && turn.Tool != nil && strings.Contains(turn.Tool.Error, "disabled") {
+			sawDisabled = true
+		}
+	}
+	if !sawDisabled {
+		t.Fatal("tool output did not record disabled error")
+	}
+}
+
+func TestPolicyNeedApproveRunsInInterim(t *testing.T) {
+	var responded int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if responded == 0 {
+			responded++
+			sseResponse(w, completedEvent("", "echo", `{}`))
+			return
+		}
+		sseResponse(w, textDeltaEvent("ok"), completedEvent("ok", "", ""))
+	}))
+	t.Cleanup(srv.Close)
+
+	var executed bool
+	echo := NewFuncTool("echo", "echo", map[string]any{"type": "object"}, func(_ context.Context, _ string) (string, error) {
+		executed = true
+		return "done", nil
+	})
+	tools := wrapToolsWithPolicySet([]Tool{echo}, ToolSetConfig{
+		Policies: map[CapabilityRef]ExecPolicy{
+			ToolCapability("echo"): ExecPolicyNeedApprove,
+		},
+	})
+	conv := mustNewConversation(t, testClient(srv.URL), "sys", tools, ConversationConfig{
+		StreamEvents: true,
+		StreamSource: streampkg.Source{Layer: "skill", ID: "policy_skill"},
+		StreamScope:  streampkg.Scope{NodeID: "node_policy"},
+	})
+	sub, err := conv.EventStream().Subscribe(streampkg.Filter{}, streampkg.WithSubscriberBuffer(16))
+	if err != nil {
+		t.Fatalf("Subscribe: %v", err)
+	}
+	if out, err := conv.Run(t.Context(), "go", ""); err != nil {
+		t.Fatalf("Run: %v", err)
+	} else if out != "ok" {
+		t.Fatalf("Run output = %q, want ok", out)
+	}
+	conv.EventStream().Close()
+	if !executed {
+		t.Fatal("need_approve policy should still execute in 12a")
+	}
+	events := collectStreamEvents(t, sub)
+	if !hasStreamEvent(events, streampkg.EventToolExecutionCompleted, "skill", "node_policy", func(delta map[string]any) bool {
+		return delta["name"] == "echo" && delta["policy"] == "need_approve"
+	}) {
+		t.Fatalf("missing need_approve recording in tool execution event: %+v", events)
+	}
+}
+
 // TestConversationRun_NilClientReturnsError confirms Run rejects
 // conversations that are not bound to a transport.
 func TestConversationRun_NilClientReturnsError(t *testing.T) {
