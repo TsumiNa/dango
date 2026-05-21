@@ -169,7 +169,11 @@ func main() {
 	field("bash block removals", formatSlice(bashBlock))
 	field("builtin extras", formatExtraTools(builtinExtras))
 
-	baseSkill, err := llm.NewSkill(dir, llm.SkillConfig{BashAllow: bashAllow, BashBlock: bashBlock, BuiltinExtras: builtinExtras})
+	baseSkill, err := llm.NewSkill(dir, llm.SkillConfig{ToolSet: llm.ToolSetConfig{
+		BashAllow: bashAllow,
+		BashBlock: bashBlock,
+		Extras:    builtinExtras,
+	}})
 	if err != nil {
 		log.Fatalf("load skill: %v", err)
 	}

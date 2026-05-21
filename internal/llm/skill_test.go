@@ -140,7 +140,7 @@ func TestNew_WithDir_CarriesBashAllowAndBlock(t *testing.T) {
 	dir := writeSkillDir(t, "---\nname: x\ndescription: d\n---\n")
 	allow := []string{"rg", "fd"}
 	block := []string{"curl", "wget"}
-	sk, err := NewSkill(dir, SkillConfig{BashAllow: allow, BashBlock: block})
+	sk, err := NewSkill(dir, SkillConfig{ToolSet: ToolSetConfig{BashAllow: allow, BashBlock: block}})
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -158,10 +158,10 @@ func TestNew_WithDir_CarriesBashAllowAndBlock(t *testing.T) {
 	}
 }
 
-func TestNewSkill_CarriesBuiltinExtras(t *testing.T) {
+func TestNewSkill_CarriesExtrasEnum(t *testing.T) {
 	dir := writeSkillDir(t, "---\nname: x\ndescription: d\n---\n")
 	extras := []ExtraTool{ExtraListDir, ExtraPwd}
-	sk, err := NewSkill(dir, SkillConfig{BuiltinExtras: extras})
+	sk, err := NewSkill(dir, SkillConfig{ToolSet: ToolSetConfig{Extras: extras}})
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -434,7 +434,7 @@ func TestRuntimeInstructionPrependsPlatformSystemPrompt(t *testing.T) {
 }
 
 func TestSetAccessibleDirsAndBuiltinToolsPreservesCustomTools(t *testing.T) {
-	loaded, err := NewSkill(writeSkillDir(t, "---\nname: x\ndescription: d\n---\nbody\n"), SkillConfig{BuiltinExtras: []ExtraTool{ExtraPwd}})
+	loaded, err := NewSkill(writeSkillDir(t, "---\nname: x\ndescription: d\n---\nbody\n"), SkillConfig{ToolSet: ToolSetConfig{Extras: []ExtraTool{ExtraPwd}}})
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}

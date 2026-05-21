@@ -49,13 +49,11 @@ type Skill struct {
 	License     string `yaml:"license,omitempty" toml:"license,omitempty" json:"license,omitempty"`
 	Instruction string
 
-	dir           fs.FS
-	workspace     *workspaceRoot
-	envFiles      []string
-	bashAllow     []string
-	bashBlock     []string
-	builtinExtras []ExtraTool
-	tools         []Tool
+	dir       fs.FS
+	workspace *workspaceRoot
+	envFiles  []string
+	toolSet   ToolSetConfig
+	tools     []Tool
 
 	conv        *Conversation
 	eventStream *streampkg.Stream
@@ -63,18 +61,13 @@ type Skill struct {
 
 // SkillConfig controls optional behaviour while loading a [Skill].
 type SkillConfig struct {
-	// BashAllow lists command names allowed by built-in bash tools.
-	BashAllow []string
-	// BashBlock lists command names blocked by built-in bash tools.
-	BashBlock []string
-	// BuiltinExtras lists opt-in built-in tools to append after the default
-	// built-in tool set, such as [ExtraListDir] and [ExtraPwd].
-	BuiltinExtras []ExtraTool
+	// ToolSet controls which built-in tools are exposed to the loaded skill.
+	ToolSet ToolSetConfig
 }
 
 // DefaultSkillConfig returns the default optional behaviour for [NewSkill].
 func DefaultSkillConfig() SkillConfig {
-	return SkillConfig{}
+	return SkillConfig{ToolSet: DefaultToolSetConfig()}
 }
 
 // SkillOption adjusts a constructed lightweight [Skill] before it is returned.
@@ -218,9 +211,7 @@ func newFromFS(fs fs.FS, displayDir string, workspace *workspaceRoot, envFiles [
 	sk.dir = fs
 	sk.workspace = workspace
 	sk.envFiles = append([]string(nil), envFiles...)
-	sk.bashAllow = append([]string(nil), cfg.BashAllow...)
-	sk.bashBlock = append([]string(nil), cfg.BashBlock...)
-	sk.builtinExtras = append([]ExtraTool(nil), cfg.BuiltinExtras...)
+	sk.toolSet = copyToolSetConfig(cfg.ToolSet)
 
 	return &sk, nil
 }
@@ -321,9 +312,7 @@ func (s *Skill) SetAccessibleDirs(dirs ...string) error {
 func (s *Skill) copy() *Skill {
 	bound := *s
 	bound.workspace = s.workspace.copy()
-	bound.bashAllow = append([]string(nil), s.bashAllow...)
-	bound.bashBlock = append([]string(nil), s.bashBlock...)
-	bound.builtinExtras = append([]ExtraTool(nil), s.builtinExtras...)
+	bound.toolSet = copyToolSetConfig(s.toolSet)
 	bound.envFiles = append([]string(nil), s.envFiles...)
 	bound.tools = append([]Tool(nil), s.tools...)
 	bound.conv = nil
@@ -466,19 +455,29 @@ func (s *Skill) AccessibleDirs() []string {
 }
 
 // BashAllow returns the executables this skill wants to permit on top
-// of the built-in default bash allowlist. Callers pass it alongside
-// [Skill.BashBlock] to [Skill.BuiltinTools] when wiring the built-in tools.
-func (s *Skill) BashAllow() []string { return append([]string(nil), s.bashAllow...) }
+// of the built-in default bash allowlist configured through
+// [SkillConfig.ToolSet]. [Skill.BuiltinTools] consumes this setting when it
+// rebuilds the skill's built-in tools.
+func (s *Skill) BashAllow() []string { return append([]string(nil), s.toolSet.BashAllow...) }
 
 // BashBlock returns the executables this skill wants to remove from
-// the built-in default bash allowlist. Entries in BashBlock override
-// both the default list and [Skill.BashAllow].
-func (s *Skill) BashBlock() []string { return append([]string(nil), s.bashBlock...) }
+// the built-in default bash allowlist configured through
+// [SkillConfig.ToolSet]. Entries in BashBlock override both the default list
+// and [Skill.BashAllow] when [Skill.BuiltinTools] rebuilds the skill's
+// built-in tools.
+func (s *Skill) BashBlock() []string { return append([]string(nil), s.toolSet.BashBlock...) }
 
 // BuiltinExtras returns opt-in built-in tools appended after the default
 // built-in tool set. Callers that need tool names can use
 // [ExtraTool.String].
-func (s *Skill) BuiltinExtras() []ExtraTool { return append([]ExtraTool(nil), s.builtinExtras...) }
+func (s *Skill) BuiltinExtras() []ExtraTool { return append([]ExtraTool(nil), s.toolSet.Extras...) }
+
+func copyToolSetConfig(cfg ToolSetConfig) ToolSetConfig {
+	cfg.BashAllow = append([]string(nil), cfg.BashAllow...)
+	cfg.BashBlock = append([]string(nil), cfg.BashBlock...)
+	cfg.Extras = append([]ExtraTool(nil), cfg.Extras...)
+	return cfg
+}
 
 // Conversation returns the underlying [Conversation]. Callers may
 // inspect its turns, usage, or session metadata but should not mutate

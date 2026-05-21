@@ -15,3 +15,11 @@ const (
 
 // ParseExtraTool converts a config string into a typed extra tool value.
 func ParseExtraTool(name string) (ExtraTool, error) { return builtin.ParseExtraTool(name) }
+
+// ToolSetConfig is the single typed input that controls which built-in tools
+// are enabled for a skill.
+type ToolSetConfig = builtin.ToolSetConfig
+
+// DefaultToolSetConfig returns the default built-in tool availability for a
+// newly loaded skill.
+func DefaultToolSetConfig() ToolSetConfig { return ToolSetConfig{} }
