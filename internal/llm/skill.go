@@ -475,8 +475,9 @@ func (s *Skill) BashAllow() []string { return append([]string(nil), s.bashAllow.
 // both the default list and [Skill.BashAllow].
 func (s *Skill) BashBlock() []string { return append([]string(nil), s.bashBlock...) }
 
-// BuiltinExtras returns opt-in built-in tool names appended after the default
-// built-in tool set.
+// BuiltinExtras returns opt-in built-in tools appended after the default
+// built-in tool set. Callers that need tool names can use
+// [ExtraTool.String].
 func (s *Skill) BuiltinExtras() []ExtraTool { return append([]ExtraTool(nil), s.builtinExtras...) }
 
 // Conversation returns the underlying [Conversation]. Callers may
