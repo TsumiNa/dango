@@ -455,13 +455,16 @@ func (s *Skill) AccessibleDirs() []string {
 }
 
 // BashAllow returns the executables this skill wants to permit on top
-// of the built-in default bash allowlist. Callers pass it alongside
-// [Skill.BashBlock] to [Skill.BuiltinTools] when wiring the built-in tools.
+// of the built-in default bash allowlist configured through
+// [SkillConfig.ToolSet]. [Skill.BuiltinTools] consumes this setting when it
+// rebuilds the skill's built-in tools.
 func (s *Skill) BashAllow() []string { return append([]string(nil), s.toolSet.BashAllow...) }
 
 // BashBlock returns the executables this skill wants to remove from
-// the built-in default bash allowlist. Entries in BashBlock override
-// both the default list and [Skill.BashAllow].
+// the built-in default bash allowlist configured through
+// [SkillConfig.ToolSet]. Entries in BashBlock override both the default list
+// and [Skill.BashAllow] when [Skill.BuiltinTools] rebuilds the skill's
+// built-in tools.
 func (s *Skill) BashBlock() []string { return append([]string(nil), s.toolSet.BashBlock...) }
 
 // BuiltinExtras returns opt-in built-in tools appended after the default
