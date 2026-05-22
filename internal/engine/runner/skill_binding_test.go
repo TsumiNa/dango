@@ -272,6 +272,25 @@ func TestRunnerDynamicAdjustAffectsOnlyThisRun(t *testing.T) {
 	}
 }
 
+func TestRunnerSetSkillBashCommandPoliciesClonesArgsPrefix(t *testing.T) {
+	agent := &policyBindAgent{}
+	r := New(WithLogger(testLogger), WithInitialPlan(&CoarsePlan{Request: "demo"}, map[string]*Node{
+		"node": {Id: "node", SkillName: "skill", Agent: agent},
+	}))
+	policies := []llm.BashCommandPolicy{{Command: "git", ArgsPrefix: []string{"push"}, Policy: llm.ExecPolicyNeedApprove}}
+	if err := r.SetSkillBashCommandPolicies("skill", policies); err != nil {
+		t.Fatalf("SetSkillBashCommandPolicies: %v", err)
+	}
+	policies[0].ArgsPrefix[0] = "status"
+	got, ok := r.SkillToolSetConfig("skill")
+	if !ok {
+		t.Fatal("SkillToolSetConfig(skill) = false")
+	}
+	if got.BashCommandPolicies[0].ArgsPrefix[0] != "push" {
+		t.Fatalf("runner snapshot args prefix = %q, want push", got.BashCommandPolicies[0].ArgsPrefix[0])
+	}
+}
+
 func cloneRunnerToolSet(cfg llm.ToolSetConfig) llm.ToolSetConfig {
 	cfg.BashAllow = append([]string(nil), cfg.BashAllow...)
 	cfg.BashBlock = append([]string(nil), cfg.BashBlock...)

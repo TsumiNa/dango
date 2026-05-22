@@ -375,6 +375,26 @@ func TestBashCommandPatternMatchSemantics(t *testing.T) {
 	}
 }
 
+func TestBashCommandPatternMostRestrictiveMatchWinsAcrossScript(t *testing.T) {
+	policies := []BashCommandPolicy{
+		{Command: "git", Policy: ExecPolicyPassby},
+		{Command: "git", ArgsPrefix: []string{"push"}, Policy: ExecPolicyOff},
+	}
+	decision, matched, matchIndex, err := classifyBashCommandPolicy("git status && git push origin main", policies)
+	if err != nil {
+		t.Fatalf("classifyBashCommandPolicy: %v", err)
+	}
+	if !matched {
+		t.Fatal("expected a policy match")
+	}
+	if decision.Policy != ExecPolicyOff {
+		t.Fatalf("decision.Policy = %q, want off", decision.Policy)
+	}
+	if matchIndex != 1 {
+		t.Fatalf("matchIndex = %d, want 1", matchIndex)
+	}
+}
+
 func TestBashCommandPatternOffRejects(t *testing.T) {
 	cfg := newConfig(nil)
 	cfg.BashCommandPolicies = []BashCommandPolicy{{Command: "git", ArgsPrefix: []string{"push"}, Policy: ExecPolicyOff}}

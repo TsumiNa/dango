@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"strings"
 	"time"
 
 	"github.com/tsumina/dango/internal/llm/internal/toolpolicy"
@@ -132,7 +131,7 @@ func (c *Conversation) requestApproval(ctx context.Context, req toolpolicy.Appro
 
 	resp, err := c.approver.Approve(approvalCtx, ApprovalRequest(req))
 	if err != nil {
-		if errors.Is(err, context.DeadlineExceeded) || strings.Contains(err.Error(), context.DeadlineExceeded.Error()) {
+		if c.approvalTimeout > 0 && errors.Is(approvalCtx.Err(), context.DeadlineExceeded) && ctx.Err() == nil {
 			resp = toolpolicy.ApprovalResponse{
 				Outcome: toolpolicy.ApprovalOutcomeDeny,
 				Reason:  fmt.Sprintf("approval timed out after %s", c.approvalTimeout.Round(time.Millisecond)),

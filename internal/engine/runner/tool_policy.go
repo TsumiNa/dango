@@ -97,6 +97,9 @@ func (r *Runner) SetSkillBashCommandPolicies(skillName string, policies []llm.Ba
 	}
 	cfg = cloneToolSetConfig(cfg)
 	cfg.BashCommandPolicies = append([]llm.BashCommandPolicy(nil), policies...)
+	for i := range cfg.BashCommandPolicies {
+		cfg.BashCommandPolicies[i].ArgsPrefix = append([]string(nil), cfg.BashCommandPolicies[i].ArgsPrefix...)
+	}
 	r.skillToolSets[skillName] = cfg
 	return nil
 }

@@ -281,10 +281,8 @@ func classifyBashCommandPolicy(command string, policies []BashCommandPolicy) (to
 	var matched toolpolicy.Decision
 	var ok bool
 	matchIndex := -1
+	bestPrefixLen := -1
 	syntax.Walk(f, func(node syntax.Node) bool {
-		if ok {
-			return false
-		}
 		call, isCall := node.(*syntax.CallExpr)
 		if !isCall || len(call.Args) == 0 {
 			return true
@@ -304,18 +302,43 @@ func classifyBashCommandPolicy(command string, policies []BashCommandPolicy) (to
 			if len(policy.ArgsPrefix) > len(normalized) {
 				continue
 			}
-			matched = toolpolicy.Decision{
+			candidate := toolpolicy.Decision{
 				Capability: toolpolicy.BuiltinCapability("bash"),
 				Policy:     policy.Policy.Default(),
 				Reason:     fmt.Sprintf("matched bash command policy %q", strings.TrimSpace(strings.Join(append([]string{policy.Command}, policy.ArgsPrefix...), " "))),
 			}
-			ok = true
-			matchIndex = i
-			return false
+			prefixLen := len(policy.ArgsPrefix)
+			if !ok || betterBashCommandPolicyMatch(candidate.Policy, prefixLen, i, matched, bestPrefixLen, matchIndex) {
+				matched = candidate
+				ok = true
+				matchIndex = i
+				bestPrefixLen = prefixLen
+			}
 		}
 		return true
 	})
 	return matched, ok, matchIndex, nil
+}
+
+func betterBashCommandPolicyMatch(policy ExecPolicy, prefixLen int, index int, current toolpolicy.Decision, currentPrefixLen int, currentIndex int) bool {
+	if rank := bashCommandPolicyRank(policy); rank != bashCommandPolicyRank(current.Policy) {
+		return rank > bashCommandPolicyRank(current.Policy)
+	}
+	if prefixLen != currentPrefixLen {
+		return prefixLen > currentPrefixLen
+	}
+	return currentIndex < 0 || index < currentIndex
+}
+
+func bashCommandPolicyRank(policy ExecPolicy) int {
+	switch policy {
+	case ExecPolicyOff:
+		return 2
+	case ExecPolicyNeedApprove:
+		return 1
+	default:
+		return 0
+	}
 }
 
 func staticCall(call *syntax.CallExpr) (string, []string, bool) {

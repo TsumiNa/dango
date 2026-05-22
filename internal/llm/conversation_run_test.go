@@ -10,8 +10,10 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	streampkg "github.com/tsumina/dango/internal/engine/stream"
+	"github.com/tsumina/dango/internal/llm/internal/toolpolicy"
 )
 
 // TestConversationRun_HappyPath drives one tool call then a final
@@ -677,6 +679,72 @@ func TestPolicyNeedApproveHeadlessDenied(t *testing.T) {
 	}
 	if !sawDenied {
 		t.Fatal("missing no-approver tool output")
+	}
+}
+
+func TestConversationRequestApprovalConfiguredTimeoutReturnsDenied(t *testing.T) {
+	conv := &Conversation{
+		approver: ApproverFunc(func(ctx context.Context, _ ApprovalRequest) (ApprovalResponse, error) {
+			<-ctx.Done()
+			return ApprovalResponse{}, ctx.Err()
+		}),
+		approvalTimeout: 10 * time.Millisecond,
+	}
+	resp, err := conv.requestApproval(context.Background(), ApprovalRequest{})
+	if err == nil {
+		t.Fatal("expected approval timeout error")
+	}
+	var denied *toolpolicy.ApprovalDeniedError
+	if !errors.As(err, &denied) {
+		t.Fatalf("expected ApprovalDeniedError, got %v", err)
+	}
+	if resp.Outcome != ApprovalOutcomeDeny {
+		t.Fatalf("resp.Outcome = %q, want deny", resp.Outcome)
+	}
+	if !strings.Contains(resp.Reason, "approval timed out after") {
+		t.Fatalf("resp.Reason = %q, want timeout message", resp.Reason)
+	}
+}
+
+func TestConversationRequestApprovalPreservesParentDeadlineError(t *testing.T) {
+	conv := &Conversation{
+		approver: ApproverFunc(func(ctx context.Context, _ ApprovalRequest) (ApprovalResponse, error) {
+			return ApprovalResponse{}, ctx.Err()
+		}),
+		approvalTimeout: time.Second,
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
+	defer cancel()
+	<-ctx.Done()
+	resp, err := conv.requestApproval(ctx, ApprovalRequest{})
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("err = %v, want context deadline exceeded", err)
+	}
+	var denied *toolpolicy.ApprovalDeniedError
+	if errors.As(err, &denied) {
+		t.Fatalf("expected original deadline error, got ApprovalDeniedError %v", err)
+	}
+	if resp.Outcome != "" || resp.Reason != "" {
+		t.Fatalf("resp = %+v, want zero response", resp)
+	}
+}
+
+func TestConversationRequestApprovalWithoutConfiguredTimeoutPreservesDeadlineError(t *testing.T) {
+	conv := &Conversation{
+		approver: ApproverFunc(func(context.Context, ApprovalRequest) (ApprovalResponse, error) {
+			return ApprovalResponse{}, context.DeadlineExceeded
+		}),
+	}
+	resp, err := conv.requestApproval(context.Background(), ApprovalRequest{})
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("err = %v, want context deadline exceeded", err)
+	}
+	var denied *toolpolicy.ApprovalDeniedError
+	if errors.As(err, &denied) {
+		t.Fatalf("expected original deadline error, got ApprovalDeniedError %v", err)
+	}
+	if resp.Outcome != "" || resp.Reason != "" {
+		t.Fatalf("resp = %+v, want zero response", resp)
 	}
 }
 
