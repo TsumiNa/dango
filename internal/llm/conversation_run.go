@@ -2,7 +2,11 @@ package llm
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"time"
+
+	"github.com/tsumina/dango/internal/llm/internal/toolpolicy"
 )
 
 // MaxSteps returns the iteration bound used by [Conversation.Run].
@@ -65,8 +69,8 @@ func (c *Conversation) Run(ctx context.Context, userInput string, effort Reasoni
 		}
 		for _, call := range resp.ToolCalls {
 			c.emitToolExecutionStarted(ctx, call)
-			output, execErr := c.dispatch(ctx, call)
-			c.emitToolExecutionFinished(ctx, call, execErr)
+			output, execErr, decision := c.dispatch(ctx, call)
+			c.emitToolExecutionFinished(ctx, call, execErr, decision)
 			c.AppendToolOutput(call.CallID, output, execErr)
 			// execErr is surfaced to the model via output so the loop
 			// can recover on the next turn.
@@ -88,15 +92,72 @@ func (c *Conversation) runStep(ctx context.Context, effort ReasoningEffort) (*Re
 // tools. On error the error text is returned as output so the model
 // sees it; the caller (Run) appends the returned string as the
 // function_call_output regardless of error.
-func (c *Conversation) dispatch(ctx context.Context, call ToolCall) (string, error) {
+func (c *Conversation) dispatch(ctx context.Context, call ToolCall) (string, error, Decision) {
 	tool, ok := c.toolByName[call.Name]
 	if !ok {
 		msg := fmt.Sprintf("error: unknown tool %q", call.Name)
-		return msg, fmt.Errorf("llm: unknown tool %q", call.Name)
+		return msg, fmt.Errorf("llm: unknown tool %q", call.Name), Decision{}
 	}
-	out, err := tool.Execute(ctx, call.Arguments)
+	decision := toolpolicy.Decision{}
+	argsSummary, _ := compactJSONText(call.Arguments)
+	execCtx := toolpolicy.WithRecorder(ctx, &decision)
+	execCtx = toolpolicy.WithCallMetadata(execCtx, call.CallID, call.Name, argsSummary)
+	execCtx = toolpolicy.WithApprover(execCtx, c.requestApproval)
+	out, err := tool.Execute(execCtx, call.Arguments)
 	if err != nil {
-		return fmt.Sprintf("error: %s\n%s", err.Error(), out), err
+		return fmt.Sprintf("error: %s\n%s", err.Error(), out), err, decision
 	}
-	return out, nil
+	return out, nil, decision
+}
+
+func (c *Conversation) requestApproval(ctx context.Context, req toolpolicy.ApprovalRequest) (toolpolicy.ApprovalResponse, error) {
+	c.emitToolApprovalRequested(ctx, req)
+	if c.approver == nil {
+		resp := toolpolicy.ApprovalResponse{
+			Outcome: toolpolicy.ApprovalOutcomeDeny,
+			Reason:  "no approver configured",
+		}
+		err := &toolpolicy.ApprovalDeniedError{Capability: req.Capability, Reason: resp.Reason}
+		c.emitToolApprovalResolved(ctx, req, resp, err)
+		return resp, err
+	}
+
+	approvalCtx := ctx
+	cancel := func() {}
+	if c.approvalTimeout > 0 {
+		approvalCtx, cancel = context.WithTimeout(ctx, c.approvalTimeout)
+	}
+	defer cancel()
+
+	resp, err := c.approver.Approve(approvalCtx, ApprovalRequest(req))
+	if err != nil {
+		if c.approvalTimeout > 0 && errors.Is(approvalCtx.Err(), context.DeadlineExceeded) && ctx.Err() == nil {
+			resp = toolpolicy.ApprovalResponse{
+				Outcome: toolpolicy.ApprovalOutcomeDeny,
+				Reason:  fmt.Sprintf("approval timed out after %s", c.approvalTimeout.Round(time.Millisecond)),
+			}
+			err = &toolpolicy.ApprovalDeniedError{Capability: req.Capability, Reason: resp.Reason}
+		}
+		c.emitToolApprovalResolved(ctx, req, resp, err)
+		return resp, err
+	}
+	switch resp.Outcome {
+	case toolpolicy.ApprovalOutcomeApprove, toolpolicy.ApprovalOutcomeApproveForSession:
+		c.emitToolApprovalResolved(ctx, req, resp, nil)
+		return resp, nil
+	case "", toolpolicy.ApprovalOutcomeDeny:
+		if resp.Outcome == "" {
+			resp.Outcome = toolpolicy.ApprovalOutcomeDeny
+		}
+		if resp.Reason == "" {
+			resp.Reason = "approval denied"
+		}
+		err = &toolpolicy.ApprovalDeniedError{Capability: req.Capability, Reason: resp.Reason}
+		c.emitToolApprovalResolved(ctx, req, resp, err)
+		return resp, err
+	default:
+		err = fmt.Errorf("llm: invalid approval outcome %q", resp.Outcome)
+		c.emitToolApprovalResolved(ctx, req, resp, err)
+		return resp, err
+	}
 }

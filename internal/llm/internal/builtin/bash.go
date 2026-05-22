@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/tsumina/dango/internal/llm/internal/toolpolicy"
 	"mvdan.cc/sh/v3/syntax"
 )
 
@@ -103,6 +104,35 @@ func newBashWithConfig(ws workspace, cfg *config) tool {
 			}
 			if err := checkRedirections(args.Command, ws); err != nil {
 				return "", fmt.Errorf("bash: %w", err)
+			}
+			if decision, matched, matchIndex, err := classifyBashCommandPolicy(args.Command, cfg.BashCommandPolicies); err != nil {
+				return "", fmt.Errorf("bash: %w", err)
+			} else if matched {
+				if decision.Policy == ExecPolicyOff {
+					toolpolicy.Record(ctx, decision)
+					return "", &toolpolicy.DisabledError{
+						Capability: decision.Capability,
+						Reason:     decision.Reason,
+					}
+				}
+				if decision.Policy == ExecPolicyNeedApprove {
+					resp, err := toolpolicy.RequestApproval(ctx, toolpolicy.ApprovalRequest{
+						Capability: decision.Capability,
+						Policy:     decision.Policy,
+						Reason:     decision.Reason,
+					})
+					decision.ApprovalOutcome = resp.Outcome
+					decision.ApprovalReason = resp.Reason
+					toolpolicy.Record(ctx, decision)
+					if err != nil {
+						return "", err
+					}
+					if resp.Outcome == toolpolicy.ApprovalOutcomeApproveForSession && matchIndex >= 0 {
+						cfg.BashCommandPolicies[matchIndex].Policy = ExecPolicyPassby
+					}
+				} else {
+					toolpolicy.Record(ctx, decision)
+				}
 			}
 
 			// Long-running tasks opt out of the timeout entirely; all other
@@ -238,6 +268,146 @@ func staticWordValue(w *syntax.Word) (string, bool) {
 		}
 	}
 	return b.String(), true
+}
+
+func classifyBashCommandPolicy(command string, policies []BashCommandPolicy) (toolpolicy.Decision, bool, int, error) {
+	if len(policies) == 0 {
+		return toolpolicy.Decision{}, false, -1, nil
+	}
+	f, err := syntax.NewParser().Parse(strings.NewReader(command), "")
+	if err != nil {
+		return toolpolicy.Decision{}, false, -1, fmt.Errorf("parse command: %w", err)
+	}
+	var matched toolpolicy.Decision
+	var ok bool
+	matchIndex := -1
+	bestPrefixLen := -1
+	syntax.Walk(f, func(node syntax.Node) bool {
+		call, isCall := node.(*syntax.CallExpr)
+		if !isCall || len(call.Args) == 0 {
+			return true
+		}
+		head, args, static := staticCall(call)
+		if !static {
+			return true
+		}
+		normalized := normalizeCommandArgs(head, args)
+		for i, policy := range policies {
+			if filepath.Base(head) != filepath.Base(policy.Command) {
+				continue
+			}
+			if len(policy.ArgsPrefix) > 0 && !equalArgsPrefix(normalized, policy.ArgsPrefix) {
+				continue
+			}
+			if len(policy.ArgsPrefix) > len(normalized) {
+				continue
+			}
+			candidate := toolpolicy.Decision{
+				Capability: toolpolicy.BuiltinCapability("bash"),
+				Policy:     policy.Policy.Default(),
+				Reason:     fmt.Sprintf("matched bash command policy %q", strings.TrimSpace(strings.Join(append([]string{policy.Command}, policy.ArgsPrefix...), " "))),
+			}
+			prefixLen := len(policy.ArgsPrefix)
+			if !ok || betterBashCommandPolicyMatch(candidate.Policy, prefixLen, i, matched, bestPrefixLen, matchIndex) {
+				matched = candidate
+				ok = true
+				matchIndex = i
+				bestPrefixLen = prefixLen
+			}
+		}
+		return true
+	})
+	return matched, ok, matchIndex, nil
+}
+
+func betterBashCommandPolicyMatch(policy ExecPolicy, prefixLen int, index int, current toolpolicy.Decision, currentPrefixLen int, currentIndex int) bool {
+	if rank := bashCommandPolicyRank(policy); rank != bashCommandPolicyRank(current.Policy) {
+		return rank > bashCommandPolicyRank(current.Policy)
+	}
+	if prefixLen != currentPrefixLen {
+		return prefixLen > currentPrefixLen
+	}
+	return currentIndex < 0 || index < currentIndex
+}
+
+func bashCommandPolicyRank(policy ExecPolicy) int {
+	switch policy {
+	case ExecPolicyOff:
+		return 2
+	case ExecPolicyNeedApprove:
+		return 1
+	default:
+		return 0
+	}
+}
+
+func staticCall(call *syntax.CallExpr) (string, []string, bool) {
+	head, ok := staticWordValue(call.Args[0])
+	if !ok {
+		return "", nil, false
+	}
+	args := make([]string, 0, len(call.Args)-1)
+	for _, arg := range call.Args[1:] {
+		value, ok := staticWordValue(arg)
+		if !ok {
+			return "", nil, false
+		}
+		args = append(args, value)
+	}
+	return head, args, true
+}
+
+func normalizeCommandArgs(head string, args []string) []string {
+	if filepath.Base(head) != "git" {
+		return append([]string(nil), args...)
+	}
+	return trimLeadingGitOptions(args)
+}
+
+func trimLeadingGitOptions(args []string) []string {
+	out := append([]string(nil), args...)
+	for len(out) > 0 {
+		switch token := out[0]; {
+		case token == "--":
+			return out[1:]
+		case token == "-c",
+			token == "-C",
+			token == "--exec-path",
+			token == "--git-dir",
+			token == "--work-tree",
+			token == "--namespace",
+			token == "--config-env",
+			token == "--super-prefix":
+			if len(out) == 1 {
+				return nil
+			}
+			out = out[2:]
+		case strings.HasPrefix(token, "--git-dir="),
+			strings.HasPrefix(token, "--work-tree="),
+			strings.HasPrefix(token, "--namespace="),
+			strings.HasPrefix(token, "--config-env="),
+			strings.HasPrefix(token, "--super-prefix="),
+			strings.HasPrefix(token, "--exec-path="):
+			out = out[1:]
+		case strings.HasPrefix(token, "-"):
+			out = out[1:]
+		default:
+			return out
+		}
+	}
+	return out
+}
+
+func equalArgsPrefix(args []string, prefix []string) bool {
+	if len(prefix) > len(args) {
+		return false
+	}
+	for i := range prefix {
+		if args[i] != prefix[i] {
+			return false
+		}
+	}
+	return true
 }
 
 // runBashBuffered executes cmd, returning the captured combined output

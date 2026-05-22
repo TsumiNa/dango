@@ -44,6 +44,8 @@ type Runner struct {
 	skillSessionStore    llm.SessionStore
 	skillSessionIDs      map[string]string
 	skillSessionMu       sync.Mutex
+	toolSetMu            sync.RWMutex
+	skillToolSets        map[string]llm.ToolSetConfig
 
 	// Engine-level lifecycle state.
 	stateMu sync.RWMutex
@@ -103,6 +105,7 @@ func New(opts ...Option) *Runner {
 		queryCh:           make(chan chan<- RunnerSnapshot),
 		skillSessionStore: newMemorySessionStore(),
 		skillSessionIDs:   make(map[string]string),
+		skillToolSets:     make(map[string]llm.ToolSetConfig),
 		rootPathRule:      defaultWorkspacePathRule,
 	}
 	for _, opt := range opts {
@@ -113,6 +116,7 @@ func New(opts ...Option) *Runner {
 	if r.plan != nil && r.plan.RunnerID == "" {
 		r.plan.RunnerID = r.id
 	}
+	r.snapshotSkillToolSets(r.initialNodes)
 	r.snapshot = buildInitialRunnerSnapshot(r.initialNodes)
 	r.startSettleObserver()
 	return r

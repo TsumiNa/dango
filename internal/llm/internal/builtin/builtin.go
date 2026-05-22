@@ -26,6 +26,9 @@ type config struct {
 	bashAllowlist map[string]struct{}
 	// bashAllowlistDisabled turns off allowlist enforcement entirely.
 	bashAllowlistDisabled bool
+	// BashCommandPolicies classifies specific bash command patterns after the
+	// allowlist and redirection checks pass.
+	BashCommandPolicies []BashCommandPolicy
 }
 
 func newConfig(opts []option) *config {
@@ -97,6 +100,7 @@ func withoutAllowlist() option {
 // slices.
 func Tools(ws workspace, cfg ToolSetConfig) ([]tool, error) {
 	toolCfg := newConfig([]option{withAllowlistAdjust(cfg.BashAllow, cfg.BashBlock)})
+	toolCfg.BashCommandPolicies = append([]BashCommandPolicy(nil), cfg.BashCommandPolicies...)
 	tools := coreTools(ws, toolCfg)
 	seenExtras := make(map[ExtraTool]struct{}, len(cfg.Extras))
 	for _, name := range cfg.Extras {

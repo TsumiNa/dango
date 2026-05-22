@@ -4,13 +4,16 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	streampkg "github.com/tsumina/dango/internal/engine/stream"
+	"github.com/tsumina/dango/internal/llm/internal/toolpolicy"
 )
 
 // TestConversationRun_HappyPath drives one tool call then a final
@@ -349,6 +352,399 @@ func TestConversationRun_UnknownToolRecovers(t *testing.T) {
 	}
 	if outputTurns != 1 {
 		t.Errorf("got %d tool_output turns, want 1", outputTurns)
+	}
+}
+
+func TestPolicyPassbyRunsImmediately(t *testing.T) {
+	var responded int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if responded == 0 {
+			responded++
+			_, _ = w.Write([]byte(`{
+				"id":"r1","object":"response","created_at":0,"model":"m","status":"completed",
+				"output":[{"id":"fc","type":"function_call","status":"completed","call_id":"c","name":"echo","arguments":"{}"}],
+				"parallel_tool_calls":false,"tool_choice":"auto","tools":[]
+			}`))
+			return
+		}
+		_, _ = w.Write([]byte(`{
+			"id":"r2","object":"response","created_at":0,"model":"m","status":"completed",
+			"output":[{"id":"m","type":"message","role":"assistant","status":"completed",
+			 "content":[{"type":"output_text","text":"ok","annotations":[]}]}],
+			"parallel_tool_calls":false,"tool_choice":"auto","tools":[]
+		}`))
+	}))
+	t.Cleanup(srv.Close)
+
+	var executed bool
+	echo := NewFuncTool("echo", "echo", map[string]any{"type": "object"}, func(_ context.Context, _ string) (string, error) {
+		executed = true
+		return "done", nil
+	})
+	tools := wrapToolsWithPolicySet([]Tool{echo}, ToolSetConfig{
+		Policies: map[CapabilityRef]ExecPolicy{
+			ToolCapability("echo"): ExecPolicyPassby,
+		},
+	})
+	conv := mustNewConversation(t, testClient(srv.URL), "sys", tools)
+	if out, err := conv.Run(t.Context(), "go", ""); err != nil {
+		t.Fatalf("Run: %v", err)
+	} else if out != "ok" {
+		t.Fatalf("Run output = %q, want ok", out)
+	}
+	if !executed {
+		t.Fatal("passby tool did not execute")
+	}
+}
+
+func TestPolicyOffRejects(t *testing.T) {
+	var responded int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if responded == 0 {
+			responded++
+			_, _ = w.Write([]byte(`{
+				"id":"r1","object":"response","created_at":0,"model":"m","status":"completed",
+				"output":[{"id":"fc","type":"function_call","status":"completed","call_id":"c","name":"echo","arguments":"{}"}],
+				"parallel_tool_calls":false,"tool_choice":"auto","tools":[]
+			}`))
+			return
+		}
+		_, _ = w.Write([]byte(`{
+			"id":"r2","object":"response","created_at":0,"model":"m","status":"completed",
+			"output":[{"id":"m","type":"message","role":"assistant","status":"completed",
+			 "content":[{"type":"output_text","text":"recovered","annotations":[]}]}],
+			"parallel_tool_calls":false,"tool_choice":"auto","tools":[]
+		}`))
+	}))
+	t.Cleanup(srv.Close)
+
+	var executed bool
+	echo := NewFuncTool("echo", "echo", map[string]any{"type": "object"}, func(_ context.Context, _ string) (string, error) {
+		executed = true
+		return "done", nil
+	})
+	tools := wrapToolsWithPolicySet([]Tool{echo}, ToolSetConfig{
+		Policies: map[CapabilityRef]ExecPolicy{
+			ToolCapability("echo"): ExecPolicyOff,
+		},
+	})
+	conv := mustNewConversation(t, testClient(srv.URL), "sys", tools)
+	if out, err := conv.Run(t.Context(), "go", ""); err != nil {
+		t.Fatalf("Run: %v", err)
+	} else if out != "recovered" {
+		t.Fatalf("Run output = %q, want recovered", out)
+	}
+	if executed {
+		t.Fatal("off policy still executed tool")
+	}
+	var sawDisabled bool
+	for _, turn := range conv.Turns() {
+		if turn.Role == RoleToolOutput && turn.Tool != nil && strings.Contains(turn.Tool.Error, "disabled") {
+			sawDisabled = true
+		}
+	}
+	if !sawDisabled {
+		t.Fatal("tool output did not record disabled error")
+	}
+}
+
+func TestPolicyNeedApprovePublishesRequestAndWaits(t *testing.T) {
+	var responded int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if responded == 0 {
+			responded++
+			sseResponse(w, completedEvent("", "echo", `{}`))
+			return
+		}
+		sseResponse(w, textDeltaEvent("ok"), completedEvent("ok", "", ""))
+	}))
+	t.Cleanup(srv.Close)
+
+	var executed bool
+	requests := make(chan ApprovalRequest, 1)
+	responses := make(chan ApprovalResponse, 1)
+	echo := NewFuncTool("echo", "echo", map[string]any{"type": "object"}, func(_ context.Context, _ string) (string, error) {
+		executed = true
+		return "done", nil
+	})
+	tools := wrapToolsWithPolicySet([]Tool{echo}, ToolSetConfig{
+		Policies: map[CapabilityRef]ExecPolicy{
+			ToolCapability("echo"): ExecPolicyNeedApprove,
+		},
+	})
+	conv := mustNewConversation(t, testClient(srv.URL), "sys", tools, ConversationConfig{
+		StreamEvents: true,
+		StreamSource: streampkg.Source{Layer: "skill", ID: "policy_skill"},
+		StreamScope:  streampkg.Scope{NodeID: "node_policy"},
+		Approver: ApproverFunc(func(ctx context.Context, req ApprovalRequest) (ApprovalResponse, error) {
+			requests <- req
+			select {
+			case resp := <-responses:
+				return resp, nil
+			case <-ctx.Done():
+				return ApprovalResponse{}, ctx.Err()
+			}
+		}),
+	})
+	sub, err := conv.EventStream().Subscribe(streampkg.Filter{}, streampkg.WithSubscriberBuffer(16))
+	if err != nil {
+		t.Fatalf("Subscribe: %v", err)
+	}
+	result := make(chan error, 1)
+	go func() {
+		if out, err := conv.Run(t.Context(), "go", ""); err != nil {
+			result <- err
+		} else if out != "ok" {
+			result <- fmt.Errorf("Run output = %q, want ok", out)
+		} else {
+			result <- nil
+		}
+	}()
+	req := <-requests
+	if req.ToolName != "echo" {
+		t.Fatalf("approval tool = %q, want echo", req.ToolName)
+	}
+	if req.Capability.Name != "echo" {
+		t.Fatalf("approval capability = %+v, want echo", req.Capability)
+	}
+	if executed {
+		t.Fatal("tool executed before approval")
+	}
+	responses <- ApprovalResponse{Outcome: ApprovalOutcomeApprove, Reason: "looks safe"}
+	if err := <-result; err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	conv.EventStream().Close()
+	if !executed {
+		t.Fatal("approved tool did not execute")
+	}
+	events := collectStreamEvents(t, sub)
+	if !hasStreamEvent(events, streampkg.EventToolApprovalRequested, "skill", "node_policy", func(delta map[string]any) bool {
+		return delta["name"] == "echo" && delta["policy"] == "need_approve"
+	}) {
+		t.Fatalf("missing approval request event: %+v", events)
+	}
+	if !hasStreamEvent(events, streampkg.EventToolApprovalResolved, "skill", "node_policy", func(delta map[string]any) bool {
+		return delta["name"] == "echo" && delta["approval_outcome"] == "approve" && delta["approval_reason"] == "looks safe"
+	}) {
+		t.Fatalf("missing approval resolved event: %+v", events)
+	}
+	if !hasStreamEvent(events, streampkg.EventToolExecutionCompleted, "skill", "node_policy", func(delta map[string]any) bool {
+		return delta["name"] == "echo" && delta["policy"] == "need_approve" && delta["approval_outcome"] == "approve"
+	}) {
+		t.Fatalf("missing approval outcome in tool execution event: %+v", events)
+	}
+}
+
+func TestPolicyNeedApproveDenied(t *testing.T) {
+	var responded int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if responded == 0 {
+			responded++
+			sseResponse(w, completedEvent("", "echo", `{}`))
+			return
+		}
+		sseResponse(w, textDeltaEvent("recovered"), completedEvent("recovered", "", ""))
+	}))
+	t.Cleanup(srv.Close)
+
+	var executed bool
+	echo := NewFuncTool("echo", "echo", map[string]any{"type": "object"}, func(_ context.Context, _ string) (string, error) {
+		executed = true
+		return "done", nil
+	})
+	tools := wrapToolsWithPolicySet([]Tool{echo}, ToolSetConfig{
+		Policies: map[CapabilityRef]ExecPolicy{
+			ToolCapability("echo"): ExecPolicyNeedApprove,
+		},
+	})
+	conv := mustNewConversation(t, testClient(srv.URL), "sys", tools, ConversationConfig{
+		StreamEvents: true,
+		StreamSource: streampkg.Source{Layer: "skill", ID: "policy_skill"},
+		StreamScope:  streampkg.Scope{NodeID: "node_policy"},
+		Approver: ApproverFunc(func(context.Context, ApprovalRequest) (ApprovalResponse, error) {
+			return ApprovalResponse{Outcome: ApprovalOutcomeDeny, Reason: "blocked"}, nil
+		}),
+	})
+	sub, err := conv.EventStream().Subscribe(streampkg.Filter{}, streampkg.WithSubscriberBuffer(16))
+	if err != nil {
+		t.Fatalf("Subscribe: %v", err)
+	}
+	if out, err := conv.Run(t.Context(), "go", ""); err != nil {
+		t.Fatalf("Run: %v", err)
+	} else if out != "recovered" {
+		t.Fatalf("Run output = %q, want recovered", out)
+	}
+	conv.EventStream().Close()
+	if executed {
+		t.Fatal("denied tool still executed")
+	}
+	events := collectStreamEvents(t, sub)
+	if !hasStreamEvent(events, streampkg.EventToolApprovalResolved, "skill", "node_policy", func(delta map[string]any) bool {
+		return delta["name"] == "echo" && delta["approval_outcome"] == "deny" && delta["approval_reason"] == "blocked"
+	}) {
+		t.Fatalf("missing denied approval event: %+v", events)
+	}
+	if !hasStreamEvent(events, streampkg.EventToolExecutionFailed, "skill", "node_policy", func(delta map[string]any) bool {
+		return delta["name"] == "echo" && delta["approval_outcome"] == "deny"
+	}) {
+		t.Fatalf("missing denied tool execution event: %+v", events)
+	}
+}
+
+func TestPolicyNeedApproveApproveForSession(t *testing.T) {
+	var responded int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		responded++
+		switch responded {
+		case 1, 2:
+			sseResponse(w, completedEvent("", "echo", `{}`))
+		default:
+			sseResponse(w, textDeltaEvent("ok"), completedEvent("ok", "", ""))
+		}
+	}))
+	t.Cleanup(srv.Close)
+
+	var executed int
+	var approvals int
+	echo := NewFuncTool("echo", "echo", map[string]any{"type": "object"}, func(_ context.Context, _ string) (string, error) {
+		executed++
+		return "done", nil
+	})
+	tools := wrapToolsWithPolicySet([]Tool{echo}, ToolSetConfig{
+		Policies: map[CapabilityRef]ExecPolicy{
+			ToolCapability("echo"): ExecPolicyNeedApprove,
+		},
+	})
+	conv := mustNewConversation(t, testClient(srv.URL), "sys", tools, ConversationConfig{
+		StreamEvents: true,
+		Approver: ApproverFunc(func(context.Context, ApprovalRequest) (ApprovalResponse, error) {
+			approvals++
+			return ApprovalResponse{Outcome: ApprovalOutcomeApproveForSession, Reason: "session ok"}, nil
+		}),
+	})
+	if out, err := conv.Run(t.Context(), "go", ""); err != nil {
+		t.Fatalf("Run: %v", err)
+	} else if out != "ok" {
+		t.Fatalf("Run output = %q, want ok", out)
+	}
+	if executed != 2 {
+		t.Fatalf("executed = %d, want 2", executed)
+	}
+	if approvals != 1 {
+		t.Fatalf("approvals = %d, want 1", approvals)
+	}
+}
+
+func TestPolicyNeedApproveHeadlessDenied(t *testing.T) {
+	var responded int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if responded == 0 {
+			responded++
+			sseResponse(w, completedEvent("", "echo", `{}`))
+			return
+		}
+		sseResponse(w, textDeltaEvent("recovered"), completedEvent("recovered", "", ""))
+	}))
+	t.Cleanup(srv.Close)
+
+	var executed bool
+	echo := NewFuncTool("echo", "echo", map[string]any{"type": "object"}, func(_ context.Context, _ string) (string, error) {
+		executed = true
+		return "done", nil
+	})
+	tools := wrapToolsWithPolicySet([]Tool{echo}, ToolSetConfig{
+		Policies: map[CapabilityRef]ExecPolicy{
+			ToolCapability("echo"): ExecPolicyNeedApprove,
+		},
+	})
+	conv := mustNewConversation(t, testClient(srv.URL), "sys", tools, ConversationConfig{
+		StreamEvents: true,
+	})
+	if out, err := conv.Run(t.Context(), "go", ""); err != nil {
+		t.Fatalf("Run: %v", err)
+	} else if out != "recovered" {
+		t.Fatalf("Run output = %q, want recovered", out)
+	}
+	if executed {
+		t.Fatal("headless need_approve still executed")
+	}
+	var sawDenied bool
+	for _, turn := range conv.Turns() {
+		if turn.Role == RoleToolOutput && turn.Tool != nil && strings.Contains(turn.Tool.Error, "no approver configured") {
+			sawDenied = true
+		}
+	}
+	if !sawDenied {
+		t.Fatal("missing no-approver tool output")
+	}
+}
+
+func TestConversationRequestApprovalConfiguredTimeoutReturnsDenied(t *testing.T) {
+	conv := &Conversation{
+		approver: ApproverFunc(func(ctx context.Context, _ ApprovalRequest) (ApprovalResponse, error) {
+			<-ctx.Done()
+			return ApprovalResponse{}, ctx.Err()
+		}),
+		approvalTimeout: 10 * time.Millisecond,
+	}
+	resp, err := conv.requestApproval(context.Background(), ApprovalRequest{})
+	if err == nil {
+		t.Fatal("expected approval timeout error")
+	}
+	var denied *toolpolicy.ApprovalDeniedError
+	if !errors.As(err, &denied) {
+		t.Fatalf("expected ApprovalDeniedError, got %v", err)
+	}
+	if resp.Outcome != ApprovalOutcomeDeny {
+		t.Fatalf("resp.Outcome = %q, want deny", resp.Outcome)
+	}
+	if !strings.Contains(resp.Reason, "approval timed out after") {
+		t.Fatalf("resp.Reason = %q, want timeout message", resp.Reason)
+	}
+}
+
+func TestConversationRequestApprovalPreservesParentDeadlineError(t *testing.T) {
+	conv := &Conversation{
+		approver: ApproverFunc(func(ctx context.Context, _ ApprovalRequest) (ApprovalResponse, error) {
+			return ApprovalResponse{}, ctx.Err()
+		}),
+		approvalTimeout: time.Second,
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
+	defer cancel()
+	<-ctx.Done()
+	resp, err := conv.requestApproval(ctx, ApprovalRequest{})
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("err = %v, want context deadline exceeded", err)
+	}
+	var denied *toolpolicy.ApprovalDeniedError
+	if errors.As(err, &denied) {
+		t.Fatalf("expected original deadline error, got ApprovalDeniedError %v", err)
+	}
+	if resp.Outcome != "" || resp.Reason != "" {
+		t.Fatalf("resp = %+v, want zero response", resp)
+	}
+}
+
+func TestConversationRequestApprovalWithoutConfiguredTimeoutPreservesDeadlineError(t *testing.T) {
+	conv := &Conversation{
+		approver: ApproverFunc(func(context.Context, ApprovalRequest) (ApprovalResponse, error) {
+			return ApprovalResponse{}, context.DeadlineExceeded
+		}),
+	}
+	resp, err := conv.requestApproval(context.Background(), ApprovalRequest{})
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("err = %v, want context deadline exceeded", err)
+	}
+	var denied *toolpolicy.ApprovalDeniedError
+	if errors.As(err, &denied) {
+		t.Fatalf("expected original deadline error, got ApprovalDeniedError %v", err)
+	}
+	if resp.Outcome != "" || resp.Reason != "" {
+		t.Fatalf("resp = %+v, want zero response", resp)
 	}
 }
 

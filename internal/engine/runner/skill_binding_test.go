@@ -191,3 +191,120 @@ func TestRunner_PrepareNodeAgent_MergesAgentOwnedStream(t *testing.T) {
 		t.Fatalf("merged event = %+v, want runner and node scope preserved", event)
 	}
 }
+
+type policyBindAgent struct {
+	cfg  llm.ToolSetConfig
+	seen []llm.ToolSetConfig
+}
+
+func (e *policyBindAgent) RuntimeToolSetConfig() llm.ToolSetConfig { return cloneRunnerToolSet(e.cfg) }
+
+func (e *policyBindAgent) SetRuntimeToolSetConfig(cfg llm.ToolSetConfig) {
+	e.cfg = cloneRunnerToolSet(cfg)
+}
+
+func (e *policyBindAgent) BindForRunner(sessID *string, runtimePaths AgentRuntimePaths, sessStores ...llm.SessionStore) (string, error) {
+	e.seen = append(e.seen, cloneRunnerToolSet(e.cfg))
+	return "session-policy", nil
+}
+
+func (e *policyBindAgent) Execute(ctx context.Context, parentOutputs map[string]any) (any, []*Node, error) {
+	return nil, nil, nil
+}
+
+func (e *policyBindAgent) Polish(ctx context.Context) (any, error) { return nil, nil }
+
+func (e *policyBindAgent) Report(ctx context.Context, output any) (any, error) {
+	return output, nil
+}
+
+func TestRunnerSnapshotIsolatesFromPreset(t *testing.T) {
+	preset := llm.ToolSetConfig{
+		Policies: map[llm.CapabilityRef]llm.ExecPolicy{
+			llm.ToolCapability("echo"): llm.ExecPolicyNeedApprove,
+		},
+	}
+	agent := &policyBindAgent{cfg: preset}
+	r := New(WithLogger(testLogger), WithInitialPlan(&CoarsePlan{Request: "demo"}, map[string]*Node{
+		"node": {Id: "node", SkillName: "skill", Agent: agent},
+	}))
+	preset.Policies[llm.ToolCapability("echo")] = llm.ExecPolicyOff
+	got, ok := r.SkillToolSetConfig("skill")
+	if !ok {
+		t.Fatal("SkillToolSetConfig(skill) = false")
+	}
+	if got.Policies[llm.ToolCapability("echo")] != llm.ExecPolicyNeedApprove {
+		t.Fatalf("runner snapshot policy = %q, want need_approve", got.Policies[llm.ToolCapability("echo")])
+	}
+}
+
+func TestRunnerDynamicAdjustAffectsOnlyThisRun(t *testing.T) {
+	preset := llm.ToolSetConfig{
+		Policies: map[llm.CapabilityRef]llm.ExecPolicy{
+			llm.ToolCapability("echo"): llm.ExecPolicyNeedApprove,
+		},
+	}
+	agentA := &policyBindAgent{cfg: preset}
+	agentB := &policyBindAgent{cfg: preset}
+	runnerA := New(WithLogger(testLogger), WithInitialPlan(&CoarsePlan{Request: "demo"}, map[string]*Node{
+		"node-a": {Id: "node-a", SkillName: "skill", Agent: agentA},
+	}))
+	runnerB := New(WithLogger(testLogger), WithInitialPlan(&CoarsePlan{Request: "demo"}, map[string]*Node{
+		"node-b": {Id: "node-b", SkillName: "skill", Agent: agentB},
+	}))
+	if err := runnerA.SetSkillCapabilityPolicy("skill", llm.ToolCapability("echo"), llm.ExecPolicyOff); err != nil {
+		t.Fatalf("SetSkillCapabilityPolicy: %v", err)
+	}
+	if err := runnerA.prepareNodeAgent("node-a", agentA, AgentRuntimePaths{SkillName: "skill"}); err != nil {
+		t.Fatalf("prepareNodeAgent(runnerA): %v", err)
+	}
+	if err := runnerB.prepareNodeAgent("node-b", agentB, AgentRuntimePaths{SkillName: "skill"}); err != nil {
+		t.Fatalf("prepareNodeAgent(runnerB): %v", err)
+	}
+	if len(agentA.seen) != 1 || agentA.seen[0].Policies[llm.ToolCapability("echo")] != llm.ExecPolicyOff {
+		t.Fatalf("runnerA saw policies %+v, want off", agentA.seen)
+	}
+	if len(agentB.seen) != 1 || agentB.seen[0].Policies[llm.ToolCapability("echo")] != llm.ExecPolicyNeedApprove {
+		t.Fatalf("runnerB saw policies %+v, want need_approve", agentB.seen)
+	}
+	if preset.Policies[llm.ToolCapability("echo")] != llm.ExecPolicyNeedApprove {
+		t.Fatalf("preset mutated to %q, want need_approve", preset.Policies[llm.ToolCapability("echo")])
+	}
+}
+
+func TestRunnerSetSkillBashCommandPoliciesClonesArgsPrefix(t *testing.T) {
+	agent := &policyBindAgent{}
+	r := New(WithLogger(testLogger), WithInitialPlan(&CoarsePlan{Request: "demo"}, map[string]*Node{
+		"node": {Id: "node", SkillName: "skill", Agent: agent},
+	}))
+	policies := []llm.BashCommandPolicy{{Command: "git", ArgsPrefix: []string{"push"}, Policy: llm.ExecPolicyNeedApprove}}
+	if err := r.SetSkillBashCommandPolicies("skill", policies); err != nil {
+		t.Fatalf("SetSkillBashCommandPolicies: %v", err)
+	}
+	policies[0].ArgsPrefix[0] = "status"
+	got, ok := r.SkillToolSetConfig("skill")
+	if !ok {
+		t.Fatal("SkillToolSetConfig(skill) = false")
+	}
+	if got.BashCommandPolicies[0].ArgsPrefix[0] != "push" {
+		t.Fatalf("runner snapshot args prefix = %q, want push", got.BashCommandPolicies[0].ArgsPrefix[0])
+	}
+}
+
+func cloneRunnerToolSet(cfg llm.ToolSetConfig) llm.ToolSetConfig {
+	cfg.BashAllow = append([]string(nil), cfg.BashAllow...)
+	cfg.BashBlock = append([]string(nil), cfg.BashBlock...)
+	cfg.Extras = append([]llm.ExtraTool(nil), cfg.Extras...)
+	if len(cfg.Policies) > 0 {
+		cloned := make(map[llm.CapabilityRef]llm.ExecPolicy, len(cfg.Policies))
+		for k, v := range cfg.Policies {
+			cloned[k] = v
+		}
+		cfg.Policies = cloned
+	}
+	cfg.BashCommandPolicies = append([]llm.BashCommandPolicy(nil), cfg.BashCommandPolicies...)
+	for i := range cfg.BashCommandPolicies {
+		cfg.BashCommandPolicies[i].ArgsPrefix = append([]string(nil), cfg.BashCommandPolicies[i].ArgsPrefix...)
+	}
+	return cfg
+}

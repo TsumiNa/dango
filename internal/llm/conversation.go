@@ -162,14 +162,16 @@ func DefaultAutoShrinkConfig() AutoShrinkConfig {
 // conversation-owned stream for standalone llm package use. Stream output is
 // observational and independent of session persistence.
 type ConversationConfig struct {
-	MaxSteps       int
-	AutoShrink     *AutoShrinkConfig
-	Summarizer     Summarizer
-	StreamEvents   bool
-	EventStream    *streampkg.Stream
-	StreamSource   streampkg.Source
-	StreamScope    streampkg.Scope
-	StreamMetadata map[string]any
+	MaxSteps        int
+	AutoShrink      *AutoShrinkConfig
+	Summarizer      Summarizer
+	StreamEvents    bool
+	EventStream     *streampkg.Stream
+	StreamSource    streampkg.Source
+	StreamScope     streampkg.Scope
+	StreamMetadata  map[string]any
+	Approver        Approver
+	ApprovalTimeout time.Duration
 }
 
 // DefaultConversationConfig returns the default optional behaviour for
@@ -192,6 +194,19 @@ func DefaultConversationConfig() ConversationConfig {
 // is summarising, or it will recurse.
 type Summarizer interface {
 	Summarize(ctx context.Context, turns []Turn) (string, error)
+}
+
+// Approver decides whether a need_approve tool call may proceed.
+type Approver interface {
+	Approve(ctx context.Context, req ApprovalRequest) (ApprovalResponse, error)
+}
+
+// ApproverFunc adapts a plain function into an [Approver].
+type ApproverFunc func(context.Context, ApprovalRequest) (ApprovalResponse, error)
+
+// Approve implements [Approver].
+func (f ApproverFunc) Approve(ctx context.Context, req ApprovalRequest) (ApprovalResponse, error) {
+	return f(ctx, req)
 }
 
 // SummarizerFunc adapts a plain function into a [Summarizer].
@@ -303,10 +318,12 @@ type Conversation struct {
 	// Stream output. When configured, model/tool progress is emitted as
 	// compact stream events. Large generated content should be written as
 	// artifacts and referenced from events rather than embedded raw.
-	eventStream   *streampkg.Stream
-	eventSource   streampkg.Source
-	eventScope    streampkg.Scope
-	eventMetadata map[string]any
+	eventStream     *streampkg.Stream
+	eventSource     streampkg.Source
+	eventScope      streampkg.Scope
+	eventMetadata   map[string]any
+	approver        Approver
+	approvalTimeout time.Duration
 
 	// Persistence. stores and sessionID are set by [Conversation.OpenSession];
 	// when stores is empty all mutating methods are pure in-memory updates.
@@ -367,14 +384,16 @@ func NewConversation(client *Client, instructions string, tools []Tool, cfg Conv
 	}
 	resolved := resolveConversationConfig(cfg)
 	c := &Conversation{
-		client:       client,
-		instructions: instructions,
-		tools:        append([]Tool(nil), tools...),
-		toolSpecs:    specs,
-		toolByName:   byName,
-		maxSteps:     resolved.MaxSteps,
-		summarizer:   resolved.Summarizer,
-		autoShrink:   *resolved.AutoShrink,
+		client:          client,
+		instructions:    instructions,
+		tools:           append([]Tool(nil), tools...),
+		toolSpecs:       specs,
+		toolByName:      byName,
+		maxSteps:        resolved.MaxSteps,
+		summarizer:      resolved.Summarizer,
+		autoShrink:      *resolved.AutoShrink,
+		approver:        resolved.Approver,
+		approvalTimeout: resolved.ApprovalTimeout,
 	}
 	if resolved.StreamEvents {
 		source := resolved.StreamSource

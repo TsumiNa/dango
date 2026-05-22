@@ -113,15 +113,27 @@ func (c *Conversation) emitToolCallCompleted(ctx context.Context, call ToolCall)
 }
 
 func (c *Conversation) emitToolExecutionStarted(ctx context.Context, call ToolCall) {
-	c.emitStreamEvent(ctx, streampkg.EventToolExecutionStarted, streampkg.StatusRunning, toolExecutionDelta(call, nil), nil)
+	c.emitStreamEvent(ctx, streampkg.EventToolExecutionStarted, streampkg.StatusRunning, toolExecutionDelta(call, nil, Decision{}), nil)
 }
 
-func (c *Conversation) emitToolExecutionFinished(ctx context.Context, call ToolCall, execErr error) {
+func (c *Conversation) emitToolExecutionFinished(ctx context.Context, call ToolCall, execErr error, decision Decision) {
 	eventType := streampkg.EventToolExecutionCompleted
 	if execErr != nil {
 		eventType = streampkg.EventToolExecutionFailed
 	}
-	c.emitStreamEvent(ctx, eventType, streamStatusForError(execErr), toolExecutionDelta(call, execErr), nil)
+	c.emitStreamEvent(ctx, eventType, streamStatusForError(execErr), toolExecutionDelta(call, execErr, decision), nil)
+}
+
+func (c *Conversation) emitToolApprovalRequested(ctx context.Context, req ApprovalRequest) {
+	c.emitStreamEvent(ctx, streampkg.EventToolApprovalRequested, streampkg.StatusPending, approvalRequestDelta(req), nil)
+}
+
+func (c *Conversation) emitToolApprovalResolved(ctx context.Context, req ApprovalRequest, resp ApprovalResponse, err error) {
+	metadata := map[string]any(nil)
+	if err != nil {
+		metadata = map[string]any{"error": compactErrorText(err.Error())}
+	}
+	c.emitStreamEvent(ctx, streampkg.EventToolApprovalResolved, streamStatusForError(err), approvalResolvedDelta(req, resp), metadata)
 }
 
 func (c *Conversation) emitToolResult(ctx context.Context, callID string, output string, execErr error) {
@@ -155,13 +167,67 @@ func toolCallDelta(call ToolCall) map[string]any {
 	return delta
 }
 
-func toolExecutionDelta(call ToolCall, execErr error) map[string]any {
+func toolExecutionDelta(call ToolCall, execErr error, decision Decision) map[string]any {
 	delta := map[string]any{
 		"call_id": call.CallID,
 		"name":    call.Name,
 	}
 	if execErr != nil {
 		delta["error"] = compactErrorText(execErr.Error())
+	}
+	if decision.Policy != "" {
+		delta["policy"] = string(decision.Policy)
+	}
+	if decision.Capability.Kind != "" {
+		delta["capability_kind"] = string(decision.Capability.Kind)
+	}
+	if decision.Capability.Name != "" {
+		delta["capability_name"] = decision.Capability.Name
+	}
+	if decision.Reason != "" {
+		delta["policy_reason"] = decision.Reason
+	}
+	if decision.ApprovalOutcome != "" {
+		delta["approval_outcome"] = string(decision.ApprovalOutcome)
+	}
+	if decision.ApprovalReason != "" {
+		delta["approval_reason"] = decision.ApprovalReason
+	}
+	return delta
+}
+
+func approvalRequestDelta(req ApprovalRequest) map[string]any {
+	delta := map[string]any{
+		"policy": string(req.Policy),
+	}
+	if req.CallID != "" {
+		delta["call_id"] = req.CallID
+	}
+	if req.ToolName != "" {
+		delta["name"] = req.ToolName
+	}
+	if req.ArgumentsSummary != "" {
+		delta["arguments_summary"] = req.ArgumentsSummary
+	}
+	if req.Capability.Kind != "" {
+		delta["capability_kind"] = string(req.Capability.Kind)
+	}
+	if req.Capability.Name != "" {
+		delta["capability_name"] = req.Capability.Name
+	}
+	if req.Reason != "" {
+		delta["policy_reason"] = req.Reason
+	}
+	return delta
+}
+
+func approvalResolvedDelta(req ApprovalRequest, resp ApprovalResponse) map[string]any {
+	delta := approvalRequestDelta(req)
+	if resp.Outcome != "" {
+		delta["approval_outcome"] = string(resp.Outcome)
+	}
+	if resp.Reason != "" {
+		delta["approval_reason"] = resp.Reason
 	}
 	return delta
 }
