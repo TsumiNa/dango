@@ -507,6 +507,13 @@ func (o *Orchestrator) AddSkills(cfgs ...SkillRegistration) error {
 	}
 
 	resolved := make(map[string]SkillRegistration)
+	// Map iteration is non-deterministic, so we may visit a resolvable
+	// collision before an unresolvable one. Collect the names that win on
+	// user-supplied precedence and only emit warnings once the loop has
+	// successfully built `resolved` and `o.skills` has been updated. Logging
+	// inside the loop would leave a "user-supplied skill took precedence"
+	// trail for a change that was rolled back by a later error return.
+	var resolvedCollisions []string
 	for name, regs := range tentative {
 		if len(regs) == 1 {
 			resolved[name] = regs[0]
@@ -521,21 +528,22 @@ func (o *Orchestrator) AddSkills(cfgs ...SkillRegistration) error {
 		}
 
 		if len(userSupplied) > 1 {
-			return fmt.Errorf("orchestrate: name conflict for skill %q: multiple user-imported skills. Please use an alias to resolve the conflict", name)
+			return fmt.Errorf("orchestrate: name conflict for skill %q: multiple user-supplied skills. Please use an alias to resolve the conflict", name)
 		}
 		if len(userSupplied) == 0 {
 			return fmt.Errorf("orchestrate: name conflict for skill %q: multiple system-provided skills. Please use an alias to resolve the conflict", name)
 		}
 
-		// Emit warning
-		o.logger.Warn("orchestrate: skill name collision detected; user-imported skill taking precedence. Assign an alias to disambiguate",
-			slog.String("name", name),
-		)
-
 		resolved[name] = userSupplied[0]
+		resolvedCollisions = append(resolvedCollisions, name)
 	}
 
 	o.skills = resolved
+	for _, name := range resolvedCollisions {
+		o.logger.Warn("orchestrate: skill name collision detected; user-supplied skill taking precedence. Assign an alias to disambiguate",
+			slog.String("name", name),
+		)
+	}
 	return nil
 }
 

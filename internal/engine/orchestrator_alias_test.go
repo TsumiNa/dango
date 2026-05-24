@@ -77,8 +77,8 @@ func TestSkillConflictBothUserSuppliedIsError(t *testing.T) {
 
 	if err := o.AddSkills(userReg1, userReg2); err == nil {
 		t.Error("expected error when mounting multiple user-supplied skills with the same name, got nil")
-	} else if !strings.Contains(err.Error(), "conflict") || !strings.Contains(err.Error(), "user-imported") {
-		t.Errorf("expected error message to mention conflict and user-imported, got: %v", err)
+	} else if !strings.Contains(err.Error(), "conflict") || !strings.Contains(err.Error(), "user-supplied") {
+		t.Errorf("expected error message to mention conflict and user-supplied, got: %v", err)
 	}
 
 	// 2. Two system-provided skills with the same name (no user skill)
