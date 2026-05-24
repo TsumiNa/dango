@@ -556,6 +556,8 @@ func cloneSkillRegistrations(skills map[string]SkillRegistration) map[string]Ski
 	for name, cfg := range skills {
 		copyMap[name] = SkillRegistration{
 			Skill:          cfg.Skill,
+			Alias:          cfg.Alias,
+			IsUserSupplied: cfg.IsUserSupplied,
 			AccessibleDirs: append([]string(nil), cfg.AccessibleDirs...),
 			Client:         cfg.Client,
 			Config:         cloneConversationConfig(cfg.Config),

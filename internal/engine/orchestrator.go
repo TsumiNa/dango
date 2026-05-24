@@ -331,6 +331,8 @@ func (o *Orchestrator) configuredOrchestratorSkill(sk *llm.Skill) (*llm.Skill, e
 // bind step. Client and Config are forwarded unchanged to that bind step.
 type SkillRegistration struct {
 	Skill          *llm.Skill
+	Alias          string
+	IsUserSupplied bool
 	AccessibleDirs []string
 	Client         *llm.Client
 	Config         llm.ConversationConfig
@@ -429,42 +431,85 @@ func (o *Orchestrator) AddSkills(cfgs ...SkillRegistration) error {
 	if len(cfgs) == 0 {
 		return nil
 	}
-	prepared := make(map[string]SkillRegistration, len(cfgs))
-	for i, cfg := range cfgs {
-		if cfg.Skill == nil {
+
+	o.mu.Lock()
+	defer o.mu.Unlock()
+
+	// tentative maps effectiveName -> registrations
+	tentative := make(map[string][]SkillRegistration)
+
+	// Add existing ones
+	for name, reg := range o.skills {
+		tentative[name] = append(tentative[name], reg)
+	}
+
+	// Add new ones
+	for i, reg := range cfgs {
+		if reg.Skill == nil {
 			return fmt.Errorf("orchestrate: add skill config %d requires a non-nil skill", i)
 		}
-		if cfg.Skill.Conversation() != nil {
+		if reg.Skill.Conversation() != nil {
 			return fmt.Errorf("orchestrate: add skill config %d requires a lightweight unbound skill", i)
 		}
-		sk, err := cfg.Skill.SetAccessibleDirsAndBuiltinTools(cfg.AccessibleDirs...)
+		sk, err := reg.Skill.SetAccessibleDirsAndBuiltinTools(reg.AccessibleDirs...)
 		if err != nil {
 			return err
 		}
 		if sk.Name == "" {
 			return fmt.Errorf("orchestrate: add skill config %d has empty skill name", i)
 		}
-		if _, exists := prepared[sk.Name]; exists {
-			return fmt.Errorf("orchestrate: skill %q already provided in AddSkills", sk.Name)
+
+		effectiveName := sk.Name
+		if reg.Alias != "" {
+			effectiveName = reg.Alias
+			sk.Name = reg.Alias
 		}
-		prepared[sk.Name] = SkillRegistration{
+
+		preparedReg := SkillRegistration{
 			Skill:          sk,
-			AccessibleDirs: append([]string(nil), cfg.AccessibleDirs...),
-			Client:         cfg.Client,
-			Config:         cloneConversationConfig(cfg.Config),
+			Alias:          reg.Alias,
+			IsUserSupplied: reg.IsUserSupplied,
+			AccessibleDirs: append([]string(nil), reg.AccessibleDirs...),
+			Client:         reg.Client,
+			Config:         cloneConversationConfig(reg.Config),
 		}
+
+		tentative[effectiveName] = append(tentative[effectiveName], preparedReg)
 	}
 
-	o.mu.Lock()
-	defer o.mu.Unlock()
-	for name := range prepared {
-		if _, exists := o.skills[name]; exists {
-			return fmt.Errorf("orchestrate: skill %q already registered", name)
+	resolved := make(map[string]SkillRegistration)
+	for name, regs := range tentative {
+		if len(regs) == 1 {
+			resolved[name] = regs[0]
+			continue
 		}
+
+		var userSupplied []SkillRegistration
+		var systemSupplied []SkillRegistration
+		for _, r := range regs {
+			if r.IsUserSupplied {
+				userSupplied = append(userSupplied, r)
+			} else {
+				systemSupplied = append(systemSupplied, r)
+			}
+		}
+
+		if len(userSupplied) > 1 {
+			return fmt.Errorf("orchestrate: name conflict for skill %q: multiple user-imported skills. Please use an alias to resolve the conflict", name)
+		}
+		if len(userSupplied) == 0 {
+			return fmt.Errorf("orchestrate: name conflict for skill %q: multiple system-provided skills. Please use an alias to resolve the conflict", name)
+		}
+
+		// Emit warning
+		o.logger.Warn("orchestrate: skill name collision detected; user-imported skill taking precedence. Assign an alias to disambiguate",
+			slog.String("name", name),
+		)
+
+		resolved[name] = userSupplied[0]
 	}
-	for name, cfg := range prepared {
-		o.skills[name] = cfg
-	}
+
+	o.skills = resolved
 	return nil
 }
 
@@ -489,9 +534,10 @@ func (o *Orchestrator) AddSkillDirs(cfg llm.ConversationConfig, dirs ...string) 
 			return err
 		}
 		cfgs = append(cfgs, SkillRegistration{
-			Skill:  sk,
-			Client: client,
-			Config: cfg,
+			Skill:          sk,
+			Client:         client,
+			Config:         cfg,
+			IsUserSupplied: true,
 		})
 	}
 	return o.AddSkills(cfgs...)
