@@ -95,6 +95,41 @@ func TestSkillConflictBothUserSuppliedIsError(t *testing.T) {
 	}
 }
 
+func TestSkillConflictAcrossSeparateAddSkillsCalls(t *testing.T) {
+	var buf bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&buf, nil))
+	o := newOrchestrator(logger)
+
+	// First call: register a system-supplied skill named "writer".
+	sysReg := newTestSkillRegistration(t, "writer", "System writer", nil)
+	sysReg.IsUserSupplied = false
+	mustAddSkills(t, o, sysReg)
+
+	if got := o.Skills()["writer"]; got == nil || got.Description != "System writer" {
+		t.Fatalf("after first AddSkills, expected system 'writer' to be registered; got %+v", got)
+	}
+
+	// Second call: register a user-supplied skill that collides with the
+	// existing system skill. The user skill should replace the system skill
+	// and a collision warning should be emitted.
+	userReg := newTestSkillRegistration(t, "writer", "User writer", nil)
+	userReg.IsUserSupplied = true
+	mustAddSkills(t, o, userReg)
+
+	stored := o.Skills()["writer"]
+	if stored == nil {
+		t.Fatal("expected 'writer' to remain registered after second AddSkills")
+	}
+	if stored.Description != "User writer" {
+		t.Errorf("stored.Description = %q, want 'User writer' (user-supplied skill should win cross-call collision)", stored.Description)
+	}
+
+	logOutput := buf.String()
+	if !strings.Contains(logOutput, "collision") && !strings.Contains(logOutput, "precedence") {
+		t.Errorf("expected cross-call collision warning, got logs:\n%s", logOutput)
+	}
+}
+
 func TestSkillAliasResolvesConflictNoWarning(t *testing.T) {
 	var buf bytes.Buffer
 	logger := slog.New(slog.NewTextHandler(&buf, nil))

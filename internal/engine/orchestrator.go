@@ -473,6 +473,9 @@ func (o *Orchestrator) AddSkills(cfgs ...SkillRegistration) error {
 		}
 
 		if reg.Alias != "" {
+			// sk is a fresh copy returned by SetAccessibleDirsAndBuiltinTools
+			// (see Skill.copy), so mutating sk.Name here does not affect the
+			// caller's *llm.Skill pointer.
 			sk.Name = reg.Alias
 		}
 
@@ -511,12 +514,9 @@ func (o *Orchestrator) AddSkills(cfgs ...SkillRegistration) error {
 		}
 
 		var userSupplied []SkillRegistration
-		var systemSupplied []SkillRegistration
 		for _, r := range regs {
 			if r.IsUserSupplied {
 				userSupplied = append(userSupplied, r)
-			} else {
-				systemSupplied = append(systemSupplied, r)
 			}
 		}
 
