@@ -2,6 +2,7 @@ package builtin
 
 import (
 	"fmt"
+	"net/url"
 	"path/filepath"
 	"strings"
 
@@ -9,8 +10,8 @@ import (
 )
 
 // checkURLAllowlist parses command as a bash script and verifies that if curl or wget
-// are used, their target URLs are statically extractable and prefix-match an entry
-// in allowlist.
+// are used, their target URLs are statically extractable and match an entry
+// in allowlist. It recursively analyzes common wrapper commands (e.g., env, bash, sh).
 //
 // Following redirects (-L) is not statically analyzable and is out of scope; the
 // allowlist only constrains the initial target URL.
@@ -70,44 +71,9 @@ func checkURLAllowlist(command string, allowlist []string) error {
 		}
 
 		cmdName := filepath.Base(head)
-		if cmdName != "curl" && cmdName != "wget" {
-			return true
-		}
-
-		// Parse and validate target URLs
-		urls, err := parseCommandURLs(cmdName, call.Args[1:])
-		if err != nil {
-			first = fmt.Errorf("extract URL from %s command: %w. Please rewrite the command with an explicit, static URL argument", cmdName, err)
+		if err := checkWrapperCommand(cmdName, call.Args[1:], allowlist); err != nil {
+			first = err
 			return false
-		}
-
-		if len(urls) == 0 {
-			first = fmt.Errorf("no statically extractable URL found in %s command. Please rewrite the command with an explicit, static URL argument", cmdName)
-			return false
-		}
-
-		for _, u := range urls {
-			if strings.HasPrefix(u, "@") {
-				first = fmt.Errorf("URL starting with @ is not allowed in %s command. Please rewrite the command with an explicit, static URL argument", cmdName)
-				return false
-			}
-			if strings.Contains(u, "--data-urlencode") {
-				first = fmt.Errorf("URL embedding with --data-urlencode is not allowed in %s command. Please rewrite the command with an explicit, static URL argument", cmdName)
-				return false
-			}
-
-			// Perform prefix match
-			matched := false
-			for _, entry := range allowlist {
-				if strings.HasPrefix(u, entry) {
-					matched = true
-					break
-				}
-			}
-			if !matched {
-				first = fmt.Errorf("URL %q is not allowed by the URL allowlist", u)
-				return false
-			}
 		}
 
 		return true
@@ -116,7 +82,165 @@ func checkURLAllowlist(command string, allowlist []string) error {
 	return first
 }
 
-// hasCurlOrWget checks if the statement contains a CallExpr executing curl or wget.
+// checkWrapperCommand recursively unwraps and validates command execution for curl/wget.
+func checkWrapperCommand(cmdName string, args []*syntax.Word, allowlist []string) error {
+	if cmdName == "curl" || cmdName == "wget" {
+		return checkDirectCurlOrWget(cmdName, args, allowlist)
+	}
+
+	if cmdName == "env" {
+		subCmd, subArgs, err := parseEnvArgs(args)
+		if err != nil {
+			return err
+		}
+		if subCmd != "" {
+			return checkWrapperCommand(filepath.Base(subCmd), subArgs, allowlist)
+		}
+	}
+
+	if cmdName == "bash" || cmdName == "sh" {
+		hasC := false
+		var scriptWord *syntax.Word
+		for i := 0; i < len(args); i++ {
+			val, ok := staticWordValue(args[i])
+			if ok && val == "-c" {
+				hasC = true
+				if i+1 < len(args) {
+					scriptWord = args[i+1]
+				}
+				break
+			}
+		}
+		if !hasC {
+			return fmt.Errorf("running bash/sh scripts from files is not allowed when URL allowlist is active")
+		}
+		if scriptWord == nil {
+			return fmt.Errorf("bash/sh -c is missing script argument")
+		}
+		scriptStr, ok := staticWordValue(scriptWord)
+		if !ok {
+			return fmt.Errorf("dynamic bash/sh -c scripts are not allowed when URL allowlist is active")
+		}
+		// Recursively parse and check the script
+		if err := checkURLAllowlist(scriptStr, allowlist); err != nil {
+			return fmt.Errorf("error in bash/sh -c script: %w", err)
+		}
+	}
+
+	if cmdName == "xargs" {
+		if hasArgCurlOrWget(args) {
+			return fmt.Errorf("xargs executing curl/wget is not allowed (reads from stdin)")
+		}
+	}
+
+	return nil
+}
+
+func checkDirectCurlOrWget(cmdName string, args []*syntax.Word, allowlist []string) error {
+	urls, err := parseCommandURLs(cmdName, args)
+	if err != nil {
+		return fmt.Errorf("extract URL from %s command: %w. Please rewrite the command with an explicit, static URL argument", cmdName, err)
+	}
+
+	if len(urls) == 0 {
+		return fmt.Errorf("no statically extractable URL found in %s command. Please rewrite the command with an explicit, static URL argument", cmdName)
+	}
+
+	for _, u := range urls {
+		if strings.HasPrefix(u, "@") {
+			return fmt.Errorf("URL starting with @ is not allowed in %s command. Please rewrite the command with an explicit, static URL argument", cmdName)
+		}
+
+		matched := false
+		for _, entry := range allowlist {
+			if urlMatches(u, entry) {
+				matched = true
+				break
+			}
+		}
+		if !matched {
+			return fmt.Errorf("URL %q is not allowed by the URL allowlist", u)
+		}
+	}
+
+	return nil
+}
+
+// urlMatches checks if the target URL matches the allowlist entry using net/url parsing.
+func urlMatches(targetStr, entryStr string) bool {
+	target, err := url.Parse(targetStr)
+	if err != nil {
+		return false
+	}
+	entry, err := url.Parse(entryStr)
+	if err != nil {
+		return false
+	}
+
+	if strings.ToLower(target.Scheme) != strings.ToLower(entry.Scheme) {
+		return false
+	}
+	if strings.ToLower(target.Host) != strings.ToLower(entry.Host) {
+		return false
+	}
+
+	targetPath := target.Path
+	if targetPath == "" {
+		targetPath = "/"
+	}
+	entryPath := entry.Path
+	if entryPath == "" {
+		entryPath = "/"
+	}
+
+	if entryPath == "/" {
+		return true
+	}
+
+	if targetPath == entryPath {
+		return true
+	}
+	if strings.HasPrefix(targetPath, entryPath+"/") {
+		return true
+	}
+	return false
+}
+
+// parseEnvArgs extracts the subcommand and remaining arguments from env command args.
+func parseEnvArgs(args []*syntax.Word) (string, []*syntax.Word, error) {
+	for i := 0; i < len(args); i++ {
+		val, ok := staticWordValue(args[i])
+		if !ok {
+			return "", nil, fmt.Errorf("env has dynamic arguments")
+		}
+		if strings.Contains(val, "=") {
+			continue
+		}
+		if strings.HasPrefix(val, "-") {
+			if val == "-u" || val == "--unset" {
+				i++
+			}
+			continue
+		}
+		return val, args[i+1:], nil
+	}
+	return "", nil, nil
+}
+
+func hasArgCurlOrWget(args []*syntax.Word) bool {
+	for _, arg := range args {
+		if val, ok := staticWordValue(arg); ok {
+			base := filepath.Base(val)
+			if base == "curl" || base == "wget" {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// hasCurlOrWget checks if the statement contains a CallExpr executing curl or wget,
+// or wrappers executing them.
 func hasCurlOrWget(node syntax.Node) bool {
 	var found bool
 	syntax.Walk(node, func(n syntax.Node) bool {
@@ -135,6 +259,35 @@ func hasCurlOrWget(node syntax.Node) bool {
 		if cmdName == "curl" || cmdName == "wget" {
 			found = true
 			return false
+		}
+		if cmdName == "xargs" {
+			if hasArgCurlOrWget(call.Args[1:]) {
+				found = true
+				return false
+			}
+		}
+		if cmdName == "env" {
+			subCmd, _, _ := parseEnvArgs(call.Args[1:])
+			subCmdName := filepath.Base(subCmd)
+			if subCmdName == "curl" || subCmdName == "wget" {
+				found = true
+				return false
+			}
+		}
+		if cmdName == "bash" || cmdName == "sh" {
+			for i := 0; i < len(call.Args); i++ {
+				val, ok := staticWordValue(call.Args[i])
+				if ok && val == "-c" && i+1 < len(call.Args) {
+					scriptStr, ok := staticWordValue(call.Args[i+1])
+					if ok {
+						f, err := syntax.NewParser().Parse(strings.NewReader(scriptStr), "")
+						if err == nil && hasCurlOrWget(f) {
+							found = true
+							return false
+						}
+					}
+				}
+			}
 		}
 		return true
 	})

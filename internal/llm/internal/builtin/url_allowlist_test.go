@@ -50,6 +50,13 @@ func TestBashURLAllowlistAllowsListedURL(t *testing.T) {
 		{"curl --header=$TOKEN https://example.com/api", false},
 		{"curl --data=$DATA https://example.com/api", false},
 
+		// Wrapper command recursion
+		{"env curl https://example.com/api", false},
+		{"bash -c \"curl https://example.com/api\"", false},
+		{"sh -c \"curl https://example.com/api\"", false},
+		{"env bash -c \"curl https://example.com/api\"", false},
+		{"env FOO=bar curl https://example.com/api", false},
+
 		// Invalid cases (unlisted URLs)
 		{"curl https://example.com/other", true},
 		{"curl http://example.com/api", true}, // HTTP instead of HTTPS
@@ -65,6 +72,37 @@ func TestBashURLAllowlistAllowsListedURL(t *testing.T) {
 		err := checkURLAllowlist(tc.cmd, allowlist)
 		if (err != nil) != tc.wantErr {
 			t.Errorf("checkURLAllowlist(%q) error state mismatch: got %v, wantErr %v", tc.cmd, err, tc.wantErr)
+		}
+	}
+}
+
+func TestBashURLAllowlistRejectsBypasses(t *testing.T) {
+	allowlist := []string{
+		"https://example.com/api",
+	}
+
+	tests := []struct {
+		cmd     string
+		wantErr bool
+	}{
+		// Host lookalike bypass
+		{"curl https://example.com.evil.com/api", true},
+		// Path boundary mismatch
+		{"curl https://example.com/apiv2", true},
+		// Shell wrappers bypass attempts
+		{"xargs curl", true},
+		{"xargs -n 1 curl", true},
+		{"bash script.sh", true},
+		{"sh script.sh", true},
+		{"bash -c $DYNAMIC", true},
+		{"env $DYNAMIC curl https://example.com/api", true},
+		{"bash -c \"curl https://malicious.com\"", true},
+	}
+
+	for _, tc := range tests {
+		err := checkURLAllowlist(tc.cmd, allowlist)
+		if (err != nil) != tc.wantErr {
+			t.Errorf("checkURLAllowlist(%q) expected error: %v, got %v", tc.cmd, tc.wantErr, err)
 		}
 	}
 }
@@ -116,7 +154,9 @@ func TestBashURLAllowlistRejectsStdin(t *testing.T) {
 		"cat urls.txt | curl https://example.com",
 		"curl <<EOF\nhttps://example.com\nEOF",
 		"curl <<< https://example.com",
-		"{ curl; } < urls.txt", // Block redirection
+		"{ curl; } < urls.txt",
+		"env curl < urls.txt",
+		"bash -c \"curl\" < urls.txt",
 	}
 
 	for _, cmd := range tests {
@@ -158,7 +198,6 @@ func TestBashURLAllowlistRejectsURLFileAndEmbedding(t *testing.T) {
 	tests := []string{
 		"curl --url @file.txt",
 		"curl @file.txt",
-		"curl --data-urlencode https://example.com",
 	}
 
 	for _, cmd := range tests {

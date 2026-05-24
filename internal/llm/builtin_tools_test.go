@@ -213,6 +213,12 @@ func TestBuiltinToolsAppliesBashURLAllowlist(t *testing.T) {
 	skill, err := NewSkill(writeSkillDir(t, "---\nname: x\ndescription: d\n---\nbody\n"), SkillConfig{
 		ToolSet: ToolSetConfig{
 			BashURLAllowlist: []string{"https://example.com/api"},
+			BashCommandPolicies: []BashCommandPolicy{
+				{
+					Command: "curl",
+					Policy:  ExecPolicyOff,
+				},
+			},
 		},
 	})
 	if err != nil {
@@ -228,8 +234,14 @@ func TestBuiltinToolsAppliesBashURLAllowlist(t *testing.T) {
 	// 1. Allowed URL prefix
 	args, _ := json.Marshal(map[string]any{"command": "curl https://example.com/api/v1/data"})
 	_, err1 := bash.Execute(context.Background(), string(args))
-	if err1 != nil && strings.Contains(err1.Error(), "is not allowed by the URL allowlist") {
+	if err1 == nil {
+		t.Fatal("expected command to be rejected by policy")
+	}
+	if strings.Contains(err1.Error(), "is not allowed by the URL allowlist") {
 		t.Fatalf("expected allowed URL prefix to not be rejected by URL allowlist, got: %v", err1)
+	}
+	if !strings.Contains(err1.Error(), "matched bash command policy") {
+		t.Fatalf("expected policy disabled error, got: %v", err1)
 	}
 
 	// 2. Blocked URL prefix
