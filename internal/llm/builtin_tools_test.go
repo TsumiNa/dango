@@ -208,3 +208,37 @@ func llmToolNames(tools []Tool) []string {
 	}
 	return names
 }
+
+func TestBuiltinToolsAppliesBashURLAllowlist(t *testing.T) {
+	skill, err := NewSkill(writeSkillDir(t, "---\nname: x\ndescription: d\n---\nbody\n"), SkillConfig{
+		ToolSet: ToolSetConfig{
+			BashURLAllowlist: []string{"https://example.com/api"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	cleanupSkillTemp(t, skill)
+	tools, err := skill.BuiltinTools()
+	if err != nil {
+		t.Fatalf("BuiltinTools: %v", err)
+	}
+	bash := findTool(t, tools, "bash")
+
+	// 1. Allowed URL prefix
+	args, _ := json.Marshal(map[string]any{"command": "curl https://example.com/api/v1/data"})
+	_, err1 := bash.Execute(context.Background(), string(args))
+	if err1 != nil && strings.Contains(err1.Error(), "is not allowed by the URL allowlist") {
+		t.Fatalf("expected allowed URL prefix to not be rejected by URL allowlist, got: %v", err1)
+	}
+
+	// 2. Blocked URL prefix
+	argsBlocked, _ := json.Marshal(map[string]any{"command": "curl https://malicious.com"})
+	_, err2 := bash.Execute(context.Background(), string(argsBlocked))
+	if err2 == nil {
+		t.Fatal("expected unlisted URL target to be rejected by URL allowlist")
+	}
+	if !strings.Contains(err2.Error(), "is not allowed by the URL allowlist") {
+		t.Fatalf("expected URL allowlist error, got: %v", err2)
+	}
+}

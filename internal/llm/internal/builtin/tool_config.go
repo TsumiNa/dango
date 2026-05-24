@@ -70,6 +70,7 @@ type DisabledError = toolpolicy.DisabledError
 type ToolSetConfig struct {
 	BashAllow           []string
 	BashBlock           []string
+	BashURLAllowlist    []string
 	Extras              []ExtraTool
 	Policies            map[CapabilityRef]ExecPolicy
 	BashCommandPolicies []BashCommandPolicy

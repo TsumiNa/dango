@@ -26,6 +26,9 @@ type config struct {
 	bashAllowlist map[string]struct{}
 	// bashAllowlistDisabled turns off allowlist enforcement entirely.
 	bashAllowlistDisabled bool
+	// bashURLAllowlist is the set of permitted target URL prefixes.
+	// Empty/nil means no URL restrictions.
+	bashURLAllowlist []string
 	// BashCommandPolicies classifies specific bash command patterns after the
 	// allowlist and redirection checks pass.
 	BashCommandPolicies []BashCommandPolicy
@@ -89,6 +92,12 @@ func withoutAllowlist() option {
 	}
 }
 
+func withBashURLAllowlist(urls []string) option {
+	return func(c *config) {
+		c.bashURLAllowlist = urls
+	}
+}
+
 // Tools returns the default set of filesystem and shell tools scoped to ws,
 // in the order an agent sees them: bash first, then read/write/edit helpers,
 // delete/move, grep, pipeline_search_replace, file_excerpt, artifact_catalog,
@@ -99,7 +108,10 @@ func withoutAllowlist() option {
 // removed afterwards. Entries in cfg.BashBlock win when a name appears in both
 // slices.
 func Tools(ws workspace, cfg ToolSetConfig) ([]tool, error) {
-	toolCfg := newConfig([]option{withAllowlistAdjust(cfg.BashAllow, cfg.BashBlock)})
+	toolCfg := newConfig([]option{
+		withAllowlistAdjust(cfg.BashAllow, cfg.BashBlock),
+		withBashURLAllowlist(cfg.BashURLAllowlist),
+	})
 	toolCfg.BashCommandPolicies = append([]BashCommandPolicy(nil), cfg.BashCommandPolicies...)
 	tools := coreTools(ws, toolCfg)
 	seenExtras := make(map[ExtraTool]struct{}, len(cfg.Extras))
