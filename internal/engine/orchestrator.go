@@ -330,9 +330,23 @@ func (o *Orchestrator) configuredOrchestratorSkill(sk *llm.Skill) (*llm.Skill, e
 // glue code in their playground, and run commands through the runner-owned
 // bind step. Client and Config are forwarded unchanged to that bind step.
 type SkillRegistration struct {
+	// Skill is the lightweight unbound skill loaded from a skill directory.
 	Skill          *llm.Skill
+	// Alias is an optional user-specified name to mount the skill under.
+	// If non-empty, the skill is registered and routed under this name,
+	// overriding the intrinsic name defined in the skill's manifest.
+	Alias          string
+	// IsUserSupplied is true if the skill is explicitly loaded/supplied by the
+	// user. If false, it is treated as a default system-provided skill.
+	// This flag is used to prioritize user-supplied skills in case of name
+	// collisions.
+	IsUserSupplied bool
+	// AccessibleDirs specifies file paths that the skill's tools are allowed
+	// to access.
 	AccessibleDirs []string
+	// Client is the LLM client that the skill will use when bound.
 	Client         *llm.Client
+	// Config is the conversation configuration details for the skill.
 	Config         llm.ConversationConfig
 }
 
@@ -425,45 +439,110 @@ func (o *Orchestrator) SetMaxRunningRunners(limit int) error {
 // configuration that runner-owned execution will later pass into
 // [llm.Skill.Bind]. AddSkills augments each skill with the built-in tools but
 // does not bind it yet.
+//
+// If two skills share the same effective name (either the intrinsic name or
+// the configured Alias), a conflict is resolved using the following policies:
+//   - If exactly one colliding skill is user-supplied (IsUserSupplied is true),
+//     it takes precedence and is registered. A warning is logged.
+//   - If multiple user-supplied skills collide under the same name, registration
+//     fails with an error. The user must provide a distinct Alias.
+//   - If multiple system-provided skills collide and there is no user-supplied
+//     skill to resolve the collision, registration fails with an error.
 func (o *Orchestrator) AddSkills(cfgs ...SkillRegistration) error {
 	if len(cfgs) == 0 {
 		return nil
 	}
-	prepared := make(map[string]SkillRegistration, len(cfgs))
-	for i, cfg := range cfgs {
-		if cfg.Skill == nil {
+
+	// Prepare and validate all new registrations outside the lock.
+	// This includes performing the heavy file system copying/tool preparation
+	// phase (SetAccessibleDirsAndBuiltinTools) for each new skill.
+	preparedNew := make([]SkillRegistration, 0, len(cfgs))
+	for i, reg := range cfgs {
+		if reg.Skill == nil {
 			return fmt.Errorf("orchestrate: add skill config %d requires a non-nil skill", i)
 		}
-		if cfg.Skill.Conversation() != nil {
+		if reg.Skill.Conversation() != nil {
 			return fmt.Errorf("orchestrate: add skill config %d requires a lightweight unbound skill", i)
 		}
-		sk, err := cfg.Skill.SetAccessibleDirsAndBuiltinTools(cfg.AccessibleDirs...)
+		sk, err := reg.Skill.SetAccessibleDirsAndBuiltinTools(reg.AccessibleDirs...)
 		if err != nil {
 			return err
 		}
 		if sk.Name == "" {
 			return fmt.Errorf("orchestrate: add skill config %d has empty skill name", i)
 		}
-		if _, exists := prepared[sk.Name]; exists {
-			return fmt.Errorf("orchestrate: skill %q already provided in AddSkills", sk.Name)
+
+		if reg.Alias != "" {
+			// sk is a fresh copy returned by SetAccessibleDirsAndBuiltinTools
+			// (see Skill.copy), so mutating sk.Name here does not affect the
+			// caller's *llm.Skill pointer.
+			sk.Name = reg.Alias
 		}
-		prepared[sk.Name] = SkillRegistration{
+
+		preparedNew = append(preparedNew, SkillRegistration{
 			Skill:          sk,
-			AccessibleDirs: append([]string(nil), cfg.AccessibleDirs...),
-			Client:         cfg.Client,
-			Config:         cloneConversationConfig(cfg.Config),
-		}
+			Alias:          reg.Alias,
+			IsUserSupplied: reg.IsUserSupplied,
+			AccessibleDirs: append([]string(nil), reg.AccessibleDirs...),
+			Client:         reg.Client,
+			Config:         cloneConversationConfig(reg.Config),
+		})
 	}
 
 	o.mu.Lock()
 	defer o.mu.Unlock()
-	for name := range prepared {
-		if _, exists := o.skills[name]; exists {
-			return fmt.Errorf("orchestrate: skill %q already registered", name)
-		}
+
+	// tentative maps effectiveName -> registrations
+	tentative := make(map[string][]SkillRegistration)
+
+	// Add existing ones
+	for name, reg := range o.skills {
+		tentative[name] = append(tentative[name], reg)
 	}
-	for name, cfg := range prepared {
-		o.skills[name] = cfg
+
+	// Add new ones
+	for _, reg := range preparedNew {
+		effectiveName := reg.Skill.Name
+		tentative[effectiveName] = append(tentative[effectiveName], reg)
+	}
+
+	resolved := make(map[string]SkillRegistration)
+	// Map iteration is non-deterministic, so we may visit a resolvable
+	// collision before an unresolvable one. Collect the names that win on
+	// user-supplied precedence and only emit warnings once the loop has
+	// successfully built `resolved` and `o.skills` has been updated. Logging
+	// inside the loop would leave a "user-supplied skill took precedence"
+	// trail for a change that was rolled back by a later error return.
+	var resolvedCollisions []string
+	for name, regs := range tentative {
+		if len(regs) == 1 {
+			resolved[name] = regs[0]
+			continue
+		}
+
+		var userSupplied []SkillRegistration
+		for _, r := range regs {
+			if r.IsUserSupplied {
+				userSupplied = append(userSupplied, r)
+			}
+		}
+
+		if len(userSupplied) > 1 {
+			return fmt.Errorf("orchestrate: name conflict for skill %q: multiple user-supplied skills. Please use an alias to resolve the conflict", name)
+		}
+		if len(userSupplied) == 0 {
+			return fmt.Errorf("orchestrate: name conflict for skill %q: multiple system-provided skills. Please use an alias to resolve the conflict", name)
+		}
+
+		resolved[name] = userSupplied[0]
+		resolvedCollisions = append(resolvedCollisions, name)
+	}
+
+	o.skills = resolved
+	for _, name := range resolvedCollisions {
+		o.logger.Warn("orchestrate: skill name collision detected; user-supplied skill taking precedence. Assign an alias to disambiguate",
+			slog.String("name", name),
+		)
 	}
 	return nil
 }
@@ -489,9 +568,10 @@ func (o *Orchestrator) AddSkillDirs(cfg llm.ConversationConfig, dirs ...string) 
 			return err
 		}
 		cfgs = append(cfgs, SkillRegistration{
-			Skill:  sk,
-			Client: client,
-			Config: cfg,
+			Skill:          sk,
+			Client:         client,
+			Config:         cfg,
+			IsUserSupplied: true,
 		})
 	}
 	return o.AddSkills(cfgs...)
