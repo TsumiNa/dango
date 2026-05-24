@@ -105,6 +105,9 @@ func newBashWithConfig(ws workspace, cfg *config) tool {
 			if err := checkRedirections(args.Command, ws); err != nil {
 				return "", fmt.Errorf("bash: %w", err)
 			}
+			if err := checkURLAllowlist(args.Command, cfg.bashURLAllowlist); err != nil {
+				return "", fmt.Errorf("bash: %w", err)
+			}
 			if decision, matched, matchIndex, err := classifyBashCommandPolicy(args.Command, cfg.BashCommandPolicies); err != nil {
 				return "", fmt.Errorf("bash: %w", err)
 			} else if matched {

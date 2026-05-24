@@ -503,6 +503,7 @@ func (s *Skill) WithToolSetConfig(cfg ToolSetConfig) (*Skill, error) {
 func copyToolSetConfig(cfg ToolSetConfig) ToolSetConfig {
 	cfg.BashAllow = append([]string(nil), cfg.BashAllow...)
 	cfg.BashBlock = append([]string(nil), cfg.BashBlock...)
+	cfg.BashURLAllowlist = append([]string(nil), cfg.BashURLAllowlist...)
 	cfg.Extras = append([]ExtraTool(nil), cfg.Extras...)
 	cfg.Policies = toolpolicy.ClonePolicyMap(cfg.Policies)
 	cfg.BashCommandPolicies = toolpolicy.CloneBashCommandPolicies(cfg.BashCommandPolicies)
