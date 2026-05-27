@@ -233,6 +233,31 @@ func TestAnalyzerTolerantOfBadLines(t *testing.T) {
 	}
 }
 
+// TestAnalyzerHandlesOverlongLines guards the bufio.Reader switch: a single
+// stream event that exceeds the old bufio.Scanner 1 MiB cap (memo
+// snapshots and exchange document deltas can be megabytes) must not abort
+// the whole analysis, and the tool-call lines around it must still tally.
+func TestAnalyzerHandlesOverlongLines(t *testing.T) {
+	t.Parallel()
+	huge := strings.Repeat("x", 2<<20) // 2 MiB single line — exceeds the old cap
+	input := strings.NewReader(
+		makeAuditLine(t, "writer", "bash", bashArgs("ls /tmp")) + "\n" +
+			huge + "\n" +
+			makeAuditLine(t, "writer", "bash", bashArgs("git status")) + "\n",
+	)
+
+	rep, err := Analyze(input)
+	if err != nil {
+		t.Fatalf("Analyze must not abort on overlong line: %v", err)
+	}
+	if rep.TotalEvents != 3 {
+		t.Fatalf("TotalEvents = %d, want 3 (one huge line still counted)", rep.TotalEvents)
+	}
+	if rep.BashHeads["ls"] != 1 || rep.BashHeads["git"] != 1 {
+		t.Fatalf("tool-call tally lost across the overlong line: %+v", rep.BashHeads)
+	}
+}
+
 func TestFormatMarkdownIncludesAllSections(t *testing.T) {
 	t.Parallel()
 	rep := Report{

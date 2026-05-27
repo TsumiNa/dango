@@ -1,12 +1,18 @@
 // Package main implements the analyze-tool-traces utility.
 //
 // It consumes the JSON-lines stream-event log dango runners write to
-// artifacts/debug/stream_events.jsonl, picks out the audit-tagged
-// llm.tool_call.started events (see docs/tool-call-audit-schema.md), and
-// reports the data shapes that the post-alpha hardening phase needs:
-// bash command-head distribution, captured inner bodies for
-// Turing-complete heads (python -c / bash -c / sh -c / awk / make /
-// xargs), per-skill tallies, and curl/wget URL frequencies.
+// artifacts/debug/stream_events.jsonl and reports the data shapes the
+// post-alpha hardening phase needs: bash command-head distribution,
+// captured inner bodies for Turing-complete heads (python -c / bash -c
+// / sh -c / awk / make / xargs), per-skill tallies, and curl/wget URL
+// frequencies.
+//
+// The analyzer filters input by event_type ([streampkg.EventLLMToolCallStarted]
+// today), not by the audit-category tag introduced in subtask 60a, so
+// traces captured before the tag landed remain analyzable. The
+// [Report.AuditEvents] counter reports the subset of events that did
+// carry the `category: "audit"` tag (see docs/tool-call-audit-schema.md)
+// so callers can tell how much of a trace is audit-grade.
 //
 // The analyzer supersedes the hand-rolled PR C-3 methodology recorded in
 // docs/builtin-tools-restructure-plan.md.
@@ -14,7 +20,9 @@ package main
 
 import (
 	"bufio"
+	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/url"
@@ -69,72 +77,82 @@ func Analyze(r io.Reader) (Report, error) {
 		PerSkillTallies: map[string]int{},
 		URLsByHost:      map[string]int{},
 	}
-	scanner := bufio.NewScanner(r)
-	// One event can carry a 4 KiB truncated argument plus envelope, so the
-	// per-line cap has to be larger than bufio.MaxScanTokenSize.
-	scanner.Buffer(make([]byte, 0, 1<<20), 1<<20)
-
-	for scanner.Scan() {
-		line := scanner.Bytes()
-		if len(line) == 0 {
-			continue
+	// bufio.Reader (not Scanner) so a single overlong line — memo
+	// snapshots and exchange events carry unbounded document bodies, far
+	// larger than the [bufio.MaxScanTokenSize] cap — neither aborts the
+	// analysis nor silently drops events. ReadBytes returns the partial
+	// line at io.EOF so the loop handles files that do not end with a
+	// newline.
+	br := bufio.NewReader(r)
+	for {
+		raw, err := br.ReadBytes('\n')
+		line := bytes.TrimRight(raw, "\n")
+		if len(line) > 0 {
+			rep.TotalEvents++
+			foldLine(line, &rep)
 		}
-		rep.TotalEvents++
-
-		var ev streampkg.Event
-		if err := json.Unmarshal(line, &ev); err != nil {
-			continue
-		}
-		if ev.Metadata["category"] == "audit" {
-			rep.AuditEvents++
-		}
-		if ev.EventType != streampkg.EventLLMToolCallStarted {
-			continue
-		}
-		rep.ToolCallStarted++
-
-		var payload toolCallPayload
-		if err := json.Unmarshal(ev.Delta, &payload); err != nil {
-			continue
-		}
-		skill := skillLabel(ev)
-		rep.PerSkillTallies[skill]++
-		if payload.Name != "bash" {
-			continue
-		}
-		rep.BashCalls++
-
-		cmd := bashCommandFromArgs(payload.Arguments)
-		head := commandHead(cmd)
-		if head == "" {
-			continue
-		}
-		rep.BashHeads[head]++
-
-		if turingCompleteHeads[head] {
-			if body := captureInnerBody(head, cmd); body != "" {
-				rep.InnerBodies[head] = append(rep.InnerBodies[head], body)
+		if err != nil {
+			if errors.Is(err, io.EOF) {
+				return rep, nil
 			}
+			return rep, fmt.Errorf("analyze: read line: %w", err)
 		}
-		if head == "curl" {
-			rep.CurlCalls++
+	}
+}
+
+// foldLine parses one JSON-encoded stream event and folds it into rep.
+// Unparseable lines are silently dropped; callers learn about the total
+// line count from rep.TotalEvents.
+func foldLine(line []byte, rep *Report) {
+	var ev streampkg.Event
+	if err := json.Unmarshal(line, &ev); err != nil {
+		return
+	}
+	if ev.Metadata["category"] == "audit" {
+		rep.AuditEvents++
+	}
+	if ev.EventType != streampkg.EventLLMToolCallStarted {
+		return
+	}
+	rep.ToolCallStarted++
+
+	var payload toolCallPayload
+	if err := json.Unmarshal(ev.Delta, &payload); err != nil {
+		return
+	}
+	skill := skillLabel(ev)
+	rep.PerSkillTallies[skill]++
+	if payload.Name != "bash" {
+		return
+	}
+	rep.BashCalls++
+
+	cmd := bashCommandFromArgs(payload.Arguments)
+	head := commandHead(cmd)
+	if head == "" {
+		return
+	}
+	rep.BashHeads[head]++
+
+	if turingCompleteHeads[head] {
+		if body := captureInnerBody(head, cmd); body != "" {
+			rep.InnerBodies[head] = append(rep.InnerBodies[head], body)
 		}
-		if head == "wget" {
-			rep.WgetCalls++
-		}
-		if head == "curl" || head == "wget" {
-			for _, raw := range extractURLs(cmd) {
-				host := urlHost(raw)
-				if host != "" {
-					rep.URLsByHost[host]++
-				}
+	}
+	if head == "curl" {
+		rep.CurlCalls++
+	}
+	if head == "wget" {
+		rep.WgetCalls++
+	}
+	if head == "curl" || head == "wget" {
+		for _, raw := range extractURLs(cmd) {
+			host := urlHost(raw)
+			if host != "" {
+				rep.URLsByHost[host]++
 			}
 		}
 	}
-	if err := scanner.Err(); err != nil {
-		return rep, fmt.Errorf("analyze: scan: %w", err)
-	}
-	return rep, nil
 }
 
 // toolCallPayload mirrors the audit-event delta documented in
@@ -185,10 +203,12 @@ func bashCommandFromArgs(args string) string {
 }
 
 // commandHead returns the first whitespace-delimited token of cmd that
-// looks like a command name (skipping leading `KEY=value` shell variable
-// assignments and `sudo -E` style prefixes that would otherwise dominate
-// the head distribution). A trailing colon or semicolon is stripped so
-// heredoc preambles still match.
+// looks like a command name, skipping leading `KEY=value` shell variable
+// assignments that would otherwise dominate the head distribution. A
+// trailing colon or semicolon is stripped so heredoc preambles still
+// match. Wrapper prefixes (`sudo`, `time`, `env`, etc.) are intentionally
+// not unwrapped — they surface as their own heads in the distribution so
+// the report makes "what got invoked under sudo" visible.
 func commandHead(cmd string) string {
 	cmd = strings.TrimSpace(cmd)
 	for _, tok := range strings.Fields(cmd) {
