@@ -257,6 +257,10 @@ improvement. The unified model changes how every capability is gated;
 the rest are opt-in or observability-only and do not change default
 behavior.
 
+Status as of 2026-05-28: every item below is delivered. PR numbers are
+inline. The next move is the post-alpha structural hardening track
+that consumes this work (§ 0.5 / item 8 in § 4).
+
 - **Unified tool/MCP/skill security model** (`docs/near_term_plan/10`–
   `12`). One abstraction with two axes: availability (allow/deny;
   builtins always on, extras/MCP/skills opt-controllable) and execution
@@ -267,19 +271,28 @@ behavior.
   Replaces the earlier `TrustedInput` flag idea: a mounted skill is
   trusted by default (philosophy: do not push security work onto the
   user), and skills are governed by the same on/off availability list.
+  **Delivered** as #92 (`11`, extras enum + tool-config reshape) and
+  #93 (`12a`, policy data model + `passby`/`off` enforcement +
+  command-pattern classification). `12b` (the approval round-trip)
+  remains deferred until an interactive approver exists.
 - **`WithBashURLAllowlist([]string)` opt-in** (`docs/near_term_plan/30`).
   Adds the config surface and curl/wget URL extraction. Default empty
   = no restriction; non-empty enforces fail-closed. Decision recorded
   there: keep `curl` in bash rather than building a constrained Go
-  wrapper.
+  wrapper. **Delivered** as #94.
 - **Audit-tagging the tool-call stream events** (`docs/near_term_plan/60`).
-  Mark `llm.tool_call.started` / `.completed` as the canonical audit
-  source via a stable `category` tag and document the field set in
-  `docs/tool-call-audit-schema.md`.
+  Mark `llm.tool_call.started` / `.completed` / `llm.tool_result.delta`
+  / `mcp.tool.call.completed` as the canonical audit source via a
+  stable `category: "audit"` tag and document the field set in
+  `docs/tool-call-audit-schema.md`. **Delivered** alongside the
+  closeout PR (see `docs/near_term_plan/60` and `90`).
 - **Trace-analysis utility** (`docs/near_term_plan/60`). Promote the
-  PR C-3 manual analysis to a Go program that reports bash command-head
+  PR C-3 manual analysis to a Go program (`tools/analyze-tool-traces`,
+  `just analyze-traces <jsonl>`) that reports bash command-head
   distribution, Turing-complete head inner bodies, per-skill tallies,
-  and curl/wget URL frequencies.
+  and curl/wget URL frequencies. **Delivered** alongside the closeout
+  PR; reproduces the PR C-3 "three bash calls" finding on the recorded
+  artifact.
 
 Anything not listed in § 2.4 stays in § 2.3 and waits for the trigger.
 
@@ -311,6 +324,11 @@ MCP servers already return AI-friendly curated results rather than raw
 search-engine pages, response parsing is more ergonomic in Python, and
 documented Python SDKs exist for Tavily / arXiv / Semantic Scholar. We
 should consume those ecosystems rather than reimplement them.
+
+Status: MCP availability **delivered** as #97 (client wrapper,
+namespaced tool adapter, orchestrator global + per-skill visibility,
+call-only stream event). The app/cmd cycle still owns server curation
+and the packaged Python skills.
 
 - **Web search.** No structured `web_search` tool. Skills that need to
   locate papers, datasets, or documentation can only `curl` known URLs.
@@ -379,6 +397,7 @@ shows a recurring bash pain point; flag it then, not now.
 ### 3.4 Version control and history
 
 **Destination:** Go builtin. Scheduled as `docs/near_term_plan/20`.
+**Delivered** as #87.
 
 - **Git.** Not on the default allowlist. Research skills that ingest
   existing repos (read commit history, diff between revisions, blame a
@@ -390,7 +409,7 @@ shows a recurring bash pain point; flag it then, not now.
 
 **Destination:** Go builtin. Scheduled as `docs/near_term_plan/21`
 (`artifact_catalog`) and `docs/near_term_plan/22`
-(`structured_preview`).
+(`structured_preview`). **Delivered** as #88 and #89 respectively.
 
 - **Artifact catalog.** A first-class read of the per-task
   `downstream/artifacts/` directory + the handoff front-matter

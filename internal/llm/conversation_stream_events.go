@@ -11,6 +11,16 @@ import (
 
 const conversationStreamTextLimit = 4096
 
+// auditCategoryMetadata is the metadata stamp that marks an event as part of
+// the tool-call audit pipeline (see docs/tool-call-audit-schema.md). It is
+// applied to llm.tool_call.started, llm.tool_call.completed,
+// llm.tool_result.delta, and mcp.tool.call.completed so downstream consumers
+// (the trace analyzer; future post-alpha audit storage) can filter on a
+// single stable field instead of an event-type allowlist.
+func auditCategoryMetadata() map[string]any {
+	return map[string]any{"category": "audit"}
+}
+
 // EventStream returns the progress stream this conversation writes to, or nil
 // when the conversation was created without [ConversationConfig.StreamEvents].
 // The stream may be owned by the conversation or supplied by its caller through
@@ -105,11 +115,11 @@ func (c *Conversation) emitTextDelta(ctx context.Context, eventType string, stat
 }
 
 func (c *Conversation) emitToolCallStarted(ctx context.Context, call ToolCall) {
-	c.emitStreamEvent(ctx, streampkg.EventLLMToolCallStarted, streampkg.StatusRunning, toolCallDelta(call), nil)
+	c.emitStreamEvent(ctx, streampkg.EventLLMToolCallStarted, streampkg.StatusRunning, toolCallDelta(call), auditCategoryMetadata())
 }
 
 func (c *Conversation) emitToolCallCompleted(ctx context.Context, call ToolCall) {
-	c.emitStreamEvent(ctx, streampkg.EventLLMToolCallCompleted, streampkg.StatusCompleted, toolCallDelta(call), nil)
+	c.emitStreamEvent(ctx, streampkg.EventLLMToolCallCompleted, streampkg.StatusCompleted, toolCallDelta(call), auditCategoryMetadata())
 }
 
 func (c *Conversation) emitToolExecutionStarted(ctx context.Context, call ToolCall) {
@@ -160,7 +170,7 @@ func (c *Conversation) emitToolResult(ctx context.Context, callID string, output
 	if execErr != nil {
 		payload["error"] = compactErrorText(execErr.Error())
 	}
-	c.emitStreamEvent(ctx, streampkg.EventLLMToolResultDelta, streamStatusForError(execErr), payload, nil)
+	c.emitStreamEvent(ctx, streampkg.EventLLMToolResultDelta, streamStatusForError(execErr), payload, auditCategoryMetadata())
 }
 
 // mcpDescriptorFor returns the MCP server and bare tool name when the tool
@@ -201,7 +211,7 @@ func (c *Conversation) emitMCPToolCall(ctx context.Context, callID, namespaced, 
 	if execErr != nil {
 		payload["error"] = compactErrorText(execErr.Error())
 	}
-	c.emitStreamEvent(ctx, streampkg.EventMCPToolCallCompleted, streamStatusForError(execErr), payload, nil)
+	c.emitStreamEvent(ctx, streampkg.EventMCPToolCallCompleted, streamStatusForError(execErr), payload, auditCategoryMetadata())
 }
 
 func (c *Conversation) toolArgumentsForCallID(callID string) string {
