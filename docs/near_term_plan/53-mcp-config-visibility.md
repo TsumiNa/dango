@@ -15,17 +15,17 @@ that specific skill with only those server's tools.
 ## Scope
 
 1. `internal/engine/orchestrator.go`:
-   - `Orchestrator.AddMCPServers(handles ...*llm.MCPServer) error` — store
-     handles in the orchestrator and log one INFO line per server plus a
-     single WARN risk notice. Reject duplicate server names.
+   - `Orchestrator.AddMCPServers(handles ...*mcpclient.Server) error` —
+     store handles in the orchestrator and log one INFO line per server
+     plus a single WARN risk notice. Reject duplicate server names.
    - On every `AddSkills` call, append the global MCP tools to each new
-     skill (via `Skill.AddTools`).
+     skill (via `Skill.AddTools` with adapters from `llm.MCPTools`).
    - On `AddSkills` with `SkillRegistration.MCPServers` non-empty, append
      those handles' tools to the one skill they were registered with.
    - `Orchestrator.MCPServers()` snapshot accessor.
    - `Orchestrator.Close()` shuts down every MCP server the orchestrator
-     started so app/cmd has a single shutdown call.
-2. New `MCPServers []*llm.MCPServer` field on `SkillRegistration`.
+     is holding so app/cmd has a single shutdown call.
+2. New `MCPServers []*mcpclient.Server` field on `SkillRegistration`.
 
 ## Tests
 

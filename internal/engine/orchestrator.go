@@ -12,6 +12,7 @@ import (
 	persistencepkg "github.com/tsumina/dango/internal/engine/runner/persistence"
 	streampkg "github.com/tsumina/dango/internal/engine/stream"
 	"github.com/tsumina/dango/internal/llm"
+	"github.com/tsumina/dango/internal/mcpclient"
 )
 
 // Orchestrator is a runner factory that bridges external user requests to
@@ -39,8 +40,8 @@ type Orchestrator struct {
 	queuedRunnerByID  map[string]*queuedRunner
 	queuedRunners     runnerStartQueue
 	nextQueueOrder    uint64
-	globalMCPServers  []*llm.MCPServer
-	mcpServerByName   map[string]*llm.MCPServer
+	globalMCPServers  []*mcpclient.Server
+	mcpServerByName   map[string]*mcpclient.Server
 }
 
 // OrchestratorOption adjusts a constructed [Orchestrator] before it is returned.
@@ -176,7 +177,7 @@ func NewOrchestrator(opts ...OrchestratorOption) *Orchestrator {
 		runners:          make(map[string]*runnerpkg.Runner),
 		runningRunnerIDs: make(map[string]struct{}),
 		queuedRunnerByID: make(map[string]*queuedRunner),
-		mcpServerByName:  make(map[string]*llm.MCPServer),
+		mcpServerByName:  make(map[string]*mcpclient.Server),
 	}
 	for _, opt := range opts {
 		if opt != nil {
@@ -357,7 +358,7 @@ type SkillRegistration struct {
 	// or close these servers; the caller that supplied them owns their
 	// lifecycle. Tools are appended to the skill's tool set with the
 	// namespaced "<server>__<tool>" name.
-	MCPServers []*llm.MCPServer
+	MCPServers []*mcpclient.Server
 }
 
 // SetLogger replaces the Orchestrator logger.
@@ -467,7 +468,7 @@ func (o *Orchestrator) AddSkills(cfgs ...SkillRegistration) error {
 	// their tools to every skill being registered. Capturing this once also
 	// keeps registration deterministic if AddMCPServers is racing.
 	o.mu.RLock()
-	globalMCP := append([]*llm.MCPServer(nil), o.globalMCPServers...)
+	globalMCP := append([]*mcpclient.Server(nil), o.globalMCPServers...)
 	o.mu.RUnlock()
 
 	// Prepare and validate all new registrations outside the lock.
@@ -510,7 +511,7 @@ func (o *Orchestrator) AddSkills(cfgs ...SkillRegistration) error {
 			AccessibleDirs: append([]string(nil), reg.AccessibleDirs...),
 			Client:         reg.Client,
 			Config:         cloneConversationConfig(reg.Config),
-			MCPServers:     append([]*llm.MCPServer(nil), reg.MCPServers...),
+			MCPServers:     append([]*mcpclient.Server(nil), reg.MCPServers...),
 		})
 	}
 

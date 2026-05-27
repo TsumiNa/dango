@@ -8,13 +8,20 @@ implementation).
 ## Goal
 
 Wrap the official `github.com/modelcontextprotocol/go-sdk` client in a thin
-internal package the rest of the codebase can depend on without taking a
-direct dependency on the SDK. Provide stdio lifecycle, tool listing, tool
-calling, and result-to-string conversion.
+in-repo package the rest of the codebase can depend on without taking a
+direct dependency on the SDK from every call site. Provide stdio lifecycle,
+tool listing, tool calling, and result-to-string conversion.
+
+The package lives at `internal/mcpclient` (one level above
+`internal/llm`) so both `internal/llm` (for the [Tool] adapter) and
+`internal/engine` (for orchestrator registration) can import it directly.
+Putting it any deeper would require an extra wrapper layer in `llm` just
+to re-export the type to `engine`, which would add ceremony for no
+isolation benefit.
 
 ## Scope
 
-1. New package `internal/llm/internal/mcpclient`:
+1. New package `internal/mcpclient`:
    - `Server` struct: holds the spec (name, command, args, env), the active
      `*mcp.ClientSession`, and the captured tool catalogue.
    - `Start(ctx, spec)`: builds `mcp.CommandTransport`, connects, calls
@@ -48,7 +55,7 @@ calling, and result-to-string conversion.
 
 ## Verifiable acceptance
 
-- `go test ./internal/llm/internal/mcpclient/...` green.
+- `go test ./internal/mcpclient/...` green.
 - The package depends on the official SDK and exposes a surface narrow
   enough that the parent `llm` package adapter can wrap it without
   re-implementing JSON-RPC bookkeeping.

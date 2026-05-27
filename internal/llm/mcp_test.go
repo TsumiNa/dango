@@ -12,17 +12,17 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
 	streampkg "github.com/tsumina/dango/internal/engine/stream"
-	"github.com/tsumina/dango/internal/llm/internal/mcpclient"
+	"github.com/tsumina/dango/internal/mcpclient"
 )
 
 const mcpTestTimeout = 5 * time.Second
 
-func TestMCPServerExposesNamespacedTools(t *testing.T) {
+func TestMCPToolsExposesNamespacedTools(t *testing.T) {
 	t.Parallel()
 	srv, _, cancel := newTestMCPServer(t, "demo")
 	defer cancel()
 
-	tools := srv.Tools()
+	tools := MCPTools(srv)
 	if len(tools) == 0 {
 		t.Fatal("expected at least one tool")
 	}
@@ -32,6 +32,13 @@ func TestMCPServerExposesNamespacedTools(t *testing.T) {
 	}
 	if !names["demo__echo"] {
 		t.Fatalf("expected demo__echo in %v", names)
+	}
+}
+
+func TestMCPToolsNilServer(t *testing.T) {
+	t.Parallel()
+	if got := MCPTools(nil); got != nil {
+		t.Fatalf("expected nil tools, got %v", got)
 	}
 }
 
@@ -139,24 +146,11 @@ func TestNamespacedMCPName(t *testing.T) {
 	}
 }
 
-func TestMCPServerCloseIsIdempotent(t *testing.T) {
-	t.Parallel()
-	srv, _, cancel := newTestMCPServer(t, "demo")
-	defer cancel()
-
-	if err := srv.Close(); err != nil {
-		t.Fatalf("first close: %v", err)
-	}
-	if err := srv.Close(); err != nil {
-		t.Fatalf("second close: %v", err)
-	}
-}
-
-// findMCPTool returns the tool with the given namespaced name, failing the
-// test if it is not in the server's listing.
-func findMCPTool(t *testing.T, srv *MCPServer, namespaced string) Tool {
+// findMCPTool returns the [Tool] with the given namespaced name from srv's
+// adapter set, failing the test if it is not present.
+func findMCPTool(t *testing.T, srv *mcpclient.Server, namespaced string) Tool {
 	t.Helper()
-	for _, tool := range srv.Tools() {
+	for _, tool := range MCPTools(srv) {
 		if tool.Name() == namespaced {
 			return tool
 		}
@@ -166,8 +160,8 @@ func findMCPTool(t *testing.T, srv *MCPServer, namespaced string) Tool {
 }
 
 // newTestMCPServer wires an in-memory MCP server with deterministic tools
-// and returns an MCPServer connected to it.
-func newTestMCPServer(t *testing.T, name string) (*MCPServer, context.Context, context.CancelFunc) {
+// and returns a connected mcpclient.Server.
+func newTestMCPServer(t *testing.T, name string) (*mcpclient.Server, context.Context, context.CancelFunc) {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), mcpTestTimeout)
 
@@ -195,12 +189,11 @@ func newTestMCPServer(t *testing.T, name string) (*MCPServer, context.Context, c
 		t.Fatalf("mcp server connect: %v", err)
 	}
 
-	inner, err := mcpclient.StartWithTransport(ctx, mcpclient.ServerSpec{Name: name}, clientTransport)
+	srv, err := mcpclient.StartWithTransport(ctx, mcpclient.ServerSpec{Name: name}, clientTransport)
 	if err != nil {
 		cancel()
 		t.Fatalf("mcp client connect: %v", err)
 	}
-	srv := startMCPServerWithInner(inner)
 	t.Cleanup(func() { _ = srv.Close() })
 	return srv, ctx, cancel
 }

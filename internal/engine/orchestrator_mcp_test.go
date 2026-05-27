@@ -12,6 +12,7 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/tsumina/dango/internal/llm"
+	"github.com/tsumina/dango/internal/mcpclient"
 )
 
 const orchestratorMCPTimeout = 5 * time.Second
@@ -82,7 +83,7 @@ func TestOrchestratorPerSkillMCPIsolation(t *testing.T) {
 	defer cleanup()
 
 	regWithMCP := newTestSkillRegistration(t, "writer", "writes things", nil)
-	regWithMCP.MCPServers = []*llm.MCPServer{perSkill}
+	regWithMCP.MCPServers = []*mcpclient.Server{perSkill}
 	regBare := newTestSkillRegistration(t, "reader", "reads things", nil)
 	mustAddSkills(t, o, regWithMCP, regBare)
 
@@ -160,7 +161,7 @@ func TestOrchestratorAddSkillsRejectsBoundSkill(t *testing.T) {
 	defer cleanup()
 
 	reg := newTestSkillRegistration(t, "writer", "writes", nil)
-	reg.MCPServers = []*llm.MCPServer{srv}
+	reg.MCPServers = []*mcpclient.Server{srv}
 	mustAddSkills(t, o, reg)
 }
 
@@ -179,8 +180,8 @@ func skillExposesTool(sk *llm.Skill, name string) bool {
 }
 
 // newOrchestratorTestMCPServer wires an in-memory MCP server with a single
-// "echo" tool and returns a connected *llm.MCPServer plus a cleanup func.
-func newOrchestratorTestMCPServer(t *testing.T, name string) (*llm.MCPServer, func()) {
+// "echo" tool and returns a connected *mcpclient.Server plus a cleanup func.
+func newOrchestratorTestMCPServer(t *testing.T, name string) (*mcpclient.Server, func()) {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), orchestratorMCPTimeout)
 
@@ -206,7 +207,7 @@ func newOrchestratorTestMCPServer(t *testing.T, name string) (*llm.MCPServer, fu
 		t.Fatalf("server connect: %v", err)
 	}
 
-	srv, err := llm.StartMCPServerWithTransport(ctx, llm.MCPServerSpec{Name: name}, clientTransport)
+	srv, err := mcpclient.StartWithTransport(ctx, mcpclient.ServerSpec{Name: name}, clientTransport)
 	if err != nil {
 		cancel()
 		t.Fatalf("client connect: %v", err)

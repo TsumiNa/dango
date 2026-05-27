@@ -25,12 +25,13 @@ records the contracts that the implementation honors.
 
 ## 2. Lifecycle
 
-- **Spawn / stop.** `llm.StartMCPServer(ctx, spec)` builds a
+- **Spawn / stop.** `mcpclient.Start(ctx, spec)` builds a
   `mcp.CommandTransport` from the user-supplied command/args/env and calls
   `mcp.Client.Connect`. The caller (typically the orchestrator at startup,
-  or skill-mounting code) keeps the returned `*llm.MCPServer` and calls
-  `Close` during shutdown. The orchestrator owns shutdown for the servers it
-  started; skills do not close servers they did not start.
+  or skill-mounting code) keeps the returned `*mcpclient.Server` and calls
+  `Close` during shutdown. The orchestrator owns shutdown for the servers
+  it holds (via `Orchestrator.Close`); per-skill servers belong to whoever
+  passed them into `SkillRegistration.MCPServers`.
 - **Observation of crashes.** Because the SDK runs the subprocess via
   `exec.Cmd` and surfaces transport-level errors through `CallTool`
   responses, a crashed server first manifests as a failed tool call. The
@@ -96,17 +97,19 @@ records the contracts that the implementation honors.
 ## 5. Config shape
 
 - **Global servers** (visible to every skill) live on the orchestrator. The
-  app/cmd entry point calls `Orchestrator.AddMCPServers(specs…)` at startup;
-  the orchestrator spawns each server once and reuses the live handle for
-  every later `AddSkills` call.
+  app/cmd entry point starts each server with `mcpclient.Start(ctx, spec)`
+  and passes the live handles into `Orchestrator.AddMCPServers(handles…)`
+  at startup; the orchestrator keeps the handles and reuses them for every
+  later `AddSkills` call.
 - **Per-skill servers** are declared by the user when mounting a skill, on
-  the new field `SkillRegistration.MCPServers []*llm.MCPServer`. The
-  orchestrator only appends those servers' tools to the one skill they were
-  registered with.
-- **Server tool registration.** The orchestrator translates each
-  `*llm.MCPServer` into its `Tools()` list and appends them to the skill via
-  the existing `Skill.AddTools(...)` path. From the conversation's point of
-  view, an MCP tool is just another `Tool` implementation. This keeps the
+  the new field `SkillRegistration.MCPServers []*mcpclient.Server`. The
+  orchestrator only appends those servers' tools to the one skill they
+  were registered with.
+- **Server tool registration.** The orchestrator turns each
+  `*mcpclient.Server` into a `[]llm.Tool` via `llm.MCPTools(srv)` and
+  appends the result to the skill through the existing
+  `Skill.AddTools(...)` path. From the conversation's point of view, an
+  MCP tool is just another `Tool` implementation. This keeps the
   tool-execution loop, policy enforcement (`10`/`12a`), and approval flow
   (`12b`, when it lands) uniform across builtins, extras, and MCP.
 - **Availability / policy axis (`10`).** Each MCP tool surfaces a
@@ -157,9 +160,9 @@ independently verifiable through its own colocated tests.
 
 | File | Subtask | Scope |
 | --- | --- | --- |
-| `51-mcp-client.md` | MCP client wrapper | `internal/llm/internal/mcpclient`: connection management, `ListTools`, `CallTool`, result-to-string conversion, truncation, stdio transport. |
-| `52-mcp-adapter.md` | LLM tool adapter | `internal/llm/mcp.go`: `MCPServerSpec`, `MCPServer`, `mcpTool` (`Tool` impl), namespacing, capability-ref kind, MCP-specific stream event. |
-| `53-mcp-config-visibility.md` | Orchestrator visibility | `internal/engine/orchestrator.go`: `AddMCPServers` (global), `SkillRegistration.MCPServers` (per-skill), per-runner registration, shutdown ownership. |
+| `51-mcp-client.md` | MCP client wrapper | `internal/mcpclient`: connection management, `ListTools`, `CallTool`, result-to-string conversion, truncation, stdio transport. |
+| `52-mcp-adapter.md` | LLM tool adapter | `internal/llm/mcp.go`: `MCPTools(*mcpclient.Server) []Tool`, `mcpTool` (`Tool` impl), namespacing, capability-ref kind, MCP-specific stream event. |
+| `53-mcp-config-visibility.md` | Orchestrator visibility | `internal/engine/orchestrator.go`: `AddMCPServers` (global, takes `*mcpclient.Server`), `SkillRegistration.MCPServers` (per-skill), per-runner registration, shutdown ownership. |
 
 ## Startup listing and risk notice
 

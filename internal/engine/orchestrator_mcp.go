@@ -5,6 +5,7 @@ import (
 	"log/slog"
 
 	"github.com/tsumina/dango/internal/llm"
+	"github.com/tsumina/dango/internal/mcpclient"
 )
 
 // AddMCPServers registers servers as orchestrator-wide ("global") MCP
@@ -13,7 +14,7 @@ import (
 // registered through subsequent AddSkills calls, since AddSkills snapshots
 // the current global set at registration time).
 //
-// Caller-supplied [llm.MCPServer] handles must already be started; the
+// Caller-supplied [mcpclient.Server] handles must already be started; the
 // orchestrator does not spawn them. The orchestrator keeps references for
 // the duration of its lifetime so [Orchestrator.Close] can shut them down
 // in one call. AddMCPServers logs one INFO line per registered server and
@@ -24,7 +25,7 @@ import (
 // Like the other startup-only orchestrator settings, AddMCPServers must be
 // called before the first planning call. Duplicate server names (across
 // calls or within one call) are rejected.
-func (o *Orchestrator) AddMCPServers(servers ...*llm.MCPServer) error {
+func (o *Orchestrator) AddMCPServers(servers ...*mcpclient.Server) error {
 	if len(servers) == 0 {
 		return nil
 	}
@@ -75,13 +76,13 @@ func (o *Orchestrator) AddMCPServers(servers ...*llm.MCPServer) error {
 // MCPServers returns a snapshot of the orchestrator-wide MCP server handles
 // registered through [Orchestrator.AddMCPServers]. The returned slice is safe
 // for the caller to mutate.
-func (o *Orchestrator) MCPServers() []*llm.MCPServer {
+func (o *Orchestrator) MCPServers() []*mcpclient.Server {
 	o.mu.RLock()
 	defer o.mu.RUnlock()
 	if len(o.globalMCPServers) == 0 {
 		return nil
 	}
-	return append([]*llm.MCPServer(nil), o.globalMCPServers...)
+	return append([]*mcpclient.Server(nil), o.globalMCPServers...)
 }
 
 // Close shuts down every MCP server the orchestrator is holding so the
@@ -93,7 +94,7 @@ func (o *Orchestrator) Close() error {
 	o.mu.Lock()
 	servers := o.globalMCPServers
 	o.globalMCPServers = nil
-	o.mcpServerByName = make(map[string]*llm.MCPServer)
+	o.mcpServerByName = make(map[string]*mcpclient.Server)
 	o.mu.Unlock()
 
 	var firstErr error
@@ -110,7 +111,7 @@ func (o *Orchestrator) Close() error {
 // expanded in order; per-skill servers come after globals so users can rely
 // on a deterministic registration order if they ever need to disambiguate
 // otherwise-identical tool names by registration source.
-func collectMCPTools(global, perSkill []*llm.MCPServer) []llm.Tool {
+func collectMCPTools(global, perSkill []*mcpclient.Server) []llm.Tool {
 	if len(global) == 0 && len(perSkill) == 0 {
 		return nil
 	}
@@ -119,13 +120,13 @@ func collectMCPTools(global, perSkill []*llm.MCPServer) []llm.Tool {
 		if srv == nil {
 			continue
 		}
-		out = append(out, srv.Tools()...)
+		out = append(out, llm.MCPTools(srv)...)
 	}
 	for _, srv := range perSkill {
 		if srv == nil {
 			continue
 		}
-		out = append(out, srv.Tools()...)
+		out = append(out, llm.MCPTools(srv)...)
 	}
 	return out
 }

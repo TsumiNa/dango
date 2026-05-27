@@ -14,10 +14,10 @@ stream event ("call only, no result body").
 ## Scope
 
 1. New file `internal/llm/mcp.go`:
-   - `MCPServerSpec` — user-facing struct (name, command, args, env).
-   - `MCPServer` — handle returned by `StartMCPServer(ctx, spec)`. Wraps
-     `mcpclient.Server` and exposes `Tools() []Tool`, `Close() error`,
-     `Name() string`.
+   - `MCPTools(srv *mcpclient.Server) []Tool` — package-level adapter
+     function that turns the server's catalogue into `Tool` adapters.
+     No wrapper struct: callers (the orchestrator, mostly) pass the
+     raw `*mcpclient.Server` they already hold.
    - `mcpTool` — unexported `Tool` implementation. `Name()` returns
      `<server>__<tool>`. `Parameters()` returns the server's
      `InputSchema`. `Execute()` calls the MCP server and emits the
@@ -41,7 +41,7 @@ stream event ("call only, no result body").
 - `TestMCPToolForwardsArgumentsAndReturnsResult`.
 - `TestMCPToolNamespacedName`.
 - `TestMCPToolSuppressesResultDeltaAndEmitsCallEvent`.
-- `TestMCPServerCloseReleasesSubprocess`.
+- `TestMCPToolsExposesNamespacedTools`.
 
 ## Out of scope
 
