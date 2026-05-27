@@ -570,6 +570,19 @@ func (o *Orchestrator) AddSkills(cfgs ...SkillRegistration) error {
 			slog.String("name", name),
 		)
 	}
+	// Per docs/mcp-support-plan.md §5, every mount of a user-supplied MCP
+	// server should surface the same risk notice that AddMCPServers emits
+	// for globals. We log once per AddSkills call (not per server) to keep
+	// startup noise bounded when many skills declare the same server.
+	for _, reg := range preparedNew {
+		if len(reg.MCPServers) > 0 {
+			o.logger.Warn("orchestrate: per-skill MCP servers run as external processes with host privileges; risk is the user's to own",
+				slog.String("skill", reg.Skill.Name),
+				slog.Int("mcp_server_count", len(reg.MCPServers)),
+			)
+			break
+		}
+	}
 	return nil
 }
 

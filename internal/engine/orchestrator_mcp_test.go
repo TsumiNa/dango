@@ -153,9 +153,30 @@ func TestOrchestratorCloseShutsDownMCPServers(t *testing.T) {
 	}
 }
 
-func TestOrchestratorAddSkillsRejectsBoundSkill(t *testing.T) {
-	// Sanity check that the pre-MCP guard rails remain in effect even when
-	// the registration carries MCP servers.
+func TestOrchestratorAddSkillsEmitsPerSkillMCPWarning(t *testing.T) {
+	var buf bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	o := newOrchestrator(logger)
+	srv, cleanup := newOrchestratorTestMCPServer(t, "perskill")
+	defer cleanup()
+
+	reg := newTestSkillRegistration(t, "writer", "writes", nil)
+	reg.MCPServers = []*mcpclient.Server{srv}
+	mustAddSkills(t, o, reg)
+
+	out := buf.String()
+	if !strings.Contains(out, "per-skill MCP servers run as external processes") {
+		t.Fatalf("missing per-skill WARN risk notice: %q", out)
+	}
+	if !strings.Contains(out, `skill=writer`) {
+		t.Fatalf("WARN should name the skill: %q", out)
+	}
+}
+
+func TestOrchestratorAddSkillsAcceptsMCPServers(t *testing.T) {
+	// Sanity check: a registration carrying per-skill MCP servers is accepted
+	// and the skill ends up with the namespaced tool. Bound-skill rejection
+	// has its own coverage in the base orchestrator tests.
 	o := newOrchestrator(testLogger)
 	srv, cleanup := newOrchestratorTestMCPServer(t, "demo")
 	defer cleanup()
@@ -163,6 +184,9 @@ func TestOrchestratorAddSkillsRejectsBoundSkill(t *testing.T) {
 	reg := newTestSkillRegistration(t, "writer", "writes", nil)
 	reg.MCPServers = []*mcpclient.Server{srv}
 	mustAddSkills(t, o, reg)
+	if !skillExposesTool(o.Skills()["writer"], "demo__echo") {
+		t.Fatal("expected writer to expose demo__echo after accepting per-skill MCP server")
+	}
 }
 
 // skillExposesTool reports whether sk lists a tool with the given name in

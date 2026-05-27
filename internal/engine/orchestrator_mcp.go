@@ -86,10 +86,15 @@ func (o *Orchestrator) MCPServers() []*mcpclient.Server {
 }
 
 // Close shuts down every MCP server the orchestrator is holding so the
-// embedding app/cmd has a single call to make at process exit. It is safe to
-// call multiple times; subsequent calls are no-ops. Close does not stop
-// in-flight runners or release other orchestrator resources today; it is
-// scoped to MCP cleanup.
+// embedding app/cmd has a single call to make at process exit.
+//
+// Close is intended for process shutdown after every in-flight request has
+// settled. It does not stop runners and does not flip the configuration
+// lock, so a later [Orchestrator.AddMCPServers] call would succeed and
+// register fresh servers; the contract "safe to call multiple times" is
+// then only true if the caller has not registered new servers since the
+// previous Close. Calling Close twice without any intervening registration
+// is a no-op as documented.
 func (o *Orchestrator) Close() error {
 	o.mu.Lock()
 	servers := o.globalMCPServers

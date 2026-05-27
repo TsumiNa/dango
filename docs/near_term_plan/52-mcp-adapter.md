@@ -25,12 +25,19 @@ stream event ("call only, no result body").
      conversation.
 2. New event constant in `internal/engine/stream/event.go`:
    `EventMCPToolCallCompleted = "mcp.tool.call.completed"`.
-3. Conversation hook:
-   - Suppress `EventLLMToolResultDelta` for MCP tools (an unexported
-     `skipResultStreamTool` interface that `mcpTool` satisfies).
-   - Emit `EventMCPToolCallCompleted` with `server`, `tool`,
+3. Conversation hook (in `internal/llm/conversation_stream_events.go`):
+   - When `emitToolResult` runs, look up the dispatched tool by call ID
+     and type-assert the unexported `mcpToolMarker` interface
+     (`mcpServerName()` / `mcpToolName()`). `mcpTool` satisfies it
+     directly; `policyTool` forwards it through.
+   - When the assertion succeeds, skip `EventLLMToolResultDelta` and
+     emit `EventMCPToolCallCompleted` with `server`, `tool`,
      `namespaced_name`, `call_id`, `arguments_summary`, `outcome`, and
      optional `error`.
+   - `mcpTool.Execute` itself stays simple: it forwards to
+     `mcpclient.Server.Call` and returns the result string. The stream
+     hook owns the event emission so the policy/approval path remains
+     uniform.
 4. Capability ref kind:
    `CapabilityRef{Kind: CapabilityMCPTool, Name: "<server>__<tool>"}`.
    Already defined in `toolpolicy`; the adapter wires the policy lookup

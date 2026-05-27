@@ -2,7 +2,6 @@ package llm
 
 import (
 	"context"
-	"fmt"
 
 	"github.com/tsumina/dango/internal/mcpclient"
 )
@@ -71,9 +70,9 @@ func (t *mcpTool) Parameters() map[string]any {
 }
 
 func (t *mcpTool) Execute(ctx context.Context, arguments string) (string, error) {
-	if t.server == nil {
-		return "", fmt.Errorf("llm: mcp tool %q has no live server", t.Name())
-	}
+	// t.server is guaranteed non-nil: [MCPTools] is the only constructor
+	// and rejects a nil server before building any mcpTool. The server's
+	// own Call method handles the post-Close case with a typed error.
 	return t.server.Call(ctx, t.meta.Name, arguments)
 }
 

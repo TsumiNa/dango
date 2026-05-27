@@ -149,9 +149,12 @@ delta: {
 
 The full result body is **not** included. The matching
 `llm.tool_result.delta` event (which carries the truncated tool output for
-non-MCP tools) is suppressed for MCP tools by checking the adapter's
-`isMCPTool()` marker before emitting, so MCP results stay confined to the
-exchange / memo / handoff documents.
+non-MCP tools) is suppressed for MCP tools by the conversation: when
+emitting a result delta, it looks up the dispatched tool, type-asserts the
+unexported `mcpToolMarker` interface (`mcpServerName()` / `mcpToolName()`,
+forwarded through the `policyTool` wrapper), and on success swaps the
+result-delta emission for `mcp.tool.call.completed`. MCP results therefore
+stay confined to the exchange / memo / handoff documents.
 
 ## 7. Implementation split
 
@@ -167,12 +170,21 @@ independently verifiable through its own colocated tests.
 ## Startup listing and risk notice
 
 Per `50`, the runtime prints the mounted MCP servers and a one-line risk
-notice at startup. This is implemented in the orchestrator's
-`AddMCPServers` call path: it logs one INFO-level line per registered
-server (`name`, `command`, `tool_count`) and one WARN-level line stating
-that user-supplied MCP servers run as external processes with host
-privileges. The same WARN is emitted again if `Orchestrator.AddSkills` adds
-per-skill MCP servers.
+notice at startup. The orchestrator's `AddMCPServers` call path emits:
+
+- One INFO-level line per registered server with fields `server` (the
+  configured name) and `tools` (the number of tools the server
+  advertises). The launch command/args are intentionally omitted from
+  this log because they may carry secrets in arguments or environment
+  variables; the server name is the operator's identifier.
+- One WARN-level line stating that user-supplied MCP servers run as
+  external processes with host privileges.
+
+`Orchestrator.AddSkills` emits the same WARN (at most once per call) when
+any registration in the batch declares per-skill MCP servers. The WARN
+names the first such skill and the count of MCP servers attached, so
+batches mounting many skills with the same upstream server do not flood
+the log.
 
 ## Honshu observation
 

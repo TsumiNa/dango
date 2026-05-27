@@ -1,16 +1,19 @@
 // Package mcpclient is a thin wrapper around the official
 // github.com/modelcontextprotocol/go-sdk client.
 //
-// The package isolates the rest of dango from the SDK surface so the parent
-// llm package adapter can express MCP servers and tools through Go types it
-// owns (see llm/mcp.go). It is internal to internal/llm; outside callers go
-// through the public llm.MCPServer handle.
+// The package isolates the rest of dango from the SDK surface so individual
+// call sites do not depend on the upstream SDK directly. It lives at
+// internal/mcpclient (shared between internal/llm and internal/engine) so
+// the llm package can expose its [llm.MCPTools] adapter and the engine
+// package can register handles on the orchestrator without an extra
+// re-export layer. [Server] is the live handle every caller holds; there
+// is no further public wrapper in the llm package.
 //
-// A [Server] owns one live [mcp.ClientSession]. Construct one with [Start];
-// call [Server.Tools] to discover the server's tool catalogue and
-// [Server.Call] to dispatch a single tool call. [Server.Close] shuts down the
-// session, which closes stdin so a subprocess server can terminate cleanly
-// via the SDK's pipeRWC.Close path.
+// A [Server] owns one live [mcp.ClientSession]. Construct one with [Start]
+// (or [StartWithTransport] in tests); call [Server.Tools] to discover the
+// server's tool catalogue and [Server.Call] to dispatch a single tool call.
+// [Server.Close] shuts down the session, which closes stdin so a subprocess
+// server can terminate cleanly via the SDK's pipeRWC.Close path.
 //
 // Result handling concatenates the [mcp.CallToolResult.Content] entries into
 // a single string (text content verbatim; non-text content rendered as a
@@ -199,7 +202,15 @@ func (s *Server) Name() string {
 }
 
 // Tools returns a snapshot of the server's tool catalogue captured at
-// connect time. The returned slice is safe for the caller to mutate.
+// connect time.
+//
+// The returned slice is a fresh copy, so reordering or trimming it does not
+// affect future calls. However, each entry's InputSchema map is shared with
+// the Server's internal state — mutating that map will affect what later
+// callers see. Treat the schema as read-only or call [maps.Clone] yourself
+// before mutating. Tools the [llm.MCPTools] adapter produces are unaffected
+// because the [llm.Tool.Parameters] contract deep-clones the schema on
+// every call.
 func (s *Server) Tools() []ToolMetadata {
 	if s == nil {
 		return nil
