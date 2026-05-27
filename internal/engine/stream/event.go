@@ -58,6 +58,15 @@ const (
 
 	EventSkillMemoDelta  = "skill.memo.delta"
 	EventArtifactCreated = "artifact.created"
+
+	// EventMCPToolCallCompleted is the compact "an MCP tool call happened"
+	// notification published to the runtime stream. Per the MCP design plan
+	// (docs/mcp-support-plan.md §6), MCP tool results are surfaced through
+	// the exchange/memo/handoff documents rather than the stream, so this
+	// event carries only the call metadata (server, tool, namespaced name,
+	// call id, compact argument summary, outcome, optional error) without
+	// the full result body.
+	EventMCPToolCallCompleted = "mcp.tool.call.completed"
 )
 
 var (

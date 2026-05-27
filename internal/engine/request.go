@@ -561,6 +561,7 @@ func cloneSkillRegistrations(skills map[string]SkillRegistration) map[string]Ski
 			AccessibleDirs: append([]string(nil), cfg.AccessibleDirs...),
 			Client:         cfg.Client,
 			Config:         cloneConversationConfig(cfg.Config),
+			MCPServers:     append([]*llm.MCPServer(nil), cfg.MCPServers...),
 		}
 	}
 	return copyMap
