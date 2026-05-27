@@ -183,20 +183,23 @@ merges clean. None depends on the security model.
 
 ## File index
 
-| File | Subtask | Kind | Depends on |
-| --- | --- | --- | --- |
-| `20-git-allowlist.md` | `git` inspection (allowlist only) | code | — |
-| `21-artifact-catalog.md` | `artifact_catalog` tool | code | — |
-| `22-structured-preview.md` | `structured_preview` tool | code | — |
-| `30-bash-url-allowlist.md` | curl/wget egress opt-in | code | — |
-| `10-tool-security-model.md` | Unified security model | design | — |
-| `11-builtin-extras-enum.md` | Extras enum + config contract | code | 10 |
-| `12a-policy-enforcement.md` | Policy model + passby/off | code | 11 |
-| `12b-approval-flow.md` | `need_approve` round-trip | code | 12a (deferred) |
-| `40-skill-alias-and-conflicts.md` | Skill alias + conflict | code | — |
-| `50-mcp-design.md` | MCP support design | design | 10 |
-| `60-instrumentation.md` | Audit tag + trace analyzer | code | — |
-| `90-closeout.md` | Memo closeout | docs | all |
+| File | Subtask | Kind | Depends on | Status |
+| --- | --- | --- | --- | --- |
+| `20-git-allowlist.md` | `git` inspection (allowlist only) | code | — | Delivered (#87) |
+| `21-artifact-catalog.md` | `artifact_catalog` tool | code | — | Delivered (#88) |
+| `22-structured-preview.md` | `structured_preview` tool | code | — | Delivered (#89) |
+| `30-bash-url-allowlist.md` | curl/wget egress opt-in | code | — | Delivered (#94) |
+| `10-tool-security-model.md` | Unified security model | design | — | Accepted (consumed by 11/12a) |
+| `11-builtin-extras-enum.md` | Extras enum + config contract | code | 10 | Delivered (#92) |
+| `12a-policy-enforcement.md` | Policy model + passby/off | code | 11 | Delivered (#93) |
+| `12b-approval-flow.md` | `need_approve` round-trip | code | 12a | Deferred — waits for an interactive approver |
+| `40-skill-alias-and-conflicts.md` | Skill alias + conflict | code | — | Delivered (#96) |
+| `50-mcp-design.md` | MCP support design | design | 10 | Accepted (consumed by 51/52/53) |
+| `51-mcp-client.md` | MCP client wrapper | code | 50 | Delivered (#97) |
+| `52-mcp-adapter.md` | MCP tool adapter + stream event | code | 51 | Delivered (#97) |
+| `53-mcp-config-visibility.md` | MCP global / per-skill visibility | code | 52 | Delivered (#97) |
+| `60-instrumentation.md` | Audit tag + trace analyzer | code | — | Delivered (this PR) |
+| `90-closeout.md` | Memo closeout | docs | all | Delivered (this PR) |
 
 Retrofit (after `11`/`12a`): re-register `20`–`22` through the new
 config; *record* `git push` / `reset --hard` / `clean` / `rebase` as

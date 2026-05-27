@@ -71,6 +71,57 @@ security and research/autonomous-experiment coverage review. That memo
 records gaps to consider before adopting research-oriented skills; it is
 not a commitment to implement anything in this track.
 
+## Near-Term Plan (Completed)
+
+Status: Completed for the items in scope; the structural hardening track
+(post-alpha § 2.3 mitigations) and `12b` (interactive approver) remain
+deferred per their original gating conditions. See
+`docs/near_term_plan/` for the per-subtask files.
+
+Delivered sub-PRs (numeric prefix = `docs/near_term_plan/` file):
+
+- `20` (#87) — `git` added to the default bash allowlist for repo
+  inspection workflows.
+- `21` (#88) — `artifact_catalog` Go builtin reading
+  `downstream/artifacts/` plus handoff front-matter.
+- `22` (#89) — `structured_preview` Go builtin for top-level keys +
+  value-type counts on JSON/YAML.
+- `30` (#94) — opt-in bash URL allowlist for `curl` / `wget`.
+- `11` (#92) — extras-enum + tool-config reshape (`ToolSetConfig`).
+- `12a` (#93) — execution policy data model with `passby`/`off`
+  enforcement and bash command-pattern classification. `12b` remains
+  deferred until an interactive approver exists.
+- `40` (#96) — skill alias and conflict resolution at mount time.
+- `50` (#97) — MCP support: client wrapper, namespaced tool adapter,
+  orchestrator global + per-skill visibility, call-only stream event.
+- `60` and `90` (this PR) — audit-category tag on tool-call events with
+  `docs/tool-call-audit-schema.md` as the stability contract, the
+  `tools/analyze-tool-traces` utility (`just analyze-traces …`) for
+  per-run reports, and the closeout integration check that exercises
+  the delivered subtasks together.
+
+Resolved decisions:
+
+- **MCP packaging.** The `llm.MCPServer` wrapper proposed in `50` was
+  dropped in favour of exposing `mcpclient.Server` directly (see PR #97
+  refactor commit). Callers hold the raw handle; the `llm` package
+  provides only the `MCPTools(*mcpclient.Server) []llm.Tool` adapter.
+- **Audit pipeline filter.** Consumers should filter on
+  `metadata.category == "audit"` (the stable tag) rather than on an
+  event-type allowlist. The trace analyzer in
+  `tools/analyze-tool-traces` deliberately reads tool-call events
+  regardless of tag so legacy traces from before this PR landed are
+  still analyzable.
+
+Follow-up:
+
+- Post-alpha § 2.3 structural mitigations remain open.
+- `12b` interactive approver waits for the app/cmd cycle.
+- The honshu observation noted in `docs/near_term_plan/90` is
+  exercised via the cross-subtask integration test; subjective UX
+  observations are recorded in the relevant subtask files as they
+  arise.
+
 ## PR D - API Cleanup and Compatibility Review (Deferred)
 
 Status: Deferred for dedicated discussion.

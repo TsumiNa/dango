@@ -38,3 +38,13 @@ demo-debug request="Write a short project status update" data_dir=".dango-demo" 
 # Start the local orchestrator HTTP server.
 serve data_dir=".dango-demo" port="8080":
     GOCACHE=/tmp/dango-gocache GOMODCACHE=/tmp/dango-gomodcache go run ./cmd/dango orchestrator serve --data-dir {{quote(data_dir)}} --port {{port}}
+
+# Summarize a runner's stream-event log: bash command-head distribution,
+# inner-bodies of Turing-complete heads, per-skill tallies, curl/wget URLs.
+# Writes the markdown report to stdout (or `out_md`) plus an optional JSON
+# sidecar at `out_json`.
+analyze-traces jsonl out_md="" out_json="":
+    @test -n "{{jsonl}}" || { echo "usage: just analyze-traces <stream_events.jsonl> [out_md] [out_json]" >&2; exit 1; }
+    @md_flag=""; if [ -n "{{out_md}}" ]; then md_flag="-out {{quote(out_md)}}"; fi; \
+     json_flag=""; if [ -n "{{out_json}}" ]; then json_flag="-json {{quote(out_json)}}"; fi; \
+     GOCACHE=/tmp/dango-gocache GOMODCACHE=/tmp/dango-gomodcache go run ./tools/analyze-tool-traces $md_flag $json_flag {{quote(jsonl)}}
