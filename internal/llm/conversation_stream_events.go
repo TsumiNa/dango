@@ -137,12 +137,21 @@ func (c *Conversation) emitToolApprovalResolved(ctx context.Context, req Approva
 }
 
 func (c *Conversation) emitToolResult(ctx context.Context, callID string, output string, execErr error) {
+	name := c.toolNameForCallID(callID)
+	if server, mcpName := c.mcpDescriptorFor(name); server != "" {
+		// Per docs/mcp-support-plan.md §6, MCP tool results stay in the
+		// exchange/memo/handoff documents and are not written to the runtime
+		// stream. We emit only the compact MCP call event so a top-level
+		// caller still sees that a call happened.
+		c.emitMCPToolCall(ctx, callID, name, server, mcpName, execErr)
+		return
+	}
 	delta, truncated := compactConversationText(output)
 	payload := map[string]any{
 		"call_id": callID,
 		"output":  delta,
 	}
-	if name := c.toolNameForCallID(callID); name != "" {
+	if name != "" {
 		payload["name"] = name
 	}
 	if truncated {
@@ -152,6 +161,60 @@ func (c *Conversation) emitToolResult(ctx context.Context, callID string, output
 		payload["error"] = compactErrorText(execErr.Error())
 	}
 	c.emitStreamEvent(ctx, streampkg.EventLLMToolResultDelta, streamStatusForError(execErr), payload, nil)
+}
+
+// mcpDescriptorFor returns the MCP server and bare tool name when the tool
+// registered under name is an MCP-backed adapter, or empty strings when it
+// is not.
+func (c *Conversation) mcpDescriptorFor(name string) (string, string) {
+	if c == nil || name == "" {
+		return "", ""
+	}
+	tool, ok := c.toolByName[name]
+	if !ok {
+		return "", ""
+	}
+	m, ok := tool.(mcpToolMarker)
+	if !ok {
+		return "", ""
+	}
+	return m.mcpServerName(), m.mcpToolName()
+}
+
+// emitMCPToolCall publishes the compact MCP call event with the metadata the
+// design plan calls for (server, tool, namespaced name, call id, compact
+// argument summary, outcome, optional error) and never the result body.
+func (c *Conversation) emitMCPToolCall(ctx context.Context, callID, namespaced, server, tool string, execErr error) {
+	argsSummary, _ := compactJSONText(c.toolArgumentsForCallID(callID))
+	outcome := "ok"
+	if execErr != nil {
+		outcome = "error"
+	}
+	payload := map[string]any{
+		"server":            server,
+		"tool":              tool,
+		"namespaced_name":   namespaced,
+		"call_id":           callID,
+		"arguments_summary": argsSummary,
+		"outcome":           outcome,
+	}
+	if execErr != nil {
+		payload["error"] = compactErrorText(execErr.Error())
+	}
+	c.emitStreamEvent(ctx, streampkg.EventMCPToolCallCompleted, streamStatusForError(execErr), payload, nil)
+}
+
+func (c *Conversation) toolArgumentsForCallID(callID string) string {
+	if c == nil || callID == "" {
+		return ""
+	}
+	for i := len(c.turns) - 1; i >= 0; i-- {
+		turn := c.turns[i]
+		if turn.Role == RoleToolCall && turn.Tool != nil && turn.Tool.CallID == callID {
+			return turn.Tool.Arguments
+		}
+	}
+	return ""
 }
 
 func toolCallDelta(call ToolCall) map[string]any {

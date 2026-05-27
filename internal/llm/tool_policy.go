@@ -25,7 +25,7 @@ func wrapToolsWithPolicySet(tools []Tool, cfg ToolSetConfig) []Tool {
 		}
 		out[i] = &policyTool{
 			base:     tool,
-			ref:      capabilityRefForTool(tool.Name()),
+			ref:      capabilityRefForUnwrapped(tool),
 			policies: policies,
 		}
 	}
@@ -42,9 +42,39 @@ func capabilityRefForTool(name string) CapabilityRef {
 	return ToolCapability(name)
 }
 
+// capabilityRefForUnwrapped picks the policy key for tool, recognizing
+// MCP-backed tools so they land under CapabilityMCPTool instead of the
+// generic CapabilityTool bucket. Built-in extras / core tools still use
+// [capabilityRefForTool].
+func capabilityRefForUnwrapped(tool Tool) CapabilityRef {
+	if tool == nil {
+		return CapabilityRef{}
+	}
+	if m, ok := tool.(mcpToolMarker); ok && m.mcpToolName() != "" {
+		return MCPCapability(tool.Name())
+	}
+	return capabilityRefForTool(tool.Name())
+}
+
 func (t *policyTool) Name() string               { return t.base.Name() }
 func (t *policyTool) Description() string        { return t.base.Description() }
 func (t *policyTool) Parameters() map[string]any { return t.base.Parameters() }
+
+// mcpServerName / mcpToolName forward through the policy wrapper so the
+// conversation can still detect an MCP-backed tool after policy wrapping.
+func (t *policyTool) mcpServerName() string {
+	if m, ok := t.base.(mcpToolMarker); ok {
+		return m.mcpServerName()
+	}
+	return ""
+}
+
+func (t *policyTool) mcpToolName() string {
+	if m, ok := t.base.(mcpToolMarker); ok {
+		return m.mcpToolName()
+	}
+	return ""
+}
 
 func (t *policyTool) Execute(ctx context.Context, arguments string) (string, error) {
 	policy := t.resolvePolicy()

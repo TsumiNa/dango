@@ -12,6 +12,7 @@ import (
 	persistencepkg "github.com/tsumina/dango/internal/engine/runner/persistence"
 	streampkg "github.com/tsumina/dango/internal/engine/stream"
 	"github.com/tsumina/dango/internal/llm"
+	"github.com/tsumina/dango/internal/mcpclient"
 )
 
 // Orchestrator is a runner factory that bridges external user requests to
@@ -39,6 +40,8 @@ type Orchestrator struct {
 	queuedRunnerByID  map[string]*queuedRunner
 	queuedRunners     runnerStartQueue
 	nextQueueOrder    uint64
+	globalMCPServers  []*mcpclient.Server
+	mcpServerByName   map[string]*mcpclient.Server
 }
 
 // OrchestratorOption adjusts a constructed [Orchestrator] before it is returned.
@@ -174,6 +177,7 @@ func NewOrchestrator(opts ...OrchestratorOption) *Orchestrator {
 		runners:          make(map[string]*runnerpkg.Runner),
 		runningRunnerIDs: make(map[string]struct{}),
 		queuedRunnerByID: make(map[string]*queuedRunner),
+		mcpServerByName:  make(map[string]*mcpclient.Server),
 	}
 	for _, opt := range opts {
 		if opt != nil {
@@ -331,11 +335,11 @@ func (o *Orchestrator) configuredOrchestratorSkill(sk *llm.Skill) (*llm.Skill, e
 // bind step. Client and Config are forwarded unchanged to that bind step.
 type SkillRegistration struct {
 	// Skill is the lightweight unbound skill loaded from a skill directory.
-	Skill          *llm.Skill
+	Skill *llm.Skill
 	// Alias is an optional user-specified name to mount the skill under.
 	// If non-empty, the skill is registered and routed under this name,
 	// overriding the intrinsic name defined in the skill's manifest.
-	Alias          string
+	Alias string
 	// IsUserSupplied is true if the skill is explicitly loaded/supplied by the
 	// user. If false, it is treated as a default system-provided skill.
 	// This flag is used to prioritize user-supplied skills in case of name
@@ -345,9 +349,16 @@ type SkillRegistration struct {
 	// to access.
 	AccessibleDirs []string
 	// Client is the LLM client that the skill will use when bound.
-	Client         *llm.Client
+	Client *llm.Client
 	// Config is the conversation configuration details for the skill.
-	Config         llm.ConversationConfig
+	Config llm.ConversationConfig
+	// MCPServers are MCP servers visible only to this skill, in addition to
+	// the orchestrator-wide globals registered through
+	// [Orchestrator.AddMCPServers]. The orchestrator does not start, restart,
+	// or close these servers; the caller that supplied them owns their
+	// lifecycle. Tools are appended to the skill's tool set with the
+	// namespaced "<server>__<tool>" name.
+	MCPServers []*mcpclient.Server
 }
 
 // SetLogger replaces the Orchestrator logger.
@@ -453,6 +464,13 @@ func (o *Orchestrator) AddSkills(cfgs ...SkillRegistration) error {
 		return nil
 	}
 
+	// Snapshot the global MCP servers under the read lock so we can attach
+	// their tools to every skill being registered. Capturing this once also
+	// keeps registration deterministic if AddMCPServers is racing.
+	o.mu.RLock()
+	globalMCP := append([]*mcpclient.Server(nil), o.globalMCPServers...)
+	o.mu.RUnlock()
+
 	// Prepare and validate all new registrations outside the lock.
 	// This includes performing the heavy file system copying/tool preparation
 	// phase (SetAccessibleDirsAndBuiltinTools) for each new skill.
@@ -479,6 +497,13 @@ func (o *Orchestrator) AddSkills(cfgs ...SkillRegistration) error {
 			sk.Name = reg.Alias
 		}
 
+		if mcpTools := collectMCPTools(globalMCP, reg.MCPServers); len(mcpTools) > 0 {
+			sk, err = sk.AddTools(mcpTools...)
+			if err != nil {
+				return fmt.Errorf("orchestrate: add skill config %d: attach MCP tools: %w", i, err)
+			}
+		}
+
 		preparedNew = append(preparedNew, SkillRegistration{
 			Skill:          sk,
 			Alias:          reg.Alias,
@@ -486,6 +511,7 @@ func (o *Orchestrator) AddSkills(cfgs ...SkillRegistration) error {
 			AccessibleDirs: append([]string(nil), reg.AccessibleDirs...),
 			Client:         reg.Client,
 			Config:         cloneConversationConfig(reg.Config),
+			MCPServers:     append([]*mcpclient.Server(nil), reg.MCPServers...),
 		})
 	}
 
@@ -543,6 +569,19 @@ func (o *Orchestrator) AddSkills(cfgs ...SkillRegistration) error {
 		o.logger.Warn("orchestrate: skill name collision detected; user-supplied skill taking precedence. Assign an alias to disambiguate",
 			slog.String("name", name),
 		)
+	}
+	// Per docs/mcp-support-plan.md §5, every mount of a user-supplied MCP
+	// server should surface the same risk notice that AddMCPServers emits
+	// for globals. We log once per AddSkills call (not per server) to keep
+	// startup noise bounded when many skills declare the same server.
+	for _, reg := range preparedNew {
+		if len(reg.MCPServers) > 0 {
+			o.logger.Warn("orchestrate: per-skill MCP servers run as external processes with host privileges; risk is the user's to own",
+				slog.String("skill", reg.Skill.Name),
+				slog.Int("mcp_server_count", len(reg.MCPServers)),
+			)
+			break
+		}
 	}
 	return nil
 }

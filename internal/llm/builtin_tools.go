@@ -88,6 +88,18 @@ func (s *Skill) SetAccessibleDirsAndBuiltinTools(dirs ...string) (*Skill, error)
 	return copySkill, nil
 }
 
+// Tools returns a snapshot of the tools currently registered on s,
+// including built-in tools (when [Skill.SetAccessibleDirsAndBuiltinTools]
+// has been called) and any caller-supplied tools added with
+// [WithTools] / [Skill.AddTools]. The returned slice is safe for the caller
+// to mutate; the underlying [Tool] values remain shared.
+func (s *Skill) Tools() []Tool {
+	if s == nil {
+		return nil
+	}
+	return append([]Tool(nil), s.tools...)
+}
+
 func isBuiltinToolName(name string) bool {
 	switch name {
 	case "bash", "read_file", "write_file", "edit_file", "delete_file", "move_file", "grep", "pipeline_search_replace", "file_excerpt", "artifact_catalog", "structured_preview":

@@ -14,6 +14,7 @@ import (
 	persistencepkg "github.com/tsumina/dango/internal/engine/runner/persistence"
 	streampkg "github.com/tsumina/dango/internal/engine/stream"
 	"github.com/tsumina/dango/internal/llm"
+	"github.com/tsumina/dango/internal/mcpclient"
 	storepkg "github.com/tsumina/dango/internal/store"
 )
 
@@ -561,6 +562,7 @@ func cloneSkillRegistrations(skills map[string]SkillRegistration) map[string]Ski
 			AccessibleDirs: append([]string(nil), cfg.AccessibleDirs...),
 			Client:         cfg.Client,
 			Config:         cloneConversationConfig(cfg.Config),
+			MCPServers:     append([]*mcpclient.Server(nil), cfg.MCPServers...),
 		}
 	}
 	return copyMap
