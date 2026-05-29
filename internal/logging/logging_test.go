@@ -72,6 +72,36 @@ func TestNewLoggerNilOutputFallsBackToDiscard(t *testing.T) {
 	l.Info("hello")
 }
 
+func TestNewLoggerSuppressesSourceWhenAddSourceFalse(t *testing.T) {
+	t.Parallel()
+
+	var buf bytes.Buffer
+	l := NewLogger(Config{Level: slog.LevelInfo, Output: &buf, AddSource: false})
+	l.Info("hello", "k", "v")
+
+	out := buf.String()
+	if strings.Contains(out, ".go:") {
+		t.Fatalf("expected no source column for AddSource=false, got %q", out)
+	}
+	if !strings.Contains(out, "INF") || !strings.Contains(out, "hello") || !strings.Contains(out, "k=v") {
+		t.Fatalf("expected level/message/attrs to still render, got %q", out)
+	}
+}
+
+func TestZeroConfigDiffersFromDefaultConfigOnAddSource(t *testing.T) {
+	t.Parallel()
+
+	// Locks the doc-comment contract: zero Config has AddSource=false
+	// (Go bool default); DefaultConfig has AddSource=true. The reviewer
+	// (PR #101) caught an earlier doc that wrongly claimed parity.
+	if (Config{}).AddSource {
+		t.Fatal("Config{}.AddSource = true, want false (Go bool zero)")
+	}
+	if !DefaultConfig().AddSource {
+		t.Fatal("DefaultConfig().AddSource = false, want true")
+	}
+}
+
 func TestNewLoggerHonorsCustomLevel(t *testing.T) {
 	t.Parallel()
 

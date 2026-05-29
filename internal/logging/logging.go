@@ -10,9 +10,16 @@ import (
 
 // Config controls the slog logger built by [NewLogger]. The format is
 // intentionally not configurable; callers tune only the sink and the
-// minimum level. The zero value yields the same result as
-// [DefaultConfig]: a discard sink at info level with source reporting
-// enabled.
+// minimum level.
+//
+// The zero value is usable and produces a safe discard-backed logger
+// (Level slog.LevelInfo, Output nil → [io.Discard], AddSource false).
+// It is *not* identical to [DefaultConfig] — the only difference is
+// AddSource, which is false in the zero value (Go's bool default) and
+// true in [DefaultConfig] because the preset pretty handler is
+// designed around showing a source column. Callers that want the
+// source column with a fluent struct literal should either start from
+// [DefaultConfig] or set AddSource explicitly.
 type Config struct {
 	// Level selects the minimum severity emitted by the logger. The
 	// zero value (slog.LevelInfo) is the dango default.
@@ -28,10 +35,11 @@ type Config struct {
 	// derived loggers are serialized by the handler.
 	Output io.Writer
 
-	// AddSource toggles source-location reporting. Defaults to true
-	// because the preset pretty handler is designed around showing a
-	// source column. Set false to drop the column without losing the
-	// rest of the layout.
+	// AddSource toggles source-location reporting. The Go zero value
+	// is false (source column suppressed); [DefaultConfig] sets it to
+	// true because the preset pretty handler is designed around
+	// showing the source column. Set false to drop the column without
+	// losing the rest of the layout.
 	AddSource bool
 }
 
