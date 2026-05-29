@@ -6,183 +6,112 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
-	"strconv"
-	"strings"
 )
 
-// Config controls the process-wide slog logger setup shared by dango commands
-// and services.
+// Config controls the slog logger built by [NewLogger]. The format is
+// intentionally not configurable; callers tune only the sink and the
+// minimum level.
 //
-// CLI code typically starts from [DefaultConfig], optionally exposes these
-// fields through [Config.BindFlags], and then passes the resolved value to
-// [New]. The same Config is intended to drive both control-plane and
-// agent-side logging so all components share one service-level logging
-// policy.
+// The zero value is usable and produces a safe discard-backed logger
+// (Level slog.LevelInfo, Output nil → [io.Discard], AddSource false).
+// It is *not* identical to [DefaultConfig] — the only difference is
+// AddSource, which is false in the zero value (Go's bool default) and
+// true in [DefaultConfig] because the preset pretty handler is
+// designed around showing a source column. Callers that want the
+// source column with a fluent struct literal should either start from
+// [DefaultConfig] or set AddSource explicitly.
 type Config struct {
-	// Level selects the minimum severity emitted by the logger.
-	Level string
-	// Format selects the output encoding. Supported values are text and json.
-	Format string
-	// File optionally appends logs to a file in addition to stderr.
-	File string
-	// AddSource enables source location reporting in slog handlers.
+	// Level selects the minimum severity emitted by the logger. The
+	// zero value (slog.LevelInfo) is the dango default.
+	Level slog.Level
+
+	// Output selects the log sink. A nil Output is treated as
+	// [io.Discard] so callers that pass the zero Config still get a
+	// safe, side-effect-free logger.
+	//
+	// The Output writer is shared with the logger after construction;
+	// callers retain ownership and are responsible for closing
+	// file-backed writers (see [OpenFileSink]). Concurrent writes from
+	// derived loggers are serialized by the handler.
+	Output io.Writer
+
+	// AddSource toggles source-location reporting. The Go zero value
+	// is false (source column suppressed); [DefaultConfig] sets it to
+	// true because the preset pretty handler is designed around
+	// showing the source column. Set false to drop the column without
+	// losing the rest of the layout.
 	AddSource bool
 }
 
-// DefaultConfig returns the logging configuration derived from environment
-// variables and repository defaults.
-//
-// The returned value is suitable for further mutation through CLI flags before
-// it is passed to [New].
+// DefaultConfig returns the discard-by-default logging configuration:
+// info-level, output to [io.Discard], source reporting on. Callers
+// wanting log output point Output at [os.Stderr], an open file, or any
+// other [io.Writer] they own.
 func DefaultConfig() Config {
 	return Config{
-		Level:     firstNonEmpty(os.Getenv("DANGO_LOG_LEVEL"), "info"),
-		Format:    firstNonEmpty(os.Getenv("DANGO_LOG_FORMAT"), "text"),
-		File:      strings.TrimSpace(os.Getenv("DANGO_LOG_FILE")),
-		AddSource: parseBoolEnv(os.Getenv("DANGO_LOG_SOURCE")),
+		Level:     slog.LevelInfo,
+		Output:    io.Discard,
+		AddSource: true,
 	}
 }
 
-type flagBinder interface {
-	StringVar(p *string, name string, value string, usage string)
-	BoolVar(p *bool, name string, value bool, usage string)
-}
-
-// BindFlags exposes Config fields on fs.
+// NewLogger builds the dango slog logger from cfg.
 //
-// BindFlags is a no-op when c or fs is nil. The flags mutate the receiver in
-// place so later calls to [New] see the final resolved configuration after the
-// usual environment-defaults-then-flags layering used by dango commands.
-func (c *Config) BindFlags(fs flagBinder) {
-	if c == nil || fs == nil {
-		return
+// The returned logger always carries the service=dango base attribute
+// and uses the package's preset pretty handler (see handler.go). The
+// returned logger is never nil; a zero Config produces a usable
+// discard-backed logger.
+//
+// NewLogger keeps a reference to cfg.Output through the handler;
+// callers must keep that writer valid for the lifetime of the logger
+// and close any file-backed writers themselves (see [OpenFileSink]).
+func NewLogger(cfg Config) *slog.Logger {
+	output := cfg.Output
+	if output == nil {
+		output = io.Discard
 	}
-
-	fs.StringVar(&c.Level, "log-level", c.Level, "log level: debug|info|warn|error")
-	fs.StringVar(&c.Format, "log-format", c.Format, "log format: text|json")
-	fs.StringVar(&c.File, "log-file", c.File, "optional log file path")
-	fs.BoolVar(&c.AddSource, "log-source", c.AddSource, "include source locations in logs")
+	return slog.New(newPrettyHandler(output, cfg.Level, cfg.AddSource)).With("service", "dango")
 }
 
-// New constructs the shared slog logger used by dango services.
+// OpenFileSink opens path in append-write mode, creating parent
+// directories as needed, and returns the file as an [io.WriteCloser].
 //
-// New normalizes the requested level and format, optionally tees output to a
-// log file, auto-enables source locations for debug-level logging, and always
-// annotates the returned logger with the service=dango field. When cfg.File is
-// set, New also returns a closer for the opened log file, and the caller is
-// responsible for closing it.
-func New(stderr io.Writer, cfg Config) (*slog.Logger, io.Closer, error) {
-	writer := io.Writer(stderr)
-	if writer == nil {
-		writer = io.Discard
+// The caller owns the returned writer and must close it once the
+// logger using it is torn down. OpenFileSink is a convenience for the
+// common "log to <artifacts>/<run>/log" pattern; callers that need
+// rotation, compression, or fan-out should build their own sink and
+// pass it directly via [Config.Output].
+func OpenFileSink(path string) (io.WriteCloser, error) {
+	if path == "" {
+		return nil, fmt.Errorf("logging: file sink path must be non-empty")
 	}
-
-	var closer io.Closer
-	if strings.TrimSpace(cfg.File) != "" {
-		if err := os.MkdirAll(filepath.Dir(cfg.File), 0o755); err != nil {
-			return nil, nil, fmt.Errorf("create log directory for %q: %w", cfg.File, err)
-		}
-
-		file, err := os.OpenFile(cfg.File, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
-		if err != nil {
-			return nil, nil, fmt.Errorf("open log file %q: %w", cfg.File, err)
-		}
-
-		writer = io.MultiWriter(writer, file)
-		closer = file
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return nil, fmt.Errorf("logging: create log directory for %q: %w", path, err)
 	}
-
-	level, err := parseLevel(cfg.Level)
+	file, err := os.OpenFile(path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
 	if err != nil {
-		if closer != nil {
-			_ = closer.Close()
-		}
-		return nil, nil, err
+		return nil, fmt.Errorf("logging: open log file %q: %w", path, err)
 	}
-
-	if !cfg.AddSource && level <= slog.LevelDebug {
-		cfg.AddSource = true
-	}
-
-	options := &slog.HandlerOptions{
-		AddSource: cfg.AddSource,
-		Level:     level,
-	}
-
-	var handler slog.Handler
-	switch normalizeFormat(cfg.Format) {
-	case "json":
-		handler = slog.NewJSONHandler(writer, options)
-	case "text":
-		handler = slog.NewTextHandler(writer, options)
-	default:
-		if closer != nil {
-			_ = closer.Close()
-		}
-		return nil, nil, fmt.Errorf("unsupported log format %q", cfg.Format)
-	}
-
-	return slog.New(handler).With("service", "dango"), closer, nil
+	return file, nil
 }
 
-// From returns logger when it is non-nil, or a discard logger otherwise.
+// From returns logger when it is non-nil, or the discard logger from
+// [DefaultConfig] otherwise.
 //
-// It is the safe entrypoint used by helper functions such as [Component] when
-// callers may not have provided a logger yet.
+// It is the safe entry point used by helpers such as [Component] when
+// callers may not have wired a logger yet.
 func From(logger *slog.Logger) *slog.Logger {
 	if logger != nil {
 		return logger
 	}
-	return slog.New(slog.NewTextHandler(io.Discard, &slog.HandlerOptions{}))
+	return NewLogger(DefaultConfig())
 }
 
-// Component annotates logger with the provided component name.
+// Component annotates logger with component=name. Sub-packages derive
+// a subsystem-scoped logger from the single process-wide root logger
+// by calling Component at their entry points.
 //
-// Component never returns nil and is the standard way for packages to derive a
-// subsystem-specific logger from the process-wide base logger.
-func Component(logger *slog.Logger, component string) *slog.Logger {
-	return From(logger).With("component", component)
-}
-
-func parseLevel(value string) (slog.Level, error) {
-	switch strings.ToLower(strings.TrimSpace(value)) {
-	case "", "info":
-		return slog.LevelInfo, nil
-	case "debug":
-		return slog.LevelDebug, nil
-	case "warn", "warning":
-		return slog.LevelWarn, nil
-	case "error":
-		return slog.LevelError, nil
-	default:
-		return 0, fmt.Errorf("unsupported log level %q", value)
-	}
-}
-
-func normalizeFormat(value string) string {
-	switch strings.ToLower(strings.TrimSpace(value)) {
-	case "", "text", "console":
-		return "text"
-	case "json":
-		return "json"
-	default:
-		return strings.ToLower(strings.TrimSpace(value))
-	}
-}
-
-func parseBoolEnv(value string) bool {
-	parsed, err := strconv.ParseBool(strings.TrimSpace(value))
-	if err != nil {
-		return false
-	}
-	return parsed
-}
-
-func firstNonEmpty(values ...string) string {
-	for _, value := range values {
-		if strings.TrimSpace(value) != "" {
-			return value
-		}
-	}
-	return ""
+// Component never returns nil; a nil logger falls through [From].
+func Component(logger *slog.Logger, name string) *slog.Logger {
+	return From(logger).With("component", name)
 }
