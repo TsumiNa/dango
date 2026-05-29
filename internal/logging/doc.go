@@ -1,23 +1,41 @@
-// Package logging provides the shared structured logging setup used by dango
-// commands and services.
+// Package logging provides dango's preset slog logger and the single
+// integration point through which the orchestrator, runner, and agent
+// receive their lifecycle logger.
 //
-// The package exists so that the CLI, orchestrator, runner, runtime, and
-// agent layers all speak the same slog dialect. [Config] describes the
-// externally visible logging knobs, [DefaultConfig] reads their defaults from
-// the environment, [Config.BindFlags] exposes them on command-line flag sets,
-// and [New] turns the resolved configuration into a logger plus an optional log
-// file closer. Helper functions such as [From] and [Component] let downstream
-// packages safely reuse or annotate loggers without each package having to
-// rebuild handler configuration.
+// The package exposes a small surface:
 //
-// The usual workflow starts in the CLI package: load [DefaultConfig], let the
-// command bind or override flags, call [New], and pass the resulting logger
-// into the packages that perform registry, planning, scheduling, or execution
-// work. Those packages then derive component-scoped loggers with [Component] so
-// one process-wide configuration still produces package-specific fields.
+//   - [Config] — the only public knob set callers may tune. Only sink
+//     (Output) and minimum level are configurable; the output format
+//     is owned by the package and not exposed.
+//   - [DefaultConfig] — discard-by-default configuration that callers
+//     start from when they have no explicit log policy.
+//   - [NewLogger] — builds the *slog.Logger from a Config, wires the
+//     preset pretty handler, and annotates with the service=dango base
+//     attribute. The returned logger is never nil.
+//   - [OpenFileSink] — convenience for opening an append-mode file
+//     suitable as Config.Output. The caller owns close.
+//   - [From] / [Component] — safe accessors used by sub-packages to
+//     derive a component-scoped logger from the single root logger
+//     without re-solving handler setup.
 //
-// This package deliberately owns configuration and handler construction, not
-// lifecycle policy. It standardizes format selection, source reporting, and
-// optional file teeing so the rest of the system can focus on emitting useful
-// events instead of re-solving logger setup.
+// The intended wiring is one call at the top of the program:
+//
+//	logger := logging.NewLogger(logging.Config{
+//	    Level:  slog.LevelInfo,
+//	    Output: os.Stderr,
+//	})
+//	o := orchestrate.NewOrchestrator(orchestrate.WithLogger(logger))
+//
+// The orchestrator propagates the same logger to every runner it
+// constructs and, transitively, to every agent each runner builds.
+// Callers that do not wire a logger get the discard default — the
+// logging.DefaultConfig sink is [io.Discard], so an unconfigured
+// service emits no log output. This matches the "redirect to
+// /dev/null" default behavior the rest of dango assumes.
+//
+// This package deliberately owns format and handler construction, not
+// lifecycle policy. It does not read environment variables, does not
+// bind flags, and does not own file lifetimes. A future CLI binary
+// that wants envvar/flag-driven configuration owns that mapping and
+// passes a built Config into [NewLogger].
 package logging
