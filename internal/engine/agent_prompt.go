@@ -63,9 +63,7 @@ func (e *Agent) stagePrompt(stage string, task string) string {
 func (e *Agent) stagePromptWithUpstreamReferences(stage string, task string, upstreamRefs []string) string {
 	note, err := builtininstructions.StageNote(stage)
 	if err != nil {
-		if e.logger != nil {
-			e.logger.Warn("failed to load agent stage note", "stage", stage, "error", err)
-		}
+		e.logger.Warn("failed to load agent stage note", "stage", stage, "error", err)
 		note = "# " + stage + " stage"
 	}
 	var b strings.Builder

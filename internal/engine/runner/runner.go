@@ -11,6 +11,7 @@ import (
 	"github.com/lithammer/shortuuid/v4"
 	streampkg "github.com/tsumina/dango/internal/engine/stream"
 	"github.com/tsumina/dango/internal/llm"
+	"github.com/tsumina/dango/internal/logging"
 )
 
 // Runner is the execution engine that drives a [CoarsePlan] through its
@@ -95,7 +96,7 @@ func New(opts ...Option) *Runner {
 	r := &Runner{
 		ctx:               context.Background(),
 		id:                id,
-		logger:            slog.Default(),
+		logger:            logging.NewLogger(logging.DefaultConfig()),
 		eventStream:       streampkg.New(streampkg.Scope{RunnerID: id}, streampkg.DefaultConfig()),
 		state:             RunnerState{Status: RunnerStatusPending},
 		phase:             PhaseCreated,

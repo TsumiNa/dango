@@ -3,7 +3,8 @@ package engine
 import (
 	"context"
 	"errors"
-	"log/slog"
+	"io"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -21,14 +22,55 @@ func TestNewOrchestrator_ReturnsIndependentInstances(t *testing.T) {
 	if o1 == o2 {
 		t.Fatal("NewOrchestrator() returned the same instance twice")
 	}
-	if o1.logger != slog.Default() {
-		t.Fatalf("logger = %p, want %p", o1.logger, slog.Default())
+	if o1.logger == nil {
+		t.Fatal("NewOrchestrator should install a non-nil default logger")
+	}
+}
+
+func TestOrchestratorDefaultsToDiscardLogger(t *testing.T) {
+	// Capture stderr to detect any side-effect writes from the default
+	// logger; if the orchestrator's discard default leaks through, this
+	// pipe will see bytes.
+	stderr := os.Stderr
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("os.Pipe: %v", err)
+	}
+	os.Stderr = w
+	t.Cleanup(func() {
+		os.Stderr = stderr
+		_ = r.Close()
+	})
+
+	o := NewOrchestrator(WithOrchestratorContext(context.Background()))
+	// Exercise the default logger through a runner-side path that would
+	// have hit a nil-guard previously; logger should be usable and
+	// produce no observable output.
+	o.logger.Info("smoke", "k", "v")
+	o.logger.Warn("smoke")
+	o.logger.Error("smoke")
+
+	if err := w.Close(); err != nil {
+		t.Fatalf("close pipe writer: %v", err)
+	}
+	bytesReadCh := make(chan []byte, 1)
+	go func() {
+		buf, _ := io.ReadAll(r)
+		bytesReadCh <- buf
+	}()
+	select {
+	case got := <-bytesReadCh:
+		if len(got) != 0 {
+			t.Fatalf("expected discard-default logger to write nothing to stderr, got %q", got)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out reading captured stderr")
 	}
 }
 
 func TestNewOrchestrator_UsesProvidedContext(t *testing.T) {
 	baseCtx, cancel := context.WithCancel(context.Background())
-	o := NewOrchestrator(WithOrchestratorContext(baseCtx), WithOrchestratorLogger(testLogger))
+	o := NewOrchestrator(WithOrchestratorContext(baseCtx), WithLogger(testLogger))
 	ctx := o.operationContext(context.WithValue(context.Background(), testContextKey("key"), "value"))
 	cancel()
 	select {
@@ -45,7 +87,7 @@ func TestNewOrchestrator_UsesProvidedContext(t *testing.T) {
 }
 
 func TestOperationContext_ReturnsAlreadyMergedContext(t *testing.T) {
-	o := NewOrchestrator(WithOrchestratorContext(context.Background()), WithOrchestratorLogger(testLogger))
+	o := NewOrchestrator(WithOrchestratorContext(context.Background()), WithLogger(testLogger))
 	ctx := o.operationContext(context.WithValue(context.Background(), testContextKey("key"), "value"))
 	if got := o.operationContext(ctx); got != ctx {
 		t.Fatalf("operationContext(already merged) = %T %p, want original %T %p", got, got, ctx, ctx)
@@ -77,17 +119,26 @@ func TestMergedContextErrKeepsFirstCancellationReason(t *testing.T) {
 	}
 }
 
-func TestSetLogger_NilRestoresDefaultLogger(t *testing.T) {
+func TestSetLogger_NilRestoresDiscardDefault(t *testing.T) {
 	o := NewOrchestrator(WithOrchestratorContext(context.Background()))
-	if err := o.SetLogger(newDiscardLogger()); err != nil {
+	custom := newDiscardLogger()
+	if err := o.SetLogger(custom); err != nil {
 		t.Fatalf("SetLogger(custom): %v", err)
+	}
+	if o.logger != custom {
+		t.Fatalf("SetLogger(custom) did not install the provided logger")
 	}
 	if err := o.SetLogger(nil); err != nil {
 		t.Fatalf("SetLogger(nil): %v", err)
 	}
-	if got := o.logger; got != slog.Default() {
-		t.Fatalf("logger after nil reset = %p, want %p", got, slog.Default())
+	if o.logger == nil {
+		t.Fatal("SetLogger(nil) left the orchestrator without a logger; expected a discard fallback")
 	}
+	if o.logger == custom {
+		t.Fatal("SetLogger(nil) did not replace the previously installed custom logger")
+	}
+	// The fallback must be usable.
+	o.logger.Info("ok")
 }
 
 type testContextKey string

@@ -142,9 +142,6 @@ func startRequestEventLogPersistence(ctx context.Context, logger *slog.Logger, r
 	if requestStream == nil || eventLog == nil {
 		return nil
 	}
-	if logger == nil {
-		logger = slog.Default()
-	}
 	sub, err := requestStream.Subscribe(streampkg.Filter{}, streampkg.WithRawStream(), streampkg.WithNoReplay(), streampkg.WithSubscriberBuffer(8192))
 	if err != nil {
 		return fmt.Errorf("orchestrate: subscribe request event log: %w", err)

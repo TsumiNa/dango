@@ -12,6 +12,7 @@ import (
 	persistencepkg "github.com/tsumina/dango/internal/engine/runner/persistence"
 	streampkg "github.com/tsumina/dango/internal/engine/stream"
 	"github.com/tsumina/dango/internal/llm"
+	"github.com/tsumina/dango/internal/logging"
 	"github.com/tsumina/dango/internal/mcpclient"
 )
 
@@ -61,13 +62,18 @@ func WithOrchestratorContext(ctx context.Context) OrchestratorOption {
 	}
 }
 
-// WithOrchestratorLogger installs logger as the Orchestrator's lifecycle
-// logger.
+// WithLogger installs logger as the Orchestrator's lifecycle logger.
+//
+// The same logger is propagated to every [runner.Runner] the Orchestrator
+// constructs and, transitively, to every [Agent] each Runner builds. Callers
+// install one logger here instead of separately on runner and agent.
 //
 // The Orchestrator keeps a reference to logger. slog.Logger values are safe for
 // concurrent use; callers that wrap a handler with additional mutable state are
-// responsible for that handler's synchronization.
-func WithOrchestratorLogger(logger *slog.Logger) OrchestratorOption {
+// responsible for that handler's synchronization. If WithLogger is not used,
+// the Orchestrator runs with the discard logger from
+// [logging.DefaultConfig].
+func WithLogger(logger *slog.Logger) OrchestratorOption {
 	return func(o *Orchestrator) {
 		if logger != nil {
 			o.logger = logger
@@ -171,7 +177,7 @@ func (o *Orchestrator) SetClient(client *llm.Client) error {
 func NewOrchestrator(opts ...OrchestratorOption) *Orchestrator {
 	o := &Orchestrator{
 		ctx:              context.Background(),
-		logger:           slog.Default(),
+		logger:           logging.NewLogger(logging.DefaultConfig()),
 		runnerPathRule:   persistencepkg.DefaultPathRule,
 		skills:           make(map[string]SkillRegistration),
 		runners:          make(map[string]*runnerpkg.Runner),
@@ -363,12 +369,12 @@ type SkillRegistration struct {
 
 // SetLogger replaces the Orchestrator logger.
 //
-// Passing nil restores slog.Default so the Orchestrator and any runner it
-// assembles remain usable. It can only be called before the first planning
-// call.
+// Passing nil restores the discard logger from [logging.DefaultConfig] so the
+// Orchestrator and any runner it assembles remain usable. It can only be called
+// before the first planning call.
 func (o *Orchestrator) SetLogger(logger *slog.Logger) error {
 	if logger == nil {
-		logger = slog.Default()
+		logger = logging.NewLogger(logging.DefaultConfig())
 	}
 	o.mu.Lock()
 	defer o.mu.Unlock()

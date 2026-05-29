@@ -40,9 +40,11 @@ func WithContext(ctx context.Context) Option {
 
 // WithLogger installs logger as the Runner's lifecycle logger.
 //
-// The Runner keeps a reference to logger. slog.Logger values are safe for
-// concurrent use; callers that wrap a handler with additional mutable state are
-// responsible for that handler's synchronization.
+// In normal use the orchestrator injects its own logger when it constructs
+// each Runner; calling WithLogger directly is the test-only path. The Runner
+// keeps a reference to logger. slog.Logger values are safe for concurrent use;
+// callers that wrap a handler with additional mutable state are responsible
+// for that handler's synchronization.
 func WithLogger(logger *slog.Logger) Option {
 	return func(r *Runner) {
 		if logger != nil {

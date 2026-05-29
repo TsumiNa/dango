@@ -8,6 +8,7 @@ import (
 	runnerpkg "github.com/tsumina/dango/internal/engine/runner"
 	streampkg "github.com/tsumina/dango/internal/engine/stream"
 	"github.com/tsumina/dango/internal/llm"
+	"github.com/tsumina/dango/internal/logging"
 )
 
 // Status reports the lifecycle state of an [Agent].
@@ -84,12 +85,20 @@ type AgentOption func(*Agent)
 
 // WithAgentLogger installs logger as the Agent's lifecycle logger.
 //
+// Orchestrator-built agents receive the orchestrator's logger automatically;
+// tests use this option directly to inject a buffer-backed logger. The option
+// is named separately from the orchestrator's [WithLogger] because Go does
+// not allow two functions named WithLogger in the same package even when
+// their option types differ.
+//
 // The Agent keeps a reference to logger. slog.Logger values are safe for
 // concurrent use; callers that wrap a handler with additional mutable state are
 // responsible for that handler's synchronization.
 func WithAgentLogger(logger *slog.Logger) AgentOption {
 	return func(e *Agent) {
-		e.logger = logger
+		if logger != nil {
+			e.logger = logger
+		}
 	}
 }
 
@@ -117,6 +126,7 @@ func NewAgent(sk *llm.Skill, planner *ExecutionPlanner, cfg llm.ConversationConf
 		return nil, fmt.Errorf("orchestrate: agent requires a non-nil planner")
 	}
 	e := &Agent{
+		logger:     logging.NewLogger(logging.DefaultConfig()),
 		skill:      sk,
 		planner:    planner,
 		bindConfig: cloneConversationConfig(cfg),
@@ -127,9 +137,7 @@ func NewAgent(sk *llm.Skill, planner *ExecutionPlanner, cfg llm.ConversationConf
 			opt(e)
 		}
 	}
-	if e.logger != nil {
-		e.logger.Info("Creating a new Agent")
-	}
+	e.logger.Info("Creating a new Agent")
 	return e, nil
 }
 
@@ -289,8 +297,5 @@ func (e *Agent) captureResult(output any) {
 }
 
 func (e *Agent) logf(format string, args ...any) {
-	if e.logger == nil {
-		return
-	}
 	e.logger.Debug(fmt.Sprintf(format, args...))
 }

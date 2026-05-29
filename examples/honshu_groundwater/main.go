@@ -18,6 +18,7 @@ import (
 	runnerpkg "github.com/tsumina/dango/internal/engine/runner"
 	streampkg "github.com/tsumina/dango/internal/engine/stream"
 	"github.com/tsumina/dango/internal/llm"
+	"github.com/tsumina/dango/internal/logging"
 	storepkg "github.com/tsumina/dango/internal/store"
 	runtimepkg "github.com/tsumina/dango/internal/store/runtime"
 	"github.com/tsumina/dango/internal/streamrender"
@@ -103,7 +104,7 @@ func runHonshuGroundwaterExample(ctx context.Context, cfg exampleConfig) (_ *exa
 	}
 	logger := cfg.Logger
 	if logger == nil {
-		logger = slog.New(slog.NewTextHandler(io.Discard, nil))
+		logger = logging.NewLogger(logging.DefaultConfig())
 	}
 	artifactsDir := cfg.ArtifactsDir
 	if artifactsDir == "" {
@@ -144,7 +145,7 @@ func runHonshuGroundwaterExample(ctx context.Context, cfg exampleConfig) (_ *exa
 	)
 	orchestrator := orchestrate.NewOrchestrator(
 		orchestrate.WithOrchestratorContext(ctx),
-		orchestrate.WithOrchestratorLogger(logger),
+		orchestrate.WithLogger(logger),
 		orchestrate.WithPersistence(persistence.Backend()),
 	)
 	if cfg.LLMClient != nil {
@@ -270,7 +271,11 @@ func newExampleLogger(out io.Writer, level string) (*slog.Logger, error) {
 	default:
 		return nil, fmt.Errorf("invalid log level %q; use debug, info, warn, or error", level)
 	}
-	return slog.New(slog.NewTextHandler(out, &slog.HandlerOptions{Level: slogLevel})), nil
+	return logging.NewLogger(logging.Config{
+		Level:     slogLevel,
+		Output:    out,
+		AddSource: true,
+	}), nil
 }
 
 func createArtifactLog(artifactsDir string, name string) (*os.File, string, error) {
