@@ -14,6 +14,10 @@ import (
 
 // singleLineRE matches one pretty-formatted record without ANSI escapes:
 // "HH:MM:SS.mmm  LVL  <src>:<line>  <message and attrs>".
+//
+// Only matches records emitted with addSource=true; the regex requires
+// the source column. Callers asserting on addSource=false output should
+// build a separate regex.
 var singleLineRE = regexp.MustCompile(`^\d{2}:\d{2}:\d{2}\.\d{3}\s+(DBG|INF|WRN|ERR)\s+\S+:\d+\s+\S.*$`)
 
 func TestPrettyHandlerWritesSingleLine(t *testing.T) {
@@ -149,5 +153,85 @@ func TestPrettyHandlerQuotesValuesWithSpaces(t *testing.T) {
 	}
 	if !strings.Contains(out, "plain=ok") {
 		t.Fatalf("expected unquoted plain value, got %q", out)
+	}
+}
+
+func TestPrettyHandlerQuotesControlChars(t *testing.T) {
+	t.Parallel()
+
+	var buf bytes.Buffer
+	l := slog.New(newPrettyHandler(&buf, slog.LevelInfo, false))
+	l.Info("m", "tab", "a\tb", "newline", "x\ny", "empty", "")
+
+	out := buf.String()
+	if !strings.Contains(out, `tab="a\tb"`) {
+		t.Fatalf("expected escaped tab value, got %q", out)
+	}
+	if !strings.Contains(out, `newline="x\ny"`) {
+		t.Fatalf("expected escaped newline value, got %q", out)
+	}
+	if !strings.Contains(out, `empty=""`) {
+		t.Fatalf("expected quoted empty value, got %q", out)
+	}
+}
+
+func TestPrettyHandlerEscapesNewlinesInMessage(t *testing.T) {
+	t.Parallel()
+
+	var buf bytes.Buffer
+	l := slog.New(newPrettyHandler(&buf, slog.LevelInfo, false))
+	l.Info("line1\nline2\rline3")
+
+	out := buf.String()
+	if strings.Count(out, "\n") != 1 {
+		t.Fatalf("expected exactly one trailing newline (single-line record), got %q", out)
+	}
+	if !strings.Contains(out, `line1\nline2\rline3`) {
+		t.Fatalf("expected backslash-escaped CR/LF in message, got %q", out)
+	}
+}
+
+func TestPrettyHandlerOmitsSourceWhenNoPC(t *testing.T) {
+	t.Parallel()
+
+	var buf bytes.Buffer
+	h := newPrettyHandler(&buf, slog.LevelInfo, true)
+	// PC=0 means "no source available"; the source column should be skipped.
+	rec := slog.NewRecord(time.Now(), slog.LevelInfo, "hello", 0)
+	if err := h.Handle(context.Background(), rec); err != nil {
+		t.Fatalf("Handle: %v", err)
+	}
+
+	out := buf.String()
+	if strings.Contains(out, ".go:") {
+		t.Fatalf("expected no source column for zero PC, got %q", out)
+	}
+	if !strings.Contains(out, "INF") || !strings.Contains(out, "hello") {
+		t.Fatalf("expected level + message even without source, got %q", out)
+	}
+}
+
+// logValuerThatResolvesToGroup is a slog.LogValuer that resolves to a
+// group value. Without Resolve() at the top of writeAttr, the handler
+// would emit the unresolved LogValuer form and never expand the group.
+type logValuerThatResolvesToGroup struct{ a, b string }
+
+func (lv logValuerThatResolvesToGroup) LogValue() slog.Value {
+	return slog.GroupValue(slog.String("a", lv.a), slog.String("b", lv.b))
+}
+
+func TestPrettyHandlerResolvesLogValuer(t *testing.T) {
+	t.Parallel()
+
+	var buf bytes.Buffer
+	l := slog.New(newPrettyHandler(&buf, slog.LevelInfo, false))
+	l.Info("m", "outer", logValuerThatResolvesToGroup{a: "1", b: "2"})
+
+	out := buf.String()
+	if !strings.Contains(out, "outer.a=1") {
+		t.Fatalf("expected expanded outer.a=1 from LogValuer-to-group, got %q", out)
+	}
+	if !strings.Contains(out, "outer.b=2") {
+		t.Fatalf("expected expanded outer.b=2 from LogValuer-to-group, got %q", out)
 	}
 }

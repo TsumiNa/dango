@@ -186,38 +186,46 @@ HH:MM:SS.mmm  LVL  pkg/file.go:123  message     key=value key=value
 
 - Timestamp: local time, millisecond precision. Width 12.
 - Level: 3-letter uppercase (`DBG`, `INF`, `WRN`, `ERR`), color-coded.
-- Source: short path relative to the module root when possible
-  (e.g. `internal/engine/runner/runner.go:487`), trimmed to the last
-  two path segments to keep the column narrow. Falls back to bare
-  `file:line` if the trim fails.
-- Message: plain text. Multiline messages are indented under the
-  source column on continuation lines.
+- Source: full module-relative path with the
+  `github.com/tsumina/dango/` prefix stripped (e.g.
+  `internal/engine/runner/runner.go:487`). Falls back to a best-effort
+  trim at the last `/dango/` segment, then to the raw frame path if
+  neither matches. Source segment is omitted entirely when the record
+  has no PC.
+- Message: CR/LF are backslash-escaped (`\n`, `\r`) so a multi-line
+  message stays one physical log line. Callers wanting structured
+  multi-line context should put it in attribute values.
 - Attributes: rendered after the message, space-separated `k=v`,
-  with values quoted only when they contain spaces, equals signs, or
-  control chars.
+  with values quoted (Go-syntax) only when they contain spaces, equals
+  signs, double quotes, or control chars; empty strings render as
+  `key=""`.
 
 ### 5.3 Color policy
 
-- Colors are applied via `lipgloss` styles, but only when the resolved
-  `Output` writer is detected as a TTY (`term.IsTerminal` on `*os.File`,
-  fall back to "no color" for any other writer).
-- Level palette: `DBG` dim grey, `INF` blue, `WRN` yellow, `ERR` red.
-  Source path uses a subtle dim style; attribute keys are dim, values
-  inherit terminal default.
-- File sinks never receive ANSI escapes; the same handler instance
-  checks the writer once at construction.
+- Colors are applied via a `lipgloss.Renderer` **bound to the resolved
+  `Output` writer** (not the package-global renderer), so the profile
+  decision targets the same sink `detectColor` inspected. Profile is
+  forced to `termenv.ANSI256` when the writer is a TTY-backed `*os.File`
+  and to `termenv.Ascii` otherwise; the same handler decides once at
+  construction.
+- Level palette: `DBG` dim grey, `INF` blue, `WRN` yellow, `ERR` red
+  bold. Source path uses a subtle dim style; attribute keys are dim,
+  values inherit terminal default.
+- File sinks and any non-`*os.File` writers never receive ANSI escapes
+  because the Ascii profile makes `Render` a no-op.
 
 ### 5.4 Handler implementation sketch
 
 ```go
 // internal/logging/handler.go
 type prettyHandler struct {
+    mu        *sync.Mutex
     w         io.Writer
     level     slog.Leveler
     addSource bool
-    color     bool
     attrs     []slog.Attr
     groups    []string
+    styles    levelStyles // lipgloss styles bound to a writer-scoped renderer
 }
 
 func newPrettyHandler(w io.Writer, level slog.Leveler, addSource bool) slog.Handler
@@ -230,13 +238,20 @@ func (h *prettyHandler) WithGroup(name string) slog.Handler
 Behavioral notes:
 
 - `Handle` builds the line into a pooled `bytes.Buffer`, writes it in
-  one `Write`. Concurrent emits are serialized by a small `sync.Mutex`
-  on the underlying writer to avoid interleaved bytes.
+  one `Write`. Concurrent emits are serialized by a shared `*sync.Mutex`
+  that derived handlers (`WithAttrs`/`WithGroup`) inherit so all writers
+  to the same sink serialize together.
 - Source resolution uses `runtime.CallersFrames` on `r.PC`. Trim to the
   module's repo root by string-stripping the known prefix
-  `github.com/tsumina/dango/`.
+  `github.com/tsumina/dango/`; falls back to a best-effort
+  `LastIndex("/dango/")` trim, then to the raw path.
+- `writeAttr` calls `a.Value.Resolve()` before inspecting `Kind` so
+  custom types that implement `slog.LogValuer` (including ones that
+  resolve to groups) are expanded per the slog handler contract.
 - `WithAttrs`/`WithGroup` accumulate into the returned handler so
-  `slog.Logger.With(...)` works as expected.
+  `slog.Logger.With(...)` works as expected. Bound attrs are
+  pre-prefixed with the groups active at bind time; later `WithGroup`
+  calls do not retroactively re-prefix earlier-bound attrs.
 
 ## 6. Files, tests, implementation order
 
@@ -252,11 +267,11 @@ For a successful runner-start sequence with `Output=os.Stderr` on a
 TTY (colors stripped here for plain text):
 
 ```
-14:02:11.482  INF  engine/orchestrator.go:128  starting runner  runner_id=ru_4f3a service=dango
-14:02:11.483  INF  engine/runner/runner.go:487 Starting execution engine event loop...  runner_id=ru_4f3a component=runner service=dango
-14:02:11.501  DBG  engine/agent.go:131         Creating a new Agent  node_id=plan-0 skill=elevation_lookup service=dango
-14:02:12.044  WRN  engine/runner/runner.go:612 retrying transient error  node_id=plan-0 attempt=2 service=dango
-14:02:12.811  ERR  engine/runner/runner.go:652 Node execution failed, terminating chain.  node_id=plan-0 error="bind skill: ..." service=dango
+14:02:11.482  INF  internal/engine/orchestrator.go:128  starting runner runner_id=ru_4f3a service=dango
+14:02:11.483  INF  internal/engine/runner/runner.go:487  Starting execution engine event loop... runner_id=ru_4f3a component=runner service=dango
+14:02:11.501  DBG  internal/engine/agent.go:131  Creating a new Agent node_id=plan-0 skill=elevation_lookup service=dango
+14:02:12.044  WRN  internal/engine/runner/runner.go:612  retrying transient error node_id=plan-0 attempt=2 service=dango
+14:02:12.811  ERR  internal/engine/runner/runner.go:652  Node execution failed, terminating chain. node_id=plan-0 error="bind skill: ..." service=dango
 ```
 
 The same emit, written to a file sink (no TTY), is byte-identical minus

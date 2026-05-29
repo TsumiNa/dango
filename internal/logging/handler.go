@@ -12,6 +12,7 @@ import (
 	"sync"
 
 	"github.com/charmbracelet/lipgloss"
+	"github.com/muesli/termenv"
 	"golang.org/x/term"
 )
 
@@ -27,7 +28,9 @@ var bufferPool = sync.Pool{
 // prettyHandler emits dango's compact single-line slog format:
 // "HH:MM:SS.mmm  LVL  pkg/file.go:NN  message  k=v ...".
 //
-// Color is decided once at construction by inspecting the writer. The
+// Color is decided once at construction by inspecting the writer and
+// forced onto a writer-bound lipgloss.Renderer so styling targets the
+// detected sink rather than the package-global stdout profile. The
 // underlying writer is protected by a mutex shared across all derived
 // handlers so concurrent emits do not interleave.
 type prettyHandler struct {
@@ -35,7 +38,6 @@ type prettyHandler struct {
 	w         io.Writer
 	level     slog.Leveler
 	addSource bool
-	color     bool
 	attrs     []slog.Attr
 	groups    []string
 	styles    levelStyles
@@ -50,28 +52,35 @@ type levelStyles struct {
 	key lipgloss.Style
 }
 
-func newLevelStyles() levelStyles {
+func newLevelStyles(r *lipgloss.Renderer) levelStyles {
 	return levelStyles{
-		dbg: lipgloss.NewStyle().Foreground(lipgloss.Color("245")),
-		inf: lipgloss.NewStyle().Foreground(lipgloss.Color("39")),
-		wrn: lipgloss.NewStyle().Foreground(lipgloss.Color("214")),
-		err: lipgloss.NewStyle().Foreground(lipgloss.Color("196")).Bold(true),
-		src: lipgloss.NewStyle().Foreground(lipgloss.Color("245")),
-		key: lipgloss.NewStyle().Foreground(lipgloss.Color("245")),
+		dbg: r.NewStyle().Foreground(lipgloss.Color("245")),
+		inf: r.NewStyle().Foreground(lipgloss.Color("39")),
+		wrn: r.NewStyle().Foreground(lipgloss.Color("214")),
+		err: r.NewStyle().Foreground(lipgloss.Color("196")).Bold(true),
+		src: r.NewStyle().Foreground(lipgloss.Color("245")),
+		key: r.NewStyle().Foreground(lipgloss.Color("245")),
 	}
 }
 
 // newPrettyHandler constructs the dango pretty handler over w. Color
 // is auto-enabled only when w is a TTY-backed *os.File; non-file
 // writers (buffers, pipes, regular files) always receive plain text.
+// The lipgloss renderer is bound to w (not the package-global one) so
+// styling decisions follow the writer that detectColor inspected.
 func newPrettyHandler(w io.Writer, level slog.Leveler, addSource bool) slog.Handler {
+	renderer := lipgloss.NewRenderer(w)
+	if detectColor(w) {
+		renderer.SetColorProfile(termenv.ANSI256)
+	} else {
+		renderer.SetColorProfile(termenv.Ascii)
+	}
 	return &prettyHandler{
 		mu:        &sync.Mutex{},
 		w:         w,
 		level:     level,
 		addSource: addSource,
-		color:     detectColor(w),
-		styles:    newLevelStyles(),
+		styles:    newLevelStyles(renderer),
 	}
 }
 
@@ -104,24 +113,15 @@ func (h *prettyHandler) Handle(_ context.Context, r slog.Record) error {
 	buf.WriteString(r.Time.Format("15:04:05.000"))
 	buf.WriteString("  ")
 
-	lvl := levelToken(r.Level)
-	if h.color {
-		buf.WriteString(h.styleLevel(r.Level).Render(lvl))
-	} else {
-		buf.WriteString(lvl)
-	}
+	buf.WriteString(h.styleLevel(r.Level).Render(levelToken(r.Level)))
 	buf.WriteString("  ")
 
 	if h.addSource && r.PC != 0 {
-		src := formatSource(r.PC)
-		if h.color {
-			src = h.styles.src.Render(src)
-		}
-		buf.WriteString(src)
+		buf.WriteString(h.styles.src.Render(formatSource(r.PC)))
 		buf.WriteString("  ")
 	}
 
-	buf.WriteString(r.Message)
+	buf.WriteString(escapeNewlines(r.Message))
 
 	for _, a := range h.attrs {
 		h.writeAttr(buf, "", a)
@@ -186,6 +186,10 @@ func prefixAttrKeys(groups []string, attrs []slog.Attr) []slog.Attr {
 }
 
 func (h *prettyHandler) writeAttr(buf *bytes.Buffer, groupPrefix string, a slog.Attr) {
+	// Resolve LogValuer before inspecting Kind so custom types that
+	// implement slog.LogValuer (including ones that resolve to groups)
+	// are expanded as the slog handler contract requires.
+	a.Value = a.Value.Resolve()
 	if a.Equal(slog.Attr{}) {
 		return
 	}
@@ -202,12 +206,7 @@ func (h *prettyHandler) writeAttr(buf *bytes.Buffer, groupPrefix string, a slog.
 	}
 	buf.WriteByte(' ')
 	key := groupPrefix + a.Key
-	if h.color {
-		buf.WriteString(h.styles.key.Render(key + "="))
-	} else {
-		buf.WriteString(key)
-		buf.WriteByte('=')
-	}
+	buf.WriteString(h.styles.key.Render(key + "="))
 	buf.WriteString(quoteValue(a.Value.String()))
 }
 
@@ -216,6 +215,18 @@ func quoteValue(v string) string {
 		return strconv.Quote(v)
 	}
 	return v
+}
+
+// escapeNewlines replaces CR/LF in s with their backslash-escaped form
+// so a multi-line message stays one physical log line. Without this,
+// callers logging multi-line strings (errors, model output) would split
+// one record into several prefix-less lines and break the documented
+// single-line invariant.
+func escapeNewlines(s string) string {
+	if !strings.ContainsAny(s, "\n\r") {
+		return s
+	}
+	return strings.NewReplacer("\n", `\n`, "\r", `\r`).Replace(s)
 }
 
 func needsQuote(v string) bool {
