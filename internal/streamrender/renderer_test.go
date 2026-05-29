@@ -15,14 +15,14 @@ import (
 
 func TestRendererFormatsRunnerFailureContext(t *testing.T) {
 	renderer := New(nil, Config{})
-	line := renderer.FormatEvent(streampkg.Event{
+	line := renderer.formatEvent(streampkg.Event{
 		EventType: streampkg.EventRunnerNodeFailed,
 		From:      streampkg.Source{Layer: "runner", ID: "runner-1"},
 		Status:    streampkg.StatusFailed,
 		Scope:     streampkg.Scope{RunnerID: "runner-1", NodeID: "train_model"},
 		Delta:     json.RawMessage(`{"event":"NodeFailed","node_id":"train_model","error":"skill execution loop did not produce final markdown"}`),
 		Metadata:  map[string]any{"skill_name": "train_gp_model"},
-	})
+	}, true)
 	for _, want := range []string{
 		"status=failed",
 		"error=\"skill execution loop did not produce final markdown\"",
@@ -32,6 +32,55 @@ func TestRendererFormatsRunnerFailureContext(t *testing.T) {
 	} {
 		if !strings.Contains(line, want) {
 			t.Fatalf("line missing %q:\n%s", want, line)
+		}
+	}
+}
+
+func TestRendererShowsSettledPhase(t *testing.T) {
+	renderer := New(nil, Config{})
+	line := renderer.formatEvent(streampkg.Event{
+		EventType: streampkg.EventRunnerPhaseChanged,
+		From:      streampkg.Source{Layer: "runner", ID: "runner-1"},
+		Status:    streampkg.StatusCompleted,
+		Scope:     streampkg.Scope{RunnerID: "runner-1"},
+		Delta:     json.RawMessage(`{"phase":"settled","status":"idle"}`),
+	}, true)
+	for _, want := range []string{"Runner[runner-1]", "status=idle", "phase=settled"} {
+		if !strings.Contains(line, want) {
+			t.Fatalf("compact line missing %q:\n%s", want, line)
+		}
+	}
+}
+
+func TestRendererShowsToolExecutionWithSkillName(t *testing.T) {
+	renderer := New(nil, Config{})
+	line := renderer.formatEvent(streampkg.Event{
+		EventType: streampkg.EventToolExecutionStarted,
+		From:      streampkg.Source{Layer: "skill", ID: "train_gp_model"},
+		Status:    streampkg.StatusRunning,
+		Scope:     streampkg.Scope{NodeID: "train_model"},
+		Delta:     json.RawMessage(`{"call_id":"call_1","name":"bash"}`),
+		Metadata:  map[string]any{"skill_name": "train_gp_model"},
+	}, true)
+	for _, want := range []string{"Skill[train_gp_model]", "tool calling", "bash", "|"} {
+		if !strings.Contains(line, want) {
+			t.Fatalf("compact line missing %q:\n%s", want, line)
+		}
+	}
+}
+
+func TestRendererShowsFailedToolExecution(t *testing.T) {
+	renderer := New(nil, Config{})
+	line := renderer.formatEvent(streampkg.Event{
+		EventType: streampkg.EventToolExecutionFailed,
+		From:      streampkg.Source{Layer: "skill", ID: "train_gp_model"},
+		Status:    streampkg.StatusFailed,
+		Scope:     streampkg.Scope{NodeID: "train_model"},
+		Delta:     json.RawMessage(`{"call_id":"call_1","name":"bash","error":"exit status 1"}`),
+	}, true)
+	for _, want := range []string{"Skill[train_gp_model]", "tool failed", "bash", "status=failed", "skill=train_gp_model", "error=\"exit status 1\""} {
+		if !strings.Contains(line, want) {
+			t.Fatalf("compact line missing %q:\n%s", want, line)
 		}
 	}
 }
@@ -81,14 +130,14 @@ func TestRendererMarqueesRunningOutputBeyondSoftLimit(t *testing.T) {
 		Status:    streampkg.StatusRunning,
 		Delta:     mustJSONString(t, "this is a very long model output chunk"),
 	}
-	line := renderer.FormatEvent(event)
+	line := renderer.formatEvent(event, true)
 	for _, want := range []string{"Skill[train]", "output", "(Tokens", "*"} {
 		if !strings.Contains(line, want) {
 			t.Fatalf("line missing %q:\n%s", want, line)
 		}
 	}
 	event.Delta = mustJSONString(t, " next")
-	line = renderer.FormatEvent(event)
+	line = renderer.formatEvent(event, true)
 	if !strings.Contains(line, "(Tokens") || !strings.Contains(line, "next") {
 		t.Fatalf("running output did not keep accumulated text + counter: %q", line)
 	}
@@ -126,7 +175,7 @@ func TestRendererSummarizesMarqueeOnFinish(t *testing.T) {
 
 func TestRendererSummarizesRunningExchangeDraft(t *testing.T) {
 	renderer := New(nil, Config{ProgressFrames: []string{"*"}})
-	line := renderer.FormatEvent(streampkg.Event{
+	line := renderer.formatEvent(streampkg.Event{
 		EventType: streampkg.EventLLMOutputDelta,
 		From:      streampkg.Source{Layer: "skill", ID: "train"},
 		Status:    streampkg.StatusRunning,
@@ -140,7 +189,7 @@ to_nodes:
 created_at: 2026-05-01T12:00:00Z
 ---
 drafting a long handoff document`),
-	})
+	}, true)
 	if !strings.Contains(line, "drafting handoff") {
 		t.Fatalf("running handoff draft line = %q", line)
 	}
@@ -157,7 +206,7 @@ func TestRendererShowsRunningReasoningImmediately(t *testing.T) {
 		Status:    streampkg.StatusRunning,
 		Delta:     mustJSONString(t, "small "),
 	}
-	line := renderer.FormatEvent(event)
+	line := renderer.formatEvent(event, true)
 	if !strings.Contains(line, "Skill[train]") || !strings.Contains(line, "reasoning") || !strings.Contains(line, "small") {
 		t.Fatalf("running reasoning line = %q", line)
 	}
@@ -214,12 +263,12 @@ func TestRendererReplacesLiveLineWhenSourceChanges(t *testing.T) {
 
 func TestRendererShowsToolExecutionAsLiveLine(t *testing.T) {
 	renderer := New(nil, DefaultConfig())
-	line := renderer.FormatEvent(streampkg.Event{
+	line := renderer.formatEvent(streampkg.Event{
 		EventType: streampkg.EventToolExecutionStarted,
 		From:      streampkg.Source{Layer: "skill", ID: "train"},
 		Status:    streampkg.StatusRunning,
 		Delta:     json.RawMessage(`{"name":"python","call_id":"call_1"}`),
-	})
+	}, true)
 	for _, want := range []string{"Skill[train]", "tool calling", "python", "|"} {
 		if !strings.Contains(line, want) {
 			t.Fatalf("tool line missing %q:\n%s", want, line)
@@ -233,12 +282,12 @@ func TestRendererLinksArtifactPaths(t *testing.T) {
 		t.Fatalf("WriteFile: %v", err)
 	}
 	renderer := New(nil, Config{})
-	line := renderer.FormatEvent(streampkg.Event{
+	line := renderer.formatEvent(streampkg.Event{
 		EventType: streampkg.EventArtifactCreated,
 		From:      streampkg.Source{Layer: "agent", ID: "node"},
 		Status:    streampkg.StatusCompleted,
 		Delta:     json.RawMessage(`{"path":` + string(mustJSONString(t, path)) + `,"resource_type":"file","stage":"execute"}`),
-	})
+	}, true)
 	for _, want := range []string{"Agent[node]", "artifact=file://", "plot.png", "type=file", "stage=execute"} {
 		if !strings.Contains(line, want) {
 			t.Fatalf("line missing %q:\n%s", want, line)
@@ -249,7 +298,7 @@ func TestRendererLinksArtifactPaths(t *testing.T) {
 func TestRendererDoesNotWriteHandoffMarkdownAsExchangeReference(t *testing.T) {
 	dir := t.TempDir()
 	renderer := New(nil, Config{ExchangeDir: dir})
-	line := renderer.FormatEvent(streampkg.Event{
+	line := renderer.formatEvent(streampkg.Event{
 		EventType:      streampkg.EventLLMOutputDelta,
 		From:           streampkg.Source{Layer: "skill", ID: "writer"},
 		Status:         streampkg.StatusCompleted,
@@ -265,7 +314,7 @@ created_at: 2026-05-01T12:00:00Z
 ---
 
 done`),
-	})
+	}, true)
 	if strings.Contains(line, "exchange=file://") || strings.Contains(line, "exchange-000000000007.md") {
 		t.Fatalf("handoff line mislabeled as exchange = %q", line)
 	}
@@ -283,7 +332,7 @@ done`),
 
 func TestRendererSummarizesExchangeMarkdownWithoutSyntheticReference(t *testing.T) {
 	renderer := New(nil, Config{})
-	line := renderer.FormatEvent(streampkg.Event{
+	line := renderer.formatEvent(streampkg.Event{
 		EventType: streampkg.EventLLMOutputDelta,
 		From:      streampkg.Source{Layer: "skill", ID: "writer"},
 		Status:    streampkg.StatusCompleted,
@@ -296,7 +345,7 @@ created_at: 2026-05-01T12:00:00Z
 ---
 
 payload`),
-	})
+	}, true)
 	if strings.Contains(line, "exchange=inline:") {
 		t.Fatalf("exchange line used synthetic inline reference: %q", line)
 	}
@@ -310,7 +359,7 @@ payload`),
 func TestRendererWritesDraftExchangeMarkdownReferences(t *testing.T) {
 	dir := t.TempDir()
 	renderer := New(nil, Config{ExchangeDir: dir})
-	line := renderer.FormatEvent(streampkg.Event{
+	line := renderer.formatEvent(streampkg.Event{
 		EventType:      streampkg.EventLLMOutputDelta,
 		From:           streampkg.Source{Layer: "skill", ID: "writer"},
 		Status:         streampkg.StatusCompleted,
@@ -324,7 +373,7 @@ created_at: 2026-05-01T12:00:00Z
 ---
 
 payload`),
-	})
+	}, true)
 	if !strings.Contains(line, "exchange=file://") || !strings.Contains(line, "exchange-000000000009.md") {
 		t.Fatalf("exchange line = %q", line)
 	}
@@ -340,13 +389,13 @@ payload`),
 func TestRendererFormatsExchangePublishedEventWithCanonicalPath(t *testing.T) {
 	dir := t.TempDir()
 	renderer := New(nil, Config{})
-	line := renderer.FormatEvent(streampkg.Event{
+	line := renderer.formatEvent(streampkg.Event{
 		EventType: streampkg.EventExchangePublished,
 		From:      streampkg.Source{Layer: "skill", ID: "writer"},
 		Status:    streampkg.StatusCompleted,
 		Scope:     streampkg.Scope{RunnerID: "runner-1", NodeID: "writer"},
 		Delta:     json.RawMessage(`{"path":` + string(mustJSONString(t, dir)) + `,"title":"report"}`),
-	})
+	}, true)
 	for _, want := range []string{"exchange=file://", dir, `title="report"`} {
 		if !strings.Contains(line, want) {
 			t.Fatalf("line missing %q:\n%s", want, line)
@@ -356,13 +405,13 @@ func TestRendererFormatsExchangePublishedEventWithCanonicalPath(t *testing.T) {
 
 func TestRendererSummarizesOrchestratorPlanningOutput(t *testing.T) {
 	renderer := New(nil, Config{})
-	line := renderer.FormatEvent(streampkg.Event{
+	line := renderer.formatEvent(streampkg.Event{
 		EventType: streampkg.EventLLMOutputDelta,
 		From:      streampkg.Source{Layer: "orchestrator", ID: "orchestrator"},
 		Status:    streampkg.StatusCompleted,
 		Delta:     mustJSONString(t, `{"plan":{"nodes":[{"id":"a"}]}}`),
 		Metadata:  map[string]any{"stage": "planning"},
-	})
+	}, true)
 	if !strings.Contains(line, "planning output captured") || strings.Contains(line, `"nodes"`) {
 		t.Fatalf("planning line = %q", line)
 	}
@@ -370,12 +419,12 @@ func TestRendererSummarizesOrchestratorPlanningOutput(t *testing.T) {
 
 func TestRendererHidesOrchestratorReviewJSONOutput(t *testing.T) {
 	renderer := New(nil, Config{})
-	line := renderer.FormatEvent(streampkg.Event{
+	line := renderer.formatEvent(streampkg.Event{
 		EventType: streampkg.EventLLMOutputDelta,
 		From:      streampkg.Source{Layer: "orchestrator", ID: "orchestrator"},
 		Status:    streampkg.StatusCompleted,
 		Delta:     mustJSONString(t, `{"approved":true}`),
-	})
+	}, true)
 	if line != "" {
 		t.Fatalf("review output line = %q, want hidden", line)
 	}
@@ -383,12 +432,12 @@ func TestRendererHidesOrchestratorReviewJSONOutput(t *testing.T) {
 
 func TestRendererHidesSkillTokenCompletion(t *testing.T) {
 	renderer := New(nil, Config{})
-	line := renderer.FormatEvent(streampkg.Event{
+	line := renderer.formatEvent(streampkg.Event{
 		EventType: streampkg.EventStatusCompleted,
 		From:      streampkg.Source{Layer: "skill", ID: "skill"},
 		Status:    streampkg.StatusCompleted,
 		Delta:     json.RawMessage(`{"usage":{"total_tokens":9510}}`),
-	})
+	}, true)
 	if line != "" {
 		t.Fatalf("skill token completion line = %q, want hidden", line)
 	}
@@ -396,12 +445,12 @@ func TestRendererHidesSkillTokenCompletion(t *testing.T) {
 
 func TestRendererOmitsTokenUsageFromStatusLines(t *testing.T) {
 	renderer := New(nil, Config{})
-	line := renderer.FormatEvent(streampkg.Event{
+	line := renderer.formatEvent(streampkg.Event{
 		EventType: streampkg.EventStatusCompleted,
 		From:      streampkg.Source{Layer: "orchestrator", ID: "orchestrator"},
 		Status:    streampkg.StatusCompleted,
 		Delta:     json.RawMessage(`{"message":"done","usage":{"total_tokens":42}}`),
-	})
+	}, true)
 	if strings.Contains(line, "total_tokens=") {
 		t.Fatalf("status line leaked token usage: %q", line)
 	}
@@ -428,8 +477,8 @@ func TestRendererDrainsSubscription(t *testing.T) {
 
 	var out bytes.Buffer
 	renderer := New(&out, Config{})
-	if err := renderer.RenderSubscription(context.Background(), sub); err != nil {
-		t.Fatalf("RenderSubscription: %v", err)
+	if err := renderer.RenderSubscriptionObserved(context.Background(), sub, nil); err != nil {
+		t.Fatalf("RenderSubscriptionObserved: %v", err)
 	}
 	if !strings.Contains(out.String(), "phase=settled") {
 		t.Fatalf("rendered output = %q", out.String())

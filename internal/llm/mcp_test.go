@@ -189,7 +189,7 @@ func newTestMCPServer(t *testing.T, name string) (*mcpclient.Server, context.Con
 		t.Fatalf("mcp server connect: %v", err)
 	}
 
-	srv, err := mcpclient.StartWithTransport(ctx, mcpclient.ServerSpec{Name: name}, clientTransport)
+	srv, err := mcpclient.Start(ctx, mcpclient.ServerSpec{Name: name}, clientTransport)
 	if err != nil {
 		cancel()
 		t.Fatalf("mcp client connect: %v", err)

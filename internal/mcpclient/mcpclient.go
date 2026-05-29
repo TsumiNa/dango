@@ -88,29 +88,18 @@ type Server struct {
 
 // Start launches spec and connects an MCP client to it.
 //
-// When spec.Command is empty, Start returns an error. Otherwise it
-// constructs an [exec.Cmd], wraps it in [mcp.CommandTransport], and waits
-// for the MCP initialize handshake to complete before listing the server's
-// tools. The returned Server keeps the live session; the caller must call
-// [Server.Close] when done.
-func Start(ctx context.Context, spec ServerSpec) (*Server, error) {
-	return startWithTransport(ctx, spec, nil)
-}
-
-// StartWithTransport is a test seam: it connects to t instead of spawning a
-// subprocess. spec.Command and spec.Args are ignored.
-func StartWithTransport(ctx context.Context, spec ServerSpec, t mcp.Transport) (*Server, error) {
-	if t == nil {
-		return nil, fmt.Errorf("mcpclient: StartWithTransport requires a non-nil transport")
-	}
-	return startWithTransport(ctx, spec, t)
-}
-
-func startWithTransport(ctx context.Context, spec ServerSpec, t mcp.Transport) (*Server, error) {
+// When transport is nil, Start constructs an [exec.Cmd] from spec and wraps
+// it in [mcp.CommandTransport]; spec.Command must be non-empty in that case.
+// When transport is non-nil, it is used directly and spec.Command / spec.Args
+// are ignored — the test suites use this form to connect to an in-process
+// transport. Either form waits for the MCP initialize handshake to complete
+// and lists the server's tools before returning. The returned Server keeps
+// the live session; the caller must call [Server.Close] when done.
+func Start(ctx context.Context, spec ServerSpec, transport mcp.Transport) (*Server, error) {
 	if spec.Name == "" {
 		return nil, fmt.Errorf("mcpclient: server name must not be empty")
 	}
-	if t == nil {
+	if transport == nil {
 		if spec.Command == "" {
 			return nil, fmt.Errorf("mcpclient: server %q has empty command", spec.Name)
 		}
@@ -118,11 +107,11 @@ func startWithTransport(ctx context.Context, spec ServerSpec, t mcp.Transport) (
 		if spec.Env != nil {
 			cmd.Env = append([]string(nil), spec.Env...)
 		}
-		t = &mcp.CommandTransport{Command: cmd}
+		transport = &mcp.CommandTransport{Command: cmd}
 	}
 
 	client := mcp.NewClient(dangoClientImpl, nil)
-	session, err := client.Connect(ctx, t, nil)
+	session, err := client.Connect(ctx, transport, nil)
 	if err != nil {
 		return nil, fmt.Errorf("mcpclient: connect %q: %w", spec.Name, err)
 	}
