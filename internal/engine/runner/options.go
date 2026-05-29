@@ -72,27 +72,6 @@ func WithPersistenceHandle(handle PersistenceHandle) Option {
 	}
 }
 
-// WithTrustedResourceRoots installs additional trusted roots for handoff
-// artifact filtering and tool access.
-//
-// Existing directories are canonicalized and kept on the runner. Non-existent
-// or invalid paths are ignored. The runner stores canonical string paths, not
-// live handles; callers may manage the source roots independently, but changing
-// filesystem contents after construction can change what tools can read/write.
-// These roots are combined with the workspace root from [PersistenceHandle]
-// when determining agent-accessible directories.
-func WithTrustedResourceRoots(roots ...string) Option {
-	return func(r *Runner) {
-		canonicalRoots := make([]string, 0, len(roots))
-		for _, root := range roots {
-			if canonical, ok := canonicalExistingDir(root); ok && !containsDir(canonicalRoots, canonical) {
-				canonicalRoots = append(canonicalRoots, canonical)
-			}
-		}
-		r.trustedResourceRoots = canonicalRoots
-	}
-}
-
 // WithRootPathRule installs rule as the mapping from runner ID to per-runner
 // workspace subdirectory under the global workspace root.
 func WithRootPathRule(rule func(string) string) Option {

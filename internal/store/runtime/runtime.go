@@ -36,11 +36,6 @@ type Config struct {
 	PostgresMarkdownMirror bool
 }
 
-// DefaultConfig returns the default startup persistence configuration.
-func DefaultConfig() Config {
-	return Config{}
-}
-
 // Persistence groups the startup-owned backend used by the orchestrator.
 type Persistence struct {
 	backend persistencepkg.Backend

@@ -23,7 +23,7 @@ func TestOpen_DefaultJSONFallbackCreatesUsableStoresAndCleansUp(t *testing.T) {
 	t.Parallel()
 
 	ctx := context.Background()
-	persistence, err := Open(DefaultConfig())
+	persistence, err := Open(Config{})
 	if err != nil {
 		t.Fatalf("Open(default): %v", err)
 	}

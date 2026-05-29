@@ -1,11 +1,8 @@
 package logging
 
 import (
-	"fmt"
 	"io"
 	"log/slog"
-	"os"
-	"path/filepath"
 )
 
 // Config controls the slog logger built by [NewLogger]. The format is
@@ -30,9 +27,9 @@ type Config struct {
 	// safe, side-effect-free logger.
 	//
 	// The Output writer is shared with the logger after construction;
-	// callers retain ownership and are responsible for closing
-	// file-backed writers (see [OpenFileSink]). Concurrent writes from
-	// derived loggers are serialized by the handler.
+	// callers retain ownership and are responsible for closing any
+	// file-backed writers themselves. Concurrent writes from derived
+	// loggers are serialized by the handler.
 	Output io.Writer
 
 	// AddSource toggles source-location reporting. The Go zero value
@@ -64,54 +61,11 @@ func DefaultConfig() Config {
 //
 // NewLogger keeps a reference to cfg.Output through the handler;
 // callers must keep that writer valid for the lifetime of the logger
-// and close any file-backed writers themselves (see [OpenFileSink]).
+// and close any file-backed writers themselves.
 func NewLogger(cfg Config) *slog.Logger {
 	output := cfg.Output
 	if output == nil {
 		output = io.Discard
 	}
 	return slog.New(newPrettyHandler(output, cfg.Level, cfg.AddSource)).With("service", "dango")
-}
-
-// OpenFileSink opens path in append-write mode, creating parent
-// directories as needed, and returns the file as an [io.WriteCloser].
-//
-// The caller owns the returned writer and must close it once the
-// logger using it is torn down. OpenFileSink is a convenience for the
-// common "log to <artifacts>/<run>/log" pattern; callers that need
-// rotation, compression, or fan-out should build their own sink and
-// pass it directly via [Config.Output].
-func OpenFileSink(path string) (io.WriteCloser, error) {
-	if path == "" {
-		return nil, fmt.Errorf("logging: file sink path must be non-empty")
-	}
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		return nil, fmt.Errorf("logging: create log directory for %q: %w", path, err)
-	}
-	file, err := os.OpenFile(path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
-	if err != nil {
-		return nil, fmt.Errorf("logging: open log file %q: %w", path, err)
-	}
-	return file, nil
-}
-
-// From returns logger when it is non-nil, or the discard logger from
-// [DefaultConfig] otherwise.
-//
-// It is the safe entry point used by helpers such as [Component] when
-// callers may not have wired a logger yet.
-func From(logger *slog.Logger) *slog.Logger {
-	if logger != nil {
-		return logger
-	}
-	return NewLogger(DefaultConfig())
-}
-
-// Component annotates logger with component=name. Sub-packages derive
-// a subsystem-scoped logger from the single process-wide root logger
-// by calling Component at their entry points.
-//
-// Component never returns nil; a nil logger falls through [From].
-func Component(logger *slog.Logger, name string) *slog.Logger {
-	return From(logger).With("component", name)
 }

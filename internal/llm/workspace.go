@@ -160,21 +160,6 @@ func (w *workspaceRoot) roots() []string {
 	return roots
 }
 
-// ResolveWorkspacePath resolves rel against root and ensures the result stays
-// inside root. It returns a cleaned absolute path on success and is available
-// for custom tools that need the same containment checks as [Skill].
-//
-// rel must be non-empty and relative; absolute paths and parent traversals
-// that escape root are rejected. Symlink escapes through existing path
-// components are also rejected.
-func ResolveWorkspacePath(root, rel string) (string, error) {
-	workspaceRoot, err := canonicalDir(root)
-	if err != nil {
-		return "", err
-	}
-	return resolveWorkspacePath(workspaceRoot, rel)
-}
-
 func resolveWorkspacePath(root, rel string) (string, error) {
 	if rel == "" {
 		return "", fmt.Errorf("path is required")
