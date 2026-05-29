@@ -12,11 +12,6 @@
 //   - [NewLogger] — builds the *slog.Logger from a Config, wires the
 //     preset pretty handler, and annotates with the service=dango base
 //     attribute. The returned logger is never nil.
-//   - [OpenFileSink] — convenience for opening an append-mode file
-//     suitable as Config.Output. The caller owns close.
-//   - [From] / [Component] — safe accessors used by sub-packages to
-//     derive a component-scoped logger from the single root logger
-//     without re-solving handler setup.
 //
 // The intended wiring is one call at the top of the program:
 //

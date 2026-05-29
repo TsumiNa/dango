@@ -27,11 +27,6 @@ func (r *Runner) nodeAccessibleDirs(nodeID string, inputs map[string]any) []stri
 		}
 	}
 	allowedRoots := r.resourceAllowedRoots()
-	for _, root := range r.trustedResourceRoots {
-		if !containsDir(dirs, root) {
-			dirs = append(dirs, root)
-		}
-	}
 	if len(allowedRoots) > 0 {
 		resourceDirs := handoffArtifactDirsFromOutputs(inputs, allowedRoots, r.workspace)
 		for _, dir := range resourceDirs {
@@ -64,11 +59,6 @@ func (r *Runner) resourceAllowedRoots() []string {
 	var roots []string
 	if r.workspace != nil {
 		if root, ok := canonicalExistingDir(r.workspace.Root()); ok {
-			roots = append(roots, root)
-		}
-	}
-	for _, root := range r.trustedResourceRoots {
-		if !containsDir(roots, root) {
 			roots = append(roots, root)
 		}
 	}

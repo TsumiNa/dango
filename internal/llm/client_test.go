@@ -79,9 +79,9 @@ func TestDetectProviderPriority(t *testing.T) {
 			for k, v := range tt.env {
 				t.Setenv(k, v)
 			}
-			p, key, ok := detectProvider()
+			p, key, ok := detectProviderWithLookup(os.LookupEnv)
 			if ok != tt.wantOK || p != tt.wantProvider || key != tt.wantKey {
-				t.Fatalf("detectProvider() = (%q, %q, %v), want (%q, %q, %v)",
+				t.Fatalf("detectProviderWithLookup() = (%q, %q, %v), want (%q, %q, %v)",
 					p, key, ok, tt.wantProvider, tt.wantKey, tt.wantOK)
 			}
 		})

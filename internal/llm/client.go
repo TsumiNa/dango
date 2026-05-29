@@ -254,12 +254,9 @@ func parseBoolEnv(s string) bool {
 	return false
 }
 
-// detectProvider inspects well-known environment variables and returns the
-// first provider that has a non-empty API key configured.
-func detectProvider() (Provider, string, bool) {
-	return detectProviderWithLookup(os.LookupEnv)
-}
-
+// detectProviderWithLookup inspects well-known environment variables via
+// lookup and returns the first provider that has a non-empty API key
+// configured.
 func detectProviderWithLookup(lookup func(string) (string, bool)) (Provider, string, bool) {
 	candidates := []struct {
 		provider Provider

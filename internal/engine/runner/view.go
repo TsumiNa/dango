@@ -49,17 +49,6 @@ func cloneRunnerSnapshot(snapshot RunnerSnapshot) RunnerSnapshot {
 	return copySnapshot
 }
 
-// IsTerminal reports whether a runner has reached a terminal status that
-// prevents further execution.
-func IsTerminal(state RunnerState) bool {
-	switch state.Status {
-	case RunnerStatusFailed, RunnerStatusCanceled:
-		return true
-	default:
-		return false
-	}
-}
-
 // IsRemovable reports whether a runner in the given state may be removed
 // from an upper-layer registry. Running or idle runners are still live and
 // should not be dropped.

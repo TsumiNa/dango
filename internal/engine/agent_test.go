@@ -171,42 +171,10 @@ func TestRenderStageOutputsRecreatesMissingExchangeDir(t *testing.T) {
 	}
 }
 
-func TestFormatParentHandoffsWithPlainMarkdown(t *testing.T) {
-	workspace, err := runnerpkg.ProvisionWorkspace(t.TempDir(), "runner-1", []string{"node-1"}, nil)
-	if err != nil {
-		t.Fatalf("ProvisionWorkspace: %v", err)
-	}
-	skillWS, ok := workspace.Skill("node-1")
-	if !ok {
-		t.Fatal("workspace.Skill(node-1) = false")
-	}
-	parentDir := filepath.Join(skillWS.UpstreamDir, "parent-1")
-	if err := os.MkdirAll(parentDir, 0o755); err != nil {
-		t.Fatalf("MkdirAll(parentDir): %v", err)
-	}
-	if err := os.WriteFile(filepath.Join(parentDir, "handoff.md"), []byte("plain handoff body"), 0o644); err != nil {
-		t.Fatalf("WriteFile(handoff.md): %v", err)
-	}
-	accessible, err := workspace.AccessibleDirs("node-1")
-	if err != nil {
-		t.Fatalf("AccessibleDirs: %v", err)
-	}
-	runtimePaths, err := workspace.AgentRuntimePaths("node-1", "skill-1", accessible)
-	if err != nil {
-		t.Fatalf("AgentRuntimePaths: %v", err)
-	}
-
-	exec, err := NewAgent(loadLightweightTestSkill(t), &ExecutionPlanner{id: "node-1"}, llm.DefaultConversationConfig(), WithAgentClient(&llm.Client{}))
-	if err != nil {
-		t.Fatalf("NewAgent: %v", err)
-	}
-	if _, err := exec.BindForRunner(nil, runtimePaths); err != nil {
-		t.Fatalf("BindForRunner: %v", err)
-	}
-
-	got := exec.formatParentHandoffs(map[string]any{"parent-1": "fallback"})
-	if !strings.Contains(got, "### parent-1\n\nplain handoff body") {
-		t.Fatalf("formatParentHandoffs = %q, want upstream plain markdown", got)
+func TestFormatParentOutputsRendersFallback(t *testing.T) {
+	got := formatParentOutputs(map[string]any{"parent-1": "fallback body"})
+	if !strings.Contains(got, "### parent-1\n\nfallback body") {
+		t.Fatalf("formatParentOutputs = %q, want fallback rendering", got)
 	}
 }
 
