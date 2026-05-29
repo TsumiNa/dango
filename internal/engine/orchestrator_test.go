@@ -1,10 +1,10 @@
 package engine
 
 import (
+	"bytes"
 	"context"
 	"errors"
-	"io"
-	"os"
+	"log/slog"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -28,43 +28,28 @@ func TestNewOrchestrator_ReturnsIndependentInstances(t *testing.T) {
 }
 
 func TestOrchestratorDefaultsToDiscardLogger(t *testing.T) {
-	// Capture stderr to detect any side-effect writes from the default
-	// logger; if the orchestrator's discard default leaks through, this
-	// pipe will see bytes.
-	stderr := os.Stderr
-	r, w, err := os.Pipe()
-	if err != nil {
-		t.Fatalf("os.Pipe: %v", err)
-	}
-	os.Stderr = w
-	t.Cleanup(func() {
-		os.Stderr = stderr
-		_ = r.Close()
-	})
+	// Reroute slog.Default() at a buffer we own so a regression to
+	// slog.Default() inside NewOrchestrator becomes observable; a plain
+	// os.Stderr capture would miss it because the standard logger
+	// captures the original stderr handle at process init.
+	var defaultSink bytes.Buffer
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&defaultSink, nil)))
+	t.Cleanup(func() { slog.SetDefault(prev) })
 
 	o := NewOrchestrator(WithOrchestratorContext(context.Background()))
-	// Exercise the default logger through a runner-side path that would
-	// have hit a nil-guard previously; logger should be usable and
-	// produce no observable output.
+	if o.logger == nil {
+		t.Fatal("NewOrchestrator() left o.logger nil; expected the discard default")
+	}
+	// Exercise the default logger through paths that previously hit
+	// nil-guards. After A-3 the logger is always non-nil; this should
+	// not panic and must not flow to slog.Default().
 	o.logger.Info("smoke", "k", "v")
 	o.logger.Warn("smoke")
 	o.logger.Error("smoke")
 
-	if err := w.Close(); err != nil {
-		t.Fatalf("close pipe writer: %v", err)
-	}
-	bytesReadCh := make(chan []byte, 1)
-	go func() {
-		buf, _ := io.ReadAll(r)
-		bytesReadCh <- buf
-	}()
-	select {
-	case got := <-bytesReadCh:
-		if len(got) != 0 {
-			t.Fatalf("expected discard-default logger to write nothing to stderr, got %q", got)
-		}
-	case <-time.After(time.Second):
-		t.Fatal("timed out reading captured stderr")
+	if defaultSink.Len() != 0 {
+		t.Fatalf("orchestrator default logger routed to slog.Default(); got %q", defaultSink.String())
 	}
 }
 

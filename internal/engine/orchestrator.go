@@ -64,9 +64,9 @@ func WithOrchestratorContext(ctx context.Context) OrchestratorOption {
 
 // WithLogger installs logger as the Orchestrator's lifecycle logger.
 //
-// The same logger is propagated to every [runner.Runner] the Orchestrator
-// constructs and, transitively, to every [Agent] each Runner builds. Callers
-// install one logger here instead of separately on runner and agent.
+// The same logger is propagated to every Runner the Orchestrator constructs
+// and, transitively, to every [Agent] each Runner builds. Callers install one
+// logger here instead of separately on runner and agent.
 //
 // The Orchestrator keeps a reference to logger. slog.Logger values are safe for
 // concurrent use; callers that wrap a handler with additional mutable state are
