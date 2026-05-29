@@ -1,27 +1,89 @@
 # Deferred Refactor Tracker Memo
 
-Last updated: 2026-05-19
+Last updated: 2026-05-29
 
 This memo records deferred refactor topics discussed before PR B.
 PR B is handled separately and should proceed now.
 
-## PR A - Logging Integration Refactor (Deferred)
+## PR A - Logging Integration Refactor (Completed)
 
-Status: Deferred to next large refactor.
+Status: Completed. See
+`docs/pr-a-logging-integration-refactor-plan.md` for the shared design
+reference (goal, non-goals, API surface, wiring flow, format spec,
+sample output, deferred items) and
+`docs/pr-a-logging-integration-refactor-steps/` for the per-PR scope
+files.
 
-Current intent:
+Delivered sub-PRs:
 
-- Evolve `internal/logging` into an opt-in integration path.
-- Expose a configured logger through package initialization flow.
-- Add orchestrator option `WithLoggerCfg(...)` for system-wide logger setup and tuning.
-- If callers do not set `WithLoggerCfg(...)`, keep logging package unused/off by default.
+- PR A-1 (#100) — `internal/logging/handler.go` pretty `slog.Handler`
+  emitting the preset single-line format
+  `HH:MM:SS.mmm  LVL  pkg/file.go:NN  message  k=v ...`. Color is
+  decided once at construction via a writer-bound `lipgloss.Renderer`
+  (ANSI256 on TTY, Ascii otherwise); attribute handling resolves
+  `LogValuer` per the slog contract and CR/LF in messages is escaped
+  to keep the single-line invariant.
+- PR A-2 (#101) — `internal/logging` API rewrite. `Config` is now
+  `{Level slog.Level, Output io.Writer, AddSource bool}`; `New` is
+  replaced by `NewLogger(cfg) *slog.Logger` which never returns nil
+  and always carries `service=dango`. `OpenFileSink(path)` provides a
+  caller-owned append-mode file writer. `Format`, `File`, `BindFlags`,
+  and the `DANGO_LOG_*` env reads are removed — any flag/env mapping
+  is the caller binary's responsibility.
+- PR A-3 (#102) — engine wiring + caller migration.
+  `WithOrchestratorLogger` is renamed to `WithLogger`; orchestrator,
+  runner, and agent all default their logger field to
+  `logging.NewLogger(logging.DefaultConfig())`, so an unconfigured
+  service emits no log output. All `e.logger != nil` guards in
+  `internal/engine/agent.go` are removed. `demo/orchestrate/main.go`
+  and `examples/honshu_groundwater/main.go` build their loggers via
+  `logging.NewLogger(logging.Config{...})` and install through
+  `orchestrate.WithLogger`.
 
-Open questions to resolve later:
+Resolved decisions (originally tracked as open questions):
 
-- Whether logger exposure should rely on `init()` or explicit constructor wiring.
-- Final ownership and lifecycle for logger config (startup-only vs runtime mutation).
-- Interaction between existing `WithOrchestratorLogger(...)` and new `WithLoggerCfg(...)`.
-- Backward compatibility policy for examples/tests using direct logger injection.
+- **`init()` vs explicit constructor wiring** — explicit. The library
+  never installs anything during init; callers build a `*slog.Logger`
+  via `logging.NewLogger(cfg)` and pass it through
+  `orchestrate.WithLogger(...)`.
+- **Logger config lifecycle (startup-only vs runtime mutation)** —
+  startup-only at the orchestrator level. `Config` is consumed inside
+  `NewLogger` and not stored; the resulting `*slog.Logger` is owned by
+  the caller and threaded down to runners and agents. The caller owns
+  the `Output` writer (including closing file sinks). `SetLogger(nil)`
+  restores the discard default.
+- **Interaction between `WithOrchestratorLogger(...)` and the new
+  option** — `WithOrchestratorLogger` is removed outright (no shim)
+  and replaced by `WithLogger(...)`. Go's package-scope naming
+  constraint prevented the agent option from also becoming
+  `WithLogger`, so `WithAgentLogger` keeps its name; the agent doc
+  comment explains the constraint. Users wire one logger at the
+  orchestrator and the orchestrator threads it everywhere.
+- **Backward compatibility for examples/tests** — no shims, no aliases,
+  no parallel APIs. All in-tree callers were updated in PR A-3 within
+  one commit; per
+  `.github/instructions/in-branch-api-compat.instructions.md`, the
+  old names are deleted.
+
+Follow-up (out of scope for PR A, tracked for future work):
+
+- **CLI binary integration.** A future `cmd/dango` (or equivalent)
+  binary owns the flag/env mapping that produces a `logging.Config`.
+- **OpenTelemetry / structured-event bridge.** Existing
+  `stream_events.jsonl` and OTLP code paths are untouched. A future
+  PR may add a `slog.Handler` that fans out to OTLP.
+- **Per-component log levels.** If a noisy package later needs a
+  lower level than the root, the right answer is a thin
+  `slog.Handler` wrapper, not a new `Config` field.
+- **Log rotation.** `OpenFileSink` opens with `O_APPEND` and returns a
+  plain file; callers needing rotation wrap the writer themselves.
+- **Subtle behavior change to watch:** `logging.From(nil)` and
+  therefore `logging.Component(nil, ...)` now go through
+  `NewLogger(DefaultConfig())` and carry `service=dango`. The old
+  `From(nil)` returned a plain `slog.NewTextHandler(io.Discard)` with
+  no base attribute. No engine code asserts on the absence of
+  `service`, but downstream fixtures matching log records by exact
+  attribute count would observe one extra attribute.
 
 ## PR C - Builtin Tools Restructure (Completed)
 
