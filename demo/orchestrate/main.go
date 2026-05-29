@@ -20,6 +20,7 @@ import (
 	runnerpkg "github.com/tsumina/dango/internal/engine/runner"
 	streampkg "github.com/tsumina/dango/internal/engine/stream"
 	"github.com/tsumina/dango/internal/llm"
+	"github.com/tsumina/dango/internal/logging"
 )
 
 // ANSI styling helpers. The demo is intended for terminal use, so we always
@@ -136,7 +137,11 @@ func colorEvent(t string) string {
 func main() {
 	// Keep the orchestrator's internal logs out of the demo stream so the
 	// curated output stays readable. Raise to Info for debugging.
-	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelWarn}))
+	logger := logging.NewLogger(logging.Config{
+		Level:     slog.LevelWarn,
+		Output:    os.Stderr,
+		AddSource: true,
+	})
 	ctx := context.Background()
 
 	o, cleanup := configureDemoOrchestrator(ctx, logger)
@@ -186,7 +191,7 @@ func main() {
 }
 
 func configureDemoOrchestrator(ctx context.Context, logger *slog.Logger) (*orchestrate.Orchestrator, func()) {
-	o := orchestrate.NewOrchestrator(orchestrate.WithOrchestratorContext(ctx), orchestrate.WithOrchestratorLogger(logger))
+	o := orchestrate.NewOrchestrator(orchestrate.WithOrchestratorContext(ctx), orchestrate.WithLogger(logger))
 	must(o.SetMaxRunningRunners(1))
 
 	root, err := os.MkdirTemp("", "dango-orchestrate-demo-")

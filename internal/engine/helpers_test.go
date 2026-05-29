@@ -18,6 +18,7 @@ import (
 	persistencepkg "github.com/tsumina/dango/internal/engine/runner/persistence"
 	streampkg "github.com/tsumina/dango/internal/engine/stream"
 	"github.com/tsumina/dango/internal/llm"
+	"github.com/tsumina/dango/internal/logging"
 	storepkg "github.com/tsumina/dango/internal/store"
 )
 
@@ -53,7 +54,7 @@ const (
 var ErrRunnerLogNotFound = runnerpkg.ErrRunnerLogNotFound
 
 func newOrchestrator(logger *slog.Logger, opts ...OrchestratorOption) *Orchestrator {
-	base := []OrchestratorOption{WithOrchestratorContext(context.Background()), WithOrchestratorLogger(logger)}
+	base := []OrchestratorOption{WithOrchestratorContext(context.Background()), WithLogger(logger)}
 	base = append(base, opts...)
 	return NewOrchestrator(base...)
 }
@@ -86,7 +87,7 @@ func newTestPersistenceBackend(opts ...func(*testPersistenceBackend)) persistenc
 }
 
 func newDiscardLogger() *slog.Logger {
-	return slog.New(slog.NewTextHandler(io.Discard, nil))
+	return logging.NewLogger(logging.DefaultConfig())
 }
 
 func clearLLMEnv(t *testing.T) {
