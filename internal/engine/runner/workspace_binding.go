@@ -10,7 +10,7 @@ func (r *Runner) provisionWorkspace(nodeIDs []string) error {
 	if r.workspaceRoot == "" {
 		return nil
 	}
-	workspace, err := ProvisionWorkspace(r.workspaceRoot, r.id, nodeIDs, r.rootPathRule)
+	workspace, err := ProvisionWorkspace(r.workspaceRoot, r.id, nodeIDs, nil)
 	if err != nil {
 		return err
 	}

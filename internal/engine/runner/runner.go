@@ -33,7 +33,6 @@ type Runner struct {
 	persistenceHandle PersistenceHandle
 	store             RunnerStore
 	workspaceRoot     string
-	rootPathRule      func(string) string
 	workspace         *Workspace
 	eventStream       *streampkg.Stream
 	plan              *CoarsePlan
@@ -106,7 +105,6 @@ func New(opts ...Option) *Runner {
 		skillSessionStore: newMemorySessionStore(),
 		skillSessionIDs:   make(map[string]string),
 		skillToolSets:     make(map[string]llm.ToolSetConfig),
-		rootPathRule:      defaultWorkspacePathRule,
 	}
 	for _, opt := range opts {
 		if opt != nil {

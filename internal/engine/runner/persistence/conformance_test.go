@@ -75,7 +75,7 @@ func backendCases() []backendCase {
 			name: "none-noop",
 			open: func(t *testing.T) (persistencepkg.Backend, func()) {
 				t.Helper()
-				return persistencepkg.None(), func() {}
+				return &noopBackend{}, func() {}
 			},
 			isNoop: true,
 		},
@@ -288,6 +288,17 @@ func newConformanceFixture(t *testing.T) conformanceFixture {
 	}
 }
 
+// noopBackend is an in-test fixture that returns nil for every store and an
+// empty workspace root. It exists only to drive the "none-noop" conformance
+// case in backendCases above; production code never instantiates it.
+type noopBackend struct{}
+
+func (*noopBackend) EventLogStore() storepkg.EventLogStore                   { return nil }
+func (*noopBackend) RunnerStore() runnerpkg.RunnerStore                      { return nil }
+func (*noopBackend) SnapshotCursorStore() storepkg.SnapshotCursorStore       { return nil }
+func (*noopBackend) WorkspaceRoot() string                                   { return "" }
+func (*noopBackend) Close(context.Context) error                             { return nil }
+
 func assertNoopBackendContract(t *testing.T, backend persistencepkg.Backend) {
 	t.Helper()
 
@@ -344,12 +355,12 @@ func assertPathRuleResolution(t *testing.T, backend persistencepkg.Backend, fixt
 		backend.WorkspaceRoot(),
 		fixture.runnerID,
 		[]string{fixture.fromNode, fixture.toNode},
-		persistencepkg.DefaultPathRule,
+		nil,
 	)
 	if err != nil {
 		t.Fatalf("ProvisionWorkspace: %v", err)
 	}
-	wantRunnerRoot := filepath.Join(canonicalWorkspaceRoot, persistencepkg.DefaultPathRule(fixture.runnerID))
+	wantRunnerRoot := filepath.Join(canonicalWorkspaceRoot, "task_"+fixture.runnerID)
 	if workspace.Root() != wantRunnerRoot {
 		t.Fatalf("workspace root = %q, want %q", workspace.Root(), wantRunnerRoot)
 	}

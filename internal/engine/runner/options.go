@@ -72,16 +72,6 @@ func WithPersistenceHandle(handle PersistenceHandle) Option {
 	}
 }
 
-// WithRootPathRule installs rule as the mapping from runner ID to per-runner
-// workspace subdirectory under the global workspace root.
-func WithRootPathRule(rule func(string) string) Option {
-	return func(r *Runner) {
-		if rule != nil {
-			r.rootPathRule = rule
-		}
-	}
-}
-
 // WithInitialPlan installs the initial coarse plan and materialized node graph.
 //
 // The Runner clones plan and nodes before storing them, so callers may mutate
