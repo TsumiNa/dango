@@ -3,7 +3,7 @@ package llm
 import (
 	"context"
 
-	"github.com/tsumina/dango/internal/llm/internal/toolpolicy"
+	"github.com/tsumina/dango/internal/llm/toolpolicy"
 )
 
 type policyTool struct {

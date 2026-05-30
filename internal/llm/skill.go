@@ -14,8 +14,8 @@ import (
 	"github.com/lithammer/shortuuid/v4"
 	streampkg "github.com/tsumina/dango/internal/engine/stream"
 	"github.com/tsumina/dango/internal/frontmatter"
-	"github.com/tsumina/dango/internal/llm/internal/builtin"
-	"github.com/tsumina/dango/internal/llm/internal/toolpolicy"
+	"github.com/tsumina/dango/internal/llm/builtin"
+	"github.com/tsumina/dango/internal/llm/toolpolicy"
 )
 
 // SkillFile is the required filename inside a skill directory that carries
