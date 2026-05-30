@@ -34,9 +34,8 @@ const (
 )
 
 // CapabilityTool and CapabilityMCPTool are the only capability-kind constants
-// referenced via the llm package surface. The other kinds (builtin, extra,
-// skill) and the CapabilityKind type itself are reached through
-// [BuiltinCapability], [ExtraCapability], or by importing toolpolicy directly.
+// with callers via the llm package. Other kinds and CapabilityKind itself are
+// accessible through toolpolicy or builtin directly.
 const (
 	CapabilityTool    = builtin.CapabilityTool
 	CapabilityMCPTool = builtin.CapabilityMCPTool
