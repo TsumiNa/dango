@@ -290,7 +290,7 @@ func newConformanceFixture(t *testing.T) conformanceFixture {
 
 // noopBackend is an in-test fixture that returns nil for every store and an
 // empty workspace root. It exists only to drive the "none-noop" conformance
-// case below; production code never instantiates it.
+// case in backendCases above; production code never instantiates it.
 type noopBackend struct{}
 
 func (*noopBackend) EventLogStore() storepkg.EventLogStore                   { return nil }
