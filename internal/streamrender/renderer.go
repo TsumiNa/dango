@@ -184,11 +184,6 @@ func New(out io.Writer, cfg Config) *Renderer {
 	return r
 }
 
-// RenderSubscription drains sub until it closes or ctx is canceled.
-func (r *Renderer) RenderSubscription(ctx context.Context, sub *streampkg.Subscription) error {
-	return r.RenderSubscriptionObserved(ctx, sub, nil)
-}
-
 // RenderSubscriptionObserved drains sub and calls observe for each event
 // before rendering it. It renders exactly the events delivered by sub, so
 // callers that want logical event rendering should pass a subscription using
@@ -254,12 +249,10 @@ func (r *Renderer) RenderEvent(event streampkg.Event) error {
 	return err
 }
 
-// FormatEvent returns the terminal line for event, or an empty string when the
-// event is filtered or intentionally silent.
-func (r *Renderer) FormatEvent(event streampkg.Event) string {
-	return r.formatEvent(event, true)
-}
-
+// formatEvent returns the terminal line for event, or an empty string when
+// the event is filtered or intentionally silent. includeFrame=false drops the
+// leading provenance frame and is used by the live-rendering path that already
+// owns its own framing.
 func (r *Renderer) formatEvent(event streampkg.Event, includeFrame bool) string {
 	if r == nil || !r.shouldRender(event) {
 		return ""

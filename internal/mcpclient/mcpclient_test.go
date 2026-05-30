@@ -18,7 +18,7 @@ func TestStartRejectsEmptyName(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), testTimeout)
 	defer cancel()
 
-	if _, err := Start(ctx, ServerSpec{Command: "echo"}); err == nil {
+	if _, err := Start(ctx, ServerSpec{Command: "echo"}, nil); err == nil {
 		t.Fatal("expected empty-name error")
 	}
 }
@@ -28,12 +28,12 @@ func TestStartRejectsEmptyCommand(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), testTimeout)
 	defer cancel()
 
-	if _, err := Start(ctx, ServerSpec{Name: "demo"}); err == nil {
+	if _, err := Start(ctx, ServerSpec{Name: "demo"}, nil); err == nil {
 		t.Fatal("expected empty-command error")
 	}
 }
 
-func TestStartWithTransportListsTools(t *testing.T) {
+func TestStartListsTools(t *testing.T) {
 	t.Parallel()
 	srv, ctx, cancel := setupServer(t)
 	defer cancel()
@@ -192,7 +192,7 @@ func setupServer(t *testing.T) (*Server, context.Context, context.CancelFunc) {
 		t.Fatalf("server connect: %v", err)
 	}
 
-	srv, err := StartWithTransport(ctx, ServerSpec{Name: "test-server"}, clientTransport)
+	srv, err := Start(ctx, ServerSpec{Name: "test-server"}, clientTransport)
 	if err != nil {
 		cancel()
 		t.Fatalf("client connect: %v", err)

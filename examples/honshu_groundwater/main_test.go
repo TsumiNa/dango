@@ -24,7 +24,6 @@ import (
 	"github.com/tsumina/dango/internal/llm"
 	storepkg "github.com/tsumina/dango/internal/store"
 	runtimepkg "github.com/tsumina/dango/internal/store/runtime"
-	"github.com/tsumina/dango/internal/streamrender"
 )
 
 func TestElevationSkillScriptParsesMessySample(t *testing.T) {
@@ -702,78 +701,6 @@ func TestNewExampleLoggerRejectsInvalidLevel(t *testing.T) {
 	if _, err := newExampleLogger(io.Discard, "verbose"); err == nil {
 		t.Fatal("newExampleLogger accepted invalid log level")
 	}
-}
-
-func TestStreamRendererIncludesFailureContext(t *testing.T) {
-	line := exampleRenderLine(streampkg.Event{
-		EventType: streampkg.EventRunnerNodeFailed,
-		From:      streampkg.Source{Layer: "runner", ID: "runner-1"},
-		Status:    streampkg.StatusFailed,
-		Scope:     streampkg.Scope{RunnerID: "runner-1", NodeID: "train_model"},
-		Delta:     json.RawMessage(`{"event":"NodeFailed","node_id":"train_model","error":"skill execution loop did not produce final markdown"}`),
-		Metadata:  map[string]any{"skill_name": "train_gp_model"},
-	})
-	for _, want := range []string{
-		"status=failed",
-		"error=\"skill execution loop did not produce final markdown\"",
-		"event=node.failed",
-		"node=train_model",
-		"skill=train_gp_model",
-	} {
-		if !strings.Contains(line, want) {
-			t.Fatalf("compact line missing %q:\n%s", want, line)
-		}
-	}
-}
-
-func TestStreamRendererShowsSettledPhase(t *testing.T) {
-	line := exampleRenderLine(streampkg.Event{
-		EventType: streampkg.EventRunnerPhaseChanged,
-		From:      streampkg.Source{Layer: "runner", ID: "runner-1"},
-		Status:    streampkg.StatusCompleted,
-		Scope:     streampkg.Scope{RunnerID: "runner-1"},
-		Delta:     json.RawMessage(`{"phase":"settled","status":"idle"}`),
-	})
-	for _, want := range []string{"Runner[runner-1]", "status=idle", "phase=settled"} {
-		if !strings.Contains(line, want) {
-			t.Fatalf("compact line missing %q:\n%s", want, line)
-		}
-	}
-}
-
-func TestStreamRendererShowsToolExecution(t *testing.T) {
-	line := exampleRenderLine(streampkg.Event{
-		EventType: streampkg.EventToolExecutionStarted,
-		From:      streampkg.Source{Layer: "skill", ID: "train_gp_model"},
-		Status:    streampkg.StatusRunning,
-		Scope:     streampkg.Scope{NodeID: "train_model"},
-		Delta:     json.RawMessage(`{"call_id":"call_1","name":"bash"}`),
-		Metadata:  map[string]any{"skill_name": "train_gp_model"},
-	})
-	for _, want := range []string{"Skill[train_gp_model]", "tool calling", "bash", "|"} {
-		if !strings.Contains(line, want) {
-			t.Fatalf("compact line missing %q:\n%s", want, line)
-		}
-	}
-}
-
-func TestStreamRendererShowsFailedToolExecution(t *testing.T) {
-	line := exampleRenderLine(streampkg.Event{
-		EventType: streampkg.EventToolExecutionFailed,
-		From:      streampkg.Source{Layer: "skill", ID: "train_gp_model"},
-		Status:    streampkg.StatusFailed,
-		Scope:     streampkg.Scope{NodeID: "train_model"},
-		Delta:     json.RawMessage(`{"call_id":"call_1","name":"bash","error":"exit status 1"}`),
-	})
-	for _, want := range []string{"Skill[train_gp_model]", "tool failed", "bash", "status=failed", "skill=train_gp_model", "error=\"exit status 1\""} {
-		if !strings.Contains(line, want) {
-			t.Fatalf("compact line missing %q:\n%s", want, line)
-		}
-	}
-}
-
-func exampleRenderLine(event streampkg.Event) string {
-	return streamrender.New(nil, streamrender.Config{}).FormatEvent(event)
 }
 
 func runSkillScript(ctx context.Context, skillDir string, script string, inputJSON string) (string, error) {
