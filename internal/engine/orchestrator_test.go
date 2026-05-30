@@ -659,9 +659,9 @@ func TestStartRunner_ForwardsStreamAndQueryState(t *testing.T) {
 	started := make(chan struct{})
 	release := make(chan struct{})
 
-	plan := &CoarsePlan{
+	plan := &runnerpkg.CoarsePlan{
 		Request: "stream",
-		Nodes:   []CoarsePlanNode{{ID: "only", SkillName: "single", TaskDescription: "stream"}},
+		Nodes:   []runnerpkg.CoarsePlanNode{{ID: "only", SkillName: "single", TaskDescription: "stream"}},
 	}
 	nodes := map[string]*runnerpkg.Node{
 		"only": {
@@ -769,9 +769,9 @@ func testLoadRunnerRecordsLoadsPersistedLog(t *testing.T, configureStore func(t 
 
 	o := newOrchestrator(testLogger, configureStore(t))
 	mustAddSkills(t, o, newTestSkillRegistration(t, "single", "Single-step runner.", nil))
-	if err := o.SetOrchestratorSkill(bindTestOrchestratorSkill(t, mustPlanJSON(t, &CoarsePlan{
+	if err := o.SetOrchestratorSkill(bindTestOrchestratorSkill(t, mustPlanJSON(t, &runnerpkg.CoarsePlan{
 		Request: "run a single node",
-		Nodes: []CoarsePlanNode{{
+		Nodes: []runnerpkg.CoarsePlanNode{{
 			ID:              "only",
 			SkillName:       "single",
 			TaskDescription: "Run the only node.",

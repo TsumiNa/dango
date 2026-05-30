@@ -35,7 +35,7 @@ type orchestratorSkillPlanPrompt struct {
 	} `json:"data"`
 }
 
-func planWithOrchestrator(ctx context.Context, req Request, skills []runnerpkg.SkillSummary, runtimeSkill *llm.Skill, requestStream *streampkg.Stream) (*CoarsePlan, *RejectReason, error) {
+func planWithOrchestrator(ctx context.Context, req Request, skills []runnerpkg.SkillSummary, runtimeSkill *llm.Skill, requestStream *streampkg.Stream) (*runnerpkg.CoarsePlan, *RejectReason, error) {
 	prompt, err := marshalOrchestratorPlanningInput(req.Input, skills)
 	if err != nil {
 		return nil, nil, fmt.Errorf("orchestrate: marshal planner input: %w", err)

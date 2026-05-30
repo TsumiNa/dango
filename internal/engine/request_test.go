@@ -82,9 +82,9 @@ func TestStartRequest_BuildsRunnerFromPlanAndReturnsID(t *testing.T) {
 		newTestSkillRegistration(t, "execute", "Execute a plan.", executeClient),
 	)
 	if err := o.SetOrchestratorSkill(bindTestOrchestratorSkill(t,
-		mustPlanJSON(t, &CoarsePlan{
+		mustPlanJSON(t, &runnerpkg.CoarsePlan{
 			Request: "build a report",
-			Nodes: []CoarsePlanNode{
+			Nodes: []runnerpkg.CoarsePlanNode{
 				{ID: "draft", SkillName: "plan", TaskDescription: "Draft the execution outline."},
 				{ID: "run", SkillName: "execute", TaskDescription: "Execute the approved outline.", DependsOn: []string{"draft"}},
 			},
@@ -177,9 +177,9 @@ func TestStartRequest_ReturnsReplayableRequestStream(t *testing.T) {
 	clearLLMEnv(t)
 	o := newOrchestrator(testLogger)
 	mustAddSkills(t, o, newTestSkillRegistration(t, "single", "Single-step runner.", nil))
-	planOutput := mustPlanJSON(t, &CoarsePlan{
+	planOutput := mustPlanJSON(t, &runnerpkg.CoarsePlan{
 		Request: "run a single node",
-		Nodes: []CoarsePlanNode{{
+		Nodes: []runnerpkg.CoarsePlanNode{{
 			ID:              "only",
 			SkillName:       "single",
 			TaskDescription: "Run the only node.",
@@ -257,9 +257,9 @@ func TestStartRequest_PersistsRawRequestFramesWithoutBlockingSubscribers(t *test
 	)))
 	mustAddSkills(t, o, newTestSkillRegistration(t, "single", "Single-step runner.", nil))
 	if err := o.SetOrchestratorSkill(bindTestOrchestratorSkill(t,
-		mustPlanJSON(t, &CoarsePlan{
+		mustPlanJSON(t, &runnerpkg.CoarsePlan{
 			Request: "run a single node",
-			Nodes: []CoarsePlanNode{{
+			Nodes: []runnerpkg.CoarsePlanNode{{
 				ID:              "only",
 				SkillName:       "single",
 				TaskDescription: "Run the only node.",
@@ -344,9 +344,9 @@ func TestStartRequestStreamsBeforeRunnerCreation(t *testing.T) {
 	clearLLMEnv(t)
 	o := newOrchestrator(testLogger)
 	mustAddSkills(t, o, newTestSkillRegistration(t, "single", "Single-step runner.", nil))
-	planOutput := mustPlanJSON(t, &CoarsePlan{
+	planOutput := mustPlanJSON(t, &runnerpkg.CoarsePlan{
 		Request: "run a single node",
-		Nodes: []CoarsePlanNode{{
+		Nodes: []runnerpkg.CoarsePlanNode{{
 			ID:              "only",
 			SkillName:       "single",
 			TaskDescription: "Run the only node.",
@@ -529,9 +529,9 @@ func TestStartRequest_ReplayPreservesRequestIdentity(t *testing.T) {
 	clearLLMEnv(t)
 	o := newOrchestrator(testLogger)
 	mustAddSkills(t, o, newTestSkillRegistration(t, "single", "Single-step runner.", nil))
-	planOutput := mustPlanJSON(t, &CoarsePlan{
+	planOutput := mustPlanJSON(t, &runnerpkg.CoarsePlan{
 		Request: "run a single node",
-		Nodes: []CoarsePlanNode{{
+		Nodes: []runnerpkg.CoarsePlanNode{{
 			ID:              "only",
 			SkillName:       "single",
 			TaskDescription: "Run the only node.",
@@ -583,9 +583,9 @@ func TestStartRequest_StreamsPlannerReasoningAndPlanningExchange(t *testing.T) {
 	clearLLMEnv(t)
 	o := newOrchestrator(testLogger)
 	mustAddSkills(t, o, newTestSkillRegistration(t, "single", "Single-step runner.", nil))
-	planOutput := mustPlanJSON(t, &CoarsePlan{
+	planOutput := mustPlanJSON(t, &runnerpkg.CoarsePlan{
 		Request: "run a single node",
-		Nodes: []CoarsePlanNode{{
+		Nodes: []runnerpkg.CoarsePlanNode{{
 			ID:              "only",
 			SkillName:       "single",
 			TaskDescription: "Run the only node.",
@@ -659,9 +659,9 @@ func TestStartRequest_EmitsRequestStreamEvents(t *testing.T) {
 	clearLLMEnv(t)
 	o := newOrchestrator(testLogger)
 	mustAddSkills(t, o, newTestSkillRegistration(t, "single", "Single-step runner.", nil))
-	planOutput := mustPlanJSON(t, &CoarsePlan{
+	planOutput := mustPlanJSON(t, &runnerpkg.CoarsePlan{
 		Request: "run a single node",
-		Nodes: []CoarsePlanNode{{
+		Nodes: []runnerpkg.CoarsePlanNode{{
 			ID:              "only",
 			SkillName:       "single",
 			TaskDescription: "Run the only node.",
@@ -757,9 +757,9 @@ func TestStartRequest_CreatesReplayableRunnerStream(t *testing.T) {
 	clearLLMEnv(t)
 	o := newOrchestrator(testLogger)
 	mustAddSkills(t, o, newTestSkillRegistration(t, "single", "Single-step runner.", nil))
-	planOutput := mustPlanJSON(t, &CoarsePlan{
+	planOutput := mustPlanJSON(t, &runnerpkg.CoarsePlan{
 		Request: "run a single node",
-		Nodes: []CoarsePlanNode{{
+		Nodes: []runnerpkg.CoarsePlanNode{{
 			ID:              "only",
 			SkillName:       "single",
 			TaskDescription: "Run the only node.",
@@ -825,9 +825,9 @@ func TestSubscribeRunnerStream_RejectsUnknownID(t *testing.T) {
 
 func TestStartRequest_StreamsFailureWhenPlanUsesUnknownSkill(t *testing.T) {
 	o := newOrchestrator(testLogger)
-	if err := o.SetOrchestratorSkill(bindTestOrchestratorSkill(t, mustPlanJSON(t, &CoarsePlan{
+	if err := o.SetOrchestratorSkill(bindTestOrchestratorSkill(t, mustPlanJSON(t, &runnerpkg.CoarsePlan{
 		Request: "process images",
-		Nodes:   []CoarsePlanNode{{ID: "only", SkillName: "missing", TaskDescription: "process images"}},
+		Nodes:   []runnerpkg.CoarsePlanNode{{ID: "only", SkillName: "missing", TaskDescription: "process images"}},
 	}))); err != nil {
 		t.Fatalf("SetOrchestratorSkill(test planner): %v", err)
 	}
@@ -851,9 +851,9 @@ func TestStartRequest_StreamsFailureWhenPlanUsesUnknownSkill(t *testing.T) {
 func TestStartRequest_RejectsPriorityOutsideRange(t *testing.T) {
 	o := newOrchestrator(testLogger)
 	mustAddSkills(t, o, newTestSkillRegistration(t, "single", "Single-step runner.", nil))
-	if err := o.SetOrchestratorSkill(bindTestOrchestratorSkill(t, mustPlanJSON(t, &CoarsePlan{
+	if err := o.SetOrchestratorSkill(bindTestOrchestratorSkill(t, mustPlanJSON(t, &runnerpkg.CoarsePlan{
 		Request: "run now",
-		Nodes: []CoarsePlanNode{{
+		Nodes: []runnerpkg.CoarsePlanNode{{
 			ID:              "only",
 			SkillName:       "single",
 			TaskDescription: "Run the only node.",

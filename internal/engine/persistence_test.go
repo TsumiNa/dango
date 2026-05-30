@@ -27,9 +27,9 @@ func TestRuntimePersistenceSQLiteSupportsReplayRunnerRecordsAndDescribeAfterReop
 	)
 	mustAddSkills(t, o, newTestSkillRegistration(t, "single", "Single-step runner.", nil))
 	if err := o.SetOrchestratorSkill(bindTestOrchestratorSkill(t,
-		mustPlanJSON(t, &CoarsePlan{
+		mustPlanJSON(t, &runnerpkg.CoarsePlan{
 			Request: "run a single node",
-			Nodes: []CoarsePlanNode{{
+			Nodes: []runnerpkg.CoarsePlanNode{{
 				ID:              "only",
 				SkillName:       "single",
 				TaskDescription: "Run the only node.",

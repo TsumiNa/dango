@@ -283,7 +283,7 @@ func writeTestSSE(t *testing.T, w io.Writer, event string, payload any) {
 	_, _ = io.WriteString(w, "data: "+string(data)+"\n\n")
 }
 
-func mustPlanJSON(t *testing.T, plan *CoarsePlan) string {
+func mustPlanJSON(t *testing.T, plan *runnerpkg.CoarsePlan) string {
 	t.Helper()
 	buf, err := json.Marshal(map[string]any{"plan": plan})
 	if err != nil {
@@ -301,11 +301,11 @@ func mustReviewJSON(t *testing.T, approved bool, reason string) string {
 	return string(buf)
 }
 
-func mustPlanSingleNodeRunner(t *testing.T, o *Orchestrator) (*CoarsePlan, *runnerpkg.Runner) {
+func mustPlanSingleNodeRunner(t *testing.T, o *Orchestrator) (*runnerpkg.CoarsePlan, *runnerpkg.Runner) {
 	t.Helper()
-	return mustPlanSingleNodeRunnerWithOutputs(t, o, mustPlanJSON(t, &CoarsePlan{
+	return mustPlanSingleNodeRunnerWithOutputs(t, o, mustPlanJSON(t, &runnerpkg.CoarsePlan{
 		Request: "run a single node",
-		Nodes: []CoarsePlanNode{{
+		Nodes: []runnerpkg.CoarsePlanNode{{
 			ID:              "only",
 			SkillName:       "single",
 			TaskDescription: "Run the only node.",
@@ -313,13 +313,13 @@ func mustPlanSingleNodeRunner(t *testing.T, o *Orchestrator) (*CoarsePlan, *runn
 	}))
 }
 
-func mustPlanSingleNodeRunnerWithOutputs(t *testing.T, o *Orchestrator, outputs ...string) (*CoarsePlan, *runnerpkg.Runner) {
+func mustPlanSingleNodeRunnerWithOutputs(t *testing.T, o *Orchestrator, outputs ...string) (*runnerpkg.CoarsePlan, *runnerpkg.Runner) {
 	t.Helper()
 	mustAddSkills(t, o, newTestSkillRegistration(t, "single", "Single-step runner.", nil))
 	if len(outputs) == 0 {
-		outputs = []string{mustPlanJSON(t, &CoarsePlan{
+		outputs = []string{mustPlanJSON(t, &runnerpkg.CoarsePlan{
 			Request: "run a single node",
-			Nodes: []CoarsePlanNode{{
+			Nodes: []runnerpkg.CoarsePlanNode{{
 				ID:              "only",
 				SkillName:       "single",
 				TaskDescription: "Run the only node.",

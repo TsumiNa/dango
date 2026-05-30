@@ -454,7 +454,7 @@ func stopStreamMerges(merges []*streampkg.Merge) {
 	}
 }
 
-func newRunnerFromPlan(ctx context.Context, logger *slog.Logger, backend persistencepkg.Backend, req Request, plan *CoarsePlan, skills map[string]SkillRegistration, plannerSkill *llm.Skill, skillSummaries []runnerpkg.SkillSummary) (*runnerpkg.Runner, error) {
+func newRunnerFromPlan(ctx context.Context, logger *slog.Logger, backend persistencepkg.Backend, req Request, plan *runnerpkg.CoarsePlan, skills map[string]SkillRegistration, plannerSkill *llm.Skill, skillSummaries []runnerpkg.SkillSummary) (*runnerpkg.Runner, error) {
 	if req.ArtifactsDir != "" {
 		if err := os.MkdirAll(req.ArtifactsDir, 0o755); err != nil {
 			return nil, fmt.Errorf("orchestrate: create artifacts dir %q: %w", req.ArtifactsDir, err)
@@ -479,7 +479,7 @@ func newRunnerFromPlan(ctx context.Context, logger *slog.Logger, backend persist
 	return runnerpkg.New(opts...), nil
 }
 
-func buildPlanNodes(logger *slog.Logger, req Request, plan *CoarsePlan, skills map[string]SkillRegistration) (map[string]*runnerpkg.Node, error) {
+func buildPlanNodes(logger *slog.Logger, req Request, plan *runnerpkg.CoarsePlan, skills map[string]SkillRegistration) (map[string]*runnerpkg.Node, error) {
 	if len(plan.Nodes) == 0 {
 		return nil, fmt.Errorf("orchestrate: coarse plan must contain at least one node")
 	}
