@@ -10,7 +10,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/tsumina/dango/internal/llm/internal/toolpolicy"
+	"github.com/tsumina/dango/internal/llm/toolpolicy"
 	"mvdan.cc/sh/v3/syntax"
 )
 

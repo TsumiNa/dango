@@ -1,8 +1,8 @@
 package llm
 
 import (
-	"github.com/tsumina/dango/internal/llm/internal/builtin"
-	"github.com/tsumina/dango/internal/llm/internal/toolpolicy"
+	"github.com/tsumina/dango/internal/llm/builtin"
+	"github.com/tsumina/dango/internal/llm/toolpolicy"
 )
 
 // ExtraTool names an opt-in built-in tool that is appended after the default
@@ -33,14 +33,11 @@ const (
 	ExecPolicyOff         = builtin.ExecPolicyOff
 )
 
-// CapabilityKind classifies one policy-controlled capability entry.
-type CapabilityKind = builtin.CapabilityKind
-
+// CapabilityTool and CapabilityMCPTool are the only capability-kind constants
+// with callers via the llm package. Other kinds and CapabilityKind itself are
+// accessible through toolpolicy or builtin directly.
 const (
-	CapabilityBuiltin = builtin.CapabilityBuiltin
-	CapabilityExtra   = builtin.CapabilityExtra
 	CapabilityTool    = builtin.CapabilityTool
-	CapabilitySkill   = builtin.CapabilitySkill
 	CapabilityMCPTool = builtin.CapabilityMCPTool
 )
 
@@ -84,9 +81,6 @@ func ExtraCapability(name string) CapabilityRef { return toolpolicy.ExtraCapabil
 
 // ToolCapability returns the generic policy key for an arbitrary tool name.
 func ToolCapability(name string) CapabilityRef { return toolpolicy.ToolCapability(name) }
-
-// SkillCapability returns the policy key for a registered skill.
-func SkillCapability(name string) CapabilityRef { return toolpolicy.SkillCapability(name) }
 
 // DefaultToolSetConfig returns the default built-in tool availability for a
 // newly loaded skill.

@@ -3,7 +3,7 @@ package llm
 import (
 	"fmt"
 
-	"github.com/tsumina/dango/internal/llm/internal/builtin"
+	"github.com/tsumina/dango/internal/llm/builtin"
 )
 
 // BuiltinTools returns the default filesystem and shell tools for s.

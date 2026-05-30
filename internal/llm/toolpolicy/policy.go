@@ -143,11 +143,6 @@ func ToolCapability(name string) CapabilityRef {
 	return CapabilityRef{Kind: CapabilityTool, Name: name}
 }
 
-// SkillCapability returns the policy key for a registered skill.
-func SkillCapability(name string) CapabilityRef {
-	return CapabilityRef{Kind: CapabilitySkill, Name: name}
-}
-
 // ClonePolicyMap returns a deep copy of policies.
 func ClonePolicyMap(policies map[CapabilityRef]ExecPolicy) map[CapabilityRef]ExecPolicy {
 	if len(policies) == 0 {

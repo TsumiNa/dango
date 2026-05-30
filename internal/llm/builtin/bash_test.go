@@ -10,7 +10,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/tsumina/dango/internal/llm/internal/toolpolicy"
+	"github.com/tsumina/dango/internal/llm/toolpolicy"
 )
 
 func TestBashRunsInRoot(t *testing.T) {

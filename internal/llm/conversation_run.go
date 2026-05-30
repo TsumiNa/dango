@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/tsumina/dango/internal/llm/internal/toolpolicy"
+	"github.com/tsumina/dango/internal/llm/toolpolicy"
 )
 
 // MaxSteps returns the iteration bound used by [Conversation.Run].

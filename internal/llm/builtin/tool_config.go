@@ -3,7 +3,7 @@ package builtin
 import (
 	"fmt"
 
-	"github.com/tsumina/dango/internal/llm/internal/toolpolicy"
+	"github.com/tsumina/dango/internal/llm/toolpolicy"
 )
 
 // ExtraTool names an opt-in built-in tool that is not part of the core floor.

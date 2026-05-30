@@ -13,7 +13,7 @@ import (
 	"time"
 
 	streampkg "github.com/tsumina/dango/internal/engine/stream"
-	"github.com/tsumina/dango/internal/llm/internal/toolpolicy"
+	"github.com/tsumina/dango/internal/llm/toolpolicy"
 )
 
 // TestConversationRun_HappyPath drives one tool call then a final
