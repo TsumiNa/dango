@@ -13,14 +13,14 @@ var instructionFS embed.FS
 func StageNote(stage string) (string, error) {
 	name := strings.TrimSpace(stage)
 	if name == "" {
-		return "", fmt.Errorf("engine/builtin/instructions: stage must not be empty")
+		return "", fmt.Errorf("engine/instructions: stage must not be empty")
 	}
 	if !validStageName(name) {
-		return "", fmt.Errorf("engine/builtin/instructions: invalid stage %q", stage)
+		return "", fmt.Errorf("engine/instructions: invalid stage %q", stage)
 	}
 	raw, err := instructionFS.ReadFile(name + ".md")
 	if err != nil {
-		return "", fmt.Errorf("engine/builtin/instructions: read %s note: %w", name, err)
+		return "", fmt.Errorf("engine/instructions: read %s note: %w", name, err)
 	}
 	return strings.TrimSpace(string(raw)), nil
 }
