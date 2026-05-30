@@ -14,6 +14,34 @@ import (
 	"github.com/tsumina/dango/internal/logging"
 )
 
+// Node represents a single unit of work within the Runner's execution graph.
+type Node struct {
+	Id              string  `json:"id" yaml:"id"`
+	SkillName       string  `json:"skill_name,omitempty" yaml:"skill_name,omitempty"`
+	TaskDescription string  `json:"task_description,omitempty" yaml:"task_description,omitempty"`
+	Parents         []*Node `json:"parents,omitempty" yaml:"parents,omitempty"`
+	// Agent contains the execution logic of the node.
+	Agent Agent `json:"-" yaml:"-"`
+
+	CreatedAt  time.Time `json:"created_at" yaml:"created_at"`
+	UpdatedAt  time.Time `json:"updated_at" yaml:"updated_at"`
+	FinishedAt time.Time `json:"finished_at" yaml:"finished_at"`
+}
+
+// PlanNodeBuilder materializes a [CoarsePlan] into the node graph a Runner can
+// execute.
+type PlanNodeBuilder func(plan *CoarsePlan) (map[string]*Node, error)
+
+// executionResult is the channel message the runner's event loop publishes
+// after a node finishes. It carries the node id, the node's output (or
+// nil), any dynamically added child nodes, and the terminal error.
+type executionResult struct {
+	nodeID   string
+	output   any
+	newNodes []*Node
+	err      error
+}
+
 // Runner is the execution engine that drives a [CoarsePlan] through its
 // phased lifecycle and exposes both engine-level and managed observation
 // surfaces.
