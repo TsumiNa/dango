@@ -9,6 +9,24 @@ import (
 	"github.com/tsumina/dango/internal/llm/toolpolicy"
 )
 
+// Approver decides whether a need_approve tool call may proceed.
+//
+// Approver lives next to dispatch because need_approve gating is consulted
+// from inside [Conversation.Run]'s tool-call loop; the interface and its
+// adapter sit here so the dispatch site and the contract that drives it
+// stay readable together.
+type Approver interface {
+	Approve(ctx context.Context, req ApprovalRequest) (ApprovalResponse, error)
+}
+
+// ApproverFunc adapts a plain function into an [Approver].
+type ApproverFunc func(context.Context, ApprovalRequest) (ApprovalResponse, error)
+
+// Approve implements [Approver].
+func (f ApproverFunc) Approve(ctx context.Context, req ApprovalRequest) (ApprovalResponse, error) {
+	return f(ctx, req)
+}
+
 // MaxSteps returns the iteration bound used by [Conversation.Run].
 func (c *Conversation) MaxSteps() int { return c.maxSteps }
 
