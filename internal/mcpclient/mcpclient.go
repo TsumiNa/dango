@@ -89,9 +89,10 @@ type Server struct {
 // Start launches spec and connects an MCP client to it.
 //
 // When transport is nil, Start constructs an [exec.Cmd] from spec and wraps
-// it in [mcp.CommandTransport]; spec.Command must be non-empty in that case.
-// When transport is non-nil, it is used directly and spec.Command / spec.Args
-// are ignored — the test suites use this form to connect to an in-process
+// it in [mcp.CommandTransport]; spec.Command must be non-empty in that case,
+// and spec.Args plus spec.Env are forwarded to the subprocess. When transport
+// is non-nil, it is used directly and spec.Command / spec.Args / spec.Env are
+// ignored — the test suites use this form to connect to an in-process
 // transport. Either form waits for the MCP initialize handshake to complete
 // and lists the server's tools before returning. The returned Server keeps
 // the live session; the caller must call [Server.Close] when done.
