@@ -1,6 +1,6 @@
 # Deferred Refactor Tracker Memo
 
-Last updated: 2026-05-29
+Last updated: 2026-05-30
 
 This memo records deferred refactor topics discussed before PR B.
 PR B is handled separately and should proceed now.
@@ -184,20 +184,170 @@ Follow-up:
   observations are recorded in the relevant subtask files as they
   arise.
 
-## PR D - API Cleanup and Compatibility Review (Deferred)
+## PR D - API Cleanup and Compatibility Review (Completed)
 
-Status: Deferred for dedicated discussion.
+Status: Completed. See `docs/pr-d-api-cleanup-plan.md` for the master
+plan with the full deletion inventory, per-PR scope, acceptance
+criteria, and curated post-track deadcode baseline.
 
-Current assessment:
+Delivered sub-PRs:
 
-- Multiple APIs flagged by deadcode need explicit keep/remove decisions.
-- Some symbols may be intentional extension points despite low in-repo usage.
+- PR D-1 (#104) — Pure dead-code purge. Removed `logging.From`,
+  `logging.Component`, `logging.OpenFileSink`; `runner.IsTerminal`;
+  the `WithTrustedResourceRoots` option + `trustedResourceRoots`
+  field + the always-empty loops in `workspace_binding.go`;
+  `Agent.formatParentHandoffs` + `readParentHandoffsFromUpstream`;
+  `llm.ResolveWorkspacePath`; `store/runtime.DefaultConfig`. Inlined
+  `detectProvider` into `detectProviderWithLookup`. Deleted Cobra
+  scaffold `cmd/add.go` + `cmd/run.go` and the empty
+  `internal/prompts/` package. Baseline deadcode 38 → 28.
+- PR D-2 (#105) — Wrapper collapse. Deleted
+  `runner/channel_markdown.go` (one-line `LooksLikeChannelMarkdown`
+  wrapper). Collapsed `mcpclient.Start` and `mcpclient.StartWithTransport`
+  into a single `Start(ctx, spec, transport)` where a nil transport
+  spawns the command. Removed `streamrender.RenderSubscription`
+  no-observe wrapper and demoted `FormatEvent` to package-private
+  `formatEvent`. Three renderer assertion tests moved from
+  `examples/honshu_groundwater/main_test.go` into
+  `internal/streamrender/renderer_test.go`. Deadcode 28 → 23.
+- PR D-3 (#106) — Unused customization plumbing. Removed
+  `orchestrator.WithRunnerPathRule` + `runnerPathRule` field, the
+  `requestStartup.runnerPathRule` field and the `pathRule` parameter
+  on `newRunnerFromPlan`, `runner.WithRootPathRule` +
+  `rootPathRule` field. Deleted `persistence.None` (moved no-op
+  backend into a conformance-test-local fixture) and
+  `persistence.DefaultPathRule` + `PathRule` type (test now uses the
+  `"task_<runner-id>"` literal). Deadcode 23 → 16.
+- PR D-4 (#107) — Engine package file reorganization. Deleted
+  `internal/engine/types.go` (three type re-exports replaced with
+  `runnerpkg.X` at all in-tree call sites including demos and
+  examples). Merged `orchestrator_skill.go` + `orchestrator_tools.go`
+  into a single `orchestrator_skill.go`. Merged `agent_stage.go` +
+  `agent_stage_output.go` into a single `agent_stage.go`. Engine
+  top-level: 14 → 12 production files.
+- PR D-5 (#108) — Runner + stream file reorganization. Split
+  `runner/types.go`: `Node` + `PlanNodeBuilder` + `executionResult`
+  moved to `runner.go`, `PlanReview` moved to `plan.go`; cross-
+  cutting domain types (`Agent` interface, `RunnerStatus`,
+  `RunnerPhase`, etc.) stayed in `types.go`. Merged
+  `runner/plan.go` + `plan_parse.go` into `plan.go`. Merged
+  `stream/channel_messages.go` + `channel_payloads.go` into
+  `channel.go` (test renamed `channel_payloads_test.go` →
+  `channel_test.go`).
+- PR D-6 (#109, with #110 doc follow-up) — Flatten
+  `internal/llm/internal/{builtin,toolpolicy}` →
+  `internal/llm/{builtin,toolpolicy}`. Updated 9 importer files.
+  Trimmed five dead façade entries in `internal/llm/tool_config.go`
+  (`SkillCapability` function, `CapabilityKind` type, three
+  `Capability*` constants with zero callers in any form) plus the
+  underlying `toolpolicy.SkillCapability` constructor. Per-symbol
+  caller count justified keeping the rest of the façade in place.
+  Deadcode 16 → 14.
+- PR D-7 (#111) — Split `internal/llm/conversation.go` (1061 lines)
+  into `turn.go` (Role / Tier / Turn / TokenUsage / RoleUsage),
+  `tool_call.go` (ToolSpec / ToolCall / ToolCallPayload),
+  `summarizer.go` (Summarizer interface + adapters +
+  `DefaultSummarizerFunc` + `summarizeTurn`). `Approver` and
+  `ApproverFunc` moved into `conversation_run.go` next to the
+  tool-dispatch loop. `conversation.go` drops to 847 lines covering
+  the config types and the `Conversation` primary type with its
+  methods.
+- PR D-8 (#112) — Split `internal/streamrender/renderer.go` (1191
+  lines) into `renderer.go` (406 lines: Renderer struct + lifecycle
+  + dispatch hub + live-line management), `event_format.go` (638
+  lines: per-event formatters + their helpers), and `style.go` (166
+  lines: color, kv formatting, layer / status presentation).
+- PR D-9 (#113) — Store package merges. `event_log.go` +
+  `event_log_json.go` → `event_log.go` (interface + JSON impl
+  together); `cursor.go` + `cursor_json.go` → `cursor.go`. Test
+  files renamed to match merged source basenames.
+- PR D-10 (this PR) — Closeout. Moved
+  `internal/engine/builtin/instructions/` →
+  `internal/engine/instructions/` (the `//go:embed builtin`
+  directive in `orchestrator_skill.go` still picks up the
+  orchestrator skill's `SKILL.md` from `internal/engine/builtin/`).
+  Trimmed stale references from `sqlite/doc.go` (`RegistryService`
+  / `TaskService` / `datadir` never existed) and from
+  `engine/runner/persistence/doc.go` (`PathRule` removed in D-3).
+  Updated this memo.
 
-Decision criteria for later review:
+Resolved decisions (originally tracked as "decision criteria for
+later review"):
 
-- Keep if needed as near-term public/internal extension points.
-- Remove if only test-facing legacy artifacts with no production path.
-- Avoid compatibility layers unless explicitly required during that refactor.
+- **Test-only public symbols.** Distinguished between three
+  categories: (a) symbols with zero callers anywhere — removed
+  (PR D-1 / D-3 / D-6); (b) thin wrappers around an existing
+  private — collapsed or demoted to private (PR D-2); (c) symbols
+  with only test callers but which are part of a documented public
+  surface a future caller will reach (the stream subscribe options,
+  the `ApproverFunc.Approve` adapter, `mcpclient.Start` for the
+  not-yet-written CLI binary, `runner.ParseMemoMarkdown` for
+  external tests in `examples/`). Category (c) is the curated
+  deadcode baseline below.
+- **Internal package nesting.** `internal/internal` carries no
+  encapsulation benefit when the parent is already `internal/`.
+  `internal/llm/internal/{builtin,toolpolicy}` was flattened in
+  PR D-6.
+- **Façade vs subpackage import.** `internal/llm/tool_config.go`
+  was preserved as a façade because most of its aliases have
+  5–20+ in-package or external callers; dropping them would force
+  5–20 llm files to import `toolpolicy` / `builtin` for negligible
+  readability gain. Only the four zero-caller entries were
+  removed.
+- **Test seams vs unexported helpers.**
+  `streamrender.FormatEvent` was demoted to package-private
+  `formatEvent`; the three rendering tests that depended on it
+  moved from the example test file to the renderer's own test
+  file. `mcpclient.StartWithTransport` collapsed into `Start`
+  with a transport parameter.
+- **Backward compatibility.** No shims, no aliases, no parallel
+  APIs throughout the track. All in-tree callers were updated in
+  the same commit as each removal, per
+  `.github/instructions/in-branch-api-compat.instructions.md`.
+
+Curated deadcode baseline after PR D-10 (14 entries, all
+intentional):
+
+- `internal/engine/runner/memo.go:79` — `ParseMemoMarkdown`. Used
+  by `examples/honshu_groundwater` and by external tests, so the
+  in-engine deadcode tool does not see the caller.
+- `internal/engine/stream/subscription.go:40,76` — `WithReplayFrom`,
+  `WithOverflowPolicy`. Documented options for the `Subscribe`
+  contract; exercised by the stream test suites.
+- `internal/llm/conversation_run.go:21` — `ApproverFunc.Approve`.
+  The canonical adapter from a plain function to the `Approver`
+  interface.
+- `internal/llm/builtin/bash.go:50` — `newBash`. Builtin-tool
+  test seam.
+- `internal/llm/builtin/builtin.go:61,88` — `withAllowlist`,
+  `withoutAllowlist`. Builtin-tool test seams.
+- `internal/mcpclient/mcpclient.go:99,133,164,182` — `Start`,
+  `listAllTools`, `coerceSchema`, `objectSchema`. `Start` is the
+  documented MCP entry point for a future CLI binary; the engine
+  takes pre-started servers via `Orchestrator.AddMCPServers`. The
+  three private helpers are reachable through `Start`.
+- `internal/store/runtime/runtime.go:84,92,109` —
+  `Persistence.RunnerStore`, `Persistence.SnapshotCursorStore`,
+  `Persistence.RootDir`. Accessors invoked from the engine startup
+  wiring; the deadcode tool conservatively flags them.
+
+Follow-up (out of scope for PR D, tracked for future work):
+
+- **Wider `tool_config.go` façade collapse.** The current façade
+  is preserved because most entries have many callers. A future
+  PR may revisit per-symbol after the orchestrator-facing API
+  stabilizes.
+- **`store.validateStoreID` placement.** Currently lives in
+  `event_log.go` but is also called from `cursor.go`. PR D-9
+  review flagged this as a candidate for a focused companion file
+  if the package grows.
+- **`HandoffDeliveredPayload` shape.** PR D-5 review noted this
+  payload declares its own `RunnerID` instead of embedding
+  `ChannelHeader` like its siblings. Intentional today (no `Kind`
+  / `Version` / `CreatedAt` metadata) but uneven.
+- **`Node.Id` vs `CoarsePlanNode.ID` initialism inconsistency.**
+  PR D-5 review flagged; pre-existing and out of scope for
+  reorganization-only work.
 
 ## PR E - Streamrender Extraction and Terminal UI Refactor (Deferred)
 
