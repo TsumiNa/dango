@@ -7,7 +7,7 @@ import (
 	"sort"
 	"strings"
 
-	builtininstructions "github.com/tsumina/dango/internal/engine/builtin/instructions"
+	instructionspkg "github.com/tsumina/dango/internal/engine/instructions"
 	runnerpkg "github.com/tsumina/dango/internal/engine/runner"
 )
 
@@ -61,7 +61,7 @@ func (e *Agent) stagePrompt(stage string, task string) string {
 }
 
 func (e *Agent) stagePromptWithUpstreamReferences(stage string, task string, upstreamRefs []string) string {
-	note, err := builtininstructions.StageNote(stage)
+	note, err := instructionspkg.StageNote(stage)
 	if err != nil {
 		e.logger.Warn("failed to load agent stage note", "stage", stage, "error", err)
 		note = "# " + stage + " stage"

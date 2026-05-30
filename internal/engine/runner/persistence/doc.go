@@ -1,8 +1,8 @@
-// Package persistence defines runner persistence backends and workspace path
-// conventions.
+// Package persistence defines the runner persistence backend contract.
 //
-// PathRule maps a runner ID to a single relative path element under the global
-// workspace root. Backend implementations provide orchestrator event-log,
-// runner-record, and cursor stores plus the global workspace root used by
-// runners. Durable backends currently include SQLite and Postgres.
+// Backend implementations provide the orchestrator event-log store, the
+// runner-record store, and the describe-replay cursor store, plus the global
+// workspace root that runners use to provision their per-runner subdirectories.
+// Durable backends currently include SQLite and Postgres; a markdown-mirror
+// backend is provided for human-readable inspection.
 package persistence
