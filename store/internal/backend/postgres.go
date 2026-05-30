@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	runnerpkg "github.com/tsumina/dango/engine/runner"
+	persistencepkg "github.com/tsumina/dango/engine/runner/persistence"
 	storepkg "github.com/tsumina/dango/store"
 	postgrespkg "github.com/tsumina/dango/store/internal/postgres"
 )
@@ -21,6 +22,8 @@ type PostgresBackend struct {
 	snapshotCursor storepkg.SnapshotCursorStore
 	workspaceRoot  string
 }
+
+var _ persistencepkg.Backend = (*PostgresBackend)(nil)
 
 // NewPostgresBackend creates a Postgres-backed persistence backend.
 //

@@ -20,6 +20,8 @@ type MarkdownBackend struct {
 	workspaceRoot  string
 }
 
+var _ Backend = (*MarkdownBackend)(nil)
+
 // NewMarkdownBackend creates a markdown/file-backed persistence backend rooted
 // at root.
 func NewMarkdownBackend(root string) (*MarkdownBackend, error) {

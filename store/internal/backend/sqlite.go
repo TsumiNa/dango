@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	runnerpkg "github.com/tsumina/dango/engine/runner"
+	persistencepkg "github.com/tsumina/dango/engine/runner/persistence"
 	storepkg "github.com/tsumina/dango/store"
 	sqlitepkg "github.com/tsumina/dango/store/internal/sqlite"
 )
@@ -21,6 +22,8 @@ type SQLiteBackend struct {
 	snapshotCursor storepkg.SnapshotCursorStore
 	workspaceRoot  string
 }
+
+var _ persistencepkg.Backend = (*SQLiteBackend)(nil)
 
 // NewSQLiteBackend creates a SQLite-backed persistence backend rooted at path.
 //
