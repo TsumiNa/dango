@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	streampkg "github.com/tsumina/dango/internal/engine/stream"
+	streampkg "github.com/tsumina/dango/stream"
 )
 
 // fixture builds a JSON-lines stream-event log with controllable contents
@@ -118,12 +118,12 @@ func TestAnalyzerSummarizesBashHeads(t *testing.T) {
 func TestCommandHeadSkipsLeadingAssignments(t *testing.T) {
 	t.Parallel()
 	cases := map[string]string{
-		"FOO=bar baz qux":         "baz",
-		"A=1 B=2 python3 -c 'x'":  "python3",
-		"normal-cmd arg":          "normal-cmd",
-		"":                        "",
-		"FOO= cmd":                "cmd", // empty-value assignment still skipped
-		"1BAD=skip cmd":           "1BAD=skip", // name cannot start with a digit
+		"FOO=bar baz qux":        "baz",
+		"A=1 B=2 python3 -c 'x'": "python3",
+		"normal-cmd arg":         "normal-cmd",
+		"":                       "",
+		"FOO= cmd":               "cmd",       // empty-value assignment still skipped
+		"1BAD=skip cmd":          "1BAD=skip", // name cannot start with a digit
 	}
 	for in, want := range cases {
 		if got := commandHead(in); got != want {

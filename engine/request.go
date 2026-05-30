@@ -1,0 +1,579 @@
+package engine
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"log/slog"
+	"os"
+	"sync"
+
+	"github.com/lithammer/shortuuid/v4"
+	agentpkg "github.com/tsumina/dango/engine/agent"
+	runnerpkg "github.com/tsumina/dango/engine/runner"
+	persistencepkg "github.com/tsumina/dango/engine/runner/persistence"
+	"github.com/tsumina/dango/internal/mcpclient"
+	"github.com/tsumina/dango/llm"
+	storepkg "github.com/tsumina/dango/store"
+	streampkg "github.com/tsumina/dango/stream"
+)
+
+// RequestRejectedError reports a planner rejection for a request that could
+// not be converted into a runner.
+type RequestRejectedError struct {
+	Reason *RejectReason
+}
+
+func (e *RequestRejectedError) Error() string {
+	if e == nil || e.Reason == nil {
+		return "orchestrate: request rejected"
+	}
+	if e.Reason.Summary != "" {
+		return "orchestrate: request rejected: " + e.Reason.Summary
+	}
+	return "orchestrate: request rejected"
+}
+
+// RequestPriority orders queued StartRequest submissions.
+//
+// Valid priorities are the integers 0 through 4 inclusive. The zero value is
+// the default priority, and larger values run first when the Orchestrator is
+// throttling concurrent runner execution.
+type RequestPriority int
+
+const (
+	RequestPriorityDefault RequestPriority = 0
+	RequestPriorityHighest RequestPriority = 4
+)
+
+func (p RequestPriority) valid() bool {
+	return p >= RequestPriorityDefault && p <= RequestPriorityHighest
+}
+
+// Request is the external task description the Orchestrator receives from the
+// caller. It contains only caller-provided input; observation state such as the
+// request stream is returned in [Response].
+type Request struct {
+	Input        string          `json:"input" yaml:"input"`
+	Priority     RequestPriority `json:"priority,omitempty" yaml:"priority,omitempty"`
+	ArtifactsDir string          `json:"artifacts_dir,omitempty" yaml:"artifacts_dir,omitempty"`
+}
+
+// Response is returned by [Orchestrator.StartRequest].
+//
+// Stream is the request-scoped event stream created for this orchestration
+// attempt. RequestID is stable from the first emitted event onward. StartRequest
+// returns before planning finishes, so RunnerID is empty in the initial
+// response. The materialized runner ID is emitted on Stream in the orchestrator
+// "runner created" progress event.
+type Response struct {
+	Stream    *streampkg.Stream
+	RequestID string
+	RunnerID  string
+}
+
+// RejectReason explains why a request cannot currently be turned into a plan.
+type RejectReason struct {
+	Summary       string   `json:"summary" yaml:"summary"`
+	Analysis      string   `json:"analysis" yaml:"analysis"`
+	MissingSkills []string `json:"missing_skills,omitempty" yaml:"missing_skills,omitempty"`
+}
+
+type requestStartup struct {
+	logger            *slog.Logger
+	persistence       persistencepkg.Backend
+	orchestratorSkill *llm.Skill
+	skillConfigs      map[string]SkillRegistration
+}
+
+// StartRequest is the outer-facing request entrypoint.
+//
+// It returns a request stream immediately, then plans and materializes the
+// runner in the background. Planning, rejection, runner creation, and runner
+// lifecycle updates are communicated through the stream. The stream is
+// replayable, so callers may subscribe after StartRequest returns and still
+// inspect events emitted during request startup. StartRequest must not become a
+// synchronization point for planner, runner, agent, or skill work; callers
+// that need to wait for progress should subscribe to the returned stream or use
+// explicit query APIs.
+func (o *Orchestrator) StartRequest(ctx context.Context, req Request) (*Response, error) {
+	ctx = o.operationContext(ctx)
+	requestID := shortuuid.New()
+	if !req.Priority.valid() {
+		return nil, fmt.Errorf("orchestrate: request priority must be between %d and %d", RequestPriorityDefault, RequestPriorityHighest)
+	}
+	requestStream := streampkg.New(streampkg.Scope{RequestID: requestID}, streampkg.DefaultConfig())
+
+	o.mu.Lock()
+	o.configLocked = true
+	startup := requestStartup{
+		logger:            o.logger,
+		persistence:       o.persistence,
+		orchestratorSkill: o.orchestratorSkill,
+		skillConfigs:      cloneSkillRegistrations(o.skills),
+	}
+	o.mu.Unlock()
+	var eventLogStore storepkg.EventLogStore
+	if startup.persistence != nil {
+		eventLogStore = startup.persistence.EventLogStore()
+	}
+	if err := startRequestEventLogPersistence(ctx, startup.logger, requestStream, eventLogStore); err != nil {
+		return nil, err
+	}
+
+	go func() {
+		if err := o.startRequestWithStream(ctx, req, requestStream, startup); err != nil {
+			emitEngineStreamEvent(ctx, requestStream,
+				streamSourceOrchestrator(),
+				streampkg.EventStatusFailed,
+				streampkg.StatusFailed,
+				err.Error(),
+				streampkg.Scope{},
+				nil,
+			)
+		}
+	}()
+	return &Response{Stream: requestStream, RequestID: requestID}, nil
+}
+
+func startRequestEventLogPersistence(ctx context.Context, logger *slog.Logger, requestStream *streampkg.Stream, eventLog storepkg.EventLogStore) error {
+	if requestStream == nil || eventLog == nil {
+		return nil
+	}
+	sub, err := requestStream.Subscribe(streampkg.Filter{}, streampkg.WithRawStream(), streampkg.WithNoReplay(), streampkg.WithSubscriberBuffer(8192))
+	if err != nil {
+		return fmt.Errorf("orchestrate: subscribe request event log: %w", err)
+	}
+	queue := newRequestEventLogQueue()
+	go drainRequestEventLogSubscription(ctx, logger, sub, queue)
+	go persistQueuedRequestEventLog(ctx, logger, queue, eventLog)
+	return nil
+}
+
+func drainRequestEventLogSubscription(ctx context.Context, logger *slog.Logger, sub *streampkg.Subscription, queue *requestEventLogQueue) {
+	defer sub.Cancel()
+	defer queue.Close()
+	for {
+		event, ok, err := sub.Next(ctx)
+		if err != nil {
+			if !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded) {
+				logger.Error("request event log subscription failed", "err", err)
+			}
+			return
+		}
+		if !ok {
+			return
+		}
+		if !queue.Enqueue(event) {
+			return
+		}
+		if requestStreamTerminal(event) {
+			return
+		}
+	}
+}
+
+func persistQueuedRequestEventLog(ctx context.Context, logger *slog.Logger, queue *requestEventLogQueue, eventLog storepkg.EventLogStore) {
+	for {
+		event, ok, err := queue.Next(ctx)
+		if err != nil {
+			if !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded) {
+				logger.Error("request event log queue failed", "err", err)
+			}
+			return
+		}
+		if !ok {
+			return
+		}
+		if err := eventLog.AppendEvent(ctx, event); err != nil {
+			logger.Error("request event log append failed",
+				"request_id", event.Scope.RequestID,
+				"sequence_number", event.SequenceNumber,
+				"event_type", event.EventType,
+				"err", err,
+			)
+		}
+	}
+}
+
+type requestEventLogQueue struct {
+	mu     sync.Mutex
+	events []streampkg.Event
+	head   int
+	closed bool
+	wake   chan struct{}
+}
+
+func newRequestEventLogQueue() *requestEventLogQueue {
+	return &requestEventLogQueue{wake: make(chan struct{}, 1)}
+}
+
+func (q *requestEventLogQueue) Enqueue(event streampkg.Event) bool {
+	if q == nil {
+		return false
+	}
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	if q.closed {
+		return false
+	}
+	q.events = append(q.events, event)
+	q.signalLocked()
+	return true
+}
+
+func (q *requestEventLogQueue) Close() {
+	if q == nil {
+		return
+	}
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	if q.closed {
+		return
+	}
+	q.closed = true
+	q.signalLocked()
+}
+
+func (q *requestEventLogQueue) Next(ctx context.Context) (streampkg.Event, bool, error) {
+	for {
+		q.mu.Lock()
+		if q.head < len(q.events) {
+			event := q.events[q.head]
+			q.events[q.head] = streampkg.Event{}
+			q.head++
+			if q.head == len(q.events) {
+				q.events = q.events[:0]
+				q.head = 0
+			} else if q.head >= 1024 && q.head*2 >= len(q.events) {
+				remaining := append([]streampkg.Event(nil), q.events[q.head:]...)
+				q.events = remaining
+				q.head = 0
+			}
+			q.mu.Unlock()
+			return event, true, nil
+		}
+		closed := q.closed
+		q.mu.Unlock()
+		if closed {
+			return streampkg.Event{}, false, nil
+		}
+		select {
+		case <-ctx.Done():
+			return streampkg.Event{}, false, ctx.Err()
+		case <-q.wake:
+		}
+	}
+}
+
+func (q *requestEventLogQueue) signalLocked() {
+	select {
+	case q.wake <- struct{}{}:
+	default:
+	}
+}
+
+func requestStreamTerminal(event streampkg.Event) bool {
+	events, err := streampkg.ExpandBundleEvent(event)
+	if err != nil {
+		return false
+	}
+	for _, candidate := range events {
+		if candidate.From.Layer == "orchestrator" && candidate.EventType == streampkg.EventStatusFailed {
+			return true
+		}
+		if candidate.EventType != streampkg.EventRunnerPhaseChanged {
+			continue
+		}
+		var delta struct {
+			Phase  string `json:"phase"`
+			Status string `json:"status"`
+		}
+		if err := json.Unmarshal(candidate.Delta, &delta); err != nil {
+			continue
+		}
+		if runnerpkg.RunnerPhase(delta.Phase) != runnerpkg.PhaseSettled {
+			continue
+		}
+		switch runnerpkg.RunnerStatus(delta.Status) {
+		case runnerpkg.RunnerStatusIdle, runnerpkg.RunnerStatusFailed, runnerpkg.RunnerStatusCanceled:
+			return true
+		}
+	}
+	return false
+}
+
+func (o *Orchestrator) startRequestWithStream(ctx context.Context, req Request, requestStream *streampkg.Stream, startup requestStartup) error {
+	var streamMerges []*streampkg.Merge
+	cleanupMerges := true
+	defer func() {
+		if cleanupMerges {
+			stopStreamMerges(streamMerges)
+		}
+	}()
+
+	envClient, envClientErr := o.resolveEnvClient()
+	planningSkill, err := runtimeOrchestrator(startup.orchestratorSkill, envClient, envClientErr, planningConversationConfig())
+	if err != nil {
+		if errors.Is(err, errOrchestratorSkillUnconfigured) {
+			return &RequestRejectedError{Reason: rejectUnconfiguredPlan(&req, cloneSkillMap(startup.skillConfigs), startup.orchestratorSkill)}
+		}
+		return err
+	}
+	if merge, err := mergeChildStream(ctx, requestStream, planningSkill.EventStream()); err != nil {
+		return err
+	} else if merge != nil {
+		streamMerges = append(streamMerges, merge)
+	}
+	emitEngineStreamEvent(ctx, requestStream,
+		streamSourceOrchestrator(),
+		streampkg.EventStatusStarted,
+		streampkg.StatusRunning,
+		"orchestrator planning started",
+		streampkg.Scope{},
+		nil,
+	)
+
+	skillSummaries := collectSkillSummaries(cloneSkillMap(startup.skillConfigs))
+	plan, reject, err := planWithOrchestrator(ctx, req, skillSummaries, planningSkill, requestStream)
+	if err != nil {
+		emitEngineStreamEvent(ctx, requestStream,
+			streamSourceOrchestrator(),
+			streampkg.EventStatusFailed,
+			streampkg.StatusFailed,
+			err.Error(),
+			streampkg.Scope{},
+			nil,
+		)
+		return err
+	}
+	if reject != nil {
+		emitEngineStreamEvent(ctx, requestStream,
+			streamSourceOrchestrator(),
+			streampkg.EventStatusFailed,
+			streampkg.StatusFailed,
+			reject.Summary,
+			streampkg.Scope{},
+			map[string]any{"reason": reject.Analysis},
+		)
+		return &RequestRejectedError{Reason: reject}
+	}
+	if plan == nil {
+		return fmt.Errorf("orchestrate: planner returned neither a plan nor a reject reason")
+	}
+	plannerSkill, err := bindOrchestratorSkillWithConfig(startup.orchestratorSkill, planningSkill.Client(), runnerPlannerConversationConfig())
+	if err != nil {
+		return err
+	}
+	if merge, err := mergeChildStream(ctx, requestStream, plannerSkill.EventStream()); err != nil {
+		return err
+	} else if merge != nil {
+		streamMerges = append(streamMerges, merge)
+	}
+
+	runner, err := newRunnerFromPlan(ctx, startup.logger, startup.persistence, req, plan, startup.skillConfigs, plannerSkill, skillSummaries)
+	if err != nil {
+		return err
+	}
+	if merge, err := mergeRunnerStream(ctx, requestStream, runner.EventStream()); err != nil {
+		return err
+	} else if merge != nil {
+		streamMerges = append(streamMerges, merge)
+	}
+	runnerID := runner.ID()
+	o.mu.Lock()
+	o.runners[runnerID] = runner
+	o.mu.Unlock()
+
+	emitEngineStreamEvent(ctx, requestStream,
+		streamSourceOrchestrator(),
+		streampkg.EventStatusProgress,
+		streampkg.StatusRunning,
+		map[string]any{"message": "runner created", "runner_id": runnerID},
+		streampkg.Scope{RunnerID: runnerID},
+		nil,
+	)
+
+	if err := o.submitManagedRunner(ctx, runner, req.Priority); err != nil {
+		return err
+	}
+	cleanupMerges = false
+	go o.watchRunnerDone(runner)
+	return nil
+}
+
+func streamSourceOrchestrator() streampkg.Source {
+	return streampkg.Source{Layer: "orchestrator", ID: "orchestrator"}
+}
+
+func emitEngineStreamEvent(ctx context.Context, eventStream *streampkg.Stream, source streampkg.Source, eventType string, status string, delta any, scope streampkg.Scope, metadata map[string]any) {
+	if eventStream == nil {
+		return
+	}
+	raw, err := json.Marshal(delta)
+	if err != nil {
+		raw, _ = json.Marshal(fmt.Sprint(delta))
+	}
+	_ = eventStream.Emit(ctx, streampkg.Event{
+		EventType: eventType,
+		From:      source,
+		Status:    status,
+		Delta:     json.RawMessage(raw),
+		Scope:     scope,
+		Metadata:  metadata,
+	})
+}
+
+func mergeChildStream(ctx context.Context, downstream *streampkg.Stream, upstream *streampkg.Stream) (*streampkg.Merge, error) {
+	if downstream == nil || upstream == nil {
+		return nil, nil
+	}
+	merge, err := downstream.MergeWithConfig(ctx, upstream, streampkg.Filter{}, streampkg.DefaultHubMergeWindowConfig(), streampkg.WithSubscriberBuffer(4096))
+	if err != nil {
+		return nil, fmt.Errorf("orchestrate: merge child stream: %w", err)
+	}
+	return merge, nil
+}
+
+func mergeRunnerStream(ctx context.Context, downstream *streampkg.Stream, upstream *streampkg.Stream) (*streampkg.Merge, error) {
+	if downstream == nil || upstream == nil {
+		return nil, nil
+	}
+	merge, err := downstream.MergeWithConfig(ctx, upstream, streampkg.Filter{}, streampkg.DefaultHubMergeWindowConfig(), streampkg.WithSubscriberBuffer(4096))
+	if err != nil {
+		return nil, fmt.Errorf("orchestrate: merge runner stream: %w", err)
+	}
+	return merge, nil
+}
+
+func stopStreamMerges(merges []*streampkg.Merge) {
+	for _, merge := range merges {
+		if merge != nil {
+			merge.Stop()
+		}
+	}
+}
+
+func newRunnerFromPlan(ctx context.Context, logger *slog.Logger, backend persistencepkg.Backend, req Request, plan *runnerpkg.CoarsePlan, skills map[string]SkillRegistration, plannerSkill *llm.Skill, skillSummaries []runnerpkg.SkillSummary) (*runnerpkg.Runner, error) {
+	if req.ArtifactsDir != "" {
+		if err := os.MkdirAll(req.ArtifactsDir, 0o755); err != nil {
+			return nil, fmt.Errorf("orchestrate: create artifacts dir %q: %w", req.ArtifactsDir, err)
+		}
+	}
+	nodes, err := buildPlanNodes(logger, req, plan, skills)
+	if err != nil {
+		return nil, err
+	}
+	opts := []runnerpkg.Option{
+		runnerpkg.WithContext(ctx),
+		runnerpkg.WithLogger(logger),
+		runnerpkg.WithPersistenceHandle(backend),
+		runnerpkg.WithInitialPlan(plan, nodes),
+		runnerpkg.WithPlannerSkill(plannerSkill),
+		runnerpkg.WithSkillSummaries(skillSummaries),
+		runnerpkg.WithPlanNodeBuilder(func(replanned *runnerpkg.CoarsePlan) (map[string]*runnerpkg.Node, error) {
+			request := Request{Input: replanned.Request, ArtifactsDir: req.ArtifactsDir}
+			return buildPlanNodes(logger, request, replanned, skills)
+		}),
+	}
+	return runnerpkg.New(opts...), nil
+}
+
+func buildPlanNodes(logger *slog.Logger, req Request, plan *runnerpkg.CoarsePlan, skills map[string]SkillRegistration) (map[string]*runnerpkg.Node, error) {
+	if len(plan.Nodes) == 0 {
+		return nil, fmt.Errorf("orchestrate: coarse plan must contain at least one node")
+	}
+
+	nodes := make(map[string]*runnerpkg.Node, len(plan.Nodes))
+	for _, step := range plan.Nodes {
+		if step.ID == "" {
+			return nil, fmt.Errorf("orchestrate: coarse plan node has empty id")
+		}
+		if _, exists := nodes[step.ID]; exists {
+			return nil, fmt.Errorf("orchestrate: coarse plan node %q is duplicated", step.ID)
+		}
+		if step.SkillName == "" {
+			return nil, fmt.Errorf("orchestrate: coarse plan node %q has empty skill name", step.ID)
+		}
+		skillCfg, ok := skills[step.SkillName]
+		if !ok || skillCfg.Skill == nil {
+			return nil, fmt.Errorf("orchestrate: coarse plan node %q references unregistered skill %q", step.ID, step.SkillName)
+		}
+
+		planner := &agentpkg.ExecutionPlanner{
+			ID:              step.ID,
+			TaskDescription: step.TaskDescription,
+			SourceInput:     req.Input,
+			ArtifactsDir:    req.ArtifactsDir,
+		}
+		if planner.TaskDescription == "" {
+			planner.TaskDescription = req.Input
+		}
+		skill := skillCfg.Skill
+		convCfg := conversationConfigForNode(skillCfg.Config, step.ID, step.SkillName)
+		agent, err := agentpkg.NewAgent(skill, planner, convCfg, agentpkg.WithAgentLogger(logger), agentpkg.WithAgentClient(skillCfg.Client))
+		if err != nil {
+			return nil, fmt.Errorf("orchestrate: build agent for node %q: %w", step.ID, err)
+		}
+
+		nodes[step.ID] = &runnerpkg.Node{
+			Id:              step.ID,
+			SkillName:       step.SkillName,
+			TaskDescription: planner.TaskDescription,
+			Agent:           agent,
+		}
+	}
+
+	for _, step := range plan.Nodes {
+		node := nodes[step.ID]
+		for _, parentID := range step.DependsOn {
+			parent := nodes[parentID]
+			if parent == nil {
+				return nil, fmt.Errorf("orchestrate: coarse plan node %q depends on unknown node %q", step.ID, parentID)
+			}
+			node.Parents = append(node.Parents, parent)
+		}
+	}
+
+	return nodes, nil
+}
+
+func conversationConfigForNode(cfg llm.ConversationConfig, nodeID string, skillName string) llm.ConversationConfig {
+	out := cfg.Clone()
+	out.StreamEvents = true
+	out.EventStream = nil
+	out.StreamMetadata = nil
+	return out
+}
+
+func cloneSkillRegistrations(skills map[string]SkillRegistration) map[string]SkillRegistration {
+	copyMap := make(map[string]SkillRegistration, len(skills))
+	for name, cfg := range skills {
+		copyMap[name] = SkillRegistration{
+			Skill:          cfg.Skill,
+			Alias:          cfg.Alias,
+			IsUserSupplied: cfg.IsUserSupplied,
+			AccessibleDirs: append([]string(nil), cfg.AccessibleDirs...),
+			Client:         cfg.Client,
+			Config:         cfg.Config.Clone(),
+			MCPServers:     append([]*mcpclient.Server(nil), cfg.MCPServers...),
+		}
+	}
+	return copyMap
+}
+
+func cloneSkillMap(skills map[string]SkillRegistration) map[string]*llm.Skill {
+	copyMap := make(map[string]*llm.Skill, len(skills))
+	for name, cfg := range skills {
+		copyMap[name] = cfg.Skill
+	}
+	return copyMap
+}
+
+func rejectUnconfiguredPlan(req *Request, skills map[string]*llm.Skill, orchestratorSkill *llm.Skill) *RejectReason {
+	return &RejectReason{
+		Summary:  "task cannot proceed",
+		Analysis: "the orchestrator skill is not bound to an llm client, so the request cannot be planned yet",
+	}
+}

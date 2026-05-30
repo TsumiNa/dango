@@ -7,7 +7,7 @@ import (
 	"fmt"
 
 	"github.com/spf13/cobra"
-	"github.com/tsumina/dango/internal/server"
+	"github.com/tsumina/dango/cmd/server"
 )
 
 // serveCmd represents the serve command

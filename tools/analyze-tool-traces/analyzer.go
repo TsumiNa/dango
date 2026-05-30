@@ -29,23 +29,23 @@ import (
 	"sort"
 	"strings"
 
-	streampkg "github.com/tsumina/dango/internal/engine/stream"
+	streampkg "github.com/tsumina/dango/stream"
 )
 
 // Report is the structured analysis result. It is what the JSON sidecar
 // serializes and what the markdown formatter consumes; keep new fields
 // JSON-marshallable.
 type Report struct {
-	TotalEvents       int            `json:"total_events"`
-	AuditEvents       int            `json:"audit_events"`
-	ToolCallStarted   int            `json:"tool_call_started"`
-	BashCalls         int            `json:"bash_calls"`
-	BashHeads         map[string]int `json:"bash_heads"`
-	InnerBodies       map[string][]string `json:"inner_bodies"`
-	PerSkillTallies   map[string]int `json:"per_skill_tallies"`
-	URLsByHost        map[string]int `json:"urls_by_host"`
-	CurlCalls         int            `json:"curl_calls"`
-	WgetCalls         int            `json:"wget_calls"`
+	TotalEvents     int                 `json:"total_events"`
+	AuditEvents     int                 `json:"audit_events"`
+	ToolCallStarted int                 `json:"tool_call_started"`
+	BashCalls       int                 `json:"bash_calls"`
+	BashHeads       map[string]int      `json:"bash_heads"`
+	InnerBodies     map[string][]string `json:"inner_bodies"`
+	PerSkillTallies map[string]int      `json:"per_skill_tallies"`
+	URLsByHost      map[string]int      `json:"urls_by_host"`
+	CurlCalls       int                 `json:"curl_calls"`
+	WgetCalls       int                 `json:"wget_calls"`
 }
 
 // turingCompleteHeads is the set of bash heads whose argument carries an

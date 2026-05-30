@@ -1,6 +1,6 @@
 # Runner 生命周期
 
-当前代码里，`internal/engine/runner.Runner` 同时承担 DAG agent runtime 和 managed lifecycle 宿主两种角色。旧文档里把 `ru` 和 managed wrapper 分开讲，已经不适合现在的实现。
+当前代码里，`engine/runner.Runner` 同时承担 DAG agent runtime 和 managed lifecycle 宿主两种角色。旧文档里把 `ru` 和 managed wrapper 分开讲，已经不适合现在的实现。
 
 ## 两条入口
 
