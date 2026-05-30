@@ -120,9 +120,9 @@ func TestSubmitManagedRunner_CanceledWhileQueuedTransitionsRunner(t *testing.T) 
 
 func newManagedQueueTestRunner(t *testing.T, request string, run func(context.Context, map[string]any) (any, []*Node, error)) *runnerpkg.Runner {
 	t.Helper()
-	plan := &CoarsePlan{
+	plan := &runnerpkg.CoarsePlan{
 		Request: request,
-		Nodes: []CoarsePlanNode{{
+		Nodes: []runnerpkg.CoarsePlanNode{{
 			ID:              "only",
 			SkillName:       "single",
 			TaskDescription: request,

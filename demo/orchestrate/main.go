@@ -401,9 +401,9 @@ func demoPlanningOutput(req *struct {
 		}
 		return string(buf), nil
 	}
-	buf, err := json.Marshal(map[string]any{"plan": orchestrate.CoarsePlan{
+	buf, err := json.Marshal(map[string]any{"plan": runnerpkg.CoarsePlan{
 		Request: req.Data.Request,
-		Nodes: []orchestrate.CoarsePlanNode{
+		Nodes: []runnerpkg.CoarsePlanNode{
 			{
 				ID:              "collect",
 				SkillName:       "collect",
@@ -423,7 +423,7 @@ func demoPlanningOutput(req *struct {
 	return string(buf), nil
 }
 
-func mustStartRequest(ctx context.Context, o *orchestrate.Orchestrator, input string, priority orchestrate.RequestPriority) *orchestrate.CoarsePlan {
+func mustStartRequest(ctx context.Context, o *orchestrate.Orchestrator, input string, priority orchestrate.RequestPriority) *runnerpkg.CoarsePlan {
 	resp, err := o.StartRequest(ctx, orchestrate.Request{Input: input, Priority: priority})
 	if err != nil {
 		fatalf("StartRequest(%q): %v", input, err)
@@ -667,7 +667,7 @@ func mustWaitForView(o *orchestrate.Orchestrator, id string, timeout time.Durati
 	return nil
 }
 
-func printPlan(label string, plan *orchestrate.CoarsePlan) {
+func printPlan(label string, plan *runnerpkg.CoarsePlan) {
 	fmt.Println("  " + bold(label) + dim(":"))
 	for _, node := range plan.Nodes {
 		deps := "∅"

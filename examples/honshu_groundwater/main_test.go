@@ -754,7 +754,7 @@ func completedNodeMarkdown(view *runnerpkg.RunnerView, nodeID string) (string, e
 	return raw, nil
 }
 
-func ensureNoPDFSkill(plan *orchestrate.CoarsePlan) error {
+func ensureNoPDFSkill(plan *runnerpkg.CoarsePlan) error {
 	if plan == nil {
 		return fmt.Errorf("missing plan")
 	}
@@ -1086,10 +1086,10 @@ func polishHandoffMarkdown(prompt string) (string, error) {
 	return doc.Markdown()
 }
 
-func groundwaterPlan(request string) *orchestrate.CoarsePlan {
-	return &orchestrate.CoarsePlan{
+func groundwaterPlan(request string) *runnerpkg.CoarsePlan {
+	return &runnerpkg.CoarsePlan{
 		Request: request,
-		Nodes: []orchestrate.CoarsePlanNode{
+		Nodes: []runnerpkg.CoarsePlanNode{
 			{
 				ID:              "enrich_elevation",
 				SkillName:       "elevation_lookup",
