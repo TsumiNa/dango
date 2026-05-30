@@ -10,11 +10,6 @@ import (
 )
 
 // Approver decides whether a need_approve tool call may proceed.
-//
-// Approver lives next to dispatch because need_approve gating is consulted
-// from inside [Conversation.Run]'s tool-call loop; the interface and its
-// adapter sit here so the dispatch site and the contract that drives it
-// stay readable together.
 type Approver interface {
 	Approve(ctx context.Context, req ApprovalRequest) (ApprovalResponse, error)
 }
