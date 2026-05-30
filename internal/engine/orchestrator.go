@@ -33,7 +33,6 @@ type Orchestrator struct {
 	mu                sync.RWMutex
 	configLocked      bool
 	persistence       persistencepkg.Backend
-	runnerPathRule    persistencepkg.PathRule
 	maxRunningRunners int
 	skills            map[string]SkillRegistration
 	runners           map[string]*runnerpkg.Runner
@@ -87,17 +86,6 @@ func WithLogger(logger *slog.Logger) OrchestratorOption {
 func WithPersistence(backend persistencepkg.Backend) OrchestratorOption {
 	return func(o *Orchestrator) {
 		o.persistence = backend
-	}
-}
-
-// WithRunnerPathRule installs rule as the per-runner workspace path mapper.
-//
-// Nil keeps [persistence.DefaultPathRule].
-func WithRunnerPathRule(rule persistencepkg.PathRule) OrchestratorOption {
-	return func(o *Orchestrator) {
-		if rule != nil {
-			o.runnerPathRule = rule
-		}
 	}
 }
 
@@ -178,7 +166,6 @@ func NewOrchestrator(opts ...OrchestratorOption) *Orchestrator {
 	o := &Orchestrator{
 		ctx:              context.Background(),
 		logger:           logging.NewLogger(logging.DefaultConfig()),
-		runnerPathRule:   persistencepkg.DefaultPathRule,
 		skills:           make(map[string]SkillRegistration),
 		runners:          make(map[string]*runnerpkg.Runner),
 		runningRunnerIDs: make(map[string]struct{}),

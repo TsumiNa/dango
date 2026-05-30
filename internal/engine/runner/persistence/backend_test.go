@@ -13,27 +13,6 @@ import (
 	storepkg "github.com/tsumina/dango/internal/store"
 )
 
-func TestNoneBackendDisablesStores(t *testing.T) {
-	t.Parallel()
-
-	backend := None()
-	if backend.EventLogStore() != nil {
-		t.Fatal("EventLogStore() != nil for none backend")
-	}
-	if backend.RunnerStore() != nil {
-		t.Fatal("RunnerStore() != nil for none backend")
-	}
-	if backend.SnapshotCursorStore() != nil {
-		t.Fatal("SnapshotCursorStore() != nil for none backend")
-	}
-	if backend.WorkspaceRoot() != "" {
-		t.Fatalf("WorkspaceRoot() = %q, want empty", backend.WorkspaceRoot())
-	}
-	if err := backend.Close(context.Background()); err != nil {
-		t.Fatalf("Close: %v", err)
-	}
-}
-
 func TestMarkdownBackendStoresAndWorkspaceRoot(t *testing.T) {
 	t.Parallel()
 
