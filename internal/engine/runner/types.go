@@ -6,7 +6,7 @@ import (
 	"time"
 )
 
-// Agent is the execution contract a Node needs across the runner's
+// Agent is the execution contract a [Node] needs across the runner's
 // phased lifecycle.
 //
 // Execute runs the node's main unit of work. Polish is invoked once during
@@ -98,16 +98,6 @@ type SkillSummary struct {
 	Description string `json:"description,omitempty" yaml:"description,omitempty"`
 }
 
-// PlanReview is the planner-owned review decision for a polished plan.
-type PlanReview struct {
-	Approved bool   `json:"approved" yaml:"approved"`
-	Reason   string `json:"reason,omitempty" yaml:"reason,omitempty"`
-}
-
-// PlanNodeBuilder materializes a [CoarsePlan] into the node graph a Runner can
-// execute.
-type PlanNodeBuilder func(plan *CoarsePlan) (map[string]*Node, error)
-
 // RunnerPhase reports which high-level business stage of the plan lifecycle a
 // Runner is currently in.
 //
@@ -144,27 +134,6 @@ const (
 	// [PhaseExecuting] through [PhaseReport] into the terminal state.
 	PhaseSettled RunnerPhase = "settled"
 )
-
-// Node represents a single unit of work within the Runner's execution graph.
-type Node struct {
-	Id              string  `json:"id" yaml:"id"`
-	SkillName       string  `json:"skill_name,omitempty" yaml:"skill_name,omitempty"`
-	TaskDescription string  `json:"task_description,omitempty" yaml:"task_description,omitempty"`
-	Parents         []*Node `json:"parents,omitempty" yaml:"parents,omitempty"`
-	// Agent contains the execution logic of the node.
-	Agent Agent `json:"-" yaml:"-"`
-
-	CreatedAt  time.Time `json:"created_at" yaml:"created_at"`
-	UpdatedAt  time.Time `json:"updated_at" yaml:"updated_at"`
-	FinishedAt time.Time `json:"finished_at" yaml:"finished_at"`
-}
-
-type executionResult struct {
-	nodeID   string
-	output   any
-	newNodes []*Node
-	err      error
-}
 
 // ErrRunnerAlreadyStarted is returned when callers attempt to start or
 // configure persistence on a Runner that has already started.
