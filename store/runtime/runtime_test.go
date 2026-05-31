@@ -74,7 +74,7 @@ func TestOpen_DefaultJSONFallbackCreatesUsableStoresAndCleansUp(t *testing.T) {
 		t.Fatalf("loaded cursor = %+v, want %+v", loadedCursor, cursor)
 	}
 
-	if err := persistence.Close(); err != nil {
+	if err := persistence.Close(context.Background()); err != nil {
 		t.Fatalf("Close: %v", err)
 	}
 	if _, err := os.Stat(root); !os.IsNotExist(err) {
@@ -115,7 +115,7 @@ func TestOpen_SQLiteStoresSurviveReopen(t *testing.T) {
 	if err := persistence.SnapshotCursorStore().SaveCursor(ctx, cursor); err != nil {
 		t.Fatalf("SaveCursor: %v", err)
 	}
-	if err := persistence.Close(); err != nil {
+	if err := persistence.Close(context.Background()); err != nil {
 		t.Fatalf("Close(first): %v", err)
 	}
 
@@ -124,7 +124,7 @@ func TestOpen_SQLiteStoresSurviveReopen(t *testing.T) {
 		t.Fatalf("Open(reopen): %v", err)
 	}
 	defer func() {
-		if err := reopened.Close(); err != nil {
+		if err := reopened.Close(context.Background()); err != nil {
 			t.Fatalf("Close(reopen): %v", err)
 		}
 	}()
@@ -171,7 +171,7 @@ func TestOpen_SQLiteWithMarkdownMirrorWritesMirrorFiles(t *testing.T) {
 	if err := persistence.SnapshotCursorStore().SaveCursor(ctx, cursor); err != nil {
 		t.Fatalf("SaveCursor: %v", err)
 	}
-	if err := persistence.Close(); err != nil {
+	if err := persistence.Close(context.Background()); err != nil {
 		t.Fatalf("Close(first): %v", err)
 	}
 
@@ -191,7 +191,7 @@ func TestOpen_SQLiteWithMarkdownMirrorWritesMirrorFiles(t *testing.T) {
 		t.Fatalf("Open(reopen sqlite-only): %v", err)
 	}
 	defer func() {
-		if err := reopened.Close(); err != nil {
+		if err := reopened.Close(context.Background()); err != nil {
 			t.Fatalf("Close(reopen): %v", err)
 		}
 	}()
@@ -247,7 +247,7 @@ func TestOpen_SQLiteBackendCloseReleasesUnderlyingResources(t *testing.T) {
 	if err := persistence.EventLogStore().AppendEvent(ctx, event); err == nil {
 		t.Fatal("AppendEvent succeeded after Backend().Close, want closed backing store")
 	}
-	if err := persistence.Close(); err != nil {
+	if err := persistence.Close(context.Background()); err != nil {
 		t.Fatalf("Close(after backend close): %v", err)
 	}
 }
@@ -278,7 +278,7 @@ func TestOpen_PostgresStoresSurviveReopen(t *testing.T) {
 	if err := persistence.SnapshotCursorStore().SaveCursor(ctx, cursor); err != nil {
 		t.Fatalf("SaveCursor: %v", err)
 	}
-	if err := persistence.Close(); err != nil {
+	if err := persistence.Close(context.Background()); err != nil {
 		t.Fatalf("Close(first): %v", err)
 	}
 
@@ -287,7 +287,7 @@ func TestOpen_PostgresStoresSurviveReopen(t *testing.T) {
 		t.Fatalf("Open(reopen): %v", err)
 	}
 	defer func() {
-		if err := reopened.Close(); err != nil {
+		if err := reopened.Close(context.Background()); err != nil {
 			t.Fatalf("Close(reopen): %v", err)
 		}
 	}()
@@ -337,7 +337,7 @@ func TestOpen_PostgresWithMarkdownMirrorWritesMirrorFiles(t *testing.T) {
 	if err := persistence.SnapshotCursorStore().SaveCursor(ctx, cursor); err != nil {
 		t.Fatalf("SaveCursor: %v", err)
 	}
-	if err := persistence.Close(); err != nil {
+	if err := persistence.Close(context.Background()); err != nil {
 		t.Fatalf("Close(first): %v", err)
 	}
 
@@ -357,7 +357,7 @@ func TestOpen_PostgresWithMarkdownMirrorWritesMirrorFiles(t *testing.T) {
 		t.Fatalf("Open(reopen postgres-only): %v", err)
 	}
 	defer func() {
-		if err := reopened.Close(); err != nil {
+		if err := reopened.Close(context.Background()); err != nil {
 			t.Fatalf("Close(reopen): %v", err)
 		}
 	}()

@@ -123,7 +123,7 @@ func runHonshuGroundwaterExample(ctx context.Context, cfg exampleConfig) (_ *exa
 		return nil, err
 	}
 	defer func() {
-		if closeErr := persistence.Close(); closeErr != nil && err == nil {
+		if closeErr := persistence.Close(ctx); closeErr != nil && err == nil {
 			err = closeErr
 		}
 	}()

@@ -139,7 +139,7 @@ func backendCases() []backendCase {
 					t.Fatalf("runtime.Open: %v", err)
 				}
 				return persistence.Backend(), func() {
-					if err := persistence.Close(); err != nil {
+					if err := persistence.Close(context.Background()); err != nil {
 						t.Fatalf("runtime persistence Close: %v", err)
 					}
 				}

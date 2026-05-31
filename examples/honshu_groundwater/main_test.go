@@ -382,7 +382,7 @@ func TestRunHonshuGroundwaterExamplePersistsTerminalRequestState(t *testing.T) {
 		t.Fatalf("runtime.Open(reopen): %v", err)
 	}
 	defer func() {
-		if err := reopened.Close(); err != nil {
+		if err := reopened.Close(context.Background()); err != nil {
 			t.Fatalf("Close(reopened persistence): %v", err)
 		}
 	}()
@@ -428,7 +428,7 @@ func TestRunHonshuGroundwaterExampleReopensPersistedState(t *testing.T) {
 		t.Fatalf("runtime.Open(reopen): %v", err)
 	}
 	defer func() {
-		if err := reopened.Close(); err != nil {
+		if err := reopened.Close(context.Background()); err != nil {
 			t.Fatalf("Close(reopened persistence): %v", err)
 		}
 	}()

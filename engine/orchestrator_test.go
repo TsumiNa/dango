@@ -753,7 +753,7 @@ func TestLoadRunnerRecords_LoadsPersistedSQLiteLog(t *testing.T) {
 			t.Fatalf("runtime.Open sqlite persistence: %v", err)
 		}
 		t.Cleanup(func() {
-			if err := persistence.Close(); err != nil {
+			if err := persistence.Close(context.Background()); err != nil {
 				t.Fatalf("Close sqlite persistence: %v", err)
 			}
 		})

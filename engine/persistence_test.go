@@ -74,7 +74,7 @@ func TestRuntimePersistenceSQLiteSupportsReplayRunnerRecordsAndDescribeAfterReop
 		t.Fatalf("DescribeRequest phase = %q, want %q", view.Phase, runnerpkg.PhaseSettled)
 	}
 	resp.Stream.Close()
-	if err := persistence.Close(); err != nil {
+	if err := persistence.Close(context.Background()); err != nil {
 		t.Fatalf("Close(first persistence): %v", err)
 	}
 
@@ -83,7 +83,7 @@ func TestRuntimePersistenceSQLiteSupportsReplayRunnerRecordsAndDescribeAfterReop
 		t.Fatalf("runtime.Open(reopen): %v", err)
 	}
 	defer func() {
-		if err := reopened.Close(); err != nil {
+		if err := reopened.Close(context.Background()); err != nil {
 			t.Fatalf("Close(reopened persistence): %v", err)
 		}
 	}()

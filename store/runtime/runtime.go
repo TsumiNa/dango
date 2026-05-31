@@ -115,14 +115,15 @@ func (p *Persistence) RootDir() string {
 }
 
 // Close releases the persistence bundle and removes any temporary fallback
-// directory created by Open.
-func (p *Persistence) Close() error {
+// directory created by Open. ctx is forwarded to the backend's Close so callers
+// can bound graceful shutdown; pass context.Background() when no deadline applies.
+func (p *Persistence) Close(ctx context.Context) error {
 	if p == nil {
 		return nil
 	}
 	var errs []error
 	if p.backend != nil {
-		if err := p.backend.Close(context.Background()); err != nil {
+		if err := p.backend.Close(ctx); err != nil {
 			errs = append(errs, err)
 		}
 	}
