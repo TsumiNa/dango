@@ -31,6 +31,14 @@ func TestMarkdownBackendStoresAndWorkspaceRoot(t *testing.T) {
 		t.Fatalf("Stat(workspace root): %v", err)
 	}
 
+	wantRoot, err := filepath.Abs(root)
+	if err != nil {
+		t.Fatalf("Abs(root): %v", err)
+	}
+	if backend.Root() != wantRoot {
+		t.Fatalf("Root() = %q, want %q", backend.Root(), wantRoot)
+	}
+
 	eventDelta, err := json.Marshal(map[string]any{"message": "ok"})
 	if err != nil {
 		t.Fatalf("marshal delta: %v", err)

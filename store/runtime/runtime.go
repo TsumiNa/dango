@@ -171,9 +171,7 @@ func openSQLiteCompositePersistence(path string) (*Persistence, error) {
 			mirror:  markdownBackend.SnapshotCursorStore(),
 		},
 		workspaceRoot: sqliteBackend.WorkspaceRoot(),
-		closeOnce: sync.OnceValue(func() error {
-			return errors.Join(sqliteBackend.Close(context.Background()), markdownBackend.Close(context.Background()))
-		}),
+		closeOnce:     closeBoth(sqliteBackend, markdownBackend),
 	}
 	return &Persistence{backend: backend}, nil
 }
@@ -211,9 +209,7 @@ func openPostgresCompositePersistence(dsn string, workspaceRoot string) (*Persis
 			mirror:  markdownBackend.SnapshotCursorStore(),
 		},
 		workspaceRoot: postgresBackend.WorkspaceRoot(),
-		closeOnce: sync.OnceValue(func() error {
-			return errors.Join(postgresBackend.Close(context.Background()), markdownBackend.Close(context.Background()))
-		}),
+		closeOnce:     closeBoth(postgresBackend, markdownBackend),
 	}
 	return &Persistence{backend: backend}, nil
 }
@@ -248,7 +244,7 @@ type compositeBackend struct {
 	runnerStore         runnerpkg.RunnerStore
 	snapshotCursorStore storepkg.SnapshotCursorStore
 	workspaceRoot       string
-	closeOnce           func() error
+	closeOnce           func(context.Context) error
 }
 
 func (c *compositeBackend) EventLogStore() storepkg.EventLogStore { return c.eventLogStore }
@@ -259,11 +255,25 @@ func (c *compositeBackend) SnapshotCursorStore() storepkg.SnapshotCursorStore {
 	return c.snapshotCursorStore
 }
 func (c *compositeBackend) WorkspaceRoot() string { return c.workspaceRoot }
-func (c *compositeBackend) Close(context.Context) error {
+func (c *compositeBackend) Close(ctx context.Context) error {
 	if c == nil || c.closeOnce == nil {
 		return nil
 	}
-	return c.closeOnce()
+	return c.closeOnce(ctx)
+}
+
+// closeBoth returns a close function that shuts down primary and mirror exactly
+// once, forwarding the caller's context to both so a future ctx-aware backend
+// can honor shutdown deadlines (rather than baking in context.Background()).
+func closeBoth(primary, mirror persistencepkg.Backend) func(context.Context) error {
+	var once sync.Once
+	var err error
+	return func(ctx context.Context) error {
+		once.Do(func() {
+			err = errors.Join(primary.Close(ctx), mirror.Close(ctx))
+		})
+		return err
+	}
 }
 
 type compositeEventLogStore struct {
