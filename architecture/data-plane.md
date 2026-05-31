@@ -6,9 +6,9 @@
 
 定义位置：
 
-- `internal/engine/runner/exchange_doc.go`
-- `internal/engine/runner/handoff_doc.go`
-- `internal/engine/runner/memo.go`
+- `engine/runner/exchange_doc.go`
+- `engine/runner/handoff_doc.go`
+- `engine/runner/memo.go`
 
 三类 document 都由两部分组成：
 
@@ -43,7 +43,7 @@ handoff 的 `intent` 用于说明下一跳语义，当前常见值有：
 
 ### Agent
 
-`internal/engine/agent_stage_output.go` 负责默认 stage 输出：
+`engine/agent/agent_stage.go` 负责默认 stage 输出：
 
 - 用 stage body 组装 `HandoffDoc`，写入当前 node 的 `downstream/handoff.md`
 - 用同一份 stage body 组装 `ExchangeDoc`，写入 runner 共享的 `exchange/`

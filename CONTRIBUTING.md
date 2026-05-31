@@ -23,25 +23,41 @@ The detailed architecture notes under `architecture/` are the best starting poin
 
 ## Repository Structure
 
+dango is structured as a reusable library plus one application that consumes it.
+The public library packages live at the module root so a downstream module can
+import them for secondary development; `cmd/` is dango's own CLI application built
+on top of those packages. Anything under an `internal/` directory (the top-level
+`internal/` or a package-local `<pkg>/internal/`) is dango-private and cannot be
+imported by other modules.
+
 ```text
-main.go                         CLI entrypoint
+main.go                         CLI entrypoint (delegates to cmd.Execute)
 cmd/                            Cobra commands; serve is the current API server command
-internal/engine/                request orchestration, planning, agents, queues, describe replay
-internal/engine/builtin/        embedded orchestrator skill and planning instructions
-internal/engine/runner/         runner lifecycle, task graph execution, exchange documents
-internal/engine/runner/persistence/
-                                unified persistence backends used by orchestrator and runner
-internal/engine/stream/         replayable stream, subscription, filtering, merge, and framing
-internal/llm/                   OpenAI Responses API client, conversations, tools, skills, workspaces
-internal/store/                 persistence abstractions and lightweight JSON fallbacks
-internal/store/sqlite/          SQLite migrations, sqlc queries, and durable store implementation
-internal/store/postgres/        Postgres durable stores for runtime persistence
-internal/store/runtime/         startup-owned persistence wiring
-internal/server/                HTTP and Unix socket API server lifecycle and routes
-internal/streamrender/          terminal renderer for stream subscriptions
-internal/logging/               shared logging setup
-internal/prompts/               repository-owned prompt assets and prompt package docs
-demo/                           focused executable demos for orchestration, skills, and streams
+cmd/server/                     HTTP and Unix socket API server lifecycle and routes
+
+# Public library packages (importable by downstream modules)
+engine/                         request orchestration, planning, queues, describe replay (primary entrypoint)
+engine/agent/                   per-node execution proxy that runs one skill for a runner
+engine/builtin/                 embedded orchestrator skill and planning instructions
+engine/runner/                  runner lifecycle, task graph execution, exchange documents
+engine/runner/persistence/      persistence Backend interface and markdown mirror backend
+engine/internal/instructions/   embedded agent stage markdown notes (private)
+llm/                            OpenAI Responses API client, conversations, tools, skills, workspaces
+llm/internal/builtin/           built-in tool implementations (private)
+llm/internal/toolpolicy/        tool capability policy (private)
+store/                          persistence abstractions and lightweight JSON fallbacks
+store/runtime/                  startup-owned persistence wiring (Open, Config, Persistence)
+store/internal/sqlite/          SQLite migrations, sqlc queries, and durable store (private)
+store/internal/postgres/        Postgres durable stores for runtime persistence (private)
+store/internal/backend/         concrete SQLite/Postgres persistence backends (private)
+stream/                         replayable stream, subscription, filtering, merge, and framing
+streamrender/                   terminal renderer for stream subscriptions
+logging/                        shared logging setup
+
+# dango-private helpers (not importable by downstream modules)
+internal/frontmatter/           YAML/markdown frontmatter parsing
+internal/mcpclient/             MCP SDK client isolation wrapper
+
 examples/honshu_groundwater/    integration example for multi-skill research workflow behavior
 docs/                           design memos and implementation notes
 .github/instructions/           canonical repository-specific coding and workflow rules

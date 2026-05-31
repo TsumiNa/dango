@@ -14,14 +14,14 @@ import (
 	"strings"
 	"time"
 
-	orchestrate "github.com/tsumina/dango/internal/engine"
-	runnerpkg "github.com/tsumina/dango/internal/engine/runner"
-	streampkg "github.com/tsumina/dango/internal/engine/stream"
-	"github.com/tsumina/dango/internal/llm"
-	"github.com/tsumina/dango/internal/logging"
-	storepkg "github.com/tsumina/dango/internal/store"
-	runtimepkg "github.com/tsumina/dango/internal/store/runtime"
-	"github.com/tsumina/dango/internal/streamrender"
+	orchestrate "github.com/tsumina/dango/engine"
+	runnerpkg "github.com/tsumina/dango/engine/runner"
+	"github.com/tsumina/dango/llm"
+	"github.com/tsumina/dango/logging"
+	storepkg "github.com/tsumina/dango/store"
+	runtimepkg "github.com/tsumina/dango/store/runtime"
+	streampkg "github.com/tsumina/dango/stream"
+	"github.com/tsumina/dango/streamrender"
 	"golang.org/x/term"
 )
 
@@ -123,7 +123,7 @@ func runHonshuGroundwaterExample(ctx context.Context, cfg exampleConfig) (_ *exa
 		return nil, err
 	}
 	defer func() {
-		if closeErr := persistence.Close(); closeErr != nil && err == nil {
+		if closeErr := persistence.Close(ctx); closeErr != nil && err == nil {
 			err = closeErr
 		}
 	}()

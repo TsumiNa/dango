@@ -18,12 +18,12 @@ import (
 
 	"github.com/openai/openai-go/v3"
 	"github.com/openai/openai-go/v3/option"
-	orchestrate "github.com/tsumina/dango/internal/engine"
-	runnerpkg "github.com/tsumina/dango/internal/engine/runner"
-	streampkg "github.com/tsumina/dango/internal/engine/stream"
-	"github.com/tsumina/dango/internal/llm"
-	storepkg "github.com/tsumina/dango/internal/store"
-	runtimepkg "github.com/tsumina/dango/internal/store/runtime"
+	orchestrate "github.com/tsumina/dango/engine"
+	runnerpkg "github.com/tsumina/dango/engine/runner"
+	"github.com/tsumina/dango/llm"
+	storepkg "github.com/tsumina/dango/store"
+	runtimepkg "github.com/tsumina/dango/store/runtime"
+	streampkg "github.com/tsumina/dango/stream"
 )
 
 func TestElevationSkillScriptParsesMessySample(t *testing.T) {
@@ -382,7 +382,7 @@ func TestRunHonshuGroundwaterExamplePersistsTerminalRequestState(t *testing.T) {
 		t.Fatalf("runtime.Open(reopen): %v", err)
 	}
 	defer func() {
-		if err := reopened.Close(); err != nil {
+		if err := reopened.Close(context.Background()); err != nil {
 			t.Fatalf("Close(reopened persistence): %v", err)
 		}
 	}()
@@ -428,7 +428,7 @@ func TestRunHonshuGroundwaterExampleReopensPersistedState(t *testing.T) {
 		t.Fatalf("runtime.Open(reopen): %v", err)
 	}
 	defer func() {
-		if err := reopened.Close(); err != nil {
+		if err := reopened.Close(context.Background()); err != nil {
 			t.Fatalf("Close(reopened persistence): %v", err)
 		}
 	}()
