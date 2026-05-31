@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	runnerpkg "github.com/tsumina/dango/engine/runner"
+	runnerpkg "github.com/tsumina/dango/runner"
 )
 
 func TestRunnerStoreAppendAssignsMonotonicSeq(t *testing.T) {

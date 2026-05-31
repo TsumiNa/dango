@@ -12,7 +12,7 @@ import (
 	"testing"
 	"time"
 
-	runnerpkg "github.com/tsumina/dango/engine/runner"
+	runnerpkg "github.com/tsumina/dango/runner"
 	storepkg "github.com/tsumina/dango/store"
 	streampkg "github.com/tsumina/dango/stream"
 )

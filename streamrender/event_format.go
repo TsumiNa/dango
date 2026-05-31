@@ -11,7 +11,7 @@ import (
 	"time"
 
 	"github.com/charmbracelet/x/ansi"
-	runnerpkg "github.com/tsumina/dango/engine/runner"
+	runnerpkg "github.com/tsumina/dango/runner"
 	streampkg "github.com/tsumina/dango/stream"
 )
 

@@ -14,8 +14,8 @@ import (
 	"strings"
 	"time"
 
-	orchestrate "github.com/tsumina/dango/engine"
-	runnerpkg "github.com/tsumina/dango/engine/runner"
+	"github.com/tsumina/dango/orchestrator"
+	runnerpkg "github.com/tsumina/dango/runner"
 	"github.com/tsumina/dango/llm"
 	"github.com/tsumina/dango/logging"
 	storepkg "github.com/tsumina/dango/store"
@@ -143,10 +143,10 @@ func runHonshuGroundwaterExample(ctx context.Context, cfg exampleConfig) (_ *exa
 		"measurements_bytes", len(cfg.MeasurementsJSON),
 		"stream_events_log", streamLogPath,
 	)
-	orchestrator := orchestrate.NewOrchestrator(
-		orchestrate.WithOrchestratorContext(ctx),
-		orchestrate.WithLogger(logger),
-		orchestrate.WithPersistence(persistence.Backend()),
+	orch := orchestrator.NewOrchestrator(
+		orchestrator.WithOrchestratorContext(ctx),
+		orchestrator.WithLogger(logger),
+		orchestrator.WithPersistence(persistence.Backend()),
 	)
 	if cfg.LLMClient != nil {
 		logger.Info("using configured llm client",
@@ -154,7 +154,7 @@ func runHonshuGroundwaterExample(ctx context.Context, cfg exampleConfig) (_ *exa
 			"model", cfg.LLMClient.Model(),
 			"reasoning_effort", cfg.LLMClient.ReasoningEffort(),
 		)
-		if err := orchestrator.SetClient(cfg.LLMClient); err != nil {
+		if err := orch.SetClient(cfg.LLMClient); err != nil {
 			return nil, err
 		}
 	}
@@ -166,7 +166,7 @@ func runHonshuGroundwaterExample(ctx context.Context, cfg exampleConfig) (_ *exa
 	for _, dir := range skillDirs {
 		logger.Info("registering skill", "skill_dir", dir)
 	}
-	if err := orchestrator.AddSkillDirs(llm.ConversationConfig{MaxSteps: 32}, skillDirs...); err != nil {
+	if err := orch.AddSkillDirs(llm.ConversationConfig{MaxSteps: 32}, skillDirs...); err != nil {
 		return nil, err
 	}
 	renderCfg := streamrender.DefaultConfig()
@@ -182,7 +182,7 @@ func runHonshuGroundwaterExample(ctx context.Context, cfg exampleConfig) (_ *exa
 
 	request := buildGroundwaterRequest(cfg.MeasurementsJSON)
 	logger.Info("submitting request to orchestrator")
-	resp, err := orchestrator.StartRequest(ctx, orchestrate.Request{
+	resp, err := orch.StartRequest(ctx, orchestrator.Request{
 		Input:        request,
 		ArtifactsDir: artifactsDir,
 	})
@@ -209,7 +209,7 @@ func runHonshuGroundwaterExample(ctx context.Context, cfg exampleConfig) (_ *exa
 	logger.Info("runner created", "runner_id", runnerID)
 
 	logger.Info("waiting for runner to settle", "runner_id", runnerID)
-	view, err := orchestrator.WaitRunner(ctx, runnerID)
+	view, err := orch.WaitRunner(ctx, runnerID)
 	if err != nil {
 		logger.Error("runner wait failed", "runner_id", runnerID, "err", err)
 		_ = closeEventStream()

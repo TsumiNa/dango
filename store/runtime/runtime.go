@@ -10,8 +10,8 @@ import (
 	"strings"
 	"sync"
 
-	runnerpkg "github.com/tsumina/dango/engine/runner"
-	persistencepkg "github.com/tsumina/dango/engine/runner/persistence"
+	runnerpkg "github.com/tsumina/dango/runner"
+	persistencepkg "github.com/tsumina/dango/runner/persistence"
 	storepkg "github.com/tsumina/dango/store"
 	backendpkg "github.com/tsumina/dango/store/internal/backend"
 	streampkg "github.com/tsumina/dango/stream"
