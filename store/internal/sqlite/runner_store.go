@@ -9,7 +9,7 @@ import (
 	"sync"
 	"time"
 
-	runnerpkg "github.com/tsumina/dango/engine/runner"
+	runnerpkg "github.com/tsumina/dango/runner"
 	sqldb "github.com/tsumina/dango/store/internal/sqlite/db"
 )
 

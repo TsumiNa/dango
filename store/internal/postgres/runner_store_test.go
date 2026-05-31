@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	runnerpkg "github.com/tsumina/dango/engine/runner"
+	runnerpkg "github.com/tsumina/dango/runner"
 )
 
 func TestRunnerStore_AppendLoadAndDelete(t *testing.T) {

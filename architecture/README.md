@@ -1,13 +1,13 @@
 # 架构总览
 
-这组文档描述当前 `engine` 和 `engine/runner` 的真实实现，而不是旧版单文件设计稿。对应的核心实现已经分散到 request、runner lifecycle、exchange 和 persistence 几个文件中，所以文档也按同样的边界拆开。
+这组文档描述当前 `orchestrator` 和 `runner` 的真实实现，而不是旧版单文件设计稿。对应的核心实现已经分散到 request、runner lifecycle、exchange 和 persistence 几个文件中，所以文档也按同样的边界拆开。
 
 ## 四个当前事实
 
-- 外部入口是 `engine/request.go` 里的 `StartRequest`。它先返回 request-scoped stream，再在后台完成 planning、runner 装配和启动。
-- `engine/runner` 里的 `Runner` 已经吸收旧的 managed runner 角色。现在没有单独的 `ManagedRunner` 类型，只有 bare `Start` 和 managed `StartManaged` 两种入口。
+- 外部入口是 `orchestrator/request.go` 里的 `StartRequest`。它先返回 request-scoped stream，再在后台完成 planning、runner 装配和启动。
+- `runner` 里的 `Runner` 已经吸收旧的 managed runner 角色。现在没有单独的 `ManagedRunner` 类型，只有 bare `Start` 和 managed `StartManaged` 两种入口。
 - `Agent` 不是独立运行时主体，而是一个和单个 skill 绑定的一对一代理。它负责绑定 skill runtime、补齐 node 上下文，并把 skill event stream 暴露给 runner。
-- 节点之间的标准数据面是 markdown exchange document，定义在 `engine/runner/exchange_doc.go`。request stream、runner store 和 describe replay 都围绕这份文档工作。
+- 节点之间的标准数据面是 markdown exchange document，定义在 `runner/exchange.go`。request stream、runner store 和 describe replay 都围绕这份文档工作。
 
 ## 核心关系图
 
@@ -48,11 +48,11 @@ flowchart TB
 
 | 区域                     | 核心文件                                                                                                            | 当前职责                                                                  |
 | ------------------------ | ------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------- |
-| request 控制面           | `engine/request.go`, `engine/orchestrator.go`, `engine/describe.go`                      | 创建 request stream、planning、runner registry、查询接口、describe replay |
-| runner 生命周期          | `engine/runner/runner.go`, `engine/runner/runner_lifecycle.go`, `engine/runner/types.go` | phase machine、engine loop、managed lifecycle、snapshot                   |
-| agent / skill binding | `engine/agent/agent.go`, `engine/agent/agent_prompt.go`, `engine/agent/agent_stage.go`, `engine/runner/skill_binding.go` | 绑定 skill runtime、session reuse、stage prompt / exchange 输出、skill stream merge |
+| request 控制面           | `orchestrator/request.go`, `orchestrator/orchestrator.go`, `orchestrator/describe.go`                      | 创建 request stream、planning、runner registry、查询接口、describe replay |
+| runner 生命周期          | `runner/runner.go`, `runner/lifecycle.go`, `runner/types.go` | phase machine、engine loop、managed lifecycle、snapshot                   |
+| agent / skill binding | `agent/agent.go`, `agent/prompt.go`, `agent/stage.go`, `runner/skill_binding.go` | 绑定 skill runtime、session reuse、stage prompt / exchange 输出、skill stream merge |
 | stream 基础设施          | `stream/`                                                                                           | replay、filter、merge、hub-mode bundle、scope / metadata                  |
-| exchange 与持久化        | `engine/runner/exchange_doc.go`, `engine/runner/record.go`, `engine/runner/store.go`         | markdown envelope、runner record 编码、append-only store                  |
+| exchange 与持久化        | `runner/exchange.go`, `runner/record.go`, `runner/store.go`         | markdown envelope、runner record 编码、append-only store                  |
 
 ## 模块边界
 

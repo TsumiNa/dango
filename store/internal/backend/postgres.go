@@ -7,8 +7,8 @@ import (
 	"path/filepath"
 	"strings"
 
-	runnerpkg "github.com/tsumina/dango/engine/runner"
-	persistencepkg "github.com/tsumina/dango/engine/runner/persistence"
+	runnerpkg "github.com/tsumina/dango/runner"
+	persistencepkg "github.com/tsumina/dango/runner/persistence"
 	storepkg "github.com/tsumina/dango/store"
 	postgrespkg "github.com/tsumina/dango/store/internal/postgres"
 )

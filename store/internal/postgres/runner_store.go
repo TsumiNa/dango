@@ -8,7 +8,7 @@ import (
 	"strings"
 	"time"
 
-	runnerpkg "github.com/tsumina/dango/engine/runner"
+	runnerpkg "github.com/tsumina/dango/runner"
 )
 
 var _ runnerpkg.RunnerStore = (*RunnerStore)(nil)

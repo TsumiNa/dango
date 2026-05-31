@@ -18,8 +18,8 @@ import (
 
 	"github.com/openai/openai-go/v3"
 	"github.com/openai/openai-go/v3/option"
-	orchestrate "github.com/tsumina/dango/engine"
-	runnerpkg "github.com/tsumina/dango/engine/runner"
+	"github.com/tsumina/dango/orchestrator"
+	runnerpkg "github.com/tsumina/dango/runner"
 	"github.com/tsumina/dango/llm"
 	storepkg "github.com/tsumina/dango/store"
 	runtimepkg "github.com/tsumina/dango/store/runtime"
@@ -433,9 +433,9 @@ func TestRunHonshuGroundwaterExampleReopensPersistedState(t *testing.T) {
 		}
 	}()
 
-	fresh := orchestrate.NewOrchestrator(
-		orchestrate.WithOrchestratorContext(ctx),
-		orchestrate.WithPersistence(reopened.Backend()),
+	fresh := orchestrator.NewOrchestrator(
+		orchestrator.WithOrchestratorContext(ctx),
+		orchestrator.WithPersistence(reopened.Backend()),
 	)
 	rawEvents, err := reopened.EventLogStore().LoadEvents(ctx, streampkg.Scope{RequestID: result.RequestID}, 1, streampkg.Filter{})
 	if err != nil {
@@ -653,7 +653,7 @@ func TestHonshuOrchestratorRegistersAutonomousSkillRuntimes(t *testing.T) {
 		t.Fatalf("exampleRoot: %v", err)
 	}
 	client := &llm.Client{}
-	o := orchestrate.NewOrchestrator(orchestrate.WithOrchestratorContext(context.Background()))
+	o := orchestrator.NewOrchestrator(orchestrator.WithOrchestratorContext(context.Background()))
 	if err := o.SetClient(client); err != nil {
 		t.Fatalf("SetClient: %v", err)
 	}
@@ -848,7 +848,7 @@ func serveFakePlanner(w http.ResponseWriter, req *responsesRequest, prompt plann
 	switch prompt.Mode {
 	case "plan":
 		if missing := missingSkills(prompt, "elevation_lookup", "train_gp_model"); len(missing) > 0 {
-			respondText(w, req.Model, mustJSON(map[string]any{"reject": orchestrate.RejectReason{
+			respondText(w, req.Model, mustJSON(map[string]any{"reject": orchestrator.RejectReason{
 				Summary:       "required skills are missing",
 				Analysis:      "Honshu groundwater modeling requires elevation enrichment and GP modeling skills",
 				MissingSkills: missing,
