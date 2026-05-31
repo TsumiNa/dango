@@ -1,4 +1,4 @@
-// Package engine bridges external requests to runner-backed execution.
+// Package orchestrator bridges external requests to runner-backed execution.
 //
 // The orchestrator owns request intake, planning, skill registration, runner
 // creation, and external query/subscription APIs. Agents own individual
