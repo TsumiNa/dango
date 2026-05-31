@@ -88,4 +88,19 @@ func (m *MarkdownBackend) WorkspaceRoot() string {
 	return m.workspaceRoot
 }
 
+// Root returns the backend's resolved root directory.
+//
+// TODO: root's role is in question. Originally only root was stored and the
+// event-log / runner / cursor / workspace sub-paths were derived from it on
+// demand; as the persistence contract grew, each derived path was stored as its
+// own field, leaving root without a clear internal consumer. Revisit whether
+// Root() (and the field) should stay, or whether the derived paths should go
+// back to deriving from root.
+func (m *MarkdownBackend) Root() string {
+	if m == nil {
+		return ""
+	}
+	return m.root
+}
+
 func (m *MarkdownBackend) Close(context.Context) error { return nil }
