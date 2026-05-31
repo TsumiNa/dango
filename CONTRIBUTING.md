@@ -13,7 +13,7 @@ dango is organized around a request-level orchestrator, runner-owned execution l
 - Streams are the runtime communication substrate. Request streams aggregate planning and runner events; runner streams aggregate runner, agent, and skill events.
 - Persistence stores request event logs, runner records, snapshot cursors, and workspace paths so live state can be replayed or audited later.
 
-The detailed architecture notes under `architecture/` are the best starting point for understanding the current engine shape:
+The detailed architecture notes under `architecture/` are the best starting point for understanding the current orchestrator/runner/agent shape:
 
 - `architecture/README.md` gives the high-level map.
 - `architecture/control-plane.md` describes request intake, planning, runner creation, and describe replay.
@@ -36,12 +36,11 @@ cmd/                            Cobra commands; serve is the current API server 
 cmd/server/                     HTTP and Unix socket API server lifecycle and routes
 
 # Public library packages (importable by downstream modules)
-engine/                         request orchestration, planning, queues, describe replay (primary entrypoint)
-engine/agent/                   per-node execution proxy that runs one skill for a runner
-engine/builtin/                 embedded orchestrator skill and planning instructions
-engine/runner/                  runner lifecycle, task graph execution, exchange documents
-engine/runner/persistence/      persistence Backend interface and markdown mirror backend
-engine/internal/instructions/   embedded agent stage markdown notes (private)
+orchestrator/                   request orchestration, planning, queues, describe replay (primary entrypoint)
+orchestrator/builtin/           embedded orchestrator skill and planning instructions
+agent/                          per-node execution proxy that runs one skill for a runner
+runner/                         runner lifecycle, task graph execution, exchange documents
+runner/persistence/             persistence Backend interface and markdown mirror backend
 llm/                            OpenAI Responses API client, conversations, tools, skills, workspaces
 llm/internal/builtin/           built-in tool implementations (private)
 llm/internal/toolpolicy/        tool capability policy (private)
@@ -55,6 +54,7 @@ streamrender/                   terminal renderer for stream subscriptions
 logging/                        shared logging setup
 
 # dango-private helpers (not importable by downstream modules)
+internal/instructions/          embedded agent stage markdown notes (used by agent)
 internal/frontmatter/           YAML/markdown frontmatter parsing
 internal/mcpclient/             MCP SDK client isolation wrapper
 
@@ -112,7 +112,7 @@ When changing SQLite tables, columns, indexes, constraints, or query shapes:
 5. Regenerate wrappers with `just db-generate`.
 6. Run `go test ./...` or `just test`.
 
-Postgres durable stores live under `internal/store/postgres/`; keep backend-specific migrations and store behavior aligned with the shared persistence contracts in `internal/store/` and `internal/engine/runner/persistence/`.
+Postgres durable stores live under `internal/store/postgres/`; keep backend-specific migrations and store behavior aligned with the shared persistence contracts in `internal/store/` and `internal/runner/persistence/`.
 
 ## Documentation Boundaries
 

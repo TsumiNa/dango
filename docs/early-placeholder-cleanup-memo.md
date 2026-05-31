@@ -7,7 +7,7 @@ likely not the only one).
 
 ## The bug
 
-`Agent.planTask()` (`engine/agent/agent.go`) is leftover early-dev scaffolding
+`Agent.planTask()` (`agent/agent.go`) is leftover early-dev scaffolding
 that writes two **hardcoded, task-independent** strings and bumps the version:
 
 ```go
@@ -23,11 +23,11 @@ func (e *Agent) planTask() error {
 `PolishPlan()` calls it, and these canned strings then flow into the **real**
 execution path — they were never meant to reach production output:
 
-1. **Into the LLM prompt.** `polishPrompt()` (`engine/agent/agent_prompt.go`)
+1. **Into the LLM prompt.** `polishPrompt()` (`agent/prompt.go`)
    injects `planner.Reason` / `planner.Solution` as a `Current planner draft`
    section, so a bound model is fed irrelevant boilerplate as if it were a prior
    draft.
-2. **Into handoff output.** `runPolishStage()` (`engine/agent/agent_stage.go`)
+2. **Into handoff output.** `runPolishStage()` (`agent/stage.go`)
    builds `defaultBody` from `task/version/reason/solution`. When
    `runnableRuntimeSkill()` returns `ok=false` (no LLM bound), `body =
    defaultBody`, so the canned strings are emitted verbatim as the polish-stage
@@ -45,7 +45,7 @@ func (e *Agent) logf(format string, args ...any) { e.logger.Debug(fmt.Sprintf(fo
 ```
 
 so the error-context call `e.logf("Error planning tasks: %v", err)`
-(`engine/agent/agent.go`) is demoted to Debug and invisible at default levels.
+(`agent/agent.go`) is demoted to Debug and invisible at default levels.
 Today it is **dead** (planTask always returns nil), but it is latent: once
 planTask does real work and can fail, the failure would be silently swallowed.
 

@@ -18,9 +18,9 @@ any engine events to a client.
 `serve` should become a real host for the library:
 
 1. Build the runtime: `store/runtime.Open(runtime.Config{...})` for persistence,
-   construct an `llm.Client`, then `engine.NewOrchestrator(WithPersistence(...),
+   construct an `llm.Client`, then `orchestrator.NewOrchestrator(WithPersistence(...),
    WithLogger(...), ...)` and register skills / MCP servers.
-2. Accept a request over HTTP and call `orchestrator.StartRequest(ctx, engine.Request{...})`.
+2. Accept a request over HTTP and call `orchestrator.StartRequest(ctx, orchestrator.Request{...})`.
 3. Bridge the returned `resp.Stream` to a streaming transport (SSE or WebSocket):
    `resp.Stream.Subscribe(stream.Filter{...}, stream.WithSubscriberBuffer(...))`
    → drain the `*stream.Subscription` and forward each `stream.Event` to the client.
@@ -31,8 +31,8 @@ any engine events to a client.
 ## Pointers / reference
 
 - Reference consumer wiring (the pattern to mirror): `examples/honshu_groundwater/main.go`.
-- Public entrypoints: `engine.NewOrchestrator`, `engine.Orchestrator.StartRequest`,
-  `engine.Response.Stream`, `engine.Orchestrator.SubscribeRunnerStream`,
+- Public entrypoints: `orchestrator.NewOrchestrator`, `orchestrator.Orchestrator.StartRequest`,
+  `orchestrator.Response.Stream`, `orchestrator.Orchestrator.SubscribeRunnerStream`,
   `store/runtime.Open`, `streamrender` (for a terminal client).
 
 ## Gotcha: hub-mode bundle expansion
@@ -41,6 +41,6 @@ When reading persisted events from the event log (and when subscribing in
 hub/tick-bundled mode), some frames arrive as `merge.bundle` events that pack
 several child events together. A consumer must call `stream.ExpandBundleEvent`
 to expand them — see how `examples/honshu_groundwater/main.go` and
-`engine/describe.go` handle it. (This bundle concept currently leaks into the
+`orchestrator/describe.go` handle it. (This bundle concept currently leaks into the
 consumer read path; tightening that is tracked separately as a stream public-API
 cleanup, not part of this serve work.)

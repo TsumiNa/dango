@@ -1,6 +1,6 @@
 # Request 控制面
 
-当前代码里，request 控制面不是单个文件，而是 `engine/request.go`、`engine/orchestrator.go` 和 `engine/describe.go` 三处协作完成。
+当前代码里，request 控制面不是单个文件，而是 `orchestrator/request.go`、`orchestrator/orchestrator.go` 和 `orchestrator/describe.go` 三处协作完成。
 
 ## 对外入口
 

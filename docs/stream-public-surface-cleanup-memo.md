@@ -18,8 +18,8 @@ to *read* events:
 
 **B. Internal fan-in / bundle plumbing — should be private.** How the
 orchestrator *assembles* the request stream from child planner/runner/skill
-streams. Verified callers are only `engine/request.go` and
-`engine/runner/skill_binding.go` (producer side) plus `stream`'s own internals:
+streams. Verified callers are only `orchestrator/request.go` and
+`runner/skill_binding.go` (producer side) plus `stream`'s own internals:
 - merge: `Stream.MergeFrom`, `Stream.MergeWithConfig`, `Merge`,
   `MergeWindowConfig`, `DefaultMergeWindowConfig`, `DefaultHubMergeWindowConfig`,
   `DefaultMergeTickDuration`, `DefaultMergePerUpstreamBufferDepth`.
@@ -41,7 +41,7 @@ development consumes events; it never assembles dango's stream topology.
    child events into one `merge.bundle` frame per tick, and those bundles are
    persisted to the event log. So a consumer reading history *must* know about
    bundles and call `stream.ExpandBundleEvent` (see
-   `examples/honshu_groundwater/main.go` and `engine/describe.go`). An internal
+   `examples/honshu_groundwater/main.go` and `orchestrator/describe.go`). An internal
    optimization has leaked into the consumer API.
 
 ## Proposed tightening (when we do it)
@@ -58,7 +58,7 @@ development consumes events; it never assembles dango's stream topology.
 ## Constraints / why deferred
 
 - **Invariant:** `stream` must stay a zero-dango-internal-dependency leaf (8+
-  packages import it). Any refactor must not pull engine/llm/store imports into
+  packages import it). Any refactor must not pull orchestrator/llm/store imports into
   `stream`, or it creates an import cycle.
 - Tightening now means adding an adapter/relocation layer, which the in-branch
   API-compatibility rule discourages doing speculatively. dango is early-stage
