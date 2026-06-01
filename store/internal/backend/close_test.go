@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 )
 
 func TestCloseWithContext_ReturnsCloseResult(t *testing.T) {
@@ -36,6 +37,26 @@ func TestCloseWithContext_HonorsCanceledContext(t *testing.T) {
 	})
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("err = %v, want context.Canceled", err)
+	}
+}
+
+func TestCloseWithContext_HonorsDeadlineExceeded(t *testing.T) {
+	t.Parallel()
+
+	// A deadline already in the past makes the context expired with
+	// DeadlineExceeded from the start — no sleep needed.
+	ctx, cancel := context.WithDeadline(context.Background(), time.Now().Add(-time.Hour))
+	defer cancel()
+
+	release := make(chan struct{})
+	t.Cleanup(func() { close(release) })
+
+	err := closeWithContext(ctx, func() error {
+		<-release
+		return nil
+	})
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("err = %v, want context.DeadlineExceeded", err)
 	}
 }
 

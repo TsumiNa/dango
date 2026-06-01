@@ -14,8 +14,11 @@ func closeWithContext(ctx context.Context, closeFn func() error) error {
 	if ctx == nil {
 		return closeFn()
 	}
-	done := make(chan error, 1)
+	done := make(chan error, 1) // buffered so the goroutine never blocks if ctx wins
 	go func() { done <- closeFn() }()
+	// No default arm: block until the close finishes or ctx is done. If both are
+	// ready at once Go picks an arm at random, and returning ctx.Err() is the
+	// intended outcome for a deadline-bounded shutdown.
 	select {
 	case err := <-done:
 		return err
