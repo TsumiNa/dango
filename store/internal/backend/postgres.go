@@ -83,9 +83,9 @@ func (p *PostgresBackend) WorkspaceRoot() string {
 	return p.workspaceRoot
 }
 
-func (p *PostgresBackend) Close(context.Context) error {
+func (p *PostgresBackend) Close(ctx context.Context) error {
 	if p == nil || p.dbStore == nil {
 		return nil
 	}
-	return p.dbStore.Close()
+	return closeWithContext(ctx, p.dbStore.Close)
 }

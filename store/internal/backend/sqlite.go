@@ -83,9 +83,9 @@ func (s *SQLiteBackend) WorkspaceRoot() string {
 	return s.workspaceRoot
 }
 
-func (s *SQLiteBackend) Close(context.Context) error {
+func (s *SQLiteBackend) Close(ctx context.Context) error {
 	if s == nil || s.dbStore == nil {
 		return nil
 	}
-	return s.dbStore.Close()
+	return closeWithContext(ctx, s.dbStore.Close)
 }
