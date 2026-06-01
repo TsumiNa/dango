@@ -22,10 +22,9 @@ type Backend interface {
 	// WorkspaceRoot returns the global root under which runners allocate their
 	// per-runner workspace via a path rule.
 	WorkspaceRoot() string
-	// Close releases backend-owned resources. ctx is intended to bound graceful
-	// shutdown, but current backends (SQLite, Postgres, Markdown) ignore it and
-	// close synchronously — see docs/persistence-close-ctx-memo.md. Callers
-	// should still pass a real context so the contract holds once a backend
-	// honors it.
+	// Close releases backend-owned resources, bounding the wait by ctx. The
+	// SQLite and Postgres backends cap the underlying database close by ctx (a
+	// cancelled or expired ctx returns its error while the close finishes in the
+	// background); the markdown backend holds no such resources and ignores ctx.
 	Close(ctx context.Context) error
 }
