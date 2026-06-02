@@ -11,10 +11,10 @@ import (
 
 	"github.com/lithammer/shortuuid/v4"
 	agentpkg "github.com/tsumina/dango/agent"
-	runnerpkg "github.com/tsumina/dango/runner"
-	persistencepkg "github.com/tsumina/dango/runner/persistence"
 	"github.com/tsumina/dango/internal/mcpclient"
 	"github.com/tsumina/dango/llm"
+	runnerpkg "github.com/tsumina/dango/runner"
+	persistencepkg "github.com/tsumina/dango/runner/persistence"
 	storepkg "github.com/tsumina/dango/store"
 	streampkg "github.com/tsumina/dango/stream"
 )
@@ -429,7 +429,7 @@ func mergeChildStream(ctx context.Context, downstream *streampkg.Stream, upstrea
 	if downstream == nil || upstream == nil {
 		return nil, nil
 	}
-	merge, err := downstream.MergeWithConfig(ctx, upstream, streampkg.Filter{}, streampkg.DefaultHubMergeWindowConfig(), streampkg.WithSubscriberBuffer(4096))
+	merge, err := downstream.Merge(ctx, upstream, streampkg.Filter{}, streampkg.WithSubscriberBuffer(4096))
 	if err != nil {
 		return nil, fmt.Errorf("orchestrate: merge child stream: %w", err)
 	}
@@ -440,7 +440,7 @@ func mergeRunnerStream(ctx context.Context, downstream *streampkg.Stream, upstre
 	if downstream == nil || upstream == nil {
 		return nil, nil
 	}
-	merge, err := downstream.MergeWithConfig(ctx, upstream, streampkg.Filter{}, streampkg.DefaultHubMergeWindowConfig(), streampkg.WithSubscriberBuffer(4096))
+	merge, err := downstream.Merge(ctx, upstream, streampkg.Filter{}, streampkg.WithSubscriberBuffer(4096))
 	if err != nil {
 		return nil, fmt.Errorf("orchestrate: merge runner stream: %w", err)
 	}

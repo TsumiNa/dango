@@ -13,7 +13,7 @@ import (
 // sequence number. The original event source is preserved, while the upstream
 // sequence number is copied into metadata for debugging and persistence.
 //
-// When MergeWindowConfig has TickDuration > 0, events are collected into bundles
+// When mergeWindowConfig has TickDuration > 0, events are collected into bundles
 // by the downstream stream's shared merge hub. When TickDuration is 0 (default),
 // events are forwarded directly.
 type Merge struct {
@@ -23,31 +23,44 @@ type Merge struct {
 	errMu sync.RWMutex
 	err   error
 
-	// hub is non-nil when hub mode is enabled via MergeWindowConfig.
+	// hub is non-nil when hub mode is enabled via mergeWindowConfig.
 	hub *mergeHub
 }
 
-// MergeFrom forwards events from upstream into s until upstream closes, ctx is
+// Merge attaches upstream to s as a runtime producer fan-in: events emitted on
+// upstream are forwarded into s (the downstream parent) until upstream closes,
+// ctx is canceled, s closes, or the returned [Merge] is stopped. This is how the
+// orchestrator and runner build their stream hierarchy (skill → runner →
+// request); ordinary consumers only need [Stream.Subscribe].
+//
+// filter and opts are applied while subscribing to upstream. Forwarding uses
+// hub-mode tick-bundling so high-rate child traffic is batched into the parent;
+// non-raw subscribers receive the batched events already expanded.
+func (s *Stream) Merge(ctx context.Context, upstream *Stream, filter Filter, opts ...SubscribeOption) (*Merge, error) {
+	return s.mergeWithConfig(ctx, upstream, filter, defaultHubMergeWindowConfig(), opts...)
+}
+
+// mergeFrom forwards events from upstream into s until upstream closes, ctx is
 // canceled, s closes, or the returned Merge is stopped.
 //
 // filter and opts are applied while subscribing to upstream, so a runner can
 // merge only the agent/skill chunks it wants to expose without forcing all
 // child-stream traffic into its own stream.
 //
-// MergeFrom uses direct forwarding (TickDuration = 0). Use MergeFromWithConfig
+// mergeFrom uses direct forwarding (TickDuration = 0). Use MergeFromWithConfig
 // to enable hub mode with tick-based bundling.
-func (s *Stream) MergeFrom(ctx context.Context, upstream *Stream, filter Filter, opts ...SubscribeOption) (*Merge, error) {
-	return s.MergeWithConfig(ctx, upstream, filter, DefaultMergeWindowConfig(), opts...)
+func (s *Stream) mergeFrom(ctx context.Context, upstream *Stream, filter Filter, opts ...SubscribeOption) (*Merge, error) {
+	return s.mergeWithConfig(ctx, upstream, filter, defaultMergeWindowConfig(), opts...)
 }
 
-// MergeWithConfig forwards events from upstream into s with configurable
+// mergeWithConfig forwards events from upstream into s with configurable
 // hub behavior. When config.TickDuration > 0, events are collected into bundles
 // by a downstream-owned merge hub shared with compatible hub-mode merges. When
-// TickDuration is 0, uses direct forwarding (same as MergeFrom). Negative
+// TickDuration is 0, uses direct forwarding (same as mergeFrom). Negative
 // TickDuration values are rejected with [ErrInvalidMerge].
 //
 // filter and opts are applied while subscribing to upstream.
-func (s *Stream) MergeWithConfig(ctx context.Context, upstream *Stream, filter Filter, config MergeWindowConfig, opts ...SubscribeOption) (*Merge, error) {
+func (s *Stream) mergeWithConfig(ctx context.Context, upstream *Stream, filter Filter, config mergeWindowConfig, opts ...SubscribeOption) (*Merge, error) {
 	if s == nil || upstream == nil {
 		return nil, ErrInvalidMerge
 	}
@@ -317,10 +330,10 @@ type upstreamFIFO struct {
 }
 
 // newUpstreamFIFO creates a new FIFO for the given upstream with a depth limit.
-// maxDepth must be positive; if not, [DefaultMergePerUpstreamBufferDepth] is used.
+// maxDepth must be positive; if not, [defaultMergePerUpstreamBufferDepth] is used.
 func newUpstreamFIFO(identity upstreamIdentity, maxDepth int) *upstreamFIFO {
 	if maxDepth <= 0 {
-		maxDepth = DefaultMergePerUpstreamBufferDepth
+		maxDepth = defaultMergePerUpstreamBufferDepth
 	}
 	return &upstreamFIFO{
 		identity: identity,
@@ -394,40 +407,40 @@ func canJoinEvents(base Event, next Event) bool {
 	return joinKeyOf(base) == joinKeyOf(next) && canJoinDeltas(base.Delta, next.Delta)
 }
 
-// MergeWindowConfig controls hub behavior for tick-based merging.
-type MergeWindowConfig struct {
+// mergeWindowConfig controls hub behavior for tick-based merging.
+type mergeWindowConfig struct {
 	// TickDuration is the time window for collecting events into a single bundle.
 	// When zero, hub mode is disabled and direct forwarding is used.
 	TickDuration time.Duration
 
 	// PerUpstreamBufferDepth limits events queued per upstream before overflow.
-	// When zero, [DefaultMergePerUpstreamBufferDepth] is used.
+	// When zero, [defaultMergePerUpstreamBufferDepth] is used.
 	PerUpstreamBufferDepth int
 }
 
-// DefaultMergeTickDuration is the standard tick window for production hub-mode
+// defaultMergeTickDuration is the standard tick window for production hub-mode
 // stream merges.
-const DefaultMergeTickDuration = 10 * time.Millisecond
+const defaultMergeTickDuration = 10 * time.Millisecond
 
-// DefaultMergePerUpstreamBufferDepth is the standard per-upstream FIFO depth
+// defaultMergePerUpstreamBufferDepth is the standard per-upstream FIFO depth
 // used by hub-mode stream merges.
-const DefaultMergePerUpstreamBufferDepth = 4096
+const defaultMergePerUpstreamBufferDepth = 4096
 
-// DefaultMergeWindowConfig returns a MergeWindowConfig with direct-forwarding
+// defaultMergeWindowConfig returns a mergeWindowConfig with direct-forwarding
 // behavior (TickDuration = 0).
-func DefaultMergeWindowConfig() MergeWindowConfig {
-	return MergeWindowConfig{
+func defaultMergeWindowConfig() mergeWindowConfig {
+	return mergeWindowConfig{
 		TickDuration:           0,
-		PerUpstreamBufferDepth: DefaultMergePerUpstreamBufferDepth,
+		PerUpstreamBufferDepth: defaultMergePerUpstreamBufferDepth,
 	}
 }
 
-// DefaultHubMergeWindowConfig returns a MergeWindowConfig with hub-mode
+// defaultHubMergeWindowConfig returns a mergeWindowConfig with hub-mode
 // bundling enabled using the standard production tick window.
-func DefaultHubMergeWindowConfig() MergeWindowConfig {
-	return MergeWindowConfig{
-		TickDuration:           DefaultMergeTickDuration,
-		PerUpstreamBufferDepth: DefaultMergePerUpstreamBufferDepth,
+func defaultHubMergeWindowConfig() mergeWindowConfig {
+	return mergeWindowConfig{
+		TickDuration:           defaultMergeTickDuration,
+		PerUpstreamBufferDepth: defaultMergePerUpstreamBufferDepth,
 	}
 }
 
@@ -436,14 +449,14 @@ type mergeHubKey struct {
 	perUpstreamBufferDepth int
 }
 
-func normalizeMergeWindowConfig(config MergeWindowConfig) MergeWindowConfig {
+func normalizeMergeWindowConfig(config mergeWindowConfig) mergeWindowConfig {
 	if config.PerUpstreamBufferDepth <= 0 {
-		config.PerUpstreamBufferDepth = DefaultMergePerUpstreamBufferDepth
+		config.PerUpstreamBufferDepth = defaultMergePerUpstreamBufferDepth
 	}
 	return config
 }
 
-func mergeHubKeyOf(config MergeWindowConfig) mergeHubKey {
+func mergeHubKeyOf(config mergeWindowConfig) mergeHubKey {
 	config = normalizeMergeWindowConfig(config)
 	return mergeHubKey{
 		tickDuration:           config.TickDuration,
@@ -451,7 +464,7 @@ func mergeHubKeyOf(config MergeWindowConfig) mergeHubKey {
 	}
 }
 
-func (s *Stream) mergeHub(config MergeWindowConfig) *mergeHub {
+func (s *Stream) mergeHub(config mergeWindowConfig) *mergeHub {
 	key := mergeHubKeyOf(config)
 
 	s.mergeMu.Lock()
@@ -535,7 +548,7 @@ type mergeHub struct {
 // tick windows. tickDuration of zero disables hub mode.
 func newMergeHub(ctx context.Context, downstream *Stream, tickDuration time.Duration, perUpstreamDepth int) *mergeHub {
 	if perUpstreamDepth <= 0 {
-		perUpstreamDepth = DefaultMergePerUpstreamBufferDepth
+		perUpstreamDepth = defaultMergePerUpstreamBufferDepth
 	}
 	hubCtx, cancel := context.WithCancel(ctx)
 	hub := &mergeHub{

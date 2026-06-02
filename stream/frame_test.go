@@ -277,7 +277,7 @@ func TestEmitFrameEmptyFrameEmitsNothing(t *testing.T) {
 }
 
 func TestRunDirectUsesFrameNormalization(t *testing.T) {
-	// End-to-end: direct MergeFrom should forward events as plain events (not bundles).
+	// End-to-end: direct mergeFrom should forward events as plain events (not bundles).
 	parent := New(Scope{RequestID: "req_direct_e2e"}, DefaultConfig())
 	child := New(Scope{NodeID: "child_1"}, DefaultConfig())
 	t.Cleanup(parent.Close)
@@ -287,9 +287,9 @@ func TestRunDirectUsesFrameNormalization(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Subscribe parent: %v", err)
 	}
-	merge, err := parent.MergeFrom(t.Context(), child, Filter{})
+	merge, err := parent.mergeFrom(t.Context(), child, Filter{})
 	if err != nil {
-		t.Fatalf("MergeFrom: %v", err)
+		t.Fatalf("mergeFrom: %v", err)
 	}
 	defer merge.Stop()
 
@@ -317,7 +317,7 @@ func TestRunDirectUsesFrameNormalization(t *testing.T) {
 }
 
 func TestFlushTickUsesFrameNormalization(t *testing.T) {
-	// End-to-end: hub-mode MergeWithConfig should emit merge.bundle events.
+	// End-to-end: hub-mode mergeWithConfig should emit merge.bundle events.
 	parent := New(Scope{RequestID: "req_hub_e2e"}, DefaultConfig())
 	child := New(Scope{NodeID: "child_hub"}, DefaultConfig())
 	t.Cleanup(parent.Close)
@@ -327,13 +327,13 @@ func TestFlushTickUsesFrameNormalization(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Subscribe parent: %v", err)
 	}
-	cfg := MergeWindowConfig{
+	cfg := mergeWindowConfig{
 		TickDuration:           5 * time.Millisecond,
 		PerUpstreamBufferDepth: 64,
 	}
-	merge, err := parent.MergeWithConfig(t.Context(), child, Filter{}, cfg)
+	merge, err := parent.mergeWithConfig(t.Context(), child, Filter{}, cfg)
 	if err != nil {
-		t.Fatalf("MergeWithConfig: %v", err)
+		t.Fatalf("mergeWithConfig: %v", err)
 	}
 	defer merge.Stop()
 
