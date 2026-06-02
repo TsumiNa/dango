@@ -47,8 +47,8 @@ func (s *Stream) Merge(ctx context.Context, upstream *Stream, filter Filter, opt
 // merge only the agent/skill chunks it wants to expose without forcing all
 // child-stream traffic into its own stream.
 //
-// mergeFrom uses direct forwarding (TickDuration = 0). Use MergeFromWithConfig
-// to enable hub mode with tick-based bundling.
+// mergeFrom uses direct forwarding (TickDuration = 0). Use [Stream.Merge] for
+// hub-mode tick-bundling.
 func (s *Stream) mergeFrom(ctx context.Context, upstream *Stream, filter Filter, opts ...SubscribeOption) (*Merge, error) {
 	return s.mergeWithConfig(ctx, upstream, filter, defaultMergeWindowConfig(), opts...)
 }

@@ -75,6 +75,48 @@ func TestStreamMergeFromCombinesMultipleUpstreams(t *testing.T) {
 	}
 }
 
+func TestStreamMergeForwardsUpstreamInHubMode(t *testing.T) {
+	parent := New(Scope{RequestID: "req_merge"}, DefaultConfig())
+	child := New(Scope{NodeID: "node_x"}, DefaultConfig())
+	t.Cleanup(parent.Close)
+	t.Cleanup(child.Close)
+
+	sub, err := parent.Subscribe(Filter{})
+	if err != nil {
+		t.Fatalf("Subscribe parent: %v", err)
+	}
+	merge, err := parent.Merge(t.Context(), child, Filter{})
+	if err != nil {
+		t.Fatalf("Merge: %v", err)
+	}
+	defer merge.Stop()
+
+	if err := child.Emit(t.Context(), Event{
+		EventType: EventAgentExecuteStarted,
+		From:      Source{Layer: "agent", ID: "node_x"},
+		Status:    StatusRunning,
+		Delta:     json.RawMessage(`{"stage":"execute"}`),
+	}); err != nil {
+		t.Fatalf("Emit child: %v", err)
+	}
+
+	// Stream.Merge uses hub-mode tick-bundling; a non-raw subscriber receives the
+	// bundled event already expanded, tagged with the parent request scope.
+	got, ok, err := sub.Next(t.Context())
+	if err != nil || !ok {
+		t.Fatalf("Next = ok %v err %v", ok, err)
+	}
+	if got.EventType == EventMergeBundle {
+		t.Fatal("non-raw subscriber should not receive a raw bundle frame")
+	}
+	if got.EventType != EventAgentExecuteStarted {
+		t.Fatalf("event type = %q, want %q", got.EventType, EventAgentExecuteStarted)
+	}
+	if got.Scope.RequestID != "req_merge" || got.Scope.NodeID != "node_x" {
+		t.Fatalf("scope = %+v, want parent request + child node", got.Scope)
+	}
+}
+
 func TestStreamMergeFromFiltersAndReplaysUpstream(t *testing.T) {
 	parent := New(Scope{}, DefaultConfig())
 	child := New(Scope{}, DefaultConfig())
