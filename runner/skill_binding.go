@@ -204,11 +204,10 @@ func (r *Runner) mergeAgentStream(id string, agent Agent) error {
 	if upstream == nil {
 		return nil
 	}
-	_, err := r.eventStream.MergeWithConfig(
+	_, err := r.eventStream.Merge(
 		r.runtimeContext(context.Background()),
 		upstream,
 		streampkg.Filter{},
-		streampkg.DefaultHubMergeWindowConfig(),
 		streampkg.WithSubscriberBuffer(4096),
 	)
 	if err != nil {

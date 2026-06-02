@@ -21,13 +21,13 @@ func TestStreamMergeFromCombinesMultipleUpstreams(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Subscribe parent: %v", err)
 	}
-	mergeA, err := parent.MergeFrom(t.Context(), childA, Filter{})
+	mergeA, err := parent.mergeFrom(t.Context(), childA, Filter{})
 	if err != nil {
-		t.Fatalf("MergeFrom childA: %v", err)
+		t.Fatalf("mergeFrom childA: %v", err)
 	}
-	mergeB, err := parent.MergeFrom(t.Context(), childB, Filter{})
+	mergeB, err := parent.mergeFrom(t.Context(), childB, Filter{})
 	if err != nil {
-		t.Fatalf("MergeFrom childB: %v", err)
+		t.Fatalf("mergeFrom childB: %v", err)
 	}
 	defer mergeA.Stop()
 	defer mergeB.Stop()
@@ -75,6 +75,48 @@ func TestStreamMergeFromCombinesMultipleUpstreams(t *testing.T) {
 	}
 }
 
+func TestStreamMergeForwardsUpstreamInHubMode(t *testing.T) {
+	parent := New(Scope{RequestID: "req_merge"}, DefaultConfig())
+	child := New(Scope{NodeID: "node_x"}, DefaultConfig())
+	t.Cleanup(parent.Close)
+	t.Cleanup(child.Close)
+
+	sub, err := parent.Subscribe(Filter{})
+	if err != nil {
+		t.Fatalf("Subscribe parent: %v", err)
+	}
+	merge, err := parent.Merge(t.Context(), child, Filter{})
+	if err != nil {
+		t.Fatalf("Merge: %v", err)
+	}
+	defer merge.Stop()
+
+	if err := child.Emit(t.Context(), Event{
+		EventType: EventAgentExecuteStarted,
+		From:      Source{Layer: "agent", ID: "node_x"},
+		Status:    StatusRunning,
+		Delta:     json.RawMessage(`{"stage":"execute"}`),
+	}); err != nil {
+		t.Fatalf("Emit child: %v", err)
+	}
+
+	// Stream.Merge uses hub-mode tick-bundling; a non-raw subscriber receives the
+	// bundled event already expanded, tagged with the parent request scope.
+	got, ok, err := sub.Next(t.Context())
+	if err != nil || !ok {
+		t.Fatalf("Next = ok %v err %v", ok, err)
+	}
+	if got.EventType == EventMergeBundle {
+		t.Fatal("non-raw subscriber should not receive a raw bundle frame")
+	}
+	if got.EventType != EventAgentExecuteStarted {
+		t.Fatalf("event type = %q, want %q", got.EventType, EventAgentExecuteStarted)
+	}
+	if got.Scope.RequestID != "req_merge" || got.Scope.NodeID != "node_x" {
+		t.Fatalf("scope = %+v, want parent request + child node", got.Scope)
+	}
+}
+
 func TestStreamMergeFromFiltersAndReplaysUpstream(t *testing.T) {
 	parent := New(Scope{}, DefaultConfig())
 	child := New(Scope{}, DefaultConfig())
@@ -102,9 +144,9 @@ func TestStreamMergeFromFiltersAndReplaysUpstream(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Subscribe parent: %v", err)
 	}
-	merge, err := parent.MergeFrom(t.Context(), child, Filter{Prefixes: []string{"llm."}}, WithReplayFrom(1))
+	merge, err := parent.mergeFrom(t.Context(), child, Filter{Prefixes: []string{"llm."}}, WithReplayFrom(1))
 	if err != nil {
-		t.Fatalf("MergeFrom: %v", err)
+		t.Fatalf("mergeFrom: %v", err)
 	}
 	defer merge.Stop()
 
@@ -121,11 +163,11 @@ func TestStreamMergeFromFiltersAndReplaysUpstream(t *testing.T) {
 func TestStreamMergeFromRejectsInvalidSources(t *testing.T) {
 	s := New(Scope{}, DefaultConfig())
 	t.Cleanup(s.Close)
-	if _, err := s.MergeFrom(t.Context(), nil, Filter{}); !errors.Is(err, ErrInvalidMerge) {
-		t.Fatalf("MergeFrom nil err = %v, want ErrInvalidMerge", err)
+	if _, err := s.mergeFrom(t.Context(), nil, Filter{}); !errors.Is(err, ErrInvalidMerge) {
+		t.Fatalf("mergeFrom nil err = %v, want ErrInvalidMerge", err)
 	}
-	if _, err := s.MergeFrom(t.Context(), s, Filter{}); !errors.Is(err, ErrInvalidMerge) {
-		t.Fatalf("MergeFrom self err = %v, want ErrInvalidMerge", err)
+	if _, err := s.mergeFrom(t.Context(), s, Filter{}); !errors.Is(err, ErrInvalidMerge) {
+		t.Fatalf("mergeFrom self err = %v, want ErrInvalidMerge", err)
 	}
 }
 
@@ -553,13 +595,13 @@ func TestUpstreamFIFODefaultMaxDepth(t *testing.T) {
 	identity := upstreamIdentity{layer: "test", id: "id"}
 
 	fifo0 := newUpstreamFIFO(identity, 0)
-	if fifo0.maxDepth != DefaultMergePerUpstreamBufferDepth {
-		t.Fatalf("maxDepth with 0 = %d, want %d", fifo0.maxDepth, DefaultMergePerUpstreamBufferDepth)
+	if fifo0.maxDepth != defaultMergePerUpstreamBufferDepth {
+		t.Fatalf("maxDepth with 0 = %d, want %d", fifo0.maxDepth, defaultMergePerUpstreamBufferDepth)
 	}
 
 	fifoNeg := newUpstreamFIFO(identity, -5)
-	if fifoNeg.maxDepth != DefaultMergePerUpstreamBufferDepth {
-		t.Fatalf("maxDepth with -5 = %d, want %d", fifoNeg.maxDepth, DefaultMergePerUpstreamBufferDepth)
+	if fifoNeg.maxDepth != defaultMergePerUpstreamBufferDepth {
+		t.Fatalf("maxDepth with -5 = %d, want %d", fifoNeg.maxDepth, defaultMergePerUpstreamBufferDepth)
 	}
 }
 
@@ -567,7 +609,7 @@ func TestMergeHubTickEmitsBundleWithReadyEvents(t *testing.T) {
 	downstream := New(Scope{}, DefaultConfig())
 	t.Cleanup(downstream.Close)
 
-	hub := newMergeHub(t.Context(), downstream, time.Hour, DefaultMergePerUpstreamBufferDepth)
+	hub := newMergeHub(t.Context(), downstream, time.Hour, defaultMergePerUpstreamBufferDepth)
 	defer hub.Stop()
 
 	id1 := upstreamIdentity{layer: "agent", id: "node_1"}
@@ -632,7 +674,7 @@ func TestMergeHubJoinsConsecutiveStringDeltas(t *testing.T) {
 	downstream := New(Scope{}, DefaultConfig())
 	t.Cleanup(downstream.Close)
 
-	hub := newMergeHub(t.Context(), downstream, time.Hour, DefaultMergePerUpstreamBufferDepth)
+	hub := newMergeHub(t.Context(), downstream, time.Hour, defaultMergePerUpstreamBufferDepth)
 	defer hub.Stop()
 
 	id := upstreamIdentity{layer: "agent", id: "node_a"}
@@ -705,7 +747,7 @@ func TestMergeHubJoinsOnlyAdjacentSameKeyDeltas(t *testing.T) {
 	downstream := New(Scope{}, DefaultConfig())
 	t.Cleanup(downstream.Close)
 
-	hub := newMergeHub(t.Context(), downstream, time.Hour, DefaultMergePerUpstreamBufferDepth)
+	hub := newMergeHub(t.Context(), downstream, time.Hour, defaultMergePerUpstreamBufferDepth)
 	defer hub.Stop()
 
 	identity := upstreamIdentity{layer: "agent", id: "node_a"}
@@ -777,7 +819,7 @@ func TestMergeHubStopsJoiningAtNonStringDelta(t *testing.T) {
 	downstream := New(Scope{}, DefaultConfig())
 	t.Cleanup(downstream.Close)
 
-	hub := newMergeHub(t.Context(), downstream, time.Hour, DefaultMergePerUpstreamBufferDepth)
+	hub := newMergeHub(t.Context(), downstream, time.Hour, defaultMergePerUpstreamBufferDepth)
 	defer hub.Stop()
 
 	identity := upstreamIdentity{layer: "agent", id: "node_a"}
@@ -836,7 +878,7 @@ func TestMergeHubKeepsNonJoinableDeltasQueued(t *testing.T) {
 	downstream := New(Scope{}, DefaultConfig())
 	t.Cleanup(downstream.Close)
 
-	hub := newMergeHub(t.Context(), downstream, time.Hour, DefaultMergePerUpstreamBufferDepth)
+	hub := newMergeHub(t.Context(), downstream, time.Hour, defaultMergePerUpstreamBufferDepth)
 	defer hub.Stop()
 
 	id := upstreamIdentity{layer: "agent", id: "node_a"}
@@ -903,7 +945,7 @@ func TestMergeHubKeepsNonJoinableDeltasQueued(t *testing.T) {
 	}
 }
 
-// TestMergeFromDefaultBehaviorUnchanged verifies that MergeFrom without config
+// TestMergeFromDefaultBehaviorUnchanged verifies that mergeFrom without config
 // works exactly as before (direct forwarding, not hub mode).
 func TestMergeFromDefaultBehaviorUnchanged(t *testing.T) {
 	parent := New(Scope{RequestID: "req_1"}, DefaultConfig())
@@ -915,9 +957,9 @@ func TestMergeFromDefaultBehaviorUnchanged(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Subscribe: %v", err)
 	}
-	merge, err := parent.MergeFrom(t.Context(), child, Filter{})
+	merge, err := parent.mergeFrom(t.Context(), child, Filter{})
 	if err != nil {
-		t.Fatalf("MergeFrom: %v", err)
+		t.Fatalf("mergeFrom: %v", err)
 	}
 	defer merge.Stop()
 
@@ -961,11 +1003,11 @@ func TestMergeFromWithConfigHubModeEmitsBundles(t *testing.T) {
 		t.Fatalf("Subscribe: %v", err)
 	}
 
-	config := MergeWindowConfig{
+	config := mergeWindowConfig{
 		TickDuration:           10 * time.Millisecond,
-		PerUpstreamBufferDepth: DefaultMergePerUpstreamBufferDepth,
+		PerUpstreamBufferDepth: defaultMergePerUpstreamBufferDepth,
 	}
-	merge, err := parent.MergeWithConfig(t.Context(), child, Filter{}, config)
+	merge, err := parent.mergeWithConfig(t.Context(), child, Filter{}, config)
 	if err != nil {
 		t.Fatalf("MergeFromWithConfig: %v", err)
 	}
@@ -1022,15 +1064,15 @@ func TestMergeWithConfigHubModeSharesDownstreamHub(t *testing.T) {
 		t.Fatalf("Subscribe: %v", err)
 	}
 
-	config := MergeWindowConfig{TickDuration: time.Hour}
-	mergeA, err := parent.MergeWithConfig(t.Context(), childA, Filter{}, config)
+	config := mergeWindowConfig{TickDuration: time.Hour}
+	mergeA, err := parent.mergeWithConfig(t.Context(), childA, Filter{}, config)
 	if err != nil {
-		t.Fatalf("MergeWithConfig childA: %v", err)
+		t.Fatalf("mergeWithConfig childA: %v", err)
 	}
 	defer mergeA.Stop()
-	mergeB, err := parent.MergeWithConfig(t.Context(), childB, Filter{}, config)
+	mergeB, err := parent.mergeWithConfig(t.Context(), childB, Filter{}, config)
 	if err != nil {
-		t.Fatalf("MergeWithConfig childB: %v", err)
+		t.Fatalf("mergeWithConfig childB: %v", err)
 	}
 	defer mergeB.Stop()
 
@@ -1086,14 +1128,14 @@ func TestMergeWithConfigStopUnregistersOnlyOneSharedHubUpstream(t *testing.T) {
 		t.Fatalf("Subscribe: %v", err)
 	}
 
-	config := MergeWindowConfig{TickDuration: time.Hour}
-	mergeA, err := parent.MergeWithConfig(t.Context(), childA, Filter{}, config)
+	config := mergeWindowConfig{TickDuration: time.Hour}
+	mergeA, err := parent.mergeWithConfig(t.Context(), childA, Filter{}, config)
 	if err != nil {
-		t.Fatalf("MergeWithConfig childA: %v", err)
+		t.Fatalf("mergeWithConfig childA: %v", err)
 	}
-	mergeB, err := parent.MergeWithConfig(t.Context(), childB, Filter{}, config)
+	mergeB, err := parent.mergeWithConfig(t.Context(), childB, Filter{}, config)
 	if err != nil {
-		t.Fatalf("MergeWithConfig childB: %v", err)
+		t.Fatalf("mergeWithConfig childB: %v", err)
 	}
 	defer mergeB.Stop()
 
@@ -1142,14 +1184,14 @@ func TestMergeFromWithConfigHubRespectsFilters(t *testing.T) {
 		t.Fatalf("Subscribe: %v", err)
 	}
 
-	config := MergeWindowConfig{
+	config := mergeWindowConfig{
 		TickDuration:           10 * time.Millisecond,
-		PerUpstreamBufferDepth: DefaultMergePerUpstreamBufferDepth,
+		PerUpstreamBufferDepth: defaultMergePerUpstreamBufferDepth,
 	}
 
 	// Filter to only LLM events.
 	filter := Filter{Prefixes: []string{"llm"}}
-	merge, err := parent.MergeWithConfig(t.Context(), child, filter, config)
+	merge, err := parent.mergeWithConfig(t.Context(), child, filter, config)
 	if err != nil {
 		t.Fatalf("MergeFromWithConfig: %v", err)
 	}
@@ -1207,11 +1249,11 @@ func TestMergeFromWithConfigHubContextCancellation(t *testing.T) {
 	t.Cleanup(parent.Close)
 	t.Cleanup(child.Close)
 
-	config := MergeWindowConfig{
+	config := mergeWindowConfig{
 		TickDuration:           10 * time.Millisecond,
-		PerUpstreamBufferDepth: DefaultMergePerUpstreamBufferDepth,
+		PerUpstreamBufferDepth: defaultMergePerUpstreamBufferDepth,
 	}
-	merge, err := parent.MergeWithConfig(ctx, child, Filter{}, config)
+	merge, err := parent.mergeWithConfig(ctx, child, Filter{}, config)
 	if err != nil {
 		t.Fatalf("MergeFromWithConfig: %v", err)
 	}
@@ -1246,11 +1288,11 @@ func TestMergeFromWithConfigMergeStopStopsHub(t *testing.T) {
 	t.Cleanup(parent.Close)
 	t.Cleanup(child.Close)
 
-	config := MergeWindowConfig{
+	config := mergeWindowConfig{
 		TickDuration:           10 * time.Millisecond,
-		PerUpstreamBufferDepth: DefaultMergePerUpstreamBufferDepth,
+		PerUpstreamBufferDepth: defaultMergePerUpstreamBufferDepth,
 	}
-	merge, err := parent.MergeWithConfig(t.Context(), child, Filter{}, config)
+	merge, err := parent.mergeWithConfig(t.Context(), child, Filter{}, config)
 	if err != nil {
 		t.Fatalf("MergeFromWithConfig: %v", err)
 	}
@@ -1273,7 +1315,7 @@ func TestMergeFromWithConfigRejectsNegativeTickDuration(t *testing.T) {
 	t.Cleanup(parent.Close)
 	t.Cleanup(child.Close)
 
-	_, err := parent.MergeWithConfig(t.Context(), child, Filter{}, MergeWindowConfig{
+	_, err := parent.mergeWithConfig(t.Context(), child, Filter{}, mergeWindowConfig{
 		TickDuration: -time.Millisecond,
 	})
 	if !errors.Is(err, ErrInvalidMerge) {
@@ -1282,14 +1324,14 @@ func TestMergeFromWithConfigRejectsNegativeTickDuration(t *testing.T) {
 }
 
 func TestDefaultHubMergeWindowConfigEnablesHubMode(t *testing.T) {
-	config := DefaultHubMergeWindowConfig()
-	if config.TickDuration != DefaultMergeTickDuration {
-		t.Fatalf("TickDuration = %v, want %v", config.TickDuration, DefaultMergeTickDuration)
+	config := defaultHubMergeWindowConfig()
+	if config.TickDuration != defaultMergeTickDuration {
+		t.Fatalf("TickDuration = %v, want %v", config.TickDuration, defaultMergeTickDuration)
 	}
 	if config.TickDuration <= 0 {
 		t.Fatalf("TickDuration = %v, want hub mode enabled", config.TickDuration)
 	}
-	if config.PerUpstreamBufferDepth != DefaultMergeWindowConfig().PerUpstreamBufferDepth {
+	if config.PerUpstreamBufferDepth != defaultMergeWindowConfig().PerUpstreamBufferDepth {
 		t.Fatalf("PerUpstreamBufferDepth = %d, want default depth", config.PerUpstreamBufferDepth)
 	}
 }
@@ -1299,7 +1341,7 @@ func TestMergeFromWithConfigHubEmptyUpstreamCloseStopsMerge(t *testing.T) {
 	child := New(Scope{}, DefaultConfig())
 	t.Cleanup(parent.Close)
 
-	merge, err := parent.MergeWithConfig(t.Context(), child, Filter{}, MergeWindowConfig{
+	merge, err := parent.mergeWithConfig(t.Context(), child, Filter{}, mergeWindowConfig{
 		TickDuration: time.Hour,
 	})
 	if err != nil {
@@ -1324,7 +1366,7 @@ func TestMergeFromWithConfigHubDrainsBufferedEventsOnUpstreamClose(t *testing.T)
 	if err != nil {
 		t.Fatalf("Subscribe: %v", err)
 	}
-	merge, err := parent.MergeWithConfig(t.Context(), child, Filter{}, MergeWindowConfig{
+	merge, err := parent.mergeWithConfig(t.Context(), child, Filter{}, mergeWindowConfig{
 		TickDuration: time.Hour,
 	})
 	if err != nil {
@@ -1383,7 +1425,7 @@ func TestMergeFromWithConfigHubEventsUseMergedScopeAndMetadata(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Subscribe: %v", err)
 	}
-	merge, err := parent.MergeWithConfig(t.Context(), child, Filter{}, MergeWindowConfig{
+	merge, err := parent.mergeWithConfig(t.Context(), child, Filter{}, mergeWindowConfig{
 		TickDuration: 10 * time.Millisecond,
 	})
 	if err != nil {
@@ -1425,7 +1467,7 @@ func TestMergeFromWithConfigHubErrorVisibleThroughMergeErr(t *testing.T) {
 	child := New(Scope{}, DefaultConfig())
 	t.Cleanup(child.Close)
 
-	merge, err := parent.MergeWithConfig(t.Context(), child, Filter{}, MergeWindowConfig{
+	merge, err := parent.mergeWithConfig(t.Context(), child, Filter{}, mergeWindowConfig{
 		TickDuration: 10 * time.Millisecond,
 	})
 	if err != nil {

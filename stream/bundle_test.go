@@ -95,8 +95,8 @@ func TestEmptyEventBatchIsInvalid(t *testing.T) {
 		Events: []Event{},
 	}
 
-	if IsValidEventBatch(bundle) {
-		t.Errorf("IsValidEventBatch(empty) = true, want false")
+	if isValidEventBatch(bundle) {
+		t.Errorf("isValidEventBatch(empty) = true, want false")
 	}
 
 	// Verify a non-empty bundle is valid
@@ -109,8 +109,8 @@ func TestEmptyEventBatchIsInvalid(t *testing.T) {
 		},
 	}
 
-	if !IsValidEventBatch(bundle) {
-		t.Errorf("IsValidEventBatch(non-empty) = false, want true")
+	if !isValidEventBatch(bundle) {
+		t.Errorf("isValidEventBatch(non-empty) = false, want true")
 	}
 }
 

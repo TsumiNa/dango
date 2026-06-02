@@ -48,9 +48,9 @@ func DecodeEventBatch(delta json.RawMessage) (EventBatch, error) {
 	return bundle, nil
 }
 
-// IsValidEventBatch reports whether a batch is valid for emission.
+// isValidEventBatch reports whether a batch is valid for emission.
 // An empty batch (no events) is not valid and should not be emitted.
-func IsValidEventBatch(bundle EventBatch) bool {
+func isValidEventBatch(bundle EventBatch) bool {
 	return len(bundle.Events) > 0
 }
 
@@ -73,7 +73,7 @@ func ExpandBundleEvent(event Event) ([]Event, error) {
 	if err != nil {
 		return nil, fmt.Errorf("expand bundle event: %w", err)
 	}
-	if !IsValidEventBatch(bundle) {
+	if !isValidEventBatch(bundle) {
 		return nil, fmt.Errorf("expand bundle event: empty event batch")
 	}
 

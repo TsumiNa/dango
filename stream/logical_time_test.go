@@ -180,14 +180,14 @@ func TestLogicalTimeIncreasesAcrossStandaloneMerges(t *testing.T) {
 	merged := New(Scope{RequestID: "req_1"}, Config{})
 	defer merged.Close()
 
-	_, err := merged.MergeFrom(ctx, up1, Filter{})
+	_, err := merged.mergeFrom(ctx, up1, Filter{})
 	if err != nil {
-		t.Fatalf("MergeFrom up1: %v", err)
+		t.Fatalf("mergeFrom up1: %v", err)
 	}
 
-	_, err = merged.MergeFrom(ctx, up2, Filter{})
+	_, err = merged.mergeFrom(ctx, up2, Filter{})
 	if err != nil {
-		t.Fatalf("MergeFrom up2: %v", err)
+		t.Fatalf("mergeFrom up2: %v", err)
 	}
 
 	// Subscribe to merged stream
